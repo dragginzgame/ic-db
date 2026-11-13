@@ -1,0 +1,31 @@
+[package]
+name = "ic-db-m0-maintenance-canister"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[target.'cfg(any())'.dev-dependencies]
+toko-tooling.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["toko-tooling"]
+
+[package.metadata.toko-tooling.loc]
+category = "tests"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+target = []
+changed-transform = ["target"]
+bad-upgrade = ["target"]
+
+[dependencies]
+ic-platform-runtime = { workspace = true, features = ["cdk"] }
+ic-storage.workspace = true
+ic-wire-endpoint.workspace = true
+
+[lints]
+workspace = true

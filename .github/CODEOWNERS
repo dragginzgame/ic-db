@@ -1,0 +1,8 @@
+# Tooling and CI changes require maintainer review.
+/.github/ @dragginzgame
+/vendor/toko-tooling/ @dragginzgame
+/.toko-tooling.snapshot @dragginzgame
+/AGENTS.md @dragginzgame
+/TOKO-TOOLING.md @dragginzgame
+/Makefile @dragginzgame
+/rust-toolchain.toml @dragginzgame

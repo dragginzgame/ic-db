@@ -1,0 +1,8 @@
+/target/
+/qualification/target/
+/.cache/
+/.tools/
+/vendor/toko-tooling/.tools/
+/.agents/
+/.aws/
+/.codex/
