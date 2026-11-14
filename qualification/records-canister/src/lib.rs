@@ -27,6 +27,8 @@ struct Entry {}
     id = 2,
     pk(field = "id"),
     index(id = 1, fields = ["entry_id", "score"]),
+    index(id = 2, fields = ["published", "title"]),
+    index(id = 3, fields = ["entry_id", "priority"]),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "entry_id", value(item(prim = "Nat64")), references(entity = 1, index = 1)),
@@ -89,6 +91,7 @@ struct NarrowNumbers {}
     id = 6,
     pk(field = "id"),
     index(id = 1, field = "owner", unique),
+    index(id = 2, field = "optional", unique, present_only),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "owner", value(item(prim = "Principal"))),
@@ -96,6 +99,11 @@ struct NarrowNumbers {}
     )
 )]
 struct IdentityRow {}
+
+#[entity(id=7, pk(field="id"), index(id=1, fields=["next", "id"]),
+    fields(field(name="id", value(item(prim="Nat64"))),
+        field(name="next", value(opt, item(prim="Nat64")), references(entity=7,index=1))))]
+struct OptionalLink {}
 
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
@@ -109,6 +117,7 @@ fn compiled() -> Schema {
         BinaryObject::SCHEMA,
         NarrowNumbers::SCHEMA,
         IdentityRow::SCHEMA,
+        OptionalLink::SCHEMA,
     ])
     .unwrap()
 }
@@ -218,7 +227,7 @@ fn inspect() -> Status {
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
 type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
-type IndexView = (u32, Vec<String>, bool);
+type IndexView = (u32, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 #[ic_wire_endpoint::query(id = 2)]
 fn schema() -> (Status, Vec<EntityView>) {
@@ -268,6 +277,7 @@ fn schema() -> (Status, Vec<EntityView>) {
                         index.id,
                         index.fields.iter().map(|name| (*name).into()).collect(),
                         index.unique,
+                        index.present_only,
                     )
                 })
                 .collect();
@@ -711,4 +721,167 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
             .map(|row| (row.score, row.id))
             .collect(),
     ))
+}
+
+#[ic_wire_endpoint::update(id = 23)]
+fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let template = db.get::<Document>(1).unwrap().unwrap();
+    let mut batch = Batch::new();
+    for (id, title, published) in rows {
+        let row = Document {
+            id,
+            title,
+            published,
+            ..template.clone()
+        };
+        if db.get::<Document>(id).unwrap().is_some() {
+            batch.replace(&row).map_err(|_| 1)?;
+        } else {
+            batch.insert(&row).map_err(|_| 1)?;
+        }
+    }
+    db.commit(batch).map_err(|_| 2)?;
+    if trap {
+        cdk::api::trap("M1 text index application trap");
+    }
+    Ok(())
+}
+
+#[ic_wire_endpoint::query(id = 24)]
+fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String, u64)>, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let mut prefix = vec![published.into()];
+    if let Some(title) = title.as_deref() {
+        prefix.push(title.into());
+    }
+    db.index_prefix::<Document>(2, &prefix, 32)
+        .map(|rows| rows.into_iter().map(|row| (row.title, row.id)).collect())
+        .map_err(|_| 1)
+}
+
+type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
+type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
+#[ic_wire_endpoint::update(id = 25)]
+fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let template = db.get::<Document>(1).unwrap().unwrap();
+    let mut batch = Batch::new();
+    for (id, optional, priority) in rows {
+        // Stable test-only identities, distinct from each other and the initial [4].
+        let identity = IdentityRow {
+            id,
+            owner: Principal::try_from_slice(&id.to_be_bytes()).unwrap(),
+            optional: optional
+                .as_ref()
+                .map(|v| Principal::try_from_slice(v.as_ref()))
+                .transpose()
+                .map_err(|_| 1)?,
+        };
+        let document = Document {
+            id,
+            priority,
+            ..template.clone()
+        };
+        if db.get::<IdentityRow>(id).unwrap().is_some() {
+            batch.replace(&identity)
+        } else {
+            batch.insert(&identity)
+        }
+        .map_err(|_| 2)?;
+        if db.get::<Document>(id).unwrap().is_some() {
+            batch.replace(&document)
+        } else {
+            batch.insert(&document)
+        }
+        .map_err(|_| 2)?;
+    }
+    db.commit(batch).map_err(|_| 3)?;
+    if trap {
+        cdk::api::trap("M1 optional index application trap");
+    }
+    Ok(())
+}
+
+#[ic_wire_endpoint::query(id = 26)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "endpoint owns transport input"
+)]
+fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
+    let host = runtime();
+    let db = open(&host);
+    let operand = value
+        .as_ref()
+        .map(|v| Principal::try_from_slice(v.as_ref()).map(ic_db::IndexValue::from))
+        .transpose();
+    let owners = operand.map_err(|_| 1).and_then(|v| {
+        db.index_prefix::<IdentityRow>(2, &[v.unwrap_or(ic_db::IndexValue::Absent)], 32)
+            .map(|rows| rows.into_iter().map(|row| row.id).collect())
+            .map_err(|_| 2)
+    });
+    let priorities = db
+        .index_prefix::<Document>(3, &[1_u64.into()], 32)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.priority, row.id))
+        .collect();
+    (owners, priorities)
+}
+
+// Optional relationships share the product batch; these are private probe controls.
+type OptionalLinks = Vec<(u64, Option<u64>)>;
+#[ic_wire_endpoint::update(id = 27)]
+fn optional_reference_batch(
+    (rows, deletes, trap): (OptionalLinks, Vec<u64>, bool),
+) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for id in deletes {
+        batch.delete::<OptionalLink>(id).map_err(|_| 1)?;
+    }
+    for (id, next) in rows {
+        let row = OptionalLink { id, next };
+        if db.get::<OptionalLink>(id).unwrap().is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1)?;
+    }
+    db.commit(batch).map_err(|_| 2)?;
+    if trap {
+        cdk::api::trap("M1 optional reference application trap");
+    }
+    Ok(())
+}
+
+#[ic_wire_endpoint::query(id = 28)]
+fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let rows = db
+        .page::<OptionalLink>(None, 32)
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| (row.id, row.next))
+        .collect();
+    let dependants = db
+        .index_prefix::<OptionalLink>(
+            1,
+            &[target
+                .map(ic_db::IndexValue::from)
+                .unwrap_or(ic_db::IndexValue::Absent)],
+            32,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    (rows, dependants, db.revision(7).unwrap())
 }

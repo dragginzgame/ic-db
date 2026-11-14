@@ -54,11 +54,12 @@ pub struct FieldSchema {
     pub value: FieldType,
     /// Whether absence is a stored value, distinct from empty/zero/false.
     pub optional: bool,
-    /// Required target existence and restricted deletion through a declared index.
+    /// Present targets must exist; deletion is restricted through a declared index.
     pub reference: Option<ReferenceSchema>,
 }
 
-/// A required Nat64 reference using an ordinary reverse-lookup index.
+/// A required or optional Nat64 reference using an ordinary reverse-lookup index.
+/// An absent optional value has no target; zero remains an ordinary target key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReferenceSchema {
     /// Target entity identity; its primary key must be a required Nat64.
@@ -67,7 +68,7 @@ pub struct ReferenceSchema {
     pub index: u32,
 }
 
-/// A compiled index over exact required integer or Principal components.
+/// A compiled index over exact integer, Principal, Bool or Text components.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IndexSchema {
     /// Stable index identity within its entity.
@@ -76,6 +77,8 @@ pub struct IndexSchema {
     pub fields: &'static [&'static str],
     /// Whether the complete key must be unique in the final batch state.
     pub unique: bool,
+    /// Unique membership requires every optional component to be present.
+    pub present_only: bool,
 }
 
 /// Compiled entity metadata emitted by the entity macro.
@@ -97,7 +100,7 @@ impl EntitySchema {
     // only selected key values; no entity or owned text/blob materialization.
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
         let mut reader = Decoder::new(bytes)?;
-        let mut keys = [None; MAX_FIELDS];
+        let mut keys = [IndexValue::Absent; MAX_FIELDS];
         for (position, field) in self.fields.iter().enumerate() {
             if field.optional && !reader.boolean()? {
                 continue;
@@ -109,7 +112,7 @@ impl EntitySchema {
                     .any(|index| index.fields.contains(&field.name))
             {
                 *keys.get_mut(position).ok_or(Error::Corrupt)? =
-                    Some(IndexValue::read(&mut reader, field.value)?);
+                    IndexValue::read(&mut reader, field.value)?;
             } else {
                 reader.skip(field.value)?;
             }
@@ -119,18 +122,29 @@ impl EntitySchema {
             self.fields
                 .iter()
                 .position(|field| field.name == name)
-                .and_then(|position| keys.get(position).copied().flatten())
+                .and_then(|position| keys.get(position).copied())
                 .ok_or(Error::Corrupt)
         };
         let indexes = self
             .indexes
             .iter()
             .map(|index| {
-                let mut bytes = Vec::with_capacity(index.fields.len() * 8);
-                for name in index.fields {
-                    key(name)?.__append_to(&mut bytes);
+                let mut components = [(IndexValue::Absent, false); 4];
+                for (slot, name) in components.iter_mut().zip(index.fields) {
+                    let field = self
+                        .fields
+                        .iter()
+                        .find(|field| field.name == *name)
+                        .ok_or(Error::Corrupt)?;
+                    *slot = (key(name)?, field.optional);
+                    if slot.0 == IndexValue::Absent && !slot.1 {
+                        return Err(Error::Corrupt);
+                    }
                 }
-                Ok(bytes)
+                Ok(key::encode_index(
+                    &components[..index.fields.len()],
+                    index.present_only,
+                ))
             })
             .collect::<Result<_, Error>>()?;
         let IndexValue::Nat64(key) = key(self.primary_key)? else {
@@ -217,11 +231,12 @@ impl Schema {
                     bytes.extend(max_bytes.to_le_bytes());
                 }
                 if let Some(reference) = field.reference {
-                    if field.optional
-                        || field.value != FieldType::Nat64
+                    if field.value != FieldType::Nat64
                         || !entities.iter().any(|target| target.id == reference.entity)
                         || !entity.indexes.iter().any(|index| {
-                            index.id == reference.index && index.fields.first() == Some(&field.name)
+                            index.id == reference.index
+                                && !index.present_only
+                                && index.fields.first() == Some(&field.name)
                         })
                     {
                         return Err(Error::InvalidSchema);
@@ -242,15 +257,26 @@ impl Schema {
                     return Err(Error::InvalidSchema);
                 }
                 let mut fields = BTreeSet::new();
+                let has_optional = index.fields.iter().any(|name| {
+                    entity
+                        .fields
+                        .iter()
+                        .any(|field| field.name == *name && field.optional)
+                });
+                if (index.unique && has_optional && !index.present_only)
+                    || (index.present_only && (!index.unique || !has_optional))
+                {
+                    return Err(Error::InvalidSchema);
+                }
                 bytes.extend(index.id.to_le_bytes());
-                bytes.push(u8::from(index.unique));
+                bytes.push(u8::from(index.unique) | (u8::from(index.present_only) << 1));
                 bytes.extend((index.fields.len() as u32).to_le_bytes());
                 for field in index.fields {
-                    if !entity.fields.iter().any(|declared| {
-                        declared.name == *field
-                            && !declared.optional
-                            && key::supports(declared.value)
-                    }) || !fields.insert(field)
+                    if !entity
+                        .fields
+                        .iter()
+                        .any(|declared| declared.name == *field && key::supports(declared.value))
+                        || !fields.insert(field)
                     {
                         return Err(Error::InvalidSchema);
                     }

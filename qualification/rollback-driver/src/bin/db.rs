@@ -11,7 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows and one record each for Document, WideNumbers, BinaryObject, NarrowNumbers and IdentityRow; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows, one record each for Document, WideNumbers, BinaryObject, NarrowNumbers and IdentityRow, and an empty OptionalLink entity; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -46,7 +46,7 @@ fn help() {
 }
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
-type IndexView = (u32, Vec<String>, bool);
+type IndexView = (u32, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
 fn print_schema(entities: Vec<EntityView>) {
@@ -93,17 +93,23 @@ fn print_schema(entities: Vec<EntityView>) {
         } else {
             let rows: Vec<Vec<String>> = indexes
                 .into_iter()
-                .map(|(id, fields, unique)| {
+                .map(|(id, fields, unique, present_only)| {
                     vec![
                         id.to_string(),
                         fields.join(", "),
                         if unique { "Yes" } else { "No" }.into(),
+                        if present_only {
+                            "All optional keys present"
+                        } else {
+                            "All rows"
+                        }
+                        .into(),
                     ]
                 })
                 .collect();
             println!(
                 "\nIndexes\n{}\n",
-                render_bordered(&["ID", "Fields (in order)", "Unique"], &rows)
+                render_bordered(&["ID", "Fields (in order)", "Unique", "Membership"], &rows)
             );
         }
     }
@@ -111,7 +117,7 @@ fn print_schema(entities: Vec<EntityView>) {
         "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes."
     );
     println!(
-        "References require an existing target and restrict its deletion; indexes belong to the dependent."
+        "Present references require an existing target and restrict its deletion; absent references have no target."
     );
     println!("Stored schema matches this executable. Use db status for storage details.");
 }

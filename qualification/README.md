@@ -44,13 +44,14 @@ their optional forms.
 Signed tests cover the complete i64 endpoints, negative/zero values, absence,
 literal fixed-width little-endian vectors, truncated/extra payloads, no-op revision
 preservation and incompatible signed/unsigned schema refusal. Native and Wasm
-reopen checks preserve the exact values. Signed keys/indexes remain unimplemented.
+reopen checks preserve the exact values. Signed secondary indexes are qualified
+below; signed primary keys remain unimplemented.
 The separate WideNumbers fixture checks required/optional 128-bit integers,
 including signed extrema, unsigned maximum and values just beyond 64 bits.
 Independent 16-byte scalar vectors and schema hashes qualify encoding;
 truncation, surplus bytes and incompatible width/signedness refuse. Native and Wasm
-checks preserve all bits across writes, no-ops, traps and reopen. Wide keys/indexes
-and arithmetic are not enabled by storage support.
+checks preserve all bits across writes, no-ops, traps and reopen. Wide secondary
+indexes are qualified below; wide primary keys and arithmetic remain unimplemented.
 NarrowNumbers exercises required and optional 8/16/32-bit integers using IcyDB's
 exact-width/extrema regression cases. Independent literal payloads and a schema
 fingerprint cover 1/2/4-byte encoding, signedness, all truncated prefixes, surplus
@@ -73,7 +74,12 @@ at every length, compound boundaries, unique exchanges, corrupt entries and
 restricted deletion through mixed-type reverse indexes. Wasm checks exercise
 Principal uniqueness and signed score ordering, including duplicate secondary
 values, final-state swaps, refusals without writes, late traps and unchanged
-upgrades. Original Nat64 key bytes/fingerprints remain unchanged.
+upgrades. Required Bool/Text indexes are also qualified: complete leading-field
+matching, empty/NUL/Unicode order, tuple boundaries, uniqueness, byte bounds,
+replacement and deletion. The full 4 KiB row with escaping doubled in its index
+is covered natively. Wasm checks Document's `(published, title)` index through
+updates, bounds refusals, late traps and unchanged upgrades. Original admitted
+key bytes/fingerprints remain unchanged; new index declarations change identity.
 
 Blob qualification carries over IcyDB's empty, zero-bound and over-limit cases.
 Literal length-framed payloads contain non-UTF-8 bytes; absence differs from an
@@ -88,11 +94,16 @@ Checks distinguish absence from empty/zero/false, count text bytes rather than
 characters, reject oversized writes and stored payloads, retain the whole-row byte
 envelope, and preserve values and per-entity revisions across reopen. Independent
 SHA-256 vectors cover the original Nat64 contract, mixed types and references.
-Required Nat64 references use a declared ordinary index beginning with the
+Required and optional Nat64 references use a declared ordinary index beginning with the
 reference field. Native checks cover missing targets, final-state insertion,
 repointing/deletion, cycles, self references and a 31-dependent removal batch.
 Wasm checks verify the same core refusal/composition boundary and reopen. No
-recursive cascade or optional/nested reference support is implied.
+recursive cascade or nested reference support is implied. OptionalLink exercises
+absence without a target, present zero/max targets, self-reference, final-state
+unlinking/deletion, unchanged refused writes, no-op revisions, late-trap rollback
+and unchanged upgrade. Native cases additionally cover independent references,
+31-dependant unlinking, literal absent/present reverse keys, incompatible optionality
+and malformed rows/index owners. The console includes its empty schema for inspection.
 The Wasm host checks generated inspection, sparse page progress, indexes,
 normal errors versus late application traps, atomic revisions and unchanged
 upgrade/reopen. Full raw stable-memory comparisons include supplier metadata.
@@ -110,8 +121,8 @@ revision, reference and index checks remain unchanged after rejection. The later
 successful replacement proves the instruction fault does not leave the host armed
 or poison retry. This carries over IcyDB's instruction-refusal preservation
 invariant using IC DB's message rollback boundary, without its budget machinery.
-The current six-entity fixture with typed indexes, codec v3 and Storage 0.74.1 covers 73 replacement writes and reaches growth
-with the insert batch starting at ID 1700: successful retry performs 1,362 backing
+The current six-entity fixture with optional indexes, codec v3 and Storage 0.74.1 covers 121 replacement writes and reaches growth
+with the insert batch starting at ID 1700: successful retry performs 1,384 backing
 writes, one growth request and expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after
@@ -129,10 +140,16 @@ state; the instrumented host must not be used for comparative performance claims
 The M0 maintenance fixture remains available only through its dedicated probe.
 Product scope still includes richer types, broader reference constraints and broad fluent
 queries. Primary keys/references still require Nat64; secondary indexes admit
-required integers and Principal. Text and optional indexing remain required
-follow-on work. `db schema` inspects all six entity descriptions, including the
+integers, Principal, Bool and bounded Text, including optional values.
+Ordinary indexes retain absent values; optional unique indexes require explicit
+`present_only` membership for every optional component. Native checks cover
+compound guards, reverse-reference admission, omitted-entry row validation and
+corrupt presence; Wasm checks absent/present order, unique swaps, transfer,
+late-message rollback and unchanged upgrade. `db schema` projects membership
+alongside all six entity descriptions, including the
 Document-to-Entry reference, its `(entry_id, score)` reverse index and IdentityRow's
-unique owner index;
+unique owner and present-only optional identity indexes, plus Document's
+`(published, title)` and optional priority indexes;
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 

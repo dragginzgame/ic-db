@@ -1,8 +1,9 @@
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
 //! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
-//! values. Secondary indexes admit required integers and Principal; primary keys
-//! and references currently require non-optional Nat64 fields.
+//! values. Secondary indexes admit integers, Principal, Bool and Text, including optional values; primary keys
+//! require non-optional Nat64 fields. References admit required or optional Nat64;
+//! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
 //! Native callers must discard their runtime after a mutation panic. No SQL,
@@ -92,9 +93,11 @@ pub trait Entity: Sized {
 #[doc(hidden)]
 pub mod __private {
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
+    pub use crate::key::encode_index;
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
         pub key: u64,
-        pub indexes: Vec<Vec<u8>>,
+        /// None means the row is outside an explicitly present-only unique index.
+        pub indexes: Vec<Option<Vec<u8>>>,
     }
 }

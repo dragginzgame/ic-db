@@ -68,10 +68,10 @@ impl Field {
         let name = name.ok_or_else(|| syn::Error::new_spanned(meta, "field requires name"))?;
         let (kind, optional) =
             value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
-        if reference.is_some() && (optional || !matches!(kind, Kind::Nat64)) {
+        if reference.is_some() && !matches!(kind, Kind::Nat64) {
             return Err(syn::Error::new_spanned(
                 meta,
-                "references currently require non-optional Nat64",
+                "references currently require Nat64",
             ));
         }
         Ok(Self {
@@ -85,21 +85,35 @@ impl Field {
         matches!(self.kind, Kind::Nat64) && !self.optional
     }
     pub fn indexable(&self) -> bool {
-        !self.optional
-            && matches!(
-                self.kind,
-                Kind::Nat8
-                    | Kind::Nat16
-                    | Kind::Nat32
-                    | Kind::Nat64
-                    | Kind::Nat128
-                    | Kind::Int8
-                    | Kind::Int16
-                    | Kind::Int32
-                    | Kind::Int64
-                    | Kind::Int128
-                    | Kind::Principal
-            )
+        matches!(
+            self.kind,
+            Kind::Nat8
+                | Kind::Nat16
+                | Kind::Nat32
+                | Kind::Nat64
+                | Kind::Nat128
+                | Kind::Int8
+                | Kind::Int16
+                | Kind::Int32
+                | Kind::Int64
+                | Kind::Int128
+                | Kind::Principal
+                | Kind::Bool
+                | Kind::Text(_)
+        )
+    }
+    pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
+        if self.optional {
+            if matches!(self.kind, Kind::Text(_)) {
+                quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
+            } else {
+                quote!(row.#ident.map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
+            }
+        } else if matches!(self.kind, Kind::Text(_)) {
+            quote!(::ic_db::IndexValue::from(row.#ident.as_str()))
+        } else {
+            quote!(::ic_db::IndexValue::from(row.#ident))
+        }
     }
     pub fn rust_type(&self) -> TokenStream {
         let base = match self.kind {

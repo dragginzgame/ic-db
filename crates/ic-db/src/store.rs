@@ -239,14 +239,16 @@ impl<M: Memory> Database<M> {
         })
     }
     /// Read the first bounded collection under an exact, nonempty leading index prefix.
-    /// Each operand must have its field's exact integer width/signedness or Principal type.
+    /// Each operand must have its field's exact type and fit its declared bounds.
+    /// Use `IndexValue::Absent` for an absent optional component. A present-only
+    /// unique index refuses absent operands because it does not enumerate those rows.
     /// # Errors
     /// Refuses unknown indexes, mismatched operand types, invalid prefix/limit or
     /// inconsistent index entries. This method does not yet return continuation.
     pub fn index_prefix<E: Entity>(
         &self,
         index: u32,
-        values: &[IndexValue],
+        values: &[IndexValue<'_>],
         limit: usize,
     ) -> Result<Vec<E>, Error> {
         self.schema.admits(E::SCHEMA)?;
@@ -265,15 +267,11 @@ impl<M: Memory> Database<M> {
                 .iter()
                 .find(|field| field.name == *name)
                 .ok_or(Error::InvalidSchema)?;
-            if value.field_type() != field.value {
+            value.admit(field.value, field.optional)?;
+            if index.present_only && *value == IndexValue::Absent {
                 return Err(Error::InvalidOperand);
             }
-            if let IndexValue::Principal(principal) = value
-                && principal.as_slice().len() > crate::codec::MAX_PRINCIPAL_BYTES
-            {
-                return Err(Error::Limit);
-            }
-            value.__append_to(&mut prefix);
+            value.append_component(field.optional, &mut prefix);
         }
         let mut rows = Vec::new();
         for entry in self
@@ -366,13 +364,28 @@ impl<M: Memory> Database<M> {
                                 .iter()
                                 .position(|index| index.id == reference.index)
                                 .ok_or(Error::Corrupt)?;
-                            let bytes = info
+                            let mut bytes = info
                                 .indexes
                                 .get(position)
-                                .and_then(|bytes| bytes.get(..8))
+                                .and_then(Option::as_ref)
+                                .map(Vec::as_slice)
                                 .ok_or(Error::Corrupt)?;
-                            let target =
-                                u64::from_be_bytes(bytes.try_into().map_err(|_| Error::Corrupt)?);
+                            if field.optional {
+                                // index_entries already validated the complete key.
+                                // Absence creates no relationship, including to key zero.
+                                match bytes.split_first() {
+                                    Some((0, _)) => continue,
+                                    Some((1, rest)) => bytes = rest,
+                                    _ => return Err(Error::Corrupt),
+                                }
+                            }
+                            let target = u64::from_be_bytes(
+                                bytes
+                                    .get(..8)
+                                    .ok_or(Error::Corrupt)?
+                                    .try_into()
+                                    .map_err(|_| Error::Corrupt)?,
+                            );
                             required.insert((reference.entity, target));
                         }
                     }
@@ -436,7 +449,7 @@ impl<M: Memory> Database<M> {
                         continue;
                     };
                     let mut prefix = index_prefix(entity.id, reference.index);
-                    prefix.extend(id.to_be_bytes());
+                    IndexValue::Nat64(id).append_component(field.optional, &mut prefix);
                     // Each skipped entry belongs to a distinct changed row in
                     // this range. At most MAX_BATCH skips plus one survivor.
                     for (position, entry) in self
@@ -496,31 +509,43 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
     if info.indexes.len() != entity.indexes.len() {
         return Err(Error::Corrupt);
     }
-    entity
-        .indexes
-        .iter()
-        .zip(&info.indexes)
-        .map(|(index, values)| {
-            let mut remaining = values.as_slice();
-            for name in index.fields {
-                let field = entity
-                    .fields
-                    .iter()
-                    .find(|field| field.name == *name)
-                    .ok_or(Error::Corrupt)?;
-                key::consume(&mut remaining, field.value)?;
+    let mut entries = Vec::new();
+    for (index, values) in entity.indexes.iter().zip(&info.indexes) {
+        let Some(values) = values else {
+            if index.present_only {
+                continue;
             }
-            if !remaining.is_empty() {
-                return Err(Error::Corrupt);
+            return Err(Error::Corrupt);
+        };
+        let mut remaining = values.as_slice();
+        for name in index.fields {
+            let field = entity
+                .fields
+                .iter()
+                .find(|field| field.name == *name)
+                .ok_or(Error::Corrupt)?;
+            if field.optional {
+                let (&presence, rest) = remaining.split_first().ok_or(Error::Corrupt)?;
+                remaining = rest;
+                match presence {
+                    0 if !index.present_only => continue,
+                    1 => {}
+                    _ => return Err(Error::Corrupt),
+                }
             }
-            let mut key = index_prefix(entity.id, index.id);
-            key.extend(values);
-            if !index.unique {
-                key.extend(info.key.to_be_bytes());
-            }
-            Ok((key, index.unique))
-        })
-        .collect()
+            key::consume(&mut remaining, field.value)?;
+        }
+        if !remaining.is_empty() {
+            return Err(Error::Corrupt);
+        }
+        let mut key = index_prefix(entity.id, index.id);
+        key.extend(values);
+        if !index.unique {
+            key.extend(info.key.to_be_bytes());
+        }
+        entries.push((key, index.unique));
+    }
+    Ok(entries)
 }
 
 // Both indexed reads and reverse-reference checks must prove the physical entry

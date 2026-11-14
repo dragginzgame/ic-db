@@ -13,10 +13,13 @@ use field::Field;
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
 ///
 /// Supports Nat/Int8/16/32/64/128, Bool, Principal and bounded Text/Blob, optionally wrapped by `opt`.
-/// Primary keys require Nat64; secondary indexes admit required integers and Principal. Unsupported shapes
+/// Primary keys require Nat64; secondary indexes admit integers, Principal,
+/// Bool and bounded Text, including optional forms. Optional unique indexes require
+/// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
-/// Required Nat64 fields may declare `references(entity = 1, index = 1)`;
-/// the selected index must belong to this entity and lead with this field.
+/// Required or optional Nat64 fields may declare `references(entity = 1, index = 1)`;
+/// the selected unfiltered index must belong to this entity and lead with this field.
+/// `None` has no target; every `Some(id)` requires that target in the final batch state.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
@@ -28,6 +31,7 @@ struct Index {
     id: u32,
     fields: Vec<String>,
     unique: bool,
+    present_only: bool,
 }
 
 fn metas(tokens: Tokens) -> syn::Result<Vec<Meta>> {
@@ -148,6 +152,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             let mut id = None;
             let mut names = None;
             let mut unique = false;
+            let mut present_only = false;
             for part in list(&meta)? {
                 if part.path().is_ident("id") {
                     once(&mut id, identity(&part)?, &part)?;
@@ -157,6 +162,10 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                     once(&mut names, vec![text(&part)?], &part)?;
                 } else if matches!(&part, Meta::Path(path) if path.is_ident("unique")) && !unique {
                     unique = true;
+                } else if matches!(&part, Meta::Path(path) if path.is_ident("present_only"))
+                    && !present_only
+                {
+                    present_only = true;
                 } else {
                     return Err(syn::Error::new_spanned(
                         part,
@@ -169,6 +178,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 fields: names
                     .ok_or_else(|| syn::Error::new_spanned(&meta, "index requires fields"))?,
                 unique,
+                present_only,
             });
         } else {
             return Err(syn::Error::new_spanned(meta, "unsupported entity option"));
@@ -216,9 +226,9 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let mut encoded_indexes = Vec::new();
     for field in &authored {
         if let Some((_, id)) = field.reference
-            && !indexes
-                .iter()
-                .any(|index| index.id == id && index.fields.first() == Some(&field.name))
+            && !indexes.iter().any(|index| {
+                index.id == id && !index.present_only && index.fields.first() == Some(&field.name)
+            })
         {
             return Err(fail(
                 "reference requires a declared index beginning with its field",
@@ -237,7 +247,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             })
         {
             return Err(fail(
-                "index currently requires 1..4 distinct non-optional integer or Principal fields",
+                "index requires 1..4 distinct integer, Principal, Bool or Text fields",
             ));
         }
         let fields: Vec<syn::Ident> = index
@@ -247,9 +257,36 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             .collect::<syn::Result<_>>()?;
         let index_id = index.id;
         let unique = index.unique;
+        let present_only = index.present_only;
+        let has_optional = index.fields.iter().any(|name| {
+            authored
+                .iter()
+                .any(|field| &field.name == name && field.optional)
+        });
+        if (unique && has_optional && !present_only) || (present_only && (!unique || !has_optional))
+        {
+            return Err(fail(
+                "optional unique indexes require present_only; present_only requires uniqueness and an optional component",
+            ));
+        }
+        let operands: Vec<_> = index
+            .fields
+            .iter()
+            .zip(&fields)
+            .map(|(name, ident)| {
+                let field = authored
+                    .iter()
+                    .find(|field| &field.name == name)
+                    .expect("admitted index field");
+                let value = field.index_value(ident);
+                let optional = field.optional;
+                quote!((#value, #optional))
+            })
+            .collect();
         let names = index.fields;
-        descriptions.push(quote! { ::ic_db::IndexSchema { id: #index_id, fields: &[#(#names),*], unique: #unique } });
-        encoded_indexes.push(quote! {{ let mut bytes = ::std::vec::Vec::new(); #(::ic_db::IndexValue::from(row.#fields).__append_to(&mut bytes);)* bytes }});
+        descriptions.push(quote! { ::ic_db::IndexSchema { id: #index_id, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
+        encoded_indexes
+            .push(quote! { ::ic_db::__private::encode_index(&[#(#operands),*], #present_only) });
     }
     let name = &item.ident;
     let attrs = &item.attrs;

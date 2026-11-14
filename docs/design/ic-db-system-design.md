@@ -253,6 +253,26 @@ and which behavior changes or moves elsewhere. Keeping the familiar declaration
 style does not require importing IcyDB's generated runtime or endpoint machinery.
 Generated Rust values still require write admission, including managed-field checks.
 
+Maintainer clarification: retain IcyDB's two-stage schema path expansion and
+host-side `ctor` registration for the richer schema graph. The first stage emits
+typed Rust references and canonical path metadata; Rust resolves those references
+rather than the procedural macro guessing module/import resolution. Constructors
+collect the compiled schema nodes in the host build; the second stage validates
+and seals the complete graph before generating the database artifacts. Registration
+order must not determine schema identity or stored layout. Keep duplicate/missing
+node and invalid-link checks, and keep this collection machinery out of deployed
+Wasm. This is build-time authoring infrastructure, not a durable runtime catalog.
+Adapt the frozen
+[path and constructor emission](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model-macros/src/node/traits.rs)
+and [graph collection/sealing](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/build/mod.rs),
+without importing endpoint generation or runtime schema reconciliation.
+Rust resolution paths and durable schema identity remain distinct: map resolved
+nodes to their declared schema names/identities under the compiled-contract rules.
+The current flat scalar macro emits descriptors directly and does not yet implement
+this two-stage pipeline. Familiar attribute syntax alone is not completion of that
+carryover; qualify cross-module/type references and deterministic graph assembly
+when delivering named/nested schema types.
+
 | Generated or shared surface | Initial responsibility |
 | --- | --- |
 | Concrete entity and key types | Typed values; composite keys preserve declared component order; optional absence remains explicit |
@@ -261,8 +281,9 @@ Generated Rust values still require write admission, including managed-field che
 | Row/key codecs | Exact bounded encoding under that descriptor's contract; no lossy numeric coercion |
 | Shared inspection | Project the compiled descriptor and separately report durable manifest admission/maintenance status |
 
-Prefer one macro emission contract through the `ic-db` facade. Do not reproduce
-separate schema-only/runtime import modes or generate insert/patch/replace helper
+Prefer one public macro emission contract through the `ic-db` facade; internal
+host-build collection and target emission may remain separate stages. Do not require
+separate user-facing schema-only/runtime import modes or generate insert/patch/replace helper
 families before their distinct input contracts require them. This is a generated
 surface choice, not removal of insert/update/delete or managed values. Defaults,
 generated keys and timestamps must retain explicit ownership in write admission.
@@ -464,15 +485,17 @@ grouping, composite-key encoding versus comparison, set/map construction order,
 enum rename/reorder identity and timestamp preservation during maintenance.
 Supported operations must agree; this does not require a universal value engine.
 
-The initial optional-unique candidate requires explicit present-only index
+The implemented scalar optional-unique contract requires explicit present-only index
 membership. Multiple absent values are allowed and have no entry in that unique
 index; present values use the same equality as comparisons and other indexes.
 For composite unique keys every optional component needs that guard. An ambiguous
-unguarded declaration refuses rather than silently choosing a null policy. Typed
-conditions express this without SQL text; ordinary non-unique indexes and
+unguarded declaration refuses rather than silently choosing a null policy. The
+compiled `present_only` option expresses the complete guard without SQL text;
+ordinary non-unique indexes and
 grouping/DISTINCT still retain absence under their own declared semantics.
-The fixed batch probe qualifies one optional scalar, including release/acquire
-and rollback; composite/nested membership and macro diagnostics remain unqualified.
+The product now qualifies optional scalar composite membership and macro
+diagnostics, including release/acquire, references and rollback. Nested membership
+and arbitrary partial-index predicates remain separate work.
 Application-specific naming, normalization and length policies are not built into
 the engine; its declared type/comparison semantics remain shared and exact.
 
@@ -1255,8 +1278,9 @@ or a performance improvement until matched workloads qualify them here.
 | Optional forms of these types | Absence remains distinct from empty, zero and false |
 
 Field validation runs before encoding and after decoding; whole-row bounds apply
-independently. Secondary indexes admit required Nat/Int8/16/32/64/128 and Principal
-components; primary keys and references still require non-optional Nat64.
+independently. Secondary indexes admit Nat/Int8/16/32/64/128, Principal,
+Bool and bounded Text components, including optional values; primary keys require
+non-optional Nat64, while references admit required or optional Nat64.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, managed policies and fluent queries remain work;
 no retained capability or product attribute has been retired.
@@ -1291,7 +1315,44 @@ public query frontend. For example, `index_prefix::<E>(1, &[owner.into()], 10)`
 looks up a Principal-leading index; an integer field requires its exact Rust
 width and signedness. Incorrect operand types refuse with `InvalidOperand`.
 Nonempty prefixes and 1–32 results remain the current contract; index continuation,
-Text/Blob/Bool/optional indexes and the fluent builder remain separate work.
+Blob indexes and the fluent builder remain separate work.
+
+Optional components use an explicit presence byte: `00` for absence, `01`
+followed by the scalar payload for presence. Ordinary indexes retain every row
+and sort absence first; empty text, zero, false and an empty Principal remain
+present values. `IndexValue::Absent` selects absence in such an index. Optional
+unique declarations require `unique, present_only`: every optional component
+must be present for the row to participate. Absence in a lookup against that
+index refuses rather than implying it enumerates missing values. This narrow
+compiled membership policy adapts IcyDB's
+[complete nullable-unique guard regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/schema/snapshot/tests.rs),
+without importing SQL predicates, a predicate compiler or runtime catalogs.
+The option is refused on non-unique indexes and indexes with no optional fields.
+A reference's designated reverse index must retain all rows. Omitting a unique
+entry never bypasses row decoding, target-existence checks or restricted deletion.
+One shared encoder decides membership for generated and stored-row keys;
+temporary row information records an omitted entry as `None`. There is no durable
+membership registry, overlay or second commit path. Native and Wasm witnesses
+cover duplicates, compound completeness, present-to-absent release/acquire,
+unique exchanges, incompatible reopen and full-backing rollback. The console
+projects the compiled policy in an explicit Membership column.
+
+Text indexes adapt IcyDB's
+[terminated byte encoding](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/ordered/segments.rs).
+Embedded zero is escaped as `00 FF`; `00 00` terminates the component. Empty
+text, a string and its longer prefix-sharing neighbor, and adjacent compound
+fields cannot alias. Ordering is exact UTF-8 byte order, with no normalization,
+case folding or locale rules. Bool uses `00/01`, false before true, without
+numeric coercion. Text operands are borrowed `IndexValue::Text(&str)`; lookup
+admission enforces the field's UTF-8 byte bound before encoding. Stored-key
+inspection also borrows text from the row buffer. The former eight-byte component
+allocation assumption is removed; no separate text index executor is introduced.
+`index_prefix::<E>(2, &[false.into(), "a".into()], 10)` matches complete leading
+fields: it excludes `"aa"` and `"a\0"`. A future starts-with predicate needs its
+own admitted semantics. Tests compare Unicode/empty/NUL tuple order with Rust
+strings, check uniqueness and corruption refusal, and qualify the full row-size
+escaping boundary natively. Wasm additionally checks a `(published, title)`
+index's bounds, updates, complete backing rollback and unchanged upgrade.
 
 Native witnesses compare every integer width's extrema and duplicate ordering
 against Rust values, compare Principal lengths 0–29 against its canonical owner,
@@ -1329,8 +1390,8 @@ Typed reads decode once, then verify the physical key/index against that value.
 Batch construction encodes once and extracts keys directly from the admitted typed
 value. Stored old rows now use one concrete metadata-driven key inspector at
 mutation and reference boundaries, replacing a generated decoder callback per
-entity. It scans canonical fields once, retaining only selected integer/Principal
-key values in a bounded stack array for primary/index construction. Unselected fields still
+entity. It scans canonical fields once, retaining only selected scalar key values
+and borrowed text in a bounded stack array for primary/index construction. Unselected fields still
 pass the same primitive, presence, length and UTF-8 checks as owned decoding;
 the complete row must be consumed. Text/blob payloads borrow the supplier's row
 buffer rather than allocating owned field values. The supplier still returns an
@@ -1352,7 +1413,7 @@ contract. The CLI uses
 compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
 terminal rendering and test endpoints stay outside the product crates.
 
-Required Nat64 fields now accept `references(entity = 1, index = 1)` alongside
+Required or optional Nat64 fields accept `references(entity = 1, index = 1)` alongside
 their `value(...)` declaration. The target must be in the admitted schema; the
 selected ordinary index belongs to the dependent entity and must lead with this
 field. Target existence and restricted deletion are validated against prepared
@@ -1360,7 +1421,28 @@ final rows and index changes. Parents and dependents may be inserted together in
 either order; explicit dependent deletion/repointing may accompany parent deletion.
 Cycles and self references are valid when their final targets exist. No recursive
 cascade or implicit requirement that a parent have children is introduced.
-Optional/nested references and other key types remain unimplemented here.
+Optional absence has no target; `Some(0)` still references the ordinary key zero.
+An optional reference must use an unfiltered reverse index, just like a required
+reference. Its presence byte is part of the existing component encoding; reverse
+checks use the present-target prefix and never interpret absent entries as edges.
+Unlinking, repointing or deleting all surviving dependants may accompany target
+deletion in the same batch. Every reference is checked independently, even when
+another reference on the row is absent. Nested references and other primary-key
+types remain unimplemented here.
+
+This retains the absence/target-existence distinction in frozen IcyDB's
+[relationship projection](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/relation/reverse_index/mod.rs)
+and [nullable relationship regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/schema/application/tests/collection_relations.rs).
+The scalar implementation is adapted to the existing compiled metadata and
+ordinary indexes; it does not import IcyDB's broader collection/nested projection
+or accepted-relation catalogs. Native cases cover absent/zero, independent
+references, final-state cycles and unlinking 31 dependants, literal index bytes,
+corruption refusal and incompatible optionality. The Wasm witness covers absence,
+zero/max targets, no-op revisions, refused deletion, late-message rollback and
+unchanged upgrade. No new namespace, stored representation, dependency or
+attribute is added; old admitted contracts retain their identities. Newly optional
+reference declarations change the fingerprint and cannot silently reopen required
+reference data.
 
 Each reverse lookup skips only old index entries removed by explicit batch
 commands, then refuses on the first surviving dependent. At most 33 candidates
@@ -1385,7 +1467,8 @@ The scalar contract grammar is `ICDBSC01`: five little-endian `u32` versions
 (grammar, row codec, key codec, semantics, supplier contract), entity count, then
 entities ordered by nonzero ID. Each contains its ID, field count, sorted
 length-prefixed UTF-8 field names and type tags, primary-key name,
-index count, then indexes ordered by ID (ID, unique byte, ordered field names).
+index count, then indexes ordered by ID (ID, flags byte, ordered field names).
+Index flags use bit 0 for unique and bit 1 for present-only membership.
 Counts/name lengths are `u32` little-endian. SHA-256 uses domain
 `ic-db:schema:v1\0`; presentation entity names are excluded. Row codec version is
 3; the other four versions remain 1, with supplier contract 1 qualified here
@@ -1413,8 +1496,14 @@ Revision/row/index keys start with tags 1/2/3, then big-endian entity ID; rows a
 the big-endian Nat64 primary key. Index keys add the index ID and declared components.
 Integers occupy their exact width in big-endian order, with signed values' leading
 sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
-These component frames concatenate unambiguously; up to four components require
-at most 120 bytes. Nonunique indexes append the primary key. Index values are the big-endian primary
+Bool occupies one strict 0/1 byte; Text escapes zero as `00 FF` and ends with
+`00 00`. These component frames concatenate unambiguously. For a valid 4 KiB
+row, distinct indexed fields require at most twice the row bytes plus eight
+terminator bytes per index, excluding namespace/primary-key bytes. A lookup
+with four maximum-bound optional Text operands encodes at most 32,780 component bytes;
+individual field bounds are checked before each operand is encoded. These
+structural caps are not a claim that every maximal index fan-out fits one IC
+message; that qualification remains part of M1. Nonunique indexes append the primary key. Index values are the big-endian primary
 key; revisions are little-endian `u64`. Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
@@ -1657,8 +1746,44 @@ This is not a measurement of Principal workloads or broad fluent-query parity.
 The IC DB artifact SHA-256 is
 `4d85f081ccf8b403a5ad2d24b5d5ff2cd6e71b43433ed531444f4fe9548f0d69`;
 the qualification lockfile is unchanged. The preceding Principal evidence is in
-`qualification/target/evidence/records-comparison-before-typed-indexes/`;
-the ordinary comparison directory contains the typed-index run.
+`qualification/target/evidence/records-comparison-before-typed-indexes/`.
+
+After bounded Text/Bool indexes, the scalar host is 171,684 Wasm bytes (+1,033)
+and 151,888 code-section bytes (+1,032). Hit/miss costs are unchanged; listing
+costs 780,555 instructions (+607), and complete read/modify/replace costs 834,511
+instructions and 7,848,468 cycles (+977 each). This includes removing the stored
+key inspector's old eight-byte allocation assumption. The frozen-IcyDB ceilings
+still hold for every measured scalar operation; its artifact and measurements
+are unchanged. Text-heavy workloads, maximal fan-out and general fluent queries
+remain outside this comparison. IC DB artifact SHA-256:
+`b3198db40a0e63d9f9c82ddb61e7cb1bcdd06e47274cca83f1522b568a2e8d8c`.
+The qualification lockfile remains unchanged. The preceding typed-index evidence
+is in `qualification/target/evidence/records-comparison-before-text-indexes/`.
+
+After optional membership, the scalar host is 172,539 Wasm bytes (+855) and
+152,670 code-section bytes (+782). Hit/miss cost 484,640/490,088 instructions
+(+634 each), listing costs 780,730 (+175), and complete read/modify/replace costs
+835,747 instructions and 7,849,704 cycles (+1,236 each). Every measured scalar
+operation remains below its frozen-IcyDB comparison ceiling; the IcyDB artifact
+and measurements are unchanged. This does not measure optional-heavy workloads.
+IC DB artifact SHA-256:
+`a3bbcadcf5a4d537d2c951fff6be197c3c489f8e82ab6c1f5b3b75882c53eb78`.
+The qualification lockfile is unchanged. Prior text-index evidence is preserved
+in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
+
+After optional references, the scalar host is 172,493 Wasm bytes and 152,625
+code-section bytes. Hit/miss/listing cost 484,596/490,044/779,278 instructions;
+complete read/modify/replace costs 835,395 instructions and 7,849,352 cycles.
+All scalar ceilings still hold; small code-layout deltas do not measure optional
+relationship workloads. IcyDB's artifact and measured costs remain unchanged.
+IC DB artifact SHA-256 is
+`9cc771e856abb2efb12e3dcd69f780f9ebb5e6e8cc2745c7d94b463c4521d512`.
+A concurrent qualification-only dependency refresh selected Testkit 0.104.1,
+Host artifacts/fs/process 0.77.3 and Platform 0.33.0; the two Wasm dependency/feature
+graphs are unchanged. The captured qualification lockfile SHA-256 is
+`0d525fd895d2895c7826962757f8df5faf27118f9ee97d6067cf7a34242c4b2a`.
+The ordinary comparison directory contains this run; the preceding evidence is
+preserved under `qualification/target/evidence/records-comparison-before-optional-references/`.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,

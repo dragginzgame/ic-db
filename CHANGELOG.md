@@ -6,8 +6,13 @@
 
 Reinstall the local fixture console, then inspect `IdentityRow`'s required and
 optional `Principal` fields and unique owner index. Document's reverse index now
-orders signed scores within each entry. This remains a fresh local database;
+orders signed scores within each entry, and its new `(published, title)` index
+combines boolean and exact text ordering. This remains a fresh local database;
 `query` still reads Entry rows.
+`db schema` now shows Membership: IdentityRow's optional identity index requires
+all optional keys present; Document's priority index includes absent values.
+The empty `OptionalLink` entity shows an optional Nat64 self-reference and its
+ordinary reverse index; no target is required for `None`.
 
 ```sh
 make db
@@ -17,10 +22,47 @@ db status
 
 ### 🛠️ Changes
 
+- Support optional Nat64 references through existing ordinary reverse indexes.
+  Absence has no target; present zero is a real key. Validate existence and
+  restricted deletion against the final batch, allowing explicit unlink/delete
+  and repoint/delete together. Adapt IcyDB's absent-relationship invariant without
+  adding relationship catalogs, cascades or nested-reference machinery. Native/Wasm
+  checks cover zero/max keys, self-references, independent edges, maximum bounded
+  unlinking, malformed data, refusal, rollback and reopen. Existing contracts and
+  stored bytes remain unchanged; changing a field's optionality changes its identity.
+  No attribute, crate, dependency or durable state is added.
+- Add optional secondary-index components. Ordinary indexes retain absence and
+  order it before presence; use `IndexValue::Absent` for an exact absent lookup.
+  Optional unique indexes require `unique, present_only`, guarding every optional
+  component of a compound key. Missing guards and filtered reverse-reference
+  indexes refuse. Keep row validation and references independent of membership.
+  Adapt IcyDB's explicit nullable-uniqueness rule without its predicate/compiler
+  machinery. Native/Wasm checks cover omission, empty values, swaps, release/acquire,
+  corruption refusal, rollback and reopen. No new crate, dependency or journal.
+  `IndexSchema` now carries `present_only`; inspection shows its Membership column.
+  Existing admitted fingerprints/key bytes remain unchanged. New index policy
+  changes the contract and cannot silently reopen existing data.
+  Scalar comparison grows by 855 Wasm bytes to 172,539; complete read/modify/replace
+  uses 835,747 instructions (+1,236). The recorded IcyDB scalar ceilings still hold;
+  optional-heavy workloads and broad fluent-query parity remain unmeasured.
 - Breaking API: `index_prefix` now accepts exact `IndexValue` operands.
   Convert numeric arguments with their declared type, such as `7_u64.into()`;
   previously accepted integer slices no longer compile directly. Existing
   Nat64 persisted contracts are unchanged.
+
+- Add required Bool and bounded Text secondary indexes. Adapt IcyDB's
+  zero-byte escaping and component terminators; preserve byte-exact UTF-8 order,
+  distinct normalization forms, empty strings and embedded NULs. Text operands
+  borrow `&str`; explicit stored operand types now use `IndexValue<'a>`.
+  Lookup prefixes match complete leading fields, not partial strings. Native and
+  Wasm checks cover bounds, ordering, tuple boundaries, writes, refusal and reopen;
+  the full 4 KiB row/escaped-key boundary is additionally qualified natively.
+  Keep one component encoder/admission owner and remove the obsolete eight-byte
+  allocation assumption. No new crate, dependency, durable metadata or attribute.
+  Scalar comparison: 171,684 Wasm bytes (+1,033); listing 780,555 instructions
+  (+607); complete read/modify/replace 834,511 instructions (+977).
+  All measured scalar operations remain below the frozen-IcyDB comparison
+  ceilings; this does not measure text-heavy queries.
 
 - Extend secondary indexes to required Nat/Int8/16/32/64/128 and Principal fields.
   Adapt IcyDB's numeric ordering and length-first Principal rules into one shared
@@ -28,7 +70,7 @@ db status
   compound boundaries, duplicate ordering, unique swaps, reverse references,
   corruption refusal and Wasm rollback/reopen are qualified. Preserve existing
   Nat64 key bytes and fingerprints. Primary keys/references remain Nat64;
-  optional/text indexing and fluent queries remain work. No attribute is removed,
+  fluent queries remain work. No attribute is removed,
   new durable metadata added, or supplier/transport dependency introduced.
   The matched scalar host grows by 3,620 bytes to 170,651 Wasm bytes; indexed
   listing uses 779,948 instructions and complete read/modify/replace uses 833,534,

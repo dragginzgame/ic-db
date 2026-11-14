@@ -28,7 +28,7 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
         quote!(id=1, pk(field="id"), fields(#field, field(name="title", value(item(prim="Text", max_bytes=4097))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="flag", value(item(prim="Bool", max_bytes=1))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="flag", value(opt, opt, item(prim="Bool"))))),
-        quote!(id=1, pk(field="id"), index(id=1,field="title"), fields(#field, field(name="title", value(item(prim="Text",max_bytes=32))))),
+        quote!(id=1, pk(field="id"), index(id=1,field="title",unique), fields(#field, field(name="title", value(opt,item(prim="Text",max_bytes=32))))),
         quote!(id=1, pk(field="id"), index(id=1,field="optional",unique), fields(#field, field(name="optional", value(opt,item(prim="Nat64"))))),
         quote!(
             id = 1,
@@ -54,6 +54,27 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
 
 #[test]
 fn references_require_a_bounded_reverse_access_path() {
+    let optional = quote!(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "target",
+            value(opt, item(prim = "Nat64")),
+            references(entity = 2, index = 1)
+        )
+    );
+    assert!(
+        expand(
+            quote!(id=1, pk(field="id"), index(id=1,fields=["target","id"]), fields(#optional)),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_ok()
+    );
+    assert!(expand(
+        quote!(id=1, pk(field="id"), index(id=1,field="target",unique,present_only), fields(#optional)),
+        quote!(struct Row {})
+    ).is_err());
     for args in [
         quote!(
             id = 1,
@@ -141,7 +162,7 @@ fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
         let wide = quote!(field(name="wide",value(item(prim=#prim))));
         for args in [
             quote!(id=1,pk(field="wide"),fields(#wide)),
-            quote!(id=1,pk(field="id"),index(id=1,field="wide"),fields(#id,field(name="wide",value(opt,item(prim=#prim))))),
+            quote!(id=1,pk(field="id"),index(id=1,field="wide",unique),fields(#id,field(name="wide",value(opt,item(prim=#prim))))),
             quote!(id=1,pk(field="id"),fields(#id,field(name="wide",value(item(prim=#prim,max_bytes=16))))),
             quote!(id=1,pk(field="id"),index(id=1,field="wide"),fields(#id,field(name="wide",value(item(prim=#prim)),references(entity=1,index=1)))),
         ] {
@@ -156,4 +177,81 @@ fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
             );
         }
     }
+}
+
+#[test]
+fn optional_membership_is_explicit_and_cannot_hide_reverse_references() {
+    let fields = quote!(fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "alias",
+            value(opt, item(prim = "Text", max_bytes = 32))
+        ),
+        field(name = "code", value(opt, item(prim = "Int64")))
+    ));
+    for index in [
+        quote!(index(id = 1, fields = ["alias", "code"], unique)),
+        quote!(index(id = 1, field = "alias", present_only)),
+        quote!(index(id = 1, field = "id", unique, present_only)),
+        quote!(index(
+            id = 1,
+            field = "alias",
+            unique,
+            present_only,
+            present_only
+        )),
+    ] {
+        assert!(
+            expand(
+                quote!(id=1,pk(field="id"),#index,#fields),
+                quote!(
+                    struct Row {}
+                )
+            )
+            .is_err()
+        );
+    }
+    for index in [
+        quote!(index(
+            id = 1,
+            fields = ["alias", "code"],
+            unique,
+            present_only
+        )),
+        quote!(index(id = 1, fields = ["alias", "code"])),
+    ] {
+        assert!(
+            expand(
+                quote!(id=1,pk(field="id"),#index,#fields),
+                quote!(
+                    struct Row {}
+                )
+            )
+            .is_ok()
+        );
+    }
+    assert!(
+        expand(
+            quote!(
+                id = 1,
+                pk(field = "id"),
+                index(id = 1, fields = ["id", "alias"], unique, present_only),
+                fields(
+                    field(
+                        name = "id",
+                        value(item(prim = "Nat64")),
+                        references(entity = 1, index = 1)
+                    ),
+                    field(
+                        name = "alias",
+                        value(opt, item(prim = "Text", max_bytes = 32))
+                    )
+                )
+            ),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
 }
