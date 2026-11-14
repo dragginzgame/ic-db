@@ -948,7 +948,6 @@ version = "0.1.1"
 dependencies = [
  "ic-db-macros",
  "ic-storage",
- "ic-wire",
  "sha2 0.11.1",
 ]
 

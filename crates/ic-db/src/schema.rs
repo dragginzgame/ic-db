@@ -1,12 +1,26 @@
 //! One compiled scalar contract, canonical fingerprint and inspection projection.
 
-use crate::{__private::RowInfo, Error};
+use crate::{__private::RowInfo, Error, codec::Decoder};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+
+const MAX_FIELDS: usize = 16;
 
 /// Stored primitive semantics supported by this increment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldType {
+    /// Exact unsigned 8-bit integer.
+    Nat8,
+    /// Exact unsigned 16-bit integer.
+    Nat16,
+    /// Exact unsigned 32-bit integer.
+    Nat32,
+    /// Exact signed 8-bit integer.
+    Int8,
+    /// Exact signed 16-bit integer.
+    Int16,
+    /// Exact signed 32-bit integer.
+    Int32,
     /// Exact unsigned 64-bit integer.
     Nat64,
     /// Exact signed 64-bit integer, without unsigned or floating-point coercion.
@@ -19,7 +33,12 @@ pub enum FieldType {
     Bool,
     /// Exact UTF-8 text, bounded in bytes without implicit normalization.
     Text {
-        /// Maximum UTF-8 byte length (1..=4096).
+        /// Maximum UTF-8 byte length (0..=4096); zero admits only empty text.
+        max_bytes: u32,
+    },
+    /// Exact binary bytes without UTF-8 interpretation or normalization.
+    Blob {
+        /// Maximum payload length (0..=4096); zero admits only an empty value.
         max_bytes: u32,
     },
 }
@@ -57,7 +76,7 @@ pub struct IndexSchema {
     pub unique: bool,
 }
 
-/// Metadata and the necessary typed codec boundary emitted by the entity macro.
+/// Compiled entity metadata emitted by the entity macro.
 pub struct EntitySchema {
     /// Stable entity identity.
     pub id: u32,
@@ -69,9 +88,48 @@ pub struct EntitySchema {
     pub primary_key: &'static str,
     /// Indexes ordered by identity.
     pub indexes: &'static [IndexSchema],
-    /// Generated decoder for key/index maintenance, not a public mutation callback.
-    #[doc(hidden)]
-    pub inspect_row: fn(&[u8]) -> Result<RowInfo, Error>,
+}
+
+impl EntitySchema {
+    // Called only for an admitted schema. Validate every stored field but retain
+    // only required Nat64 key values; no entity, owned text/blob or value cache.
+    pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
+        let mut reader = Decoder::new(bytes)?;
+        let mut keys = [None; MAX_FIELDS];
+        for (position, field) in self.fields.iter().enumerate() {
+            if field.optional && !reader.boolean()? {
+                continue;
+            }
+            if field.value == FieldType::Nat64 && !field.optional {
+                *keys.get_mut(position).ok_or(Error::Corrupt)? = Some(reader.nat64()?);
+            } else {
+                reader.skip(field.value)?;
+            }
+        }
+        reader.finish()?;
+        let key = |name: &str| {
+            self.fields
+                .iter()
+                .position(|field| field.name == name)
+                .and_then(|position| keys.get(position).copied().flatten())
+                .ok_or(Error::Corrupt)
+        };
+        let indexes = self
+            .indexes
+            .iter()
+            .map(|index| {
+                let mut bytes = Vec::with_capacity(index.fields.len() * 8);
+                for name in index.fields {
+                    bytes.extend(key(name)?.to_be_bytes());
+                }
+                Ok(bytes)
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(RowInfo {
+            key: key(self.primary_key)?,
+            indexes,
+        })
+    }
 }
 
 /// Validated executable schema. It is never reconstructed from stored data.
@@ -94,7 +152,7 @@ impl Schema {
         // Contract grammar, row codec, key codec, semantics, supplier contract.
         // Supplier contract 1 is qualified with Storage 0.74.1; it is not a guess
         // that every future supplier release uses a compatible collection format.
-        for version in [1_u32; 5] {
+        for version in [1, crate::codec::ROW_CODEC_VERSION, 1, 1, 1] {
             bytes.extend(version.to_le_bytes());
         }
         bytes.extend((entities.len() as u32).to_le_bytes());
@@ -103,7 +161,7 @@ impl Schema {
             if entity.id == 0
                 || !ids.insert(entity.id)
                 || entity.fields.is_empty()
-                || entity.fields.len() > 16
+                || entity.fields.len() > MAX_FIELDS
                 || entity.indexes.len() > 8
                 || !required_nat64(entity, entity.primary_key)
                 || entity
@@ -118,23 +176,35 @@ impl Schema {
             for field in entity.fields {
                 name(&mut bytes, field.name)?;
                 let tag = match field.value {
+                    FieldType::Nat8 => 8,
+                    FieldType::Nat16 => 9,
+                    FieldType::Nat32 => 10,
+                    FieldType::Int8 => 11,
+                    FieldType::Int16 => 12,
+                    FieldType::Int32 => 13,
                     FieldType::Nat64 => 1,
                     FieldType::Int64 => 4,
                     FieldType::Nat128 => 5,
                     FieldType::Int128 => 6,
                     FieldType::Bool => 2,
                     FieldType::Text { max_bytes } => {
-                        if !(1..=4096).contains(&max_bytes) {
+                        if max_bytes > 4096 {
                             return Err(Error::InvalidSchema);
                         }
                         3
+                    }
+                    FieldType::Blob { max_bytes } => {
+                        if max_bytes > 4096 {
+                            return Err(Error::InvalidSchema);
+                        }
+                        7
                     }
                 };
                 bytes.push(
                     tag | if field.optional { 0x80 } else { 0 }
                         | if field.reference.is_some() { 0x40 } else { 0 },
                 );
-                if let FieldType::Text { max_bytes } = field.value {
+                if let FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } = field.value {
                     bytes.extend(max_bytes.to_le_bytes());
                 }
                 if let Some(reference) = field.reference {

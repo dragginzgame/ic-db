@@ -60,10 +60,12 @@ impl Batch {
     }
     fn put<E: Entity>(&mut self, row: &E, replace: bool) -> Result<(), Error> {
         let bytes = row.encode()?;
-        if bytes.len() > crate::__private::ROW_LIMITS.bytes {
+        if bytes.len() > crate::__private::MAX_ROW_BYTES {
             return Err(Error::Limit);
         }
-        let info = (E::SCHEMA.inspect_row)(&bytes)?;
+        // encode() admitted field/row bounds. Keys come from that same typed
+        // value; decoding freshly encoded bytes would duplicate codec work.
+        let info = row.__row_info();
         let len = bytes.len();
         self.push(
             Mutation {
@@ -187,10 +189,11 @@ impl<M: Memory> Database<M> {
         self.map
             .get(&row_key(E::SCHEMA.id, key))
             .map(|bytes| {
-                if (E::SCHEMA.inspect_row)(&bytes)?.key != key {
+                let row = E::decode(&bytes)?;
+                if row.key() != key {
                     return Err(Error::Corrupt);
                 }
-                E::decode(&bytes)
+                Ok(row)
             })
             .transpose()
     }
@@ -223,10 +226,11 @@ impl<M: Memory> Database<M> {
             }
             let id = u64::from_be_bytes(key[5..].try_into().map_err(|_| Error::Corrupt)?);
             let bytes = entry.value();
-            if (E::SCHEMA.inspect_row)(&bytes)?.key != id {
+            let row = E::decode(&bytes)?;
+            if row.key() != id {
                 return Err(Error::Corrupt);
             }
-            rows.push(E::decode(&bytes)?);
+            rows.push(row);
             last = Some(id);
         }
         Ok(Page {
@@ -274,15 +278,9 @@ impl<M: Memory> Database<M> {
                 .map
                 .get(&row_key(E::SCHEMA.id, id))
                 .ok_or(Error::Corrupt)?;
-            let info = (E::SCHEMA.inspect_row)(&bytes)?;
-            if info.key != id
-                || !index_entries(E::SCHEMA, &info)?
-                    .iter()
-                    .any(|(key, _)| key == entry.key())
-            {
-                return Err(Error::Corrupt);
-            }
-            rows.push(E::decode(&bytes)?);
+            let row = E::decode(&bytes)?;
+            validate_index_entry(E::SCHEMA, &row.__row_info(), id, entry.key())?;
+            rows.push(row);
         }
         Ok(rows)
     }
@@ -320,7 +318,7 @@ impl<M: Memory> Database<M> {
                 continue;
             }
             if let Some(old) = old {
-                let info = (mutation.entity.inspect_row)(&old)?;
+                let info = mutation.entity.inspect_row(&old)?;
                 if info.key != mutation.key {
                     return Err(Error::Corrupt);
                 }
@@ -411,7 +409,7 @@ impl<M: Memory> Database<M> {
                 .iter()
                 .find(|value| value.id == entity)
                 .ok_or(Error::Corrupt)?;
-            if (schema.inspect_row)(&bytes)?.key != id {
+            if schema.inspect_row(&bytes)?.key != id {
                 return Err(Error::Corrupt);
             }
         }
@@ -450,14 +448,8 @@ impl<M: Memory> Database<M> {
                             .map
                             .get(&row_key(entity.id, owner))
                             .ok_or(Error::Corrupt)?;
-                        let info = (entity.inspect_row)(&bytes)?;
-                        if info.key != owner
-                            || !index_entries(entity, &info)?
-                                .iter()
-                                .any(|(key, _)| key == entry.key())
-                        {
-                            return Err(Error::Corrupt);
-                        }
+                        let info = entity.inspect_row(&bytes)?;
+                        validate_index_entry(entity, &info, owner, entry.key())?;
                         return Err(Error::ReferenceViolation);
                     }
                 }
@@ -505,4 +497,22 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
             Ok((key, index.unique))
         })
         .collect()
+}
+
+// Both indexed reads and reverse-reference checks must prove the physical entry
+// belongs to the decoded row, rather than trusting a valid-looking owner alone.
+fn validate_index_entry(
+    entity: &EntitySchema,
+    info: &RowInfo,
+    owner: u64,
+    key: &[u8],
+) -> Result<(), Error> {
+    if info.key != owner
+        || !index_entries(entity, info)?
+            .iter()
+            .any(|(entry, _)| entry == key)
+    {
+        return Err(Error::Corrupt);
+    }
+    Ok(())
 }

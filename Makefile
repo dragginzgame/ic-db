@@ -106,15 +106,18 @@ m0-reads:
 m0-maintenance: m0-maintenance-artifacts
 	IC_DB_M0_MAINTENANCE_DIR="$(CURDIR)/qualification/target/evidence/m0" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test maintenance -- --nocapture
 
-.PHONY: m1-records m1-records-artifact
+.PHONY: m1-records m1-records-artifact m1-records-wasm
 m1-records-artifact:
 	@mkdir -p qualification/target/evidence/m1
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/records-build.jsonl
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/records-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
-m1-records: m1-records-artifact
+m1-records:
 	cargo test --locked -p ic-db --test records -p ic-db-macros --lib
+	$(MAKE) m1-records-wasm
+
+m1-records-wasm: m1-records-artifact
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records -- --nocapture
 
 .PHONY: m1-commit-failures
@@ -146,3 +149,4 @@ release-tools:
 release-lint:
 	$(MAKE) clippy
 	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --all-targets -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings

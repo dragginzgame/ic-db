@@ -327,25 +327,45 @@ changes and an independent SHA-256 vector. Its small grammar is not the complete
 product contract. The grammar below settles what those encodings must identify;
 the product's exact tags and byte vectors must be fixed before M1 persists them.
 
-Use the existing bounded Wire native codec as the initial row-payload candidate,
-under an IC DB-owned versioned frame and admitted collection contract. Generate
-storage traversal in canonical field-name order so names need not be repeated in
-each row; keep primary/index key encoding separate because payload byte order
-does not establish index ordering. A field rename still changes schema identity.
-Database admission enforces field-specific bounds and semantics in addition to
-Wire's byte/traversal allowances. Ordinary transport Serde choices must not silently
-change stored traversal or normalization. Select named codec/semantic versions
-and qualify generated traversal before treating declaration reordering as compatible.
+IC DB owns durable row encoding and decoding, independently of transport formats.
+The product has no `ic-wire` dependency. Generate storage traversal in canonical
+field-name order so names need not be repeated in each row; keep primary/index key
+encoding separate because payload byte order does not establish index ordering.
+A field rename still changes schema identity. Database admission enforces field
+and whole-row bounds; codec changes require an explicit contract version and
+supported transition. Transport adapters convert only at their own boundary.
 
-The fixed three-field probe checks literal bytes, absent/empty distinction,
+The earlier fixed three-field Wire candidate probe checks literal bytes, absent/empty distinction,
 integer extremes, UTF-8 byte bounds, schema-before-payload admission, truncation,
 unknown framing, trailing bytes and four Wire work limits. It is native evidence
 using Wire 0.22.1, not a production frame, generated codec, rich-type proof or Wasm
 budget. Wire can accept noncanonical primitive encodings; never decode/re-encode
 an external byte sequence to establish its original identity. These checks do
 not detect every valid-value bit change or establish a row checksum policy.
-IC DB still owns persisted meaning and admission; Wire owns bounded serialization,
-and IC Storage owns backing collections. No new serialization framework is needed.
+That historical probe does not select Wire for product persistence. The current
+small scalar codec belongs to IC DB; IC Storage owns backing collections.
+Frozen IcyDB's
+[persisted scalar codec](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/persisted_row/codec/scalar/mod.rs)
+is the starting point for the current scalar implementation. Adapt its exact
+little-endian payload writes, slice-to-array reads and strict boolean validation;
+extend that approach to the already-supported 128-bit integers. Carry its
+[exact-width regression cases](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/persisted_row/codec/scalar/tests.rs)
+into generated-record tests here. The earlier
+[storage-size investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/0.257-typed-query-explain/0.257-storage-size.md)
+explains why declared numeric widths belong to storage semantics rather than a
+generic widened runtime representation.
+
+Keep IC DB's sequential schema-selected rows: the compiled contract supplies
+type, field order and scalar width. IcyDB's per-slot null/value envelope, slot
+directory and generic value materialization are not required for this layout.
+Optional fields retain explicit presence; variable fields need u32 byte lengths
+because this layout has no slot directory. Primary/index key ordering stays
+separate from little-endian row payloads. No IcyDB or Wire dependency is added.
+This removes the provisional varint/zigzag decoder, at the cost of larger small
+integers: the three-Nat64 row `(42, 2, 7)` uses 24 payload bytes instead of 3.
+Fixed-width decoding is a simplicity decision, not a measured cycle/Wasm saving.
+Richer types must start from their relevant owned IcyDB codecs and qualify their
+domain validation before admission; this increment does not implement them all.
 
 ### Compiled type graph and stored traversal
 
@@ -391,7 +411,7 @@ not a second editable catalog.
 Stored records traverse canonical fields and write no per-row field names. Enums
 write the admitted ordinal and that variant's payload; reject unknown ordinals or
 payload mismatch. Sets/maps use strictly ordered canonical elements/keys under
-the declared logical comparator, not lexicographic Wire payload bytes. Validate
+the declared logical comparator, not lexicographic row-payload bytes. Validate
 decoded entry sequences before constructing a Rust map/set, so duplicate keys or
 elements cannot be silently overwritten/deduplicated. Input normalization precedes
 uniqueness checks; normalization collisions refuse rather than select a winner.
@@ -1109,13 +1129,28 @@ two engines behind a permanent adapter in the new product.
 
 ### Next delivery: close M0, then typed schemas in M1
 
-Use IcyDB's accumulated guides, regression tests and change history as a source
-of requirements and counterexamples. For each relevant case, identify the user
-outcome and failure it prevents, then choose the smallest mechanism under this
-design's contract. SQL-authored tests can still establish retained fluent behavior.
+Before implementing each subsystem, inspect IcyDB's relevant implementation,
+regression tests and explanatory history. Its accumulated work supplies solved
+mechanisms as well as requirements and counterexamples. Identify the user outcome,
+original failure, established solution and changed assumptions; reuse or adapt
+sound code where it fits this contract. Reimplementation alone is not a benefit.
+Carry applicable failure cases into IC DB's qualification. SQL-authored tests can
+still establish retained fluent behavior.
 Do not transplant their SQL transport, schema lifecycle or generated adapters
 along with the invariant. Reading a historical test is not evidence that it passes
 in the new engine, or that every historical requirement remains applicable.
+
+The read/write boundary review at frozen revision `6d421e3` illustrates this:
+[canonical commit-key preparation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/commit/prepare/mod.rs)
+retains its decoded key, with
+[regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/commit/prepare/tests/mod.rs)
+for truncation, trailing bytes and wrong entity identity.
+[Direct row readers](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/persisted_row/reader/direct.rs)
+share row opening and primary-key validation before selected-field decoding.
+These are established ownership/validation lessons for our typed boundary;
+this inspection does not claim every IcyDB read path decodes exactly once or
+establish performance parity. Its historical-layout and journal obligations remain
+distinct from IC DB's exact-schema, synchronous-message contract.
 
 M1 delivers application-defined schemas, not a prescribed user/account model.
 Use a small synthetic parent/dependent schema to establish typed records,
@@ -1152,7 +1187,7 @@ recommendations on 2026-11-14:
 | --- | --- |
 | Generic capability contract | Carry sections 4–6's type, absence, final-state batch and query-composition rules into the product. Resolve conditional operations and numeric result/rounding rules before implementing those operations; no implicit capability cut or guessed conversion. |
 | Aggregate completion | Explicit source-change invalidation, conservative per-entity revisions and bounded server-retained state. Exact completed results, no completion guarantee during continuous writes. Expiry, incompatible-upgrade invalidation and capacity refusal are accepted; concrete quotas remain to be selected. |
-| Durable compatibility and capacity | The compiled type-graph grammar includes named fields/types/variants, ordered keys, bounds and versioned write policies. SHA-256 identifies that contract; bounded Wire payloads sit under database-owned framing. Fix product byte vectors and qualify generated traversal before M1 persists data. Retain identified copy-and-cutover; requalify capacity after the IC Storage overhaul. |
+| Durable compatibility and capacity | The compiled type-graph grammar includes named fields/types/variants, ordered keys, bounds and versioned write policies. SHA-256 identifies that contract; the product owns bounded durable encoding independently of Wire transport. Scalar codec version 3 has independent byte vectors; qualify richer generated traversal before persisting those types. Retain identified copy-and-cutover; requalify capacity after the IC Storage overhaul. |
 | Comparative acceptance | Section 10's SQL-disabled scalar workload supplies the initial ceilings below. Compare matched delivered operations, including settling work; richer workloads need their own baseline before claiming savings. |
 
 Initial scalar-slice acceptance ceilings use the exact section 10 host/profile,
@@ -1185,36 +1220,92 @@ and then build a separate database around it. Familiar IcyDB authoring and integ
 semantics carry over; its catalog lifecycle, public dynamic frontend and generated
 endpoint machinery do not.
 
-**First M1 slice delivered locally.** `ic-db` owns shared commit/traversal and
-`ic-db-macros` emits typed Nat64/Int64/Nat128/Int128/Bool/bounded Text records, optional values,
-canonical codecs and compiled metadata. Text limits apply to UTF-8 bytes, without
-normalization; None is distinct from empty, zero and false. Generated validation
-runs before encode and after decode. Whole-row limits remain independent of field
-limits. Primary/index fields currently require non-optional Nat64; rejecting other
-index shapes here does not retire their retained product capabilities.
-Int64 stores the complete `i64` domain exactly through Wire's zigzag/unsigned
-varint codec, with no unsigned or floating-point coercion. Optional absence is
-distinct from zero. Signed keys, arithmetic and predicates are not enabled by
-storage support alone. Literal extrema vectors, malformed-value refusals and
-native/Wasm persistence checks qualify this increment; commit and traversal need
-no new specialization or value-conversion layer.
-Nat128/Int128 extend this to exact Rust `u128`/`i128` values and optional forms.
-Wire encodes unsigned values as varints and signed values through zigzag mapping;
-the largest payload takes 19 bytes. Native/Wasm tests cover extrema, values beyond
-64 bits, malformed encodings, incompatible width/signedness, no-op writes and
-message rollback. No new durable namespace, duplicate value representation or arithmetic engine is added;
-wide keys/indexes and numeric operations remain separate implementation work.
-The executable journey in `crates/ic-db/tests/records.rs` covers create/reopen,
-cross-entity batches, unique exchanges and indexed reads. `db schema` uses that
-metadata through the local qualification host. No engine code is copied from
-IcyDB; familiar authoring and integrity behavior are retained independently.
-The CLI reuses `ic-host-text` bordered tables, as IcyDB's describe renderer does
-at the frozen comparison revision. Structured fixture descriptions carry fields
-and indexes; terminal layout stays in the native CLI. Schema output emphasizes
-types, optionality, keys, references and limits; full storage identities are available through
-`db status`. No SQL report machinery or terminal dependency enters the product.
-Richer types, broader references, defaults/managed policies and broad fluent queries
-remain required work. No product attributes have been retired by this increment.
+**Current M1 implementation.** `ic-db` owns shared mutation and storage access;
+`ic-db-macros` owns typed records, canonical codecs and compiled metadata.
+
+**Accepted IcyDB carryover sequence.** Reuse solved mechanisms and failure cases;
+neither the absence of slots nor the absence of runtime values is a product goal.
+
+| Piece | Decision and delivery boundary |
+| --- | --- |
+| Owned scalar codecs | Adapted for the current scalar types, with independent bytes and malformed-input checks. Start remaining rich types from their relevant owned IcyDB codecs and domain-validation cases. |
+| Borrowed field access | Implemented first M1 use: shared stored-key inspection in writes and reference checks validates text/blob through borrowed slices, without constructing a complete entity. Field/row validation and physical key/index checks remain. Broader query field access remains M2 work. |
+| Selective query reads | Required direction for M2: predicates, projection and aggregation should materialize only needed values. Compare whole-entity decoding with sequential skipping/borrowed access on wide rows before choosing the query representation. |
+| Equality, ordering and hashing | Inspect and adapt IcyDB's type-specific rules together before adding predicates, uniqueness, grouping or DISTINCT for each type. Do not let different facilities invent incompatible meanings. |
+| Offset tables | Conditional on measured selected-field workloads. Sequential rows remain the current format; fixed compiled offsets or bounded skipping may suffice. A durable directory needs an explicit format decision. |
+| Decoded-field caches | Conditional on demonstrated repeated field decoding in one operation; no eager general value cache. |
+| Runtime value representation | Add the smallest borrowed/owned representation required by admitted fluent operations. SQL removal does not make shared value handling unnecessary, but does not justify importing the complete existing Value layer. |
+
+The frozen IcyDB
+[scalar view](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/persisted_row/codec/scalar/mod.rs)
+and [selective reader regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/persisted_row/reader/structural_slot_reader/tests/direct_projection.rs)
+establish useful precedents: borrow variable payloads and avoid a decoded-value
+cache for direct scalar access. Adapt those properties to IC DB's admitted layout;
+do not import historical fallback readers, runtime schema reconciliation or the
+surrounding adapter layers. Retaining IcyDB's mechanisms does not establish parity
+or a performance improvement until matched workloads qualify them here.
+
+| Stored family | Implemented semantics |
+| --- | --- |
+| Nat/Int8/16/32/64/128 | Exact Rust integer domains; no narrowing or floating-point coercion |
+| Bool | Exact true/false values |
+| Bounded Text | Exact UTF-8 bytes, without normalization |
+| Bounded Blob | Arbitrary raw bytes; explicit length framing, including empty values |
+| Optional forms of these types | Absence remains distinct from empty, zero and false |
+
+Field validation runs before encoding and after decoding; whole-row bounds apply
+independently. Primary/index keys and references currently require non-optional
+Nat64. Storage support does not imply wider indexes, predicates or arithmetic.
+Richer types, broader references, managed policies and fluent queries remain work;
+no retained capability or product attribute has been retired.
+
+Narrow integers use their actual Rust types (`u8/u16/u32`, `i8/i16/i32`) and exact
+1/2/4-byte little-endian payloads, adapting IcyDB's owned scalar routines and
+width/extrema regression cases. Unlike IcyDB's widened runtime value path, typed
+construction here already enforces representability; the database never truncates
+an i64/u64 into a smaller field. Optional values keep their separate presence tag.
+The new type tags preserve existing codec-v3 contracts. Narrow keys/indexes and
+query arithmetic remain separate work; the shared mutation engine is unchanged.
+
+Blob fields use `value(item(prim="Blob", max_bytes=1024))`, optionally with
+`opt`. They expose `ic_db::Blob`, an alias for `Vec<u8>` encoded directly by the
+database-owned scalar codec, with no transport dependency. Bounds are 0–4096 bytes, with
+zero admitting only empty payloads and the whole-row envelope still applying.
+Text also permits an empty-only zero-byte bound; there is no type-specific
+minimum-length rule hidden in `max_bytes`.
+The frozen IcyDB
+[accepted-field regression](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/structural_field/accepted/tests.rs)
+informed empty/zero-bound/over-limit cases; its
+[blob framing regression](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/value/hash/tests.rs)
+also motivates explicit boundaries. These cases are requalified here with native
+and Wasm codecs; no IcyDB value engine is copied. Blob indexes, predicates and
+nested containers remain separate work.
+
+Typed reads decode once, then verify the physical key/index against that value.
+Batch construction encodes once and extracts keys directly from the admitted typed
+value. Stored old rows now use one concrete metadata-driven key inspector at
+mutation and reference boundaries, replacing a generated decoder callback per
+entity. It scans canonical fields once, retaining required Nat64 values in a
+bounded stack array for primary/index key construction. Unselected fields still
+pass the same primitive, presence, length and UTF-8 checks as owned decoding;
+the complete row must be consumed. Text/blob payloads borrow the supplier's row
+buffer rather than allocating owned field values. The supplier still returns an
+owned row buffer, and UTF-8 validation still examines text bytes: this is not a
+zero-copy storage or constant-time field-access claim. Row bytes and fingerprints
+are unchanged. General projections, borrowed query results and selective query
+execution have not been implemented by this increment.
+Index membership verification is shared by indexed reads and reverse-reference
+checks. No general decoded-value cache or public prepared transaction is
+introduced. Typed read loops remain generic: composition measurements must still
+establish their Wasm growth before broad query execution is built around them.
+
+The native record tests and Wasm host qualify scalar boundaries, incompatible
+admission, final-state batches, indexed reads, rollback and reopen. They do not
+establish comparative performance. Scalar routines and failure cases are adapted
+from IcyDB; surrounding storage and mutation machinery follows IC DB's simpler
+contract. The CLI uses
+compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
+terminal rendering and test endpoints stay outside the product crates.
 
 Required Nat64 fields now accept `references(entity = 1, index = 1)` alongside
 their `value(...)` declaration. The target must be in the admitted schema; the
@@ -1251,45 +1342,50 @@ entities ordered by nonzero ID. Each contains its ID, field count, sorted
 length-prefixed UTF-8 field names and type tags, primary-key name,
 index count, then indexes ordered by ID (ID, unique byte, ordered field names).
 Counts/name lengths are `u32` little-endian. SHA-256 uses domain
-`ic-db:schema:v1\0`; presentation entity names are excluded. All five versions
-start at 1, with supplier contract 1 qualified here against Storage 0.74.1.
-Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`;
+`ic-db:schema:v1\0`; presentation entity names are excluded. Row codec version is
+3; the other four versions remain 1, with supplier contract 1 qualified here
+against Storage 0.74.1. Version 1 used Wire's decoding contract and version 2
+used the provisional database-owned varint codec. Both old manifests are refused
+intact before decoding their rows; no implicit migration or historical fallback
+decoder is provided. Existing data is not deleted or recreated automatically.
+Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
+Nat8/16/32=`8/9/10` and Int8/16/32=`11/12/13`.
 optional fields set bit `0x80`.
-Text appends its `u32` little-endian maximum UTF-8 byte length. These new tags
-extend the grammar without changing existing Nat64 encodings or fingerprints.
+Text and Blob append their `u32` little-endian maximum byte length. These new tags
+extend the grammar without altering unused type definitions. The codec version
+change independently changes every schema fingerprint and integer row encoding.
 References set tag bit `0x40` and append target entity ID and reverse index ID as
-little-endian `u32`s after the type payload. Existing non-reference schemas retain
-their fingerprints. The independent Parent/Child reference golden vector is
-`e7d4d90bdd9875157123c064930a6af8012d9a3b8e8fdcd4e08e0a75dd41a2ef`.
-Changing codec semantics requires changing the corresponding declared version.
-The independent scalar golden fingerprint is
-`cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa`.
-The required/optional Int64 schema vector is
-`d9710d2d315461b90416054bd54e3dae42a7380a9fac53b23a0556d270bbbb78`.
-The required/optional 128-bit schema vector is
-`4295cb7f6bdd45ea72700f93d6b31f40683af7ac0c9064e2916dd607f9a479a5`.
-The three-entity CLI fixture adds Document (bounded title/note, optional priority,
-published flag, signed score/optional previous score and required `entry_id`
-reference) and WideNumbers (required/optional signed and unsigned 128-bit values).
-Its fingerprint is
-`75edf28841acea2e80a386f6655120ea9bcb2aa628c9950e5670514c82b78ee1`.
-The pre-reference mixed-type vector remains independently tested in native code.
-It is fresh fixture data, not a migration of an existing deployment.
+little-endian `u32`s after the type payload. Adding new tags preserves contracts
+that do not use them; changed codec semantics require a declared version change.
+Independent golden fingerprints remain in the
+[native record tests](../../crates/ic-db/tests/records.rs) and
+[Wasm fixture tests](../../qualification/rollback-driver/tests/records.rs),
+rather than a second fixture-identity ledger here. CLI sessions create fresh data;
+changes to these examples are not migrations of an existing deployment.
 
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
 Revision/row/index keys start with tags 1/2/3, then big-endian entity ID; rows add
 the big-endian Nat64 primary key. Index keys add the index ID and Nat64 components;
 nonunique indexes append the primary key. Index values are the big-endian primary
-key; revisions are little-endian `u64`. Row values are bounded Wire tuples in
+key; revisions are little-endian `u64`. Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
+Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
+width; signed values use two's complement. Booleans and optional presence use
+strict 0/1 bytes; an absent optional field carries no payload. Text and Blob carry
+a four-byte little-endian u32 byte length followed by raw bytes; Text requires
+valid UTF-8. Lengths must fit field and remaining-row bounds before copying.
+Invalid tags, truncated fields/lengths and trailing bytes are refused. There is
+one current encoding, with no adaptive format or transport serializer fallback.
 Literal row/index vectors and the independent fingerprint accompany the generated
 codec tests. Admission does not imply a full scan for corruption; accessed rows
 and index entries are checked, while supplier corruption can trap.
 
 Initial bounds: 32 entities, 16 fields/entity, 64 UTF-8 bytes/name, eight indexes/
 entity and four components/index; 32 mutations/batch, 128 KiB total encoded new-row
-payload, 4 KiB/row, and 1–32 rows/page. Codec allocation/node/depth allowances are
-64 KiB/512/16. Nat64-only records are smaller than that row envelope; these are
+payload, 4 KiB/row, and 1–32 rows/page. The flat scalar codec checks the input row
+bound and field lengths before allocating owned values; total variable payload
+cannot exceed the row envelope. Nested traversal needs explicit bounds before
+those types are admitted. Nat64-only records are smaller than that envelope; these are
 structural limits, not proof that every supplier growth path fits an IC message.
 Index-prefix reads return only a bounded first result collection; general index
 continuation and fluent semantics remain M2 work. Native tests and the Wasm host

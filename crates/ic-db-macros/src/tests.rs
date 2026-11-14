@@ -25,7 +25,6 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
             pk(field = "id"),
             fields(field(name = "id", value(opt, item(prim = "Nat64"))))
         ),
-        quote!(id=1, pk(field="id"), fields(#field, field(name="title", value(item(prim="Text", max_bytes=0))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="title", value(item(prim="Text", max_bytes=4097))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="flag", value(item(prim="Bool", max_bytes=1))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="flag", value(opt, opt, item(prim="Bool"))))),
@@ -38,6 +37,9 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
         ),
         quote!(id=1, pk(field="id"), index(id=1,field="delta"), fields(#field, field(name="delta",value(item(prim="Int64"))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="delta",value(item(prim="Int64",max_bytes=8))))),
+        quote!(id=1, pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob"))))),
+        quote!(id=1, pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=4097))))),
+        quote!(id=1, pk(field="id"), index(id=1,field="payload"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=8))))),
     ] {
         assert!(
             expand(
@@ -123,8 +125,10 @@ fn references_require_a_bounded_reverse_access_path() {
 }
 
 #[test]
-fn wide_integer_storage_does_not_admit_unimplemented_keys_or_bounds() {
-    for prim in ["Nat128", "Int128"] {
+fn integer_storage_does_not_admit_unimplemented_keys_or_bounds() {
+    for prim in [
+        "Nat8", "Nat16", "Nat32", "Int8", "Int16", "Int32", "Nat128", "Int128",
+    ] {
         let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
         let wide = quote!(field(name="wide",value(item(prim=#prim))));
         for args in [

@@ -1,16 +1,20 @@
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
-//! This M1 slice supports Nat64/Int64, Nat128/Int128, Bool and bounded Text, with optional
+//! This M1 slice supports 8/16/32/64/128-bit integers, Bool and bounded Text/Blob, with optional
 //! values. Primary and index keys currently require non-optional Nat64 fields.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
 //! Native callers must discard their runtime after a mutation panic. No SQL,
 //! endpoint exports, automatic migration or production compatibility is promised.
 
+#[doc(hidden)]
+mod codec;
 mod schema;
 mod store;
 
 pub use ic_db_macros::entity;
+/// Owned binary bytes. The database codec enforces authored limits and row bounds.
+pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{Batch, Database, Page};
 
@@ -59,6 +63,11 @@ impl std::error::Error for Error {
 pub trait Entity: Sized {
     /// This executable's compiled entity contract.
     const SCHEMA: &'static EntitySchema;
+    /// Read the application's primary key without encoding or inspecting indexes.
+    fn key(&self) -> u64;
+    /// Extract keys from an already typed value for the shared mutation/index paths.
+    #[doc(hidden)]
+    fn __row_info(&self) -> __private::RowInfo;
     /// Validate declared field bounds before encoding; no persistent effects.
     /// # Errors
     /// Refuses values outside the authored field contract.
@@ -76,17 +85,10 @@ pub trait Entity: Sized {
 /// Implementation support for generated code; not a second query frontend.
 #[doc(hidden)]
 pub mod __private {
-    pub use ic_wire::{Limits, native};
+    pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
         pub key: u64,
         pub indexes: Vec<Vec<u8>>,
     }
-    /// First scalar-slice envelope; not a rich-row capacity claim.
-    pub const ROW_LIMITS: Limits = Limits {
-        bytes: 4096,
-        allocation: 65536,
-        nodes: 512,
-        depth: 16,
-    };
 }

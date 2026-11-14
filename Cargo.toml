@@ -12,7 +12,6 @@ publish = false
 [workspace.dependencies]
 ic-db-macros = { path = "crates/ic-db-macros" }
 ic-storage = "0.74.1"
-ic-wire = "0.22.1"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 sha2 = { version = "0.11.1", default-features = false }

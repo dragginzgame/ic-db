@@ -1,12 +1,12 @@
 # Changelog
 
-## [0.1.2]
+## [0.2.0]
 
 ### ▶️ Try it
 
 Install the console using the real first M1 record library, then inspect its
 generated schema and two bounded pages. Each session has six Entry rows, one
-mixed-type Document referencing Entry 1 and one WideNumbers record; this does not connect to a deployed
+mixed-type Document referencing Entry 1, and one record each for WideNumbers, BinaryObject and NarrowNumbers; this does not connect to a deployed
 database. `db schema` shows the target and reverse index. Restart an existing console.
 
 ```sh
@@ -27,6 +27,63 @@ current `query` command still reads Entry; Document writes/reopen are covered by
 
 ### 🛠️ Product slice
 
+- Use a minor experimental release for the changed public API and durable codec
+  contract. Extend release qualification to the actual M1 Wasm records and
+  supplier-failure probes; update both product and qualification lockfiles in
+  one shared metadata transaction. Qualification packages remain at `0.0.0`.
+  Supplier review on 2026-11-14 found the selected Storage, Platform Runtime/Types,
+  Testkit, Host, Wire/Endpoint, IC Build and Toko Tooling versions current.
+  Defer qualification-only Platform's optional `0.32.3` → `0.33.0` update to the
+  next dependency-maintenance pass; retain this release's tested graph.
+  Product crates remain unpublished and do not depend on Wire.
+- Record the accepted IcyDB carryover sequence in the system design: borrowed
+  access and selective reads, shared equality/ordering/hashing, and owned rich-type
+  codecs; offset tables and caches remain evidence-gated choices.
+  Implement the first borrowed-read use in shared stored-key inspection for
+  writes and reference checks. Remove per-entity decoder callbacks and avoid
+  constructing owned text/blob fields when only keys are needed. Preserve full
+  field/row validation, physical key/index checks, existing bytes and fingerprints.
+  Public typed reads still return complete entities; selective fluent queries
+  remain implementation work. No new dependency, durable state or cache framework.
+- Add required/optional `Nat8/16/32` and `Int8/16/32` fields with native Rust
+  integer types and exact 1/2/4-byte little-endian payloads. Adapt IcyDB's owned
+  scalar width and boundary cases; verify absence, malformed rows, schema
+  incompatibility, no-ops, reopen and message rollback. Existing codec-v3 schemas
+  retain their identities and bytes. No write-engine or dependency change.
+  `db schema` shows all six widths in NarrowNumbers; `db query` still reads Entry.
+  Keys, indexes and references still require Nat64; storage support does not
+  imply query arithmetic or coercion support.
+- Remove IC Wire from product dependencies and stored-row serialization. Adapt
+  IcyDB's owned fixed-width scalar routines and exact-length regression cases:
+  little-endian integers, strict boolean/presence tags and checked u32
+  byte lengths. `Blob` is an alias for `Vec<u8>`. Row codec identity advances to 3;
+  both previous experimental manifests refuse without mutation. No migration is
+  implied. Wire remains only in separate qualification transport/historical probes.
+  Small integers take more stored bytes than the provisional varint codec;
+  decoding has no varint/zigzag path. No performance improvement is claimed.
+- Add required/optional `Blob(max_bytes)` fields exposed as `ic_db::Blob`.
+  Preserve arbitrary bytes, empty versus absent values,
+  zero-length bounds and length framing. Qualify the relevant frozen IcyDB
+  regression cases, plus a 1,024-byte bulk value,
+  oversized stored/input values, incompatible schemas, no-ops and Wasm rollback/
+  reopen. The commit engine is unchanged; Blob indexes and
+  predicates remain later work. `db schema` shows BinaryObject's byte limits;
+  `db query` continues to read Entry only.
+  Also admit `Text(max_bytes=0)` as an empty-only contract, following the same
+  IcyDB regression; remove the unnecessary Text-specific zero-bound restriction.
+- Require targeted inspection of frozen IcyDB implementations, regression tests
+  and relevant history before subsystem work. Reuse/adapt established solutions
+  where the new contract permits, and qualify their failure cases in IC DB.
+  Record concrete read/write-boundary precedents in the system design; a fresh
+  implementation is not evidence of a better mechanism.
+- Remove redundant decoding at the typed/runtime boundary. Reads decode once;
+  batch construction extracts keys from the already validated typed value instead
+  of decoding newly encoded bytes. Primary-key reads avoid constructing index
+  keys. Share physical-index membership checks with restricted deletion and retain
+  corruption refusals. Stored bytes, schema identity and message atomicity are
+  unchanged. Consolidate the design's implementation status and keep golden
+  fingerprint inventories in executable tests. Wasm growth/performance remains
+  a measurement gate, not a claimed improvement.
 - Add required/optional `Nat128` and `Int128` fields with exact Rust `u128`/`i128`
   values. Native/Wasm checks cover extrema, values beyond 64 bits, malformed
   encodings, absence, no-op writes, schema incompatibility, message rollback and

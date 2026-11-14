@@ -12,7 +12,7 @@ use field::Field;
 
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
 ///
-/// Supports Nat64/Int64, Nat128/Int128, Bool and bounded Text, optionally wrapped by `opt`.
+/// Supports Nat/Int8/16/32/64/128, Bool and bounded Text/Blob, optionally wrapped by `opt`.
 /// Primary/index fields currently require non-optional Nat64. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Required Nat64 fields may declare `references(entity = 1, index = 1)`;
@@ -254,7 +254,16 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let name = &item.ident;
     let attrs = &item.attrs;
     let visibility = &item.vis;
-    let types: Vec<_> = ordered.iter().map(|field| field.rust_type()).collect();
+    let writes: Vec<_> = ordered
+        .iter()
+        .zip(&ordered_ids)
+        .map(|(field, id)| field.encode(id))
+        .collect();
+    let reads: Vec<_> = ordered
+        .iter()
+        .zip(&ordered_ids)
+        .map(|(field, id)| field.decode(id))
+        .collect();
     let authored_types: Vec<_> = authored.iter().map(Field::rust_type).collect();
     let descriptions_fields: Vec<_> = ordered.iter().map(|field| field.description()).collect();
     let validations: Vec<_> = authored
@@ -270,25 +279,29 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             const SCHEMA: &'static ::ic_db::EntitySchema = &::ic_db::EntitySchema {
                 id: #id, name: stringify!(#name), fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
-                inspect_row: |bytes| {
-                    let row = <Self as ::ic_db::Entity>::decode(bytes)?;
-                    Ok(::ic_db::__private::RowInfo { key: row.#key_id, indexes: ::std::vec![#(#encoded_indexes),*] })
-                },
             };
+            fn key(&self) -> u64 { self.#key_id }
+            fn __row_info(&self) -> ::ic_db::__private::RowInfo {
+                let row = self;
+                ::ic_db::__private::RowInfo {
+                    key: <Self as ::ic_db::Entity>::key(row),
+                    indexes: ::std::vec![#(#encoded_indexes),*]
+                }
+            }
             fn validate(&self) -> Result<(), ::ic_db::Error> {
                 #(#validations)*
                 Ok(())
             }
             fn encode(&self) -> Result<::std::vec::Vec<u8>, ::ic_db::Error> {
                 <Self as ::ic_db::Entity>::validate(self)?;
-                ::ic_db::__private::native::encode(&(#(&self.#ordered_ids,)*), ::ic_db::__private::ROW_LIMITS)
-                    .map_err(|_| ::ic_db::Error::Limit)
+                let mut writer = ::ic_db::__private::Encoder::new();
+                #(#writes)*
+                Ok(writer.finish())
             }
             fn decode(bytes: &[u8]) -> Result<Self, ::ic_db::Error> {
-                let (#(#ordered_ids,)*) : (#(#types,)*) =
-                    ::ic_db::__private::native::decode(bytes, ::ic_db::__private::ROW_LIMITS)
-                    .map_err(|_| ::ic_db::Error::Corrupt)?;
-                let row = Self { #(#ordered_ids,)* };
+                let mut reader = ::ic_db::__private::Decoder::new(bytes)?;
+                let row = Self { #(#reads)* };
+                reader.finish()?;
                 <Self as ::ic_db::Entity>::validate(&row).map_err(|_| ::ic_db::Error::Corrupt)?;
                 Ok(row)
             }

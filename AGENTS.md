@@ -68,6 +68,14 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Use small typed boundaries over shared execution machinery. Measure
   monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
+- IC DB owns its durable row codec. Keep `ic-wire` and transport serialization
+  out of product dependencies and persisted encoding. Transport adapters may
+  convert at their boundary; wire-format optimization must not alter stored
+  bytes or decoding. Version durable codec changes explicitly and refuse
+  unsupported old contracts intact until a supported transition exists.
+  Start codec work from IcyDB's database-owned implementations and regression
+  tests; adapt them to this compiled-schema contract instead of using its Wire
+  paths. Explain departures and qualify the resulting bytes independently.
 - Feature deferrals in the design are proposals. They do not authorize removing
   capabilities from IcyDB or claiming full Toko adoption.
 - Keep one current system design and executable examples as implementation grows.
@@ -137,6 +145,15 @@ sibling checkout, establish IC DB savings, or run implicitly in scaffold CI.
 
 ## Explaining IcyDB carryover and design decisions
 
+- Before implementing or substantially changing a subsystem, inspect the relevant
+  frozen IcyDB implementation and regression tests; consult its change history or
+  investigations where they explain a fix or tradeoff. Identify the original
+  failure, established solution and which assumptions change under IC DB. This
+  is targeted research, not a full IcyDB audit for every routine edit.
+- Reuse or adapt sound IcyDB code and algorithms when they fit the chosen contract;
+  independent reimplementation is not itself a benefit. Carry applicable failure
+  cases into IC DB qualification and prove they pass here. Explain concrete reasons
+  for replacing a solved mechanism; repository size or age alone is not a reason.
 - When relevant to the work, explain what is being carried over from IcyDB and
   why. Distinguish copied/adapted code from retained behavior, API ergonomics,
   algorithms or lessons reimplemented independently; cite the inspected source

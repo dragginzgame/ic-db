@@ -6,9 +6,12 @@ export PATH="$PWD/.tools/host/bin:$PATH"
 shared="$PWD/vendor/toko-tooling/scripts/ci"
 installer="$PWD/vendor/toko-tooling/scripts/dev/install-rust-tools.sh"
 export CARGO_RELEASE_METADATA_MAX_BYTES=8388608
+source scripts/release-metadata.sh
 
 metadata_check() {
-    bash "$shared/cargo-release-metadata.sh" check ic-db
+    bash "$shared/cargo-release-metadata.sh" check ic-db || return
+    select_metadata_editor || return
+    check_qualification_lock
 }
 
 verified_source() {
@@ -24,7 +27,7 @@ case "${1:-}" in
         bash "$shared/read-cargo-workspace-version.sh" --stable Cargo.toml
         ;;
     release-files)
-        printf '%s\0' Cargo.toml Cargo.lock CHANGELOG.md
+        printf '%s\0' Cargo.toml Cargo.lock qualification/Cargo.lock CHANGELOG.md
         ;;
     release-preflight)
         bash "$shared/check-release-source.sh"
@@ -46,7 +49,8 @@ case "${1:-}" in
         CARGO_NET_OFFLINE=true VALIDATION_REPOSITORY_ROOT="$PWD" \
           bash "$shared/run-validation-targets.sh" --fail-fast \
           tools-check release-lint fmt-check test doc docs-check m0-contracts \
-          m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance
+          m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance \
+          m1-records-wasm m1-commit-failures
         bash "$shared/check-release-source.sh"
         [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]]
         receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"
@@ -55,18 +59,18 @@ case "${1:-}" in
         ;;
     release-prepare-version)
         verified_source
-        CARGO_RELEASE_METADATA_EDITOR="$(bash "$installer" --consumer "$PWD" \
-          --package ic-build --version 0.84.1 --bin ic-build-release-metadata \
-          --profile debug --features cli --check --wait-seconds 30)"
-        export CARGO_RELEASE_METADATA_EDITOR
-        bash "$shared/cargo-release-metadata.sh" prepare ic-db
+        select_metadata_editor
+        # shellcheck source=vendor/toko-tooling/scripts/ci/release-metadata-transaction.sh
+        source "$shared/release-metadata-transaction.sh"
+        release_metadata_prepare "${TMPDIR:-/tmp}/ic-db-release-metadata.XXXXXX" \
+            render_release_metadata metadata_check Cargo.lock qualification/Cargo.lock CHANGELOG.md Cargo.toml
         make fmt-check
         ;;
     release-prepared-check|release-commit-check)
         verified_source
         metadata_check
-        bash "$shared/check-release-source.sh" --allow Cargo.toml --allow Cargo.lock --allow CHANGELOG.md
-        git diff --exit-code "$RELEASE_SOURCE" -- . ':!Cargo.toml' ':!Cargo.lock' ':!CHANGELOG.md'
+        bash "$shared/check-release-source.sh" --allow Cargo.toml --allow Cargo.lock --allow qualification/Cargo.lock --allow CHANGELOG.md
+        git diff --exit-code "$RELEASE_SOURCE" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
         if [[ "$1" == release-commit-check ]]; then
             git diff --exit-code
         fi
@@ -74,7 +78,7 @@ case "${1:-}" in
     release-committed-check|release-tagged-check|release-push-check)
         verified_source
         [[ "$(git rev-parse "${RELEASE_COMMIT:?}^")" == "$RELEASE_SOURCE" ]]
-        git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . ':!Cargo.toml' ':!Cargo.lock' ':!CHANGELOG.md'
+        git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
         metadata_check
         if [[ "$1" == release-push-check ]]; then
             [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PRIVATE ]]

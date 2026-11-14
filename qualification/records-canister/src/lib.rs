@@ -53,12 +53,51 @@ struct Document {}
 )]
 struct WideNumbers {}
 
+#[entity(
+    id = 4,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "payload", value(item(prim = "Blob", max_bytes = 1024))),
+        field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 32)))
+    )
+)]
+struct BinaryObject {}
+
+#[entity(
+    id = 5,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "signed8", value(item(prim = "Int8"))),
+        field(name = "signed16", value(item(prim = "Int16"))),
+        field(name = "signed32", value(item(prim = "Int32"))),
+        field(name = "unsigned8", value(item(prim = "Nat8"))),
+        field(name = "unsigned16", value(item(prim = "Nat16"))),
+        field(name = "unsigned32", value(item(prim = "Nat32"))),
+        field(name = "optional_signed8", value(opt, item(prim = "Int8"))),
+        field(name = "optional_signed16", value(opt, item(prim = "Int16"))),
+        field(name = "optional_signed32", value(opt, item(prim = "Int32"))),
+        field(name = "optional_unsigned8", value(opt, item(prim = "Nat8"))),
+        field(name = "optional_unsigned16", value(opt, item(prim = "Nat16"))),
+        field(name = "optional_unsigned32", value(opt, item(prim = "Nat32"))),
+    )
+)]
+struct NarrowNumbers {}
+
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
 
 fn compiled() -> Schema {
-    Schema::new(&[Entry::SCHEMA, Document::SCHEMA, WideNumbers::SCHEMA]).unwrap()
+    Schema::new(&[
+        Entry::SCHEMA,
+        Document::SCHEMA,
+        WideNumbers::SCHEMA,
+        BinaryObject::SCHEMA,
+        NarrowNumbers::SCHEMA,
+    ])
+    .unwrap()
 }
 fn runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
@@ -117,6 +156,30 @@ fn initialize() {
             optional_unsigned: Some(0),
         })
         .unwrap();
+    batch
+        .insert(&BinaryObject {
+            id: 1,
+            payload: vec![0, 255, 128],
+            optional: None,
+        })
+        .unwrap();
+    batch
+        .insert(&NarrowNumbers {
+            id: 1,
+            signed8: i8::MIN,
+            signed16: i16::MIN,
+            signed32: i32::MIN,
+            unsigned8: u8::MAX,
+            unsigned16: u16::MAX,
+            unsigned32: u32::MAX,
+            optional_signed8: None,
+            optional_signed16: None,
+            optional_signed32: None,
+            optional_unsigned8: None,
+            optional_unsigned16: None,
+            optional_unsigned32: None,
+        })
+        .unwrap();
     db.commit(batch).unwrap();
 }
 fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
@@ -151,12 +214,19 @@ fn schema() -> (Status, Vec<EntityView>) {
                 .iter()
                 .map(|field| {
                     let (kind, limit) = match field.value {
+                        FieldType::Nat8 => ("Nat8", None),
+                        FieldType::Nat16 => ("Nat16", None),
+                        FieldType::Nat32 => ("Nat32", None),
+                        FieldType::Int8 => ("Int8", None),
+                        FieldType::Int16 => ("Int16", None),
+                        FieldType::Int32 => ("Int32", None),
                         FieldType::Nat64 => ("Nat64", None),
                         FieldType::Int64 => ("Int64", None),
                         FieldType::Nat128 => ("Nat128", None),
                         FieldType::Int128 => ("Int128", None),
                         FieldType::Bool => ("Bool", None),
                         FieldType::Text { max_bytes } => ("Text", Some(max_bytes)),
+                        FieldType::Blob { max_bytes } => ("Blob", Some(max_bytes)),
                     };
                     (
                         field.name.into(),
@@ -395,4 +465,122 @@ fn replace_wide_numbers(
     if trap {
         cdk::api::trap("M1 wide-number application trap");
     }
+}
+
+type BinaryValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+type NarrowRequired = (i8, i16, i32, u8, u16, u32);
+type NarrowOptional = (
+    Option<i8>,
+    Option<i16>,
+    Option<i32>,
+    Option<u8>,
+    Option<u16>,
+    Option<u32>,
+);
+type NarrowValue = (NarrowRequired, NarrowOptional);
+
+#[ic_wire_endpoint::query(id = 16)]
+fn narrow_numbers() -> (NarrowValue, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let row = db.get::<NarrowNumbers>(1).unwrap().unwrap();
+    (
+        (
+            (
+                row.signed8,
+                row.signed16,
+                row.signed32,
+                row.unsigned8,
+                row.unsigned16,
+                row.unsigned32,
+            ),
+            (
+                row.optional_signed8,
+                row.optional_signed16,
+                row.optional_signed32,
+                row.optional_unsigned8,
+                row.optional_unsigned16,
+                row.optional_unsigned32,
+            ),
+        ),
+        db.revision(5).unwrap(),
+    )
+}
+
+#[ic_wire_endpoint::update(id = 17)]
+fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) {
+    let (
+        (signed8, signed16, signed32, unsigned8, unsigned16, unsigned32),
+        (
+            optional_signed8,
+            optional_signed16,
+            optional_signed32,
+            optional_unsigned8,
+            optional_unsigned16,
+            optional_unsigned32,
+        ),
+    ) = value;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    batch
+        .replace(&NarrowNumbers {
+            id: 1,
+            signed8,
+            signed16,
+            signed32,
+            unsigned8,
+            unsigned16,
+            unsigned32,
+            optional_signed8,
+            optional_signed16,
+            optional_signed32,
+            optional_unsigned8,
+            optional_unsigned16,
+            optional_unsigned32,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    if trap {
+        cdk::api::trap("M1 narrow-number application trap");
+    }
+}
+
+// Private decoder probe: transport carries opaque bytes, never decodes a row.
+#[ic_wire_endpoint::query(id = 15)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "endpoint decoding owns the request; the database decoder borrows its bytes"
+)]
+fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
+    BinaryObject::decode(bytes.as_ref()).is_ok()
+}
+
+#[ic_wire_endpoint::query(id = 13)]
+fn binary_object() -> (BinaryValue, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let row = db.get::<BinaryObject>(1).unwrap().unwrap();
+    (
+        (row.payload.into(), row.optional.map(Into::into)),
+        db.revision(4).unwrap(),
+    )
+}
+#[ic_wire_endpoint::update(id = 14)]
+fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    batch
+        .replace(&BinaryObject {
+            id: 1,
+            payload: payload.into_vec(),
+            optional: optional.map(ic_wire::ByteBuf::into_vec),
+        })
+        .map_err(|_| 1)?;
+    db.commit(batch).map_err(|_| 2)?;
+    if trap {
+        cdk::api::trap("M1 binary application trap");
+    }
+    Ok(())
 }

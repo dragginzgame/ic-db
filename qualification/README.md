@@ -26,18 +26,47 @@ The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
-Stored fields now include Nat64/Int64, Nat128/Int128, Bool, bounded UTF-8 Text and
+Typed reads decode once; generated key extraction reuses the decoded value.
+Batch construction extracts keys from the value it has just validated/encoded.
+Stored-key inspection in mutation and reference preparation now uses one shared
+schema-driven reader. It borrows text/blob payloads and retains only bounded key
+scalars, replacing generated whole-entity decoder callbacks. A native corruption
+witness puts a 1,024-byte blob before keys and text after them: bad lengths,
+presence/boolean tags, UTF-8, trailing bytes and physical-key disagreement refuse
+replacement, deletion and reference insertion without mutation. A malformed
+non-key field on a surviving dependent also refuses reverse-reference inspection.
+This does not qualify selective fluent query execution or measure cycle savings;
+the supplier still materializes the row buffer and all fields remain validated.
+Corruption controls inject malformed rows, mismatched physical primary keys and
+stale index owners, ensuring this reduction preserves the read trust boundary.
+Stored fields now include signed/unsigned 8/16/32/64/128-bit integers, Bool, bounded UTF-8 Text, Blob and
 their optional forms.
 Signed tests cover the complete i64 endpoints, negative/zero values, absence,
-literal zigzag-varint vectors, malformed/overflowing encodings, no-op revision
+literal fixed-width little-endian vectors, truncated/extra payloads, no-op revision
 preservation and incompatible signed/unsigned schema refusal. Native and Wasm
 reopen checks preserve the exact values. Signed keys/indexes remain unimplemented.
 The separate WideNumbers fixture checks required/optional 128-bit integers,
 including signed extrema, unsigned maximum and values just beyond 64 bits.
-Independent 19-byte varint vectors and schema hashes qualify encoding; malformed
-overflow/truncation and incompatible width/signedness refuse. Native and Wasm
+Independent 16-byte scalar vectors and schema hashes qualify encoding;
+truncation, surplus bytes and incompatible width/signedness refuse. Native and Wasm
 checks preserve all bits across writes, no-ops, traps and reopen. Wide keys/indexes
 and arithmetic are not enabled by storage support.
+NarrowNumbers exercises required and optional 8/16/32-bit integers using IcyDB's
+exact-width/extrema regression cases. Independent literal payloads and a schema
+fingerprint cover 1/2/4-byte encoding, signedness, all truncated prefixes, surplus
+bytes and invalid presence tags. Native reopen rejects changed widths/signedness
+without mutation; Wasm checks extrema, absence/zero, no-op revisions and late-trap
+rollback. Native field types enforce representability before database entry;
+there is no cast from a generic widened value that could silently truncate.
+Blob qualification carries over IcyDB's empty, zero-bound and over-limit cases.
+Literal length-framed payloads contain non-UTF-8 bytes; absence differs from an
+empty blob. A 1,024-byte bulk value is encoded directly within field/row bounds.
+The private raw-decoder query checks literal payloads, invalid presence tags,
+truncation, trailing bytes, u32::MAX lengths and oversized rows on 32-bit Wasm;
+Wire carries these bytes opaquely and does not encode/decode the stored record.
+Malformed, oversized and incompatible stored values refuse. The BinaryObject
+Wasm fixture verifies limit refusals before mutation, no-op revisions, message
+rollback and unchanged upgrade; whole-row limits remain independent of fields.
 Checks distinguish absence from empty/zero/false, count text bytes rather than
 characters, reject oversized writes and stored payloads, retain the whole-row byte
 envelope, and preserve values and per-entity revisions across reopen. Independent
@@ -56,8 +85,8 @@ observed backing write in a three-row replacement including a dependent repoint,
 and rejects a real `grow()`
 request with `-1` during a maximum-cardinality insert batch. Raw backing/extent,
 indexes and revisions must revert; the identical operation must succeed on retry.
-The current three-entity fixture with Storage 0.74.1 covers 75 replacement writes and reaches growth
-with the insert batch starting at ID 1700: successful retry performs 1,316 backing
+The current five-entity fixture with codec v3 and Storage 0.74.1 covers 73 replacement writes and reaches growth
+with the insert batch starting at ID 1700: successful retry performs 1,326 backing
 writes, one growth request and expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after
@@ -65,7 +94,7 @@ unchanged upgrade also passes. Instruction exhaustion, corruption failure modes
 and other workload shapes remain M1 qualification work.
 
 Private Wire exports are test controls, not a production adapter. `make db`
-installs six Entry rows, one Document and one WideNumbers record using this host;
+installs six Entry rows and one record each for Document, WideNumbers, BinaryObject and NarrowNumbers;
 every CLI session is fresh. Clap
 owns argv and console command admission; empty console lines remain silent.
 Fault controls are compiled only for the dedicated probe and excluded from the
@@ -74,7 +103,7 @@ state; the instrumented host must not be used for comparative performance claims
 The M0 maintenance fixture remains available only through its dedicated probe.
 Product scope still includes richer types, broader reference constraints and broad fluent
 queries. Keys/indexes still require non-optional Nat64; text and optional indexing
-remain required follow-on work. `db schema` inspects all three entity descriptions,
+remain required follow-on work. `db schema` inspects all five entity descriptions,
 including the Document-to-Entry reference and its reverse index;
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
@@ -185,7 +214,13 @@ or comparator change still requires its author to change the declared version.
 Positional codecs cannot assume declaration reordering is compatible. Existing
 Wasm maintenance probes separately exercise admission and transformation recovery.
 
-## Row codec candidate
+## Historical M0 row codec candidate
+
+The Wire candidate below is retained as historical experimental evidence. The M1
+product now owns scalar row codec version 3 and has no IC Wire dependency.
+Generated-record checks cover fixed-width decoding, truncation, trailing bytes,
+malformed lengths and unchanged refusal of version 1 and 2 manifests. Qualification endpoints
+still use Wire for messages, converting binary values at that transport boundary.
 
 The design now specifies a finite compiled type graph, retaining recursive
 values under separate value-depth/node/count/byte bounds. Fields, named types

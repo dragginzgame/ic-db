@@ -22,13 +22,17 @@ delivery require an explicit decision to resume. Existing work and data are reta
 
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
 `crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
-exactly admitted schemas, persists Nat64/Int64, Nat128/Int128, Bool and bounded Text with optional
+exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers, Bool and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required Nat64 references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise, measured improvement
 or deployment. Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Primary and index keys
 currently require non-optional Nat64 fields.
+IC DB owns its durable row codec and has no IC Wire dependency. Transport format
+changes cannot change persisted decoding. The current experimental codec identity
+is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
+version 1 or 2 contract refuses without changing its data.
 The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
 No public licence or crates.io publication has been selected; packages are unpublished.
 
@@ -77,7 +81,7 @@ Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six
-`Entry` rows, one mixed-type `Document` and one `WideNumbers` record
+`Entry` rows and one record each for `Document`, `WideNumbers`, `BinaryObject` and `NarrowNumbers`
 running in local PocketIC. Each session starts fresh and is discarded on exit.
 `db schema` presents generated fields and indexes in bordered tables, with the
 primary key first and separate type, optionality and byte-limit columns. The CLI

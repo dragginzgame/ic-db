@@ -136,8 +136,8 @@ async fn product_records_and_message_boundary() {
     let original = status().await;
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
-        // Independently assembled with Perl pack(V/C) and OpenSSL SHA-256.
-        "75edf28841acea2e80a386f6655120ea9bcb2aa628c9950e5670514c82b78ee1"
+        // Independently assembled with Perl pack(V/C) and SHA-256.
+        "f2289066ba31afb1a24403dc7c7004a16524bbc367db57a3c6642b863644c993"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -156,7 +156,40 @@ async fn product_records_and_message_boundary() {
     let (admitted, entities): (Status, Vec<EntityView>) =
         native::decode_response(2, &reply, LIMITS).unwrap();
     assert_eq!(admitted, original);
-    assert_eq!(entities.len(), 3);
+    assert_eq!(entities.len(), 5);
+    assert_eq!(entities[4].0, "NarrowNumbers");
+    assert!(entities[4].4.is_empty());
+    for (name, kind) in [
+        ("signed8", "Int8"),
+        ("signed16", "Int16"),
+        ("signed32", "Int32"),
+        ("unsigned8", "Nat8"),
+        ("unsigned16", "Nat16"),
+        ("unsigned32", "Nat32"),
+    ] {
+        assert!(
+            entities[4]
+                .3
+                .contains(&(name.into(), kind.into(), false, None, None))
+        );
+        assert!(entities[4].3.contains(&(
+            format!("optional_{name}"),
+            kind.into(),
+            true,
+            None,
+            None
+        )));
+    }
+    assert_eq!(entities[3].0, "BinaryObject");
+    assert_eq!(
+        entities[3].3,
+        vec![
+            ("id".into(), "Nat64".into(), false, None, None),
+            ("optional".into(), "Blob".into(), true, Some(32), None),
+            ("payload".into(), "Blob".into(), false, Some(1024), None),
+        ]
+    );
+    assert!(entities[3].4.is_empty());
     assert_eq!(entities[2].0, "WideNumbers");
     assert_eq!(
         entities[2].3,
@@ -400,5 +433,197 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (final_value, 6));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
+    use ic_wire::ByteBuf;
+    type Value = (ByteBuf, Option<ByteBuf>);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let decodes = async |bytes: Vec<u8>| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "binary_decodes",
+                native::encode_request(15, &ByteBuf::from(bytes), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<bool>(15, &reply, LIMITS).unwrap()
+    };
+    // Independent persisted bytes, transported opaquely: id, absent option,
+    // little-endian u32 length, payload. Exercise decoding on 32-bit Wasm.
+    let valid = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 255, 128];
+    assert!(decodes(valid.clone()).await);
+    let mut bad_option = valid.clone();
+    bad_option[8] = 2;
+    for invalid in [
+        valid[..15].to_vec(),
+        [valid.as_slice(), &[0]].concat(),
+        bad_option,
+        vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255],
+        vec![0; 4097],
+    ] {
+        assert!(!decodes(invalid).await);
+    }
+    let read = async || {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "binary_object",
+                native::encode_request(13, &(), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Value, u64)>(13, &reply, LIMITS).unwrap()
+    };
+    let write = async |value: Value, trap: bool| {
+        pic.update_call(
+            canister,
+            canister,
+            "replace_binary_object",
+            native::encode_request(14, &(value, trap), LIMITS).unwrap(),
+        )
+        .await
+    };
+    assert_eq!(read().await, ((ByteBuf::from(vec![0, 255, 128]), None), 1));
+    let full = (
+        ByteBuf::from(vec![255; 1024]),
+        Some(ByteBuf::from(vec![128; 32])),
+    );
+    for (offset, value) in [(ByteBuf::new(), Some(ByteBuf::new())), full.clone()]
+        .into_iter()
+        .enumerate()
+    {
+        let reply = write(value.clone(), false).await.unwrap();
+        assert_eq!(
+            native::decode_response::<Result<(), u8>>(14, &reply, LIMITS).unwrap(),
+            Ok(())
+        );
+        assert_eq!(read().await, (value, 2 + offset as u64));
+    }
+    let before = pic.get_stable_memory(canister).await;
+    for invalid in [
+        (ByteBuf::from(vec![0; 1025]), None),
+        (ByteBuf::new(), Some(ByteBuf::from(vec![0; 33]))),
+    ] {
+        let reply = write(invalid, false).await.unwrap();
+        assert_eq!(
+            native::decode_response::<Result<(), u8>>(14, &reply, LIMITS).unwrap(),
+            Err(1)
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    let reply = write(full.clone(), false).await.unwrap();
+    assert_eq!(
+        native::decode_response::<Result<(), u8>>(14, &reply, LIMITS).unwrap(),
+        Ok(())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let error = write((ByteBuf::new(), None), true)
+        .await
+        .expect_err("late trap");
+    assert!(error.reject_message.contains("M1 binary application trap"));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (full, 3));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
+    type Required = (i8, i16, i32, u8, u16, u32);
+    type Optional = (
+        Option<i8>,
+        Option<i16>,
+        Option<i32>,
+        Option<u8>,
+        Option<u16>,
+        Option<u32>,
+    );
+    type Value = (Required, Optional);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let read = async || {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "narrow_numbers",
+                native::encode_request(16, &(), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Value, u64)>(16, &reply, LIMITS).unwrap()
+    };
+    let write = async |value: Value, trap: bool| {
+        pic.update_call(
+            canister,
+            canister,
+            "replace_narrow_numbers",
+            native::encode_request(17, &(value, trap), LIMITS).unwrap(),
+        )
+        .await
+    };
+    let minimum = (i8::MIN, i16::MIN, i32::MIN, u8::MAX, u16::MAX, u32::MAX);
+    let absent = (None, None, None, None, None, None);
+    assert_eq!(read().await, ((minimum, absent), 1));
+    let values = [
+        minimum,
+        (-1, -1, -1, 0, 0, 0),
+        (0, 0, 0, 0, 0, 0),
+        (1, 1, 1, 1, 1, 1),
+        (i8::MAX, i16::MAX, i32::MAX, 128, 32768, 2147483648),
+    ];
+    for (offset, required) in values.into_iter().enumerate() {
+        let optional = (
+            Some(required.0),
+            Some(required.1),
+            Some(required.2),
+            Some(required.3),
+            Some(required.4),
+            Some(required.5),
+        );
+        write((required, optional), false).await.unwrap();
+        assert_eq!(read().await, ((required, optional), 2 + offset as u64));
+    }
+    let (final_value, revision) = read().await;
+    let before = pic.get_stable_memory(canister).await;
+    write(final_value, false).await.unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let error = write((minimum, absent), true).await.expect_err("late trap");
+    assert!(
+        error
+            .reject_message
+            .contains("M1 narrow-number application trap")
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (final_value, revision));
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (final_value, revision));
     owned.close().await;
 }

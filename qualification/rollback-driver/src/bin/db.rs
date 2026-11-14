@@ -11,7 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows, one Document and one WideNumbers record; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows and one record each for Document, WideNumbers, BinaryObject and NarrowNumbers; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -107,7 +107,9 @@ fn print_schema(entities: Vec<EntityView>) {
             );
         }
     }
-    println!("Optional fields can be absent. Text limits count UTF-8 bytes.");
+    println!(
+        "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes."
+    );
     println!(
         "References require an existing target and restrict its deletion; indexes belong to the dependent."
     );
