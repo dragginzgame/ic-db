@@ -1,0 +1,385 @@
+//! First public journey: real generated records, governed storage and final-state batches.
+use ic_db::{Batch, Database, Entity, Error, Schema, entity};
+use ic_storage::{
+    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
+    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+};
+
+#[entity(id=1, pk(field="id", source="external"), index(id=1, fields=["category", "id"]),
+    fields(field(name="id", value(item(prim="Nat64"))),
+        field(name="category", value(item(prim="Nat64"))),
+        field(name="amount", value(item(prim="Nat64")))))]
+struct Entry {}
+
+#[entity(
+    id = 2,
+    pk(field = "id"),
+    index(id = 1, field = "token", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "token", value(item(prim = "Nat64")))
+    )
+)]
+struct TokenRow {}
+
+#[entity(id=1, pk(field="id"), index(id=1, fields=["category", "id"]),
+    fields(field(name="value", value(item(prim="Nat64"))), field(name="id", value(item(prim="Nat64"))),
+        field(name="category", value(item(prim="Nat64")))))]
+struct Changed {}
+
+#[entity(id=1, pk(field="id"), index(id=1, fields=["category", "id"]),
+    fields(field(name="amount", value(item(prim="Nat64"))), field(name="category", value(item(prim="Nat64"))),
+        field(name="id", value(item(prim="Nat64")))))]
+struct Reordered {}
+
+#[entity(
+    id = 2,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "title", value(item(prim = "Text", max_bytes = 32))),
+        field(name = "note", value(opt, item(prim = "Text", max_bytes = 64))),
+        field(name = "published", value(item(prim = "Bool"))),
+        field(name = "priority", value(opt, item(prim = "Nat64")))
+    )
+)]
+struct Document {}
+
+#[entity(
+    id = 3,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "enabled", value(opt, item(prim = "Bool"))),
+        field(name = "text", value(item(prim = "Text", max_bytes = 4096)))
+    )
+)]
+struct WideText {}
+
+fn schema() -> Schema {
+    Schema::new(&[TokenRow::SCHEMA, Entry::SCHEMA]).unwrap()
+}
+fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
+    let mut host = MemoryRuntime::new(backing).unwrap();
+    let declarations =
+        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
+            .unwrap();
+    let grants =
+        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
+    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
+        .unwrap();
+    host
+}
+
+#[test]
+fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
+    let row = Entry {
+        id: 7,
+        category: 2,
+        amount: 42,
+    };
+    assert_eq!(row.encode().unwrap(), [42, 2, 7]);
+    assert_eq!(Entry::decode(&[42, 2, 7]).unwrap(), row);
+    assert!(matches!(Entry::decode(&[42, 2, 7, 0]), Err(Error::Corrupt)));
+    let one = Schema::new(&[Entry::SCHEMA]).unwrap();
+    // Independent literal grammar assembled with Perl pack(V)/UTF-8 lengths;
+    // digest verified by OpenSSL, not the product's schema serializer.
+    assert_eq!(
+        one.fingerprint().map(|b| format!("{b:02x}")).concat(),
+        "cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa"
+    );
+    assert_eq!(
+        one.fingerprint(),
+        Schema::new(&[Reordered::SCHEMA]).unwrap().fingerprint()
+    );
+    assert_ne!(
+        one.fingerprint(),
+        Schema::new(&[Changed::SCHEMA]).unwrap().fingerprint()
+    );
+    assert!(Schema::new(&[Entry::SCHEMA, Changed::SCHEMA]).is_err());
+    assert_eq!(
+        Entry::SCHEMA
+            .fields
+            .iter()
+            .map(|field| field.name)
+            .collect::<Vec<_>>(),
+        ["amount", "category", "id"]
+    );
+    assert_eq!(Entry::SCHEMA.indexes[0].fields, ["category", "id"]);
+}
+
+#[test]
+fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
+    use ic_db::{EntitySchema, FieldType};
+    let row = Document {
+        id: 1,
+        title: "é".into(),
+        note: None,
+        published: false,
+        priority: Some(0),
+    };
+    let golden = [1, 0, 1, 0, 0, 2, 0xc3, 0xa9]; // id, note, priority, published, title
+    assert_eq!(row.encode().unwrap(), golden);
+    assert_eq!(Document::decode(&golden).unwrap(), row);
+    for malformed in [vec![1, 2], vec![1, 0, 0, 2, 0], vec![1, 0, 0, 0, 1, 0xff]] {
+        assert!(matches!(Document::decode(&malformed), Err(Error::Corrupt)));
+    }
+    let mut changed = row.clone();
+    changed.note = Some(String::new());
+    assert_ne!(changed.encode().unwrap(), golden);
+    assert_eq!(
+        Document::decode(&changed.encode().unwrap()).unwrap(),
+        changed
+    );
+    changed.title = "é".repeat(16);
+    changed.note = Some("é".repeat(32));
+    assert_eq!(
+        Document::decode(&changed.encode().unwrap()).unwrap(),
+        changed
+    );
+    changed.title.push('x');
+    assert!(matches!(changed.encode(), Err(Error::Limit)));
+    // Independent payload producer bypasses application validation: decode must
+    // still refuse the oversized text under the admitted field contract.
+    let bytes = ic_db::__private::native::encode(
+        &(
+            1_u64,
+            Option::<String>::None,
+            Some(0_u64),
+            false,
+            &changed.title,
+        ),
+        ic_db::__private::ROW_LIMITS,
+    )
+    .unwrap();
+    assert!(matches!(Document::decode(&bytes), Err(Error::Corrupt)));
+    changed.title.clear();
+    changed.note = Some("x".repeat(65));
+    assert!(matches!(changed.encode(), Err(Error::Limit)));
+    let wide = WideText {
+        id: 1,
+        enabled: None,
+        text: "x".repeat(4096),
+    };
+    assert!(wide.validate().is_ok());
+    assert!(matches!(wide.encode(), Err(Error::Limit))); // full row framing exceeds 4 KiB
+    for enabled in [None, Some(false), Some(true)] {
+        let row = WideText {
+            id: u64::MAX,
+            enabled,
+            text: String::new(),
+        };
+        assert_eq!(WideText::decode(&row.encode().unwrap()).unwrap(), row);
+    }
+    let contract = || Schema::new(&[Entry::SCHEMA, Document::SCHEMA]).unwrap();
+    let fingerprint = contract().fingerprint();
+    // Mixed-type contract assembled independently with Perl pack(V/C), UTF-8
+    // name lengths and OpenSSL SHA-256, alongside the unchanged Nat64 vector.
+    assert_eq!(
+        fingerprint.map(|b| format!("{b:02x}")).concat(),
+        "80625391c9330ef8b4379a91b5e93663acd40384608a1a74197813267f2b2b3a"
+    );
+    for variant in 0..3 {
+        let mut fields = Document::SCHEMA.fields.to_vec();
+        match variant {
+            0 => fields[4].value = FieldType::Text { max_bytes: 33 },
+            1 => fields[3].optional = true,
+            _ => fields[3].value = FieldType::Nat64,
+        }
+        // Metadata-only sensitivity control; never use this mismatched codec to persist.
+        let altered = Box::leak(Box::new(EntitySchema {
+            fields: Box::leak(fields.into_boxed_slice()),
+            ..*Document::SCHEMA
+        }));
+        assert_ne!(
+            Schema::new(&[Entry::SCHEMA, altered])
+                .unwrap()
+                .fingerprint(),
+            fingerprint
+        );
+    }
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [3; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    assert!(matches!(batch.replace(&changed), Err(Error::Limit)));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(*backing.borrow(), before);
+    let mut row = row;
+    row.note = Some(String::new());
+    row.published = true;
+    row.priority = None;
+    let mut batch = Batch::new();
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.revision(2).unwrap(), 2);
+    assert_eq!(db.revision(1).unwrap(), 0);
+    drop(db);
+    drop(runtime);
+    let runtime = host(backing);
+    let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(db.get::<Document>(1).unwrap(), Some(row));
+    assert_eq!(db.revision(2).unwrap(), 2);
+}
+
+#[test]
+fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), schema(), [1; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            id: 1,
+            category: 2,
+            amount: 10,
+        })
+        .unwrap();
+    batch
+        .insert(&Entry {
+            id: 2,
+            category: 2,
+            amount: 20,
+        })
+        .unwrap();
+    batch.insert(&TokenRow { id: 1, token: 3 }).unwrap();
+    batch.insert(&TokenRow { id: 2, token: 4 }).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.revision(1).unwrap(), 1);
+    assert_eq!(db.revision(2).unwrap(), 1);
+    assert_eq!(db.get::<Entry>(1).unwrap().unwrap().amount, 10);
+    assert!(db.get::<Entry>(99).unwrap().is_none());
+    assert!(matches!(db.get::<Changed>(1), Err(Error::UnknownEntity)));
+    assert_eq!(
+        db.index_prefix::<Entry>(1, &[2], 3)
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let page = db.page::<Entry>(None, 1).unwrap();
+    assert_eq!(page.rows[0].id, 1);
+    assert_eq!(db.page::<Entry>(page.next_after, 3).unwrap().rows[0].id, 2);
+    assert!(db.page::<Entry>(Some(u64::MAX), 3).unwrap().rows.is_empty());
+    assert!(matches!(db.page::<Entry>(None, 0), Err(Error::Limit)));
+
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch
+        .replace(&Entry {
+            id: 1,
+            category: 2,
+            amount: 10,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(*backing.borrow(), before);
+
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            id: 3,
+            category: 8,
+            amount: 30,
+        })
+        .unwrap();
+    batch
+        .insert(&Entry {
+            id: 3,
+            category: 9,
+            amount: 31,
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::DuplicateTarget)));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch.insert(&TokenRow { id: 3, token: 5 }).unwrap();
+    batch.insert(&TokenRow { id: 4, token: 5 }).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+    assert_eq!(*backing.borrow(), before);
+
+    let mut batch = Batch::new();
+    batch.replace(&TokenRow { id: 1, token: 4 }).unwrap();
+    batch.replace(&TokenRow { id: 2, token: 3 }).unwrap();
+    batch
+        .replace(&Entry {
+            id: 1,
+            category: 9,
+            amount: 11,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.revision(2).unwrap(), 2);
+    assert_eq!(db.index_prefix::<TokenRow>(1, &[4], 3).unwrap()[0].id, 1);
+    assert_eq!(db.index_prefix::<Entry>(1, &[2], 3).unwrap()[0].id, 2);
+    assert_eq!(db.index_prefix::<Entry>(1, &[9], 3).unwrap()[0].amount, 11);
+    let mut batch = Batch::new();
+    batch.insert(&TokenRow { id: 3, token: 4 }).unwrap();
+    batch.delete::<TokenRow>(1).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.index_prefix::<TokenRow>(1, &[4], 3).unwrap()[0].id, 3);
+    drop(db);
+    drop(runtime);
+
+    let runtime = host(backing.clone());
+    let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
+    assert_eq!(db.incarnation(), [1; 16]);
+    assert_eq!(db.get::<Entry>(1).unwrap().unwrap().amount, 11);
+    assert_eq!(db.revision(2).unwrap(), 3);
+    drop(db);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        Database::open(
+            runtime.open_memory(&key).unwrap(),
+            Schema::new(&[Changed::SCHEMA]).unwrap()
+        ),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    assert!(matches!(
+        Database::create(runtime.open_memory(&key).unwrap(), schema(), [2; 16]),
+        Err(Error::Storage(_))
+    ));
+    assert_eq!(*backing.borrow(), before);
+    // Independent corruption control removes authority, never reconstructs it.
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    // Literal physical keys independently check row/index representation. A stale
+    // index pointing at a decodable row must not silently return that wrong row.
+    let row = vec![2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+    assert_eq!(raw.get(&row), Some(vec![11, 9, 1]));
+    let index = vec![
+        3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 1,
+    ];
+    assert_eq!(raw.get(&index), Some(1_u64.to_be_bytes().to_vec()));
+    raw.insert(index.clone(), 2_u64.to_be_bytes().to_vec());
+    drop(raw);
+    let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
+    assert!(matches!(
+        db.index_prefix::<Entry>(1, &[9], 3),
+        Err(Error::Corrupt)
+    ));
+    drop(db);
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    raw.insert(index, 1_u64.to_be_bytes().to_vec());
+    raw.remove(&vec![0]);
+    drop(raw);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        Database::open(runtime.open_memory(&key).unwrap(), schema()),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}

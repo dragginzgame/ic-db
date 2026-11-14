@@ -20,14 +20,21 @@ IcyDB's local checkout and GitHub repository are frozen by maintainer decision
 pending this experiment. Read-only research remains allowed; development and
 delivery require an explicit decision to resume. Existing work and data are retained.
 
-The only product package, `crates/ic-db`, is an empty library scaffold. There is
-no database runtime, compatibility promise, measured improvement or deployment.
+The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
+`crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
+exactly admitted schemas, persists Nat64, Bool and bounded Text fields with optional
+values, maintains
+indexes and entity revisions, and applies bounded final-state batches. This is
+experimental: there is no production compatibility promise, measured improvement
+or deployment. Rich types, references and the broad fluent builder remain required
+implementation work; this increment does not complete M1. Primary and index keys
+currently require non-optional Nat64 fields.
 The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
 No public licence or crates.io publication has been selected; packages are unpublished.
 
 M0 investigation has begun in the independent [qualification workspace](qualification/README.md).
 Its synchronous write-rollback probe passes in PocketIC with published IC Storage.
-This supports the no-WAL candidate; it does not yet qualify a database or complete M0.
+This supports the no-WAL candidate; it does not qualify the complete product.
 The resumable grouped-sum probe also passes: it completes on unchanged input and
 explicitly invalidates under intervening writes. Completion under real traffic
 is not guaranteed under the accepted initial contract.
@@ -38,18 +45,22 @@ and indexed restricted deletion without a durable staging layer.
 The bounded-read probe covers order admission, sparse pages, actual reply-byte
 limits, ordered DISTINCT and the accepted live-pagination duplicate/omission behavior.
 `make m0-contracts` checks candidate exact numeric keys, schema identity sensitivity,
-SHA-256 fingerprints, bounded row decoding and projection/DISTINCT/grouping
+SHA-256 fingerprints, bounded recursive row decoding and projection/DISTINCT/grouping
 composition natively. It does not qualify product codecs or measure Wasm cost.
 
 The [M0 readiness review](docs/design/ic-db-system-design.md#next-delivery-close-m0-then-typed-schemas-in-m1)
-separates remaining contract decisions from M1–M3 implementation checks. M0 is not
-closed. The proposed next delivery is typed schema authoring, shared inspection
-and useful persistent records; the matched SQL-disabled IcyDB baseline is still
-outstanding.
+separates accepted entry contracts from M1–M3 implementation checks. The M0 entry
+review permits this first typed-schema increment. `make m0-icydb-baseline` provides the first
+SQL-disabled comparison workload: persistent writes, indexed reads and unchanged
+upgrade/reopen. It measures the frozen engine only; matched IC DB results and
+broader workload budgets remain outstanding.
 
 The authoring comparison is complete. M1 keeps the familiar attribute-owned
 entity/record declarations with empty struct bodies; alternatives may be explored
-later. Product schema macros and persistence remain unimplemented.
+later. For a real executable declaration and write/reopen journey, see
+[the record tests](crates/ic-db/tests/records.rs) and
+[the CLI fixture](qualification/records-canister/src/lib.rs).
+Run `make m1-records` for their focused native and Wasm checks.
 
 ## Database console
 
@@ -65,12 +76,21 @@ For one command: `db schema` or `db query --limit 2`. Use `db --help` for help.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
-The current console reads an explicitly labelled, temporary six-row M0 database
+The current console reads an explicitly labelled, temporary M1 database with six
+`Entry` rows and one mixed-type `Document` record
 running in local PocketIC. Each session starts fresh and is discarded on exit.
-It has no SQL, remote-canister connection or production credentials. Schema
-inspection and bounded queries remain required in the eventual product CLI;
+`db schema` presents generated fields and indexes in bordered tables, with the
+primary key first and separate type, optionality and byte-limit columns. The CLI
+uses `ic-host-text`, as IcyDB's describe renderer did. `db status` contains the
+full manifest fingerprint, incarnation, Entry revision and physical pages.
+`query` currently reads Entry and shows `id` and `amount`; its `--min` filter runs over a
+bounded primary-key page, so an empty page can still have a continuation.
+The output supplies a next-page command, retaining the limit and filter, or an
+explicit completion message. Terminal layout belongs to the CLI, not the runtime.
+It has no SQL, remote-canister connection or production credentials. Broader
+query support remains required in the eventual product CLI;
 Canic will own its endpoint integration. See [probe details](qualification/README.md).
-The installed fixture lives under the prefix's `share/ic-db/m0`; PocketIC still
+The installed fixture lives under the prefix's `share/ic-db/m1`; PocketIC still
 uses this checkout's explicitly prepared `.tools/m0-pocketic` server.
 
 ## Development
@@ -87,7 +107,7 @@ make clippy
 make docs-check
 ```
 
-`make help` lists the focused checks. `make ci` is the aggregate scaffold gate;
+`make help` lists the focused checks. `make ci` is the aggregate native library gate;
 passing it does not qualify a database. The configured Linux and macOS CI jobs
 run it on GitHub. These checks do not certify a production database.
 

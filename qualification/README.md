@@ -1,13 +1,126 @@
-# M0 qualification
+# Database qualification
 
-This independent workspace contains disposable mechanism probes, not a database
-engine. The product crate has no dependency on it. Published suppliers and exact
-resolved versions are recorded in [Cargo.lock](Cargo.lock).
+This independent workspace contains disposable M0 mechanism probes and an M1
+test host consuming the actual product library. The product crate has no dependency
+on this workspace. Published suppliers and exact
+resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
+also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
 as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
+
+## M1 persistent records
+
+```sh
+make m0-setup
+make m1-records
+make db
+db schema
+db query --limit 3 --min 40
+db query --after 3 --limit 3 --min 40
+```
+
+The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
+Native checks cover canonical codecs/schema identity, cross-entity batches,
+final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
+Literal keys and payload bytes supply independent representation checks.
+Stored fields now include Bool, bounded UTF-8 Text and optional Nat64/Bool/Text.
+Checks distinguish absence from empty/zero/false, count text bytes rather than
+characters, reject oversized writes and stored payloads, retain the whole-row byte
+envelope, and preserve values and per-entity revisions across reopen. Independent
+SHA-256 vectors cover the original Nat64 contract and the expanded CLI fixture.
+The Wasm host checks generated inspection, sparse page progress, indexes,
+normal errors versus late application traps, atomic revisions and unchanged
+upgrade/reopen. Full raw stable-memory comparisons include supplier metadata.
+`make m1-commit-failures` separately builds the host's `fault-injection` feature.
+It delegates backing identity and IO to the real supplier, traps after each
+observed backing write in a two-row replacement, and rejects a real `grow()`
+request with `-1` during a maximum-cardinality insert batch. Raw backing/extent,
+indexes and revisions must revert; the identical operation must succeed on retry.
+The current two-entity fixture with Storage 0.74.1 covers 48 replacement writes and reaches growth
+with the insert batch starting at ID 1700: successful retry performs 1,322 backing
+writes, one growth request and expands from 26 to 34 physical pages. These are
+version-specific observations, not layout assertions or performance measurements.
+The test discovers boundaries instead of depending on those counts. Reopen after
+unchanged upgrade also passes. Instruction exhaustion, corruption failure modes
+and other workload shapes remain M1 qualification work.
+
+Private Wire exports are test controls, not a production adapter. `make db`
+installs six Entry rows and one Document using this host; every CLI session is fresh. Clap
+owns argv and console command admission; empty console lines remain silent.
+Fault controls are compiled only for the dedicated probe and excluded from the
+ordinary CLI host. The product library has no injection feature or durable fault
+state; the instrumented host must not be used for comparative performance claims.
+The M0 maintenance fixture remains available only through its dedicated probe.
+Product scope still includes richer types, reference constraints and broad fluent
+queries. Keys/indexes still require non-optional Nat64; text and optional indexing
+remain required follow-on work. `db schema` inspects both entity descriptions;
+the current `query` command reads Entry only. The private Wasm controls test
+Document updates and unchanged-upgrade persistence.
+
+The M1 selection updates Storage to 0.74.1, Runtime to 0.22.3 and Types to 0.20.3.
+Prior recorded M0/baseline results used the versions stated with that evidence;
+the updated lockfile does not retroactively requalify those results.
+
+## Frozen IcyDB baseline
+
+```sh
+cargo fetch --manifest-path qualification/Cargo.toml --locked
+make m0-setup
+make m0-icydb-baseline
+```
+
+Fetching requires read access to `dragginzgame/icydb`. The benchmark itself runs
+offline with the prepared PocketIC server. It uses Git revision
+`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`, never a moving sibling checkout.
+The two small comparison packages exist because IcyDB's actor generator consumes
+schema registration in a native build script and the same authored types in Wasm.
+They are qualification infrastructure, not a proposed IC DB crate split.
+
+The source is frozen; suppliers resolve through **this workspace's lockfile**,
+not IcyDB's original lockfile. The selected Wasm facade has no features, its core
+has `default`, and the native generator adds `build`; SQL is absent. The feature
+tree and compiler/build records are saved under `target/evidence/icydb-baseline/`.
+Compare against this complete selection, not historical audit numbers. The
+numbers currently recorded in the design were measured with Storage 0.74.0,
+Runtime 0.22.2 and Types 0.20.2. Rerun with the current selection before a matched
+product comparison; the older artifact and measurements remain historical evidence.
+
+The fixture uses one journaled entity with `id`, `category` and `amount` Nat64
+fields, external IDs, and one `(category, id)` secondary index. It inserts 32
+rows individually, checks present/missing primary-key reads, refuses a duplicate,
+reads a category in ID order, changes an indexed category through a complete
+read/modify/replace journey, and verifies all rows and category results after an
+unchanged executable upgrade. Independent tuples supply the expected results.
+
+Instruction counter 0 surrounds request accounting, session acquisition, database
+work and result mapping; Wire request/reply encoding is outside that interval.
+Update cycle deltas include the complete host call and system charges; they are
+not pure database instructions. Query cycles are not inferred from those deltas.
+The driver also advances startup/journal work after every write, including a
+refusal, and reports those steps/instructions/cycles separately. This deliberately
+measures a settled database between requests; it is not a throughput workload or
+the cost of Canic's production scheduling policy. Count that work when comparing
+the complete journey rather than treating a successful write return as all work.
+The driver reports complete uncompressed Wasm and code-section payload bytes
+through Host Artifacts' bounded Wasm inspection, plus the artifact SHA-256.
+The recipe is this workspace's `release` profile (`z`, fat LTO, one codegen unit,
+abort, stripped symbols), without a post-link optimizer. It is an M0 comparison
+recipe, not a selected production deployment optimum.
+
+Startup is explicitly advanced by the driver, with fixed test-only entropy and a
+recorded recovery wakeup. No Canic endpoints, watchdog scheduling, production
+authorization or general failure recovery are qualified by this host. IcyDB's
+native schema macros require generated constructor registration; the comparison
+schema permits those macro-owned internals under `deny(unsafe_code)`, while the
+ordinary probe libraries and console retain `forbid(unsafe_code)`.
+
+This is the first one-engine baseline, not proof of parity or savings. There is
+no matched IC DB engine yet. High fan-out, rich records, multi-entity growth,
+aggregate costs, maintenance and Canic composition remain separate measurements.
+This focused target is not implicitly run by scaffold CI or release qualification.
 
 ## Numeric and schema contracts
 
@@ -31,12 +144,13 @@ arithmetic, aggregate precision/overflow, mixed-type promotion, Float32, product
 codecs, supplier integration or the complete retained type surface.
 
 The schema witness serializes one bounded canonical contract with field names,
-explicit entity/index/variant IDs and versions for row/key codecs, comparison,
+explicit entity/index IDs, named enum variants and versions for row/key codecs, comparison,
 normalization, absence ordering, constraints, defaults/timestamps and supplier
 format. A literal byte oracle fixes the example; 19 changes to stored behavior/layout
 change its identity, including field renames. Fields are ordered by their exact
 names; declarations can reorder, but field names are not display-only labels.
-Other source labels with explicit IDs remain outside identity. Index column order
+Entity/index source labels with explicit IDs remain outside identity. Variant
+renames change identity; reordering variant declarations does not. Index column order
 remains semantic. Duplicate/empty/oversized field names, duplicate IDs, dangling
 index fields and selected invalid bounds/versions refuse. Renaming a field without
 updating its referencing index refuses; updating both still changes the contract.
@@ -53,6 +167,41 @@ Positional codecs cannot assume declaration reordering is compatible. Existing
 Wasm maintenance probes separately exercise admission and transformation recovery.
 
 ## Row codec candidate
+
+The design now specifies a finite compiled type graph, retaining recursive
+values under separate value-depth/node/count/byte bounds. Fields, named types
+and enum variants use schema names, not author-supplied numeric IDs. Stored enum
+ordinals derive from canonical variant-name order within the admitted contract.
+The existing identity witness now uses named variants (`ICDBM0C4`); its independent
+OpenSSL vector changed deliberately. No product format or retained data exists
+under either fixture encoding.
+
+`nested_row_codec` adds one handwritten recursive row projection using published
+Wire 0.22.1 and test-only Serde 1.0.229 (registry-verified, already transitive).
+The application struct and enum declaration orders deliberately differ from their
+storage traversal. A literal payload oracle checks canonical order; map/set
+construction order does not affect bytes, while list order and absent/empty
+values remain distinct. Decode admits entry sequences before constructing maps
+or sets, rejecting duplicates and noncanonical entry order rather than silently
+discarding entries. Unknown enum ordinals and payload mismatches also refuse.
+
+The sample permits eight recursive nodes, three levels, three entries per
+collection and eight UTF-8 bytes per string. An all-maximal sample with u64 maxima
+must round-trip under 512 payload bytes, 512 Wire visits, depth 32 and a 64-KiB
+allocation allowance. Wire's allowance conservatively charges traversal and is
+not actual heap allocation; the initial 8-KiB allowance refused otherwise valid
+sample values. Database limits remain separately enforced in both directions,
+and a low value of each Wire allowance refuses independently. These numbers are
+fixture limits, not proposed product budgets or IC instruction measurements.
+The fixed enum payload uses a tuple stand-in; it does not fix the product's
+variant framing or qualify a macro generator. Generated traversal, every retained
+type combination and reopen integration remain M1 obligations.
+
+For only these new/changed contracts:
+
+```sh
+cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test schema_identity --test nested_row_codec
+```
 
 `make m0-contracts` also runs `row_codec`, a fixed `(amount, id, note)` tuple in
 canonical field-name order. Wire 0.22.1 owns payload serialization; a small
@@ -307,18 +456,23 @@ allocation, or qualify arbitrary collection types, exhaustion or production
 validation/cleanup bounds. Full repeated-migration lifecycle qualification remains
 open. The transformation is synthetic; full coverage belongs to the delivered engine.
 
-`make db` builds and installs the release binary at `~/.local/bin/db` and source A
-at `~/.local/share/ic-db/m0/maintenance-a.wasm`; it does not start PocketIC or the
-console. `DB_INSTALL_PREFIX` overrides `~/.local`. Only source A is built for the
-console, not the other maintenance variants. Cargo artifact records select both
+## Installed console
+
+`make db` builds and installs the release binary at `~/.local/bin/db` and the M1
+host at `~/.local/share/ic-db/m1/records.wasm`; it does not start PocketIC or the
+console. `DB_INSTALL_PREFIX` overrides `~/.local`. Maintenance variants are not
+built for the console. Cargo artifact records select both
 build outputs. Keep the installation's `bin` directory on `PATH`.
 
-Run `db` to open source A as a fresh temporary local database. Commands are `schema`,
+Run `db` to open a fresh temporary local record database. Commands are `schema`,
 `status`, `query [--after ID] [--limit 1..3] [--min VALUE]`, `help` and `quit`.
 Queries are read-only, order by ID ascending and inspect at most `limit` candidates.
-The minimum-value filter can return an empty page with `next_after`; only
-`complete=true` ends enumeration. A full final page may need one last empty call.
-Both schema information and records come from the running fixture's query controls.
+The minimum-value filter can return an empty page with a continuation. The CLI
+prints a next-page command preserving the filter/limit, or `Complete: no more
+candidates.` A full final page may need one last empty call. Both schema information
+and records come from the running fixture's query controls. Schema responses carry
+structured field/index descriptions; only the native CLI depends on `ic-host-text`
+and renders bordered tables. Full storage identities live in `db status`.
 
 Use `db query --after 3 --limit 2` for one command, or pipe newline commands to `db`.
 `db --help` needs no running server. The installed binary locates the fixture
@@ -328,4 +482,4 @@ Invalid commands/options fail scripts with a nonzero status;
 interactive mistakes return to the prompt. The console never evaluates SQL or
 shell commands. `quit` or EOF closes the Testkit-owned instance. Local fixture
 endpoints are qualification controls, not a shipped Canic adapter or a new public
-dynamic-query API; there is no remote connection or durable session in M0.
+dynamic-query API; there is no remote connection or durable CLI session.

@@ -42,13 +42,16 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Field declarations must not require numeric IDs. Use field names as their
   contract identity; renames require an explicit supported schema transition,
   not inferred matching or a hidden ID registry. Entity/index identity policy
-  is separate. Attribute removals are permitted with a concrete reason: report
+  is separate. Nested types and enum variants also use declared schema names;
+  compact stored enum ordinals come from canonical variant-name order under the
+  admitted contract. Renames require transitions; declaration reorderings do not.
+  Attribute removals are permitted with a concrete reason: report
   each removed attribute and the changed behavior or replacement to the maintainer.
   SQL, joins and window functions are excluded. Application usage does not define
   product breadth; distinguish SQL-only machinery from shared fluent behavior.
 - Keep `make db` as the CLI installation command; it must not launch the console.
   The installed `db` command provides schema inspection and bounded queries.
-  During M0 it opens an explicitly labelled local fixture. Future product
+  It currently opens an explicitly labelled local M1 record fixture. Future product
   access uses the same admitted fluent semantics through Canic-owned endpoints;
   the CLI must not introduce SQL or a second query engine.
 - Retain broad schema types, reference checks/restricted deletion and constrained
@@ -77,21 +80,39 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Product packages live under `crates/`. Add an independent `qualification/`
   workspace only when real native/Wasm experiments need it. Do not add dummy
   packages, runtime dependencies, tests or general frameworks to fill the scaffold.
-- Keep `ic-db` as a private unpublished scaffold. The source release destination
+- Keep `ic-db` private and unpublished while the experiment proceeds. The source release destination
   is `https://github.com/dragginzgame/ic-db.git`, branch `main`. Use the shared
   release commands and local adapter; no public licence or live deployment target
   has been selected. Qualification packages retain independent `0.0.0` versions.
 
 The independent `qualification/` workspace owns its lockfile, M0 canisters and
-native driver. `make m0-setup` explicitly prepares Testkit's server;
+native driver, plus the M1 host consuming the actual product library.
+`make m1-records` selects native generated records and their Wasm/reopen/message
+boundary checks. This first scalar slice does not complete M1's type/reference,
+resource-failure or matched-performance gates.
+`make m1-commit-failures` selects backing-write traps and physical growth refusal
+inside real product commits. Its fault feature belongs only to qualification;
+the normal CLI host and product library do not expose injection controls.
+`make m0-setup` explicitly prepares Testkit's server;
 `make m0-contracts` checks native numeric/schema/row/query semantics without a server.
 `make m0-rollback`, `make m0-batch`, `make m0-reads`, `make m0-aggregation` and
 `make m0-maintenance` select the focused experiments separately. `make db` installs
 to `~/.local` by default (`DB_INSTALL_PREFIX` overrides it). Run `db` for the console
 or `db schema` / `db query --limit 2` for one noninteractive command.
+`make m0-icydb-baseline` separately measures the immutable SQL-disabled IcyDB
+comparison host. Its source comes from the pinned Git dependency, with suppliers
+selected by the qualification lockfile. It does not read or modify the frozen
+sibling checkout, establish IC DB savings, or run implicitly in scaffold CI.
 
 ## Qualification and simplicity
 
+- After every patch, review the changed responsibility and its affected callers
+  for design drift and architectural sediment: duplicated policy or state,
+  unnecessary abstractions, obsolete paths, misleading documentation and
+  misplaced ownership. Remove newly introduced sediment within the same change;
+  do not defer it to a future cleanup. Keep the review proportional to the patch,
+  explain material findings and fixes, and do not add a general audit framework
+  or broaden testing merely to perform this review.
 - Run focused checks for changed behavior. Aggregate `make ci`, full product
   suites and release qualification require explicit selection or configured CI.
 - Use `make fmt` after code/manifest edits and `make fmt-check` for verification.
@@ -139,7 +160,7 @@ or `db schema` / `db query --limit 2` for one noninteractive command.
 ## Commands
 
 `make clippy`, `make check`, `make test` and `make doc` select the current library.
-At this stage these qualify only a scaffold. `make docs-check` checks local links;
+These qualify the current native library slice. `make docs-check` checks local links;
 `make toko-tooling-check` verifies tooling selection. Tool preparation is explicit:
 `make install-tools`, then `make tools-check`. Hooks use `make install-hooks`.
 Use `toko-cloc` for source counts; `make cloc` and `CLOC_*` settings are retired.

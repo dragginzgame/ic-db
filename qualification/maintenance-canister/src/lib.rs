@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Fixed six-row copy/index migration, plus read-only controls for the M0 console.
 //! No production manifest, query engine or general migration executor is implemented.
 

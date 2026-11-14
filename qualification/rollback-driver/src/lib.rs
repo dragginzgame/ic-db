@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Local M0 harness shared by executable probes and the development console.
 //! Testkit owns server provisioning and lifecycle.
 

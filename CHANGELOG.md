@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.1.2]
+
+### ▶️ Try it
+
+Install the console using the real first M1 record library, then inspect its
+generated schema and two bounded pages. Each session has six Entry rows and one
+mixed-type Document; this does not connect to a deployed database. Restart an existing console.
+
+```sh
+make m0-setup
+make db
+db schema
+db status
+db query --limit 3 --min 40
+db query --after 3 --limit 3 --min 40
+```
+
+The first filtered page is empty but prints a next-page command with `--after 3`. The next returns
+IDs 4–6. A full page can require one final empty request to establish completion.
+The displayed value column is now named `amount`, matching the authored schema.
+`db schema` also shows Document's bounded Text, Bool and optional fields. The
+current `query` command still reads Entry; Document writes/reopen are covered by
+`make m1-records` through private qualification controls.
+
+### 🛠️ Product slice
+
+- Restore IcyDB-style bordered schema/query tables using `ic-host-text` 0.75.0
+  in the native CLI. Show primary keys first and separate field type, optionality
+  and byte limits; keep full storage identities in `db status`. Print usable
+  continuation commands instead of raw cursor/debug fields. The fixture returns
+  structured schema metadata; remove its terminal layout and the obsolete runtime
+  field formatter. No SQL frontend, stored-format or query-semantics change.
+- Extend stored fields to Bool, Text with an explicit `max_bytes`, and optional
+  Nat64/Bool/Text. Preserve absence versus empty/zero/false; enforce UTF-8 byte
+  limits before writes and on decode. Types, bounds and optionality participate
+  in schema identity; existing Nat64 bytes/fingerprints remain unchanged. Schema
+  inspection reads typed metadata instead of hardcoding Nat64. Primary/index keys
+  remain non-optional Nat64 for now; other key types are not retired. Generated
+  codecs and validation change, while the shared commit/traversal engine does not.
+- Add the first `#[entity]` macro and shared record runtime: externally keyed
+  Nat64 fields, compiled schema fingerprints, exact manifest admission,
+  create/reopen, primary-key pages, bounded index-prefix reads and cross-entity
+  batches with final-state uniqueness and atomic entity revisions. Field names
+  are identities; numeric field IDs are not introduced. No IcyDB executor or
+  journal code is copied. Richer types, references and fluent queries remain
+  required follow-on implementation; this does not complete M1.
+- `db schema` now inspects generated metadata from this library, rather than
+  the M0 maintenance fixture. Clap owns console/argv command validation and help;
+  blank lines remain silent. `make db` still installs without launching.
+- Add `make m1-records` for native codec/identity/conflict/reopen checks and the
+  product's Wasm message-boundary witness. Full backing comparisons distinguish
+  late application traps from normal errors; unchanged executable upgrades
+  preserve rows, indexes and revisions. Instruction exhaustion and matched
+  performance remain unqualified.
+
+### 🧪 Qualification
+
+- Add `make m1-commit-failures`: trap after every observed backing write in a
+  real two-row replacement and refuse a physical growth request during a 32-row
+  insert. Full stable-memory rollback, indexes, revisions, successful retry and
+  unchanged-upgrade reopen pass. Fault injection is restricted to a dedicated
+  qualification feature; the runtime, stored format and installed CLI commands
+  remain unchanged. Review each patch for drift and architectural sediment under
+  the new `AGENTS.md` instruction, fixing introduced duplication and ownership drift
+  within the same change.
+
+```sh
+make m1-commit-failures
+```
+
+- Specify a finite compiled type graph with bounded recursive values. Extend
+  name-based identity to nested types and enum variants; compact enum tags derive
+  from canonical name order, without author-supplied field/type/variant numbers.
+  Replace the probe-only numeric enum identity candidate and update its independent
+  SHA-256 vector. Entity/index IDs remain unchanged; no product attributes or data
+  are removed.
+- Add native recursive-row codec checks for canonical field order, enum payloads,
+  map/set equality, list ordering, absent versus empty values, and separate
+  database/Wire bounds. Malformed map/set entries refuse before Rust collection
+  construction can discard duplicates. Serde 1.0.229 is an explicit test-only
+  dependency, already present transitively and registry-verified. Generated
+  rich-type product codecs and Wasm cost remain unqualified.
+
+```sh
+make m0-contracts
+```
+
+- Add `make m0-icydb-baseline`: build the frozen IcyDB revision without SQL and
+  measure a synthetic 32-row persistent workload in local PocketIC. Check typed
+  inserts, duplicate refusal, primary-key reads, ordered category lookup,
+  read/modify/replace with index maintenance and unchanged-upgrade persistence.
+  Report uncompressed Wasm/code-section bytes, instructions, complete update
+  cycle deltas and separate post-write settling work. This establishes an IcyDB
+  reference, not IC DB parity or a measured improvement.
+
+```sh
+cargo fetch --manifest-path qualification/Cargo.toml --locked
+make m0-setup
+make m0-icydb-baseline
+```
+
+The fetch needs read access to the private IcyDB repository. The benchmark uses
+an immutable Git dependency and this qualification lockfile, leaving local IcyDB
+files untouched. Recorded baseline numbers used Storage 0.74.0/Runtime 0.22.2/
+Types 0.20.2; the M1 lockfile selects 0.74.1/0.22.3/0.20.3 respectively. Refresh
+the baseline before claiming a matched product comparison.
+
+### 📚 Documentation
+
+- Narrow the IcyDB baseline to its resolving SQL-disabled product graph. Record
+  the executor conflict in the separately deferred historical Canic audit
+  workspace; keep the frozen source unchanged and avoid treating that workspace
+  as a valid benchmark or a product-engine failure.
+
 ## [0.1.1] - 2026-11-14
 
 ### ▶️ Try it

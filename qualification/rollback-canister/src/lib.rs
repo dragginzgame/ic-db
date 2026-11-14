@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Disposable M0 fixture: real Storage collections with explicit failure boundaries.
 //! Wire exports are test controls, not product endpoints or a Canic replacement.
 

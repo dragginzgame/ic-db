@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! One fixed, bounded grouped sum to probe revision invalidation and durable progress.
 //! This fixture is not a query API, schema admission implementation or job framework.
 

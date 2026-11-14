@@ -42,9 +42,8 @@ struct Field {
 }
 #[derive(Clone)]
 struct Variant {
-    id: u32,
+    name: &'static str,
     payload: u8,
-    source_name: &'static str,
 }
 #[derive(Clone)]
 struct Index {
@@ -81,15 +80,15 @@ fn canonical(contract: &Contract) -> Result<Vec<u8>, &'static str> {
     let mut variants: Vec<_> = contract.variants.iter().collect();
     let mut indexes: Vec<_> = contract.indexes.iter().collect();
     fields.sort_by_key(|field| field.name);
-    variants.sort_by_key(|variant| variant.id);
+    variants.sort_by_key(|variant| variant.name);
     indexes.sort_by_key(|index| index.id);
     if fields.windows(2).any(|pair| pair[0].name == pair[1].name)
-        || variants.windows(2).any(|pair| pair[0].id == pair[1].id)
+        || variants.windows(2).any(|pair| pair[0].name == pair[1].name)
         || indexes.windows(2).any(|pair| pair[0].id == pair[1].id)
     {
         return Err("duplicate identity");
     }
-    let mut bytes = b"ICDBM0C3".to_vec();
+    let mut bytes = b"ICDBM0C4".to_vec();
     bytes.extend(contract.entity_id.to_le_bytes());
     for version in contract.semantics.versions() {
         bytes.extend(version.to_le_bytes());
@@ -120,10 +119,11 @@ fn canonical(contract: &Contract) -> Result<Vec<u8>, &'static str> {
     }
     bytes.push(variants.len() as u8);
     for variant in variants {
-        if variant.id == 0 || variant.payload > 3 {
+        if variant.name.is_empty() || variant.name.len() > 64 || variant.payload > 3 {
             return Err("variant contract");
         }
-        bytes.extend(variant.id.to_le_bytes());
+        bytes.push(variant.name.len() as u8);
+        bytes.extend(variant.name.as_bytes());
         bytes.push(variant.payload);
     }
     bytes.push(indexes.len() as u8);
@@ -186,14 +186,12 @@ fn source() -> Contract {
         primary_key: vec!["id"],
         variants: vec![
             Variant {
-                id: 3,
+                name: "Present",
                 payload: 1,
-                source_name: "Present",
             },
             Variant {
-                id: 8,
+                name: "Absent",
                 payload: 0,
-                source_name: "Absent",
             },
         ],
         indexes: vec![Index {
@@ -207,7 +205,7 @@ fn source() -> Contract {
 
 #[test]
 fn canonical_bytes_match_independent_fixed_contract() {
-    let mut expected = b"ICDBM0C3".to_vec();
+    let mut expected = b"ICDBM0C4".to_vec();
     // Literal format witness: entity, semantic versions, fields, variants, index columns.
     expected.extend([
         42, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0,
@@ -215,7 +213,8 @@ fn canonical_bytes_match_independent_fixed_contract() {
     ]);
     expected.extend(b"\x06amount\x01\x11\0\0\0\x02id\x02\x08\0\0\0");
     expected.extend(b"\x01\x02id");
-    expected.extend([2, 3, 0, 0, 0, 1, 8, 0, 0, 0, 0, 1, 5, 0, 0, 0, 1, 2]);
+    expected.extend(b"\x02\x06Absent\0\x07Present\x01");
+    expected.extend([1, 5, 0, 0, 0, 1, 2]);
     expected.extend(b"\x06amount\0\x02id\0");
     assert_eq!(canonical(&source()).unwrap(), expected);
 }
@@ -226,14 +225,9 @@ fn display_names_and_declaration_order_preserve_identity() {
     let mut renamed = source.clone();
     renamed.source_name = "RenamedEntry";
     renamed.documentation = "Revised prose";
-    renamed.variants[0].source_name = "SomeValue";
     renamed.indexes[0].source_name = "new_label";
     assert_ne!(source.source_name, renamed.source_name);
     assert_ne!(source.documentation, renamed.documentation);
-    assert_ne!(
-        source.variants[0].source_name,
-        renamed.variants[0].source_name
-    );
     assert_ne!(
         source.indexes[0].source_name,
         renamed.indexes[0].source_name
@@ -262,7 +256,7 @@ fn behavior_and_layout_changes_change_contract_identity() {
         |c| c.primary_key = vec!["amount"],
         |c| c.fields[0].kind = 3,
         |c| c.fields[0].bound += 1,
-        |c| c.variants[0].id = 4,
+        |c| c.variants[0].name = "SomeValue",
         |c| c.variants[0].payload = 2,
         |c| c.indexes[0].unique = false,
         |c| c.indexes[0].fields.reverse(),
@@ -291,6 +285,9 @@ fn invalid_identity_graphs_refuse_instead_of_normalizing_away_errors() {
     assert!(canonical(&invalid).is_err());
     let mut invalid = source();
     invalid.variants.push(invalid.variants[0].clone());
+    assert!(canonical(&invalid).is_err());
+    let mut invalid = source();
+    invalid.variants[0].name = "";
     assert!(canonical(&invalid).is_err());
     let mut invalid = source();
     invalid.indexes.push(invalid.indexes[0].clone());
@@ -335,9 +332,9 @@ fn fingerprint_matches_independent_sha256_vector() {
     // OpenSSL SHA-256 over the literal canonical vector above, prefixed by
     // b"ic-db:schema:v1\0". No schema parser or Rust hash implementation in the oracle.
     let expected = [
-        0x55, 0xe0, 0xbb, 0x0f, 0x72, 0xb5, 0x14, 0x78, 0xfc, 0xcb, 0x69, 0xbe, 0xfe, 0x05, 0xd2,
-        0xa0, 0x13, 0xa6, 0x80, 0x55, 0x38, 0x45, 0x62, 0xf9, 0xe7, 0x65, 0x1d, 0xa1, 0xa7, 0xd0,
-        0x2b, 0x1e,
+        0xef, 0xa3, 0x0e, 0x0b, 0x12, 0xd9, 0x26, 0x06, 0x3a, 0x80, 0x59, 0x67, 0xb3, 0x7e, 0xef,
+        0x01, 0xad, 0xcb, 0x80, 0x38, 0xf0, 0xf4, 0x2f, 0x4e, 0x69, 0xc4, 0xbf, 0x4c, 0x22, 0x56,
+        0x78, 0xd3,
     ];
     assert_eq!(fingerprint(&source()).unwrap(), expected);
     // Omitting the domain must not produce the admitted identity.
