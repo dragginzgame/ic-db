@@ -16,6 +16,7 @@ pub(super) enum Kind {
     Nat128,
     Int128,
     Bool,
+    Principal,
     Text(u32),
     Blob(u32),
 }
@@ -83,6 +84,23 @@ impl Field {
     pub fn required_nat64(&self) -> bool {
         matches!(self.kind, Kind::Nat64) && !self.optional
     }
+    pub fn indexable(&self) -> bool {
+        !self.optional
+            && matches!(
+                self.kind,
+                Kind::Nat8
+                    | Kind::Nat16
+                    | Kind::Nat32
+                    | Kind::Nat64
+                    | Kind::Nat128
+                    | Kind::Int8
+                    | Kind::Int16
+                    | Kind::Int32
+                    | Kind::Int64
+                    | Kind::Int128
+                    | Kind::Principal
+            )
+    }
     pub fn rust_type(&self) -> TokenStream {
         let base = match self.kind {
             Kind::Nat8 => quote!(u8),
@@ -96,6 +114,7 @@ impl Field {
             Kind::Nat128 => quote!(u128),
             Kind::Int128 => quote!(i128),
             Kind::Bool => quote!(bool),
+            Kind::Principal => quote!(::ic_db::Principal),
             Kind::Text(_) => quote!(::std::string::String),
             Kind::Blob(_) => quote!(::ic_db::Blob),
         };
@@ -120,6 +139,7 @@ impl Field {
             Kind::Nat128 => quote!(::ic_db::FieldType::Nat128),
             Kind::Int128 => quote!(::ic_db::FieldType::Int128),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
+            Kind::Principal => quote!(::ic_db::FieldType::Principal),
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
             Kind::Blob(max_bytes) => quote!(::ic_db::FieldType::Blob {max_bytes:#max_bytes}),
         };
@@ -155,6 +175,7 @@ impl Field {
             Kind::Int64 => quote!(writer.int64(*value)?),
             Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
+            Kind::Principal => quote!(writer.principal(value)?),
             Kind::Text(_) => quote!(writer.bytes(value.as_bytes())?),
             Kind::Blob(_) => quote!(writer.bytes(value)?),
         };
@@ -180,6 +201,7 @@ impl Field {
             Kind::Int64 => quote!(reader.int64()?),
             Kind::Int128 => quote!(reader.int128()?),
             Kind::Bool => quote!(reader.boolean()?),
+            Kind::Principal => quote!(reader.principal()?),
             Kind::Text(max) => quote!(reader.text(#max as usize)?),
             Kind::Blob(max) => quote!(reader.blob(#max as usize)?),
         };
@@ -247,13 +269,14 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Nat128"), None) => Ok(Kind::Nat128),
         (Some("Int128"), None) => Ok(Kind::Int128),
         (Some("Bool"), None) => Ok(Kind::Bool),
+        (Some("Principal"), None) => Ok(Kind::Principal),
         (Some("Text"), Some(max)) => Ok(Kind::Text(max)),
         (Some("Text"), None) => Err(syn::Error::new_spanned(meta, "Text requires max_bytes")),
         (Some("Blob"), Some(max)) => Ok(Kind::Blob(max)),
         (Some("Blob"), None) => Err(syn::Error::new_spanned(meta, "Blob requires max_bytes")),
         _ => Err(syn::Error::new_spanned(
             meta,
-            "supported here: Nat/Int8/16/32/64/128, Bool, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
+            "supported here: Nat/Int8/16/32/64/128, Bool, Principal, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
         )),
     }
 }

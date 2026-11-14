@@ -24,6 +24,7 @@ help:
 	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
+	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
 	  'make db                         Install db; run db to open the console' \
 	  'make release-patch/minor/major   Qualify and deliver a private source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
@@ -65,6 +66,10 @@ m0-icydb-baseline:
 	@IC_DB_ICYDB_BASELINE_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_icydb_baseline_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/icydb-baseline/build.jsonl)" && \
 	  export IC_DB_ICYDB_BASELINE_WASM && \
 	  cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
+
+.PHONY: m1-records-comparison
+m1-records-comparison:
+	bash scripts/measure-records.sh
 
 m0-rollback:
 	@mkdir -p qualification/target/evidence/m0

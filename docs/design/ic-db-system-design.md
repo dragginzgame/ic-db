@@ -1249,23 +1249,67 @@ or a performance improvement until matched workloads qualify them here.
 | --- | --- |
 | Nat/Int8/16/32/64/128 | Exact Rust integer domains; no narrowing or floating-point coercion |
 | Bool | Exact true/false values |
+| Principal | Canonical Platform Types identity; zero to 29 significant raw bytes |
 | Bounded Text | Exact UTF-8 bytes, without normalization |
 | Bounded Blob | Arbitrary raw bytes; explicit length framing, including empty values |
 | Optional forms of these types | Absence remains distinct from empty, zero and false |
 
 Field validation runs before encoding and after decoding; whole-row bounds apply
-independently. Primary/index keys and references currently require non-optional
-Nat64. Storage support does not imply wider indexes, predicates or arithmetic.
+independently. Secondary indexes admit required Nat/Int8/16/32/64/128 and Principal
+components; primary keys and references still require non-optional Nat64.
+Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, managed policies and fluent queries remain work;
 no retained capability or product attribute has been retired.
+
+Principal fields use `value(item(prim="Principal"))`, optionally with `opt`.
+The Rust value is the re-exported `ic_platform_types::Principal`, not another
+database wrapper. Adapt the bounded raw-identity rule in IcyDB's owned scalar
+decoder and its [principal admission regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-schema/src/atom/tests.rs).
+The row carries a u32 little-endian length followed by at most 29 significant
+bytes; no principal text, checksum string, Serde or Wire encoding is persisted.
+That bound belongs to this durable contract even if the supplier later expands
+its API. Management-canister (empty), anonymous (`[4]`) and other admitted opaque
+identities are values, with application authorization policy outside the database.
+`None` differs from `Some(management_canister())`; zero bytes are significant,
+not removable padding. Decode and key inspection use the same admission rule,
+with only a small stack identity copy and no heap field allocation.
+Canonical identity ownership adds Platform Types as a direct dependency, including
+its text-support dependencies, but no transport, facade wrapper or general value
+layer. Secondary-index ordering is now admitted as described below; Principal
+primary keys and predicates remain separate work.
+
+Secondary keys adapt IcyDB's
+[ordered scalar rules](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/ordered/semantics.rs)
+and [Principal ordering regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/tests/ordered_semantics.rs):
+unsigned integers use exact-width big-endian bytes; signed integers flip the
+leading sign bit; Principal compares length before significant bytes, matching
+Platform Types. One shared component encoder serves generated typed keys,
+stored-row inspection and lookup operands. The schema supplies component types;
+no mixed-type tags, general Value engine, SQL coercion or new storage collection
+is needed. `IndexValue` is the small exact key-operand boundary, not a second
+public query frontend. For example, `index_prefix::<E>(1, &[owner.into()], 10)`
+looks up a Principal-leading index; an integer field requires its exact Rust
+width and signedness. Incorrect operand types refuse with `InvalidOperand`.
+Nonempty prefixes and 1–32 results remain the current contract; index continuation,
+Text/Blob/Bool/optional indexes and the fluent builder remain separate work.
+
+Native witnesses compare every integer width's extrema and duplicate ordering
+against Rust values, compare Principal lengths 0–29 against its canonical owner,
+and exercise compound boundaries, unique swaps/release-acquire, stale entries,
+restricted deletion and reopen. The Wasm host now uses a unique Principal owner
+index and a compound `(entry_id, score)` signed index, with full-backing rollback,
+final-state uniqueness and unchanged-upgrade checks. Key codec 1 is extended only
+for previously refused index declarations: existing Nat64 bytes and fingerprints
+are unchanged. Adding an index still changes that entity's contract and cannot
+silently reopen existing data.
 
 Narrow integers use their actual Rust types (`u8/u16/u32`, `i8/i16/i32`) and exact
 1/2/4-byte little-endian payloads, adapting IcyDB's owned scalar routines and
 width/extrema regression cases. Unlike IcyDB's widened runtime value path, typed
 construction here already enforces representability; the database never truncates
 an i64/u64 into a smaller field. Optional values keep their separate presence tag.
-The new type tags preserve existing codec-v3 contracts. Narrow keys/indexes and
-query arithmetic remain separate work; the shared mutation engine is unchanged.
+The new type tags preserve existing codec-v3 contracts. Narrow secondary indexes
+are now admitted; broader primary keys and query arithmetic remain separate work.
 
 Blob fields use `value(item(prim="Blob", max_bytes=1024))`, optionally with
 `opt`. They expose `ic_db::Blob`, an alias for `Vec<u8>` encoded directly by the
@@ -1285,8 +1329,8 @@ Typed reads decode once, then verify the physical key/index against that value.
 Batch construction encodes once and extracts keys directly from the admitted typed
 value. Stored old rows now use one concrete metadata-driven key inspector at
 mutation and reference boundaries, replacing a generated decoder callback per
-entity. It scans canonical fields once, retaining required Nat64 values in a
-bounded stack array for primary/index key construction. Unselected fields still
+entity. It scans canonical fields once, retaining only selected integer/Principal
+key values in a bounded stack array for primary/index construction. Unselected fields still
 pass the same primitive, presence, length and UTF-8 checks as owned decoding;
 the complete row must be consumed. Text/blob payloads borrow the supplier's row
 buffer rather than allocating owned field values. The supplier still returns an
@@ -1301,7 +1345,8 @@ establish their Wasm growth before broad query execution is built around them.
 
 The native record tests and Wasm host qualify scalar boundaries, incompatible
 admission, final-state batches, indexed reads, rollback and reopen. They do not
-establish comparative performance. Scalar routines and failure cases are adapted
+establish comparative performance by themselves; section 10 records the separate
+one-entity scalar comparison. Scalar routines and failure cases are adapted
 from IcyDB; surrounding storage and mutation machinery follows IC DB's simpler
 contract. The CLI uses
 compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
@@ -1349,7 +1394,7 @@ used the provisional database-owned varint codec. Both old manifests are refused
 intact before decoding their rows; no implicit migration or historical fallback
 decoder is provided. Existing data is not deleted or recreated automatically.
 Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
-Nat8/16/32=`8/9/10` and Int8/16/32=`11/12/13`.
+Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, and Principal=`14`.
 optional fields set bit `0x80`.
 Text and Blob append their `u32` little-endian maximum byte length. These new tags
 extend the grammar without altering unused type definitions. The codec version
@@ -1365,15 +1410,19 @@ changes to these examples are not migrations of an existing deployment.
 
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
 Revision/row/index keys start with tags 1/2/3, then big-endian entity ID; rows add
-the big-endian Nat64 primary key. Index keys add the index ID and Nat64 components;
-nonunique indexes append the primary key. Index values are the big-endian primary
+the big-endian Nat64 primary key. Index keys add the index ID and declared components.
+Integers occupy their exact width in big-endian order, with signed values' leading
+sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
+These component frames concatenate unambiguously; up to four components require
+at most 120 bytes. Nonunique indexes append the primary key. Index values are the big-endian primary
 key; revisions are little-endian `u64`. Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
 width; signed values use two's complement. Booleans and optional presence use
 strict 0/1 bytes; an absent optional field carries no payload. Text and Blob carry
 a four-byte little-endian u32 byte length followed by raw bytes; Text requires
-valid UTF-8. Lengths must fit field and remaining-row bounds before copying.
+valid UTF-8. Principal uses the same u32 length framing with an intrinsic 29-byte
+bound. Lengths must fit field and remaining-row bounds before copying.
 Invalid tags, truncated fields/lengths and trailing bytes are refused. There is
 one current encoding, with no adaptive format or transport serializer fallback.
 Literal row/index vectors and the independent fingerprint accompany the generated
@@ -1396,8 +1445,19 @@ during a 32-row insert batch. Complete backing, indexes and revisions roll back;
 retry and unchanged-upgrade reopen succeed. The feature lives only in qualification,
 with no product hooks, durable fault state or new allocator. Counts and reproduction
 details live in the qualification README; they are supplier-version-specific,
-not optimization targets. Instruction exhaustion and other failure/workload shapes
-remain unqualified. These limits and results do not imply completion of M1.
+not optimization targets. The same host now exhausts the real IC instruction meter
+after the first backing write inside that replacement. PocketIC must report
+`CanisterInstructionLimitExceeded`, with complete raw backing, revisions, indexes
+and reference mapping unchanged; the subsequent successful replacement proves
+retry remains usable. A fixed 4 KiB scratch loop belongs solely to the
+qualification host, not the product's execution path. This preserves the invariant
+tested by IcyDB's
+[synthetic instruction-budget regressions](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/resource/instruction_tests.rs),
+but uses an actual IC limit rejection rather than importing its budget trackers,
+diagnostic framework or mutation-job state. These results prove rollback at the
+selected boundary, not that all structurally admitted batches finish within the
+instruction envelope. Other failure/workload shapes remain unqualified; section 10
+records the first matched scalar costs. These results do not imply completion of M1.
 
 Qualification follows the mechanism that becomes real:
 
@@ -1433,9 +1493,9 @@ describes an older SQL-enabled build, omits code-section bytes and explicitly
 distinguishes planner-free typed lookup from dynamic planning. The historical
 [performance matrix](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/reports/recurring/perf-matrix.md)
 also uses an older revision and PocketIC version. Reuse their workload and
-attribution lessons; neither is a numerical baseline for this candidate. No
-matched IC DB comparison has been established here yet. The first SQL-disabled
-IcyDB-only baseline is recorded below.
+attribution lessons; neither is a numerical baseline for this candidate. The first
+SQL-disabled IcyDB-only baseline is recorded below, followed by the current
+matched scalar comparison. Broader fluent/runtime parity remains unmeasured.
 
 Baseline admission checked after the 0.1.1 release (2026-11-14): the frozen product
 workspace resolves offline with its existing lockfile. Selecting only `icydb`
@@ -1505,6 +1565,100 @@ comparison while excluding SQL and the old audit host. No IC DB runtime capabili
 or attribute was removed by this measurement. M1 must run the same values and
 operations through its delivered engine before comparing these numbers; broader
 schema, entity/query growth, aggregate and host workloads remain unmeasured.
+
+### First matched scalar comparison
+
+`make m1-records-comparison` now runs that same workload against a one-entity
+qualification host using the actual IC DB product and a freshly rebuilt frozen
+IcyDB host. Both use Storage 0.74.1, Runtime 0.22.3, Types 0.20.3, Wire 0.22.1,
+Testkit 0.104.0/PocketIC 16.1.0, Rust 1.100.0/LLVM 23.1.5 and the same release
+profile above. SQL remains disabled. One shared tuple oracle checks all operations
+and rows/indexes after unchanged upgrade; it does not use either engine's codec
+to construct expected results. The five query/update exports are checked in both
+artifacts. IC DB's host has one additional init export for explicit fresh creation.
+
+Measured on 2026-11-14, with no product optimization introduced for this experiment:
+
+| Observation | IC DB | Frozen IcyDB, refreshed suppliers |
+| --- | ---: | ---: |
+| Complete uncompressed Wasm, bytes | 166,621 | 3,085,668 |
+| Code-section payload, bytes | 146,986 | 2,977,061 |
+| Primary-key hit, instructions | 483,962 | 1,098,830 |
+| Primary-key miss, instructions | 489,410 | 1,072,993 |
+| Eight-row category listing, instructions | 773,657 | 3,083,167 |
+| Read/modify/replace call, instructions | 831,463 | 2,932,678 |
+| Read/modify/replace call, cycles | 7,845,420 | 10,027,138 |
+| Replacement settling, instructions / cycles | 0 / 0 | 4,089,572 / 11,169,432 |
+| Complete replacement journey, instructions | 831,463 | 7,022,250 |
+| Complete replacement journey, cycles | 7,845,420 | 21,196,570 |
+| Individual insert range, instructions | 613,640–758,137 | 1,908,427–2,338,737 |
+| Individual insert range, cycles | 7,602,078–7,748,620 | 8,977,172–9,409,669 |
+
+All 32 insert positions are lower for IC DB in both measures before settling;
+the driver retains every sample and IcyDB's separate settling costs. The initial
+scalar ceilings in section 9 pass for this delivered slice. Complete Wasm is
+94.6% smaller; complete replacement uses 88.2% fewer measured instructions and
+63.0% fewer cycles under the recorded settling policy. The immediate replacement
+call alone uses 21.8% fewer cycles. Query cycle estimates are not inferred.
+
+These are bounded workload observations, not full-product savings. IC DB's direct
+index-prefix read does not yet include a fluent planner; IcyDB uses its fluent
+filter/order/limit API. IcyDB also retains broader runtime and durable obligations.
+The result therefore combines simpler mechanisms with the current implementation
+gap; it does not quantify the final retained grouping, DISTINCT, rich-type,
+resumable aggregation or maintenance engine. SQL removal cannot explain the
+difference because SQL is disabled on both sides. Larger datasets, index fan-out,
+entity/query growth and Canic composition remain to be measured.
+
+IC DB includes runtime construction, schema fingerprinting/admission and result
+mapping inside each measured call. Initial creation is in its init hook; the
+driver separately records installation cycles, avoiding a claim that its first
+open call measures all setup. No setup cache or hidden precomputation is used.
+Raw allocated stable memory at completion is 1,703,936 versus 20,578,304 bytes;
+this includes supplier reservations and differing durable collections, not just
+live rows. It is not a storage-density guarantee or a supplier-optimization target.
+
+Artifact SHA-256 values are
+`5d5a9be58bcf9614c84239055dfafce9a2787b372d28522f38f56f0f12a15382`
+(IC DB) and `ed285ceb2b66837c2096d2c114bf9c7f57322076867ef99333f8a397d69875b8`
+(IcyDB). The qualification lockfile SHA-256 is
+`6fd54d6ae3239dac6e085cc0c7a50e12ceea00ed6b1c6ccca95f906c525bde5e`.
+IC DB source is `14a2810bd7fd59343259d8573305e9d928896946` plus the captured local
+qualification additions; tracked diffs and per-file hashes identify local changes,
+including untracked fixture files.
+Reproduction and evidence locations are in the
+[qualification instructions](../../qualification/README.md#matched-scalar-records).
+This adds one private measurement host and shares the existing baseline driver;
+no product crate, runtime dependency, stored representation or engine path changes.
+
+After the Principal type extension on the same date, the scalar host is 167,031
+Wasm bytes (+410) and 147,404 code-section bytes (+418). Hit/miss/listing and every
+insert increase by six measured instructions; read/modify/replace increases by
+ten, to 831,473 instructions and 7,845,430 cycles. It still satisfies the original
+scalar comparison ceilings. IcyDB's artifact and measurements are unchanged.
+This records the small cost of an additional shared type branch and canonical
+identity dependency; it is not a principal-query performance claim or a general
+monomorphization-growth proof. The new IC DB artifact SHA-256 is
+`d49f06ee47dc9d66d509b34b330dc8b114c42c6712703777e4989a332f141f18`, with
+qualification lockfile SHA-256
+`38c1b9f34e422e3c0fb52afbd0ae3fd569fc7fa162bb0b0ffd24fce44569c597`.
+The pre-extension local evidence is retained under
+`qualification/target/evidence/records-comparison-before-principal/`.
+
+After typed secondary indexes, the same scalar host is 170,651 Wasm bytes
+(+3,620) and 150,856 code-section bytes (+3,452). Hit/miss cost 484,006/489,454
+instructions (+38 each); listing costs 779,948 (+6,285, about 0.8%).
+Complete read/modify/replace costs 833,534 instructions and 7,847,491 cycles
+(+2,061 each; about 0.25% more instructions). This records the added type
+admission and component-framing work, with no supplier-specific optimization.
+All measured scalar operations still satisfy the frozen-IcyDB comparison ceilings;
+its artifact/results and both engines' physical allocation are unchanged.
+This is not a measurement of Principal workloads or broad fluent-query parity.
+The IC DB artifact SHA-256 is
+`4d85f081ccf8b403a5ad2d24b5d5ff2cd6e71b43433ed531444f4fe9548f0d69`;
+the qualification lockfile is unchanged. The preceding Principal evidence is in
+`qualification/target/evidence/records-comparison-before-typed-indexes/`;
+the ordinary comparison directory contains the typed-index run.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,

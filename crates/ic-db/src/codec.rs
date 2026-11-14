@@ -6,10 +6,12 @@
 //! db/data/persisted_row/codec/scalar at 6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac.
 //! Extend that scalar approach to 128 bits; omit its slot envelope/value layer.
 
-use crate::{Error, FieldType};
+use crate::{Error, FieldType, Principal};
 
 pub const ROW_CODEC_VERSION: u32 = 3;
 pub const MAX_ROW_BYTES: usize = 4096;
+// A durable contract bound, independent of any future supplier API expansion.
+pub(crate) const MAX_PRINCIPAL_BYTES: usize = 29;
 
 #[derive(Default)]
 pub struct Encoder {
@@ -72,6 +74,13 @@ impl Encoder {
 
     pub fn boolean(&mut self, value: bool) -> Result<(), Error> {
         self.append(&[u8::from(value)])
+    }
+
+    pub fn principal(&mut self, value: &Principal) -> Result<(), Error> {
+        if value.as_slice().len() > MAX_PRINCIPAL_BYTES {
+            return Err(Error::Limit);
+        }
+        self.bytes(value.as_slice())
     }
 
     pub fn bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
@@ -166,6 +175,11 @@ impl<'a> Decoder<'a> {
     pub fn blob(&mut self, max: usize) -> Result<Vec<u8>, Error> {
         Ok(self.blob_ref(max)?.to_vec())
     }
+    pub fn principal(&mut self) -> Result<Principal, Error> {
+        // IcyDB's owned scalar decoder admits raw identity bytes, not text or Wire.
+        Principal::try_from_slice(self.bounded_bytes(MAX_PRINCIPAL_BYTES)?)
+            .map_err(|_| Error::Corrupt)
+    }
     pub fn text(&mut self, max: usize) -> Result<String, Error> {
         Ok(self.text_ref(max)?.to_owned())
     }
@@ -213,6 +227,9 @@ impl<'a> Decoder<'a> {
             }
             FieldType::Bool => {
                 self.boolean()?;
+            }
+            FieldType::Principal => {
+                self.principal()?;
             }
             FieldType::Text { max_bytes } => {
                 self.text_ref(max_bytes as usize)?;

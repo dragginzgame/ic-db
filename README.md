@@ -22,13 +22,17 @@ delivery require an explicit decision to resume. Existing work and data are reta
 
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
 `crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
-exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers, Bool and bounded Text/Blob with optional
+exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required Nat64 references and indexed restricted deletion. This is
-experimental: there is no production compatibility promise, measured improvement
-or deployment. Rich types, broader references and the broad fluent builder remain required
-implementation work; this increment does not complete M1. Primary and index keys
-currently require non-optional Nat64 fields.
+experimental: there is no production compatibility promise or deployment.
+The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
+measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
+for one 32-row workload; it does not establish full-product parity or savings.
+Rich types, broader references and the broad fluent builder remain required
+implementation work; this increment does not complete M1. Secondary indexes now
+support required Nat/Int8/16/32/64/128 and Principal fields, including compound
+keys and uniqueness. Primary keys and references still require Nat64.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
@@ -56,8 +60,9 @@ The [M0 readiness review](docs/design/ic-db-system-design.md#next-delivery-close
 separates accepted entry contracts from M1–M3 implementation checks. The M0 entry
 review permits this first typed-schema increment. `make m0-icydb-baseline` provides the first
 SQL-disabled comparison workload: persistent writes, indexed reads and unchanged
-upgrade/reopen. It measures the frozen engine only; matched IC DB results and
-broader workload budgets remain outstanding.
+upgrade/reopen. It measures the frozen engine only; the separate
+`make m1-records-comparison` provides the matched scalar results. Broader workload
+budgets remain outstanding.
 
 The authoring comparison is complete. M1 keeps the familiar attribute-owned
 entity/record declarations with empty struct bodies; alternatives may be explored
@@ -81,7 +86,7 @@ Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six
-`Entry` rows and one record each for `Document`, `WideNumbers`, `BinaryObject` and `NarrowNumbers`
+`Entry` rows and one record each for `Document`, `WideNumbers`, `BinaryObject`, `NarrowNumbers` and `IdentityRow`
 running in local PocketIC. Each session starts fresh and is discarded on exit.
 `db schema` presents generated fields and indexes in bordered tables, with the
 primary key first and separate type, optionality and byte-limit columns. The CLI

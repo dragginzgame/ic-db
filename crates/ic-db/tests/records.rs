@@ -749,7 +749,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     assert!(db.get::<Entry>(99).unwrap().is_none());
     assert!(matches!(db.get::<Changed>(1), Err(Error::UnknownEntity)));
     assert_eq!(
-        db.index_prefix::<Entry>(1, &[2], 3)
+        db.index_prefix::<Entry>(1, &[2_u64.into()], 3)
             .unwrap()
             .iter()
             .map(|row| row.id)
@@ -809,14 +809,26 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         .unwrap();
     db.commit(batch).unwrap();
     assert_eq!(db.revision(2).unwrap(), 2);
-    assert_eq!(db.index_prefix::<TokenRow>(1, &[4], 3).unwrap()[0].id, 1);
-    assert_eq!(db.index_prefix::<Entry>(1, &[2], 3).unwrap()[0].id, 2);
-    assert_eq!(db.index_prefix::<Entry>(1, &[9], 3).unwrap()[0].amount, 11);
+    assert_eq!(
+        db.index_prefix::<TokenRow>(1, &[4_u64.into()], 3).unwrap()[0].id,
+        1
+    );
+    assert_eq!(
+        db.index_prefix::<Entry>(1, &[2_u64.into()], 3).unwrap()[0].id,
+        2
+    );
+    assert_eq!(
+        db.index_prefix::<Entry>(1, &[9_u64.into()], 3).unwrap()[0].amount,
+        11
+    );
     let mut batch = Batch::new();
     batch.insert(&TokenRow { id: 3, token: 4 }).unwrap();
     batch.delete::<TokenRow>(1).unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.index_prefix::<TokenRow>(1, &[4], 3).unwrap()[0].id, 3);
+    assert_eq!(
+        db.index_prefix::<TokenRow>(1, &[4_u64.into()], 3).unwrap()[0].id,
+        3
+    );
     drop(db);
     drop(runtime);
 
@@ -859,7 +871,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     drop(raw);
     let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
     assert!(matches!(
-        db.index_prefix::<Entry>(1, &[9], 3),
+        db.index_prefix::<Entry>(1, &[9_u64.into()], 3),
         Err(Error::Corrupt)
     ));
     drop(db);
@@ -882,7 +894,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         assert!(matches!(db.get::<Entry>(1), Err(Error::Corrupt)));
         assert!(matches!(db.page::<Entry>(None, 1), Err(Error::Corrupt)));
         assert!(matches!(
-            db.index_prefix::<Entry>(1, &[9], 1),
+            db.index_prefix::<Entry>(1, &[9_u64.into()], 1),
             Err(Error::Corrupt)
         ));
         assert_eq!(*backing.borrow(), before);
@@ -982,9 +994,13 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     batch.delete::<Child>(2).unwrap();
     db.commit(batch).unwrap();
     assert!(db.get::<Parent>(1).unwrap().is_none());
-    assert!(db.index_prefix::<Child>(1, &[1], 32).unwrap().is_empty());
+    assert!(
+        db.index_prefix::<Child>(1, &[1_u64.into()], 32)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
-        db.index_prefix::<Child>(1, &[2], 32).unwrap(),
+        db.index_prefix::<Child>(1, &[2_u64.into()], 32).unwrap(),
         vec![Child {
             id: 1,
             parent_id: 2
@@ -1081,12 +1097,13 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     batch.replace(&changed).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<InspectionRow>(1, &[2], 3)
+        db.index_prefix::<InspectionRow>(1, &[2_u64.into()], 3)
             .unwrap()
             .is_empty()
     );
     assert_eq!(
-        db.index_prefix::<InspectionRow>(1, &[3], 3).unwrap(),
+        db.index_prefix::<InspectionRow>(1, &[3_u64.into()], 3)
+            .unwrap(),
         [changed]
     );
     let mut batch = Batch::new();
@@ -1173,7 +1190,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     batch.delete::<InspectionDependent>(1).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<InspectionRow>(1, &[2], 3)
+        db.index_prefix::<InspectionRow>(1, &[2_u64.into()], 3)
             .unwrap()
             .is_empty()
     );
@@ -1489,4 +1506,506 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
     let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(db.get::<BinaryRow>(1).unwrap(), Some(full));
     assert_eq!(db.revision(22).unwrap(), 2);
+}
+
+#[entity(
+    id = 28,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "owner", value(item(prim = "Principal"))),
+        field(name = "optional", value(opt, item(prim = "Principal")))
+    )
+)]
+struct PrincipalRow {}
+
+#[test]
+fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
+    use ic_db::Principal;
+    let row = PrincipalRow {
+        id: 1,
+        owner: Principal::anonymous(),
+        optional: None,
+    };
+    // Literal row: id, absent option, u32 length, anonymous byte. Not text/Serde.
+    let golden = [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4];
+    assert_eq!(row.encode().unwrap(), golden);
+    assert_eq!(PrincipalRow::decode(&golden).unwrap(), row);
+    let contract = || Schema::new(&[PrincipalRow::SCHEMA]).unwrap();
+    // Independent Perl pack(V/C) and SHA-256 contract vector.
+    assert_eq!(
+        contract()
+            .fingerprint()
+            .map(|b| format!("{b:02x}"))
+            .concat(),
+        "ae56866e84ba009f54e4efb48d505099e38b29a150a842ecf3923021418a6478"
+    );
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [7; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    // IcyDB's canonical-identity cases: management, anonymous, short opaque and
+    // maximum-length bytes. Zero bytes are significant, never trailing padding.
+    for bytes in [
+        vec![],
+        vec![4],
+        vec![2, 7],
+        vec![0],
+        vec![0, 0],
+        vec![0xAB; 29],
+    ] {
+        let value = PrincipalRow {
+            owner: Principal::try_from_slice(&bytes).unwrap(),
+            optional: Some(Principal::management_canister()),
+            ..row
+        };
+        assert_eq!(value.owner.as_slice(), bytes);
+        let mut expected = vec![1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]; // Some(empty)
+        expected.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&bytes);
+        assert_eq!(value.encode().unwrap(), expected);
+        assert_eq!(PrincipalRow::decode(&expected).unwrap(), value);
+        let mut batch = Batch::new();
+        batch.replace(&value).unwrap();
+        db.commit(batch).unwrap();
+        assert_eq!(db.get::<PrincipalRow>(1).unwrap(), Some(value.clone()));
+        let before = backing.borrow().clone();
+        let mut batch = Batch::new();
+        batch.replace(&value).unwrap();
+        db.commit(batch).unwrap();
+        assert_eq!(*backing.borrow(), before);
+    }
+    assert!(Principal::try_from_slice(&[0; 30]).is_err());
+    let final_row = db.get::<PrincipalRow>(1).unwrap().unwrap();
+    let before = backing.borrow().clone();
+    drop(db);
+    drop(runtime);
+    let runtime = host(backing.clone());
+    let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(db.get::<PrincipalRow>(1).unwrap(), Some(final_row));
+    drop(db);
+    // Same length framing does not make a Blob the same admitted type.
+    let mut fields = PrincipalRow::SCHEMA.fields.to_vec();
+    fields[2].value = ic_db::FieldType::Blob { max_bytes: 29 };
+    let altered = Box::leak(Box::new(ic_db::EntitySchema {
+        fields: Box::leak(fields.into_boxed_slice()),
+        ..*PrincipalRow::SCHEMA
+    }));
+    assert!(matches!(
+        Database::open(
+            runtime.open_memory(&key).unwrap(),
+            Schema::new(&[altered]).unwrap()
+        ),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+
+    let mut invalid = Vec::new();
+    for end in 0..golden.len() {
+        invalid.push(golden[..end].to_vec());
+    }
+    let mut bad_tag = golden.to_vec();
+    bad_tag[8] = 2;
+    invalid.push(bad_tag);
+    let mut trailing = golden.to_vec();
+    trailing.push(0);
+    invalid.push(trailing);
+    for length in [30_u32, u32::MAX] {
+        let mut bad = golden[..9].to_vec();
+        bad.extend_from_slice(&length.to_le_bytes());
+        bad.extend_from_slice(&[0; 30]);
+        invalid.push(bad);
+    }
+    let mut optional_too_long = golden[..8].to_vec();
+    optional_too_long.extend_from_slice(&[1, 30, 0, 0, 0]);
+    optional_too_long.extend_from_slice(&[0; 30]);
+    optional_too_long.extend_from_slice(&[0, 0, 0, 0]);
+    invalid.push(optional_too_long);
+    let mut physical_key = vec![2];
+    physical_key.extend_from_slice(&28_u32.to_be_bytes());
+    physical_key.extend_from_slice(&1_u64.to_be_bytes());
+    for bytes in invalid {
+        assert!(matches!(PrincipalRow::decode(&bytes), Err(Error::Corrupt)));
+        let mut raw =
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
+                .unwrap();
+        raw.insert(physical_key.clone(), bytes);
+        drop(raw);
+        let before = backing.borrow().clone();
+        let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+        assert!(matches!(db.get::<PrincipalRow>(1), Err(Error::Corrupt)));
+        // Shared old-row inspection must validate even an unselected identity.
+        let mut batch = Batch::new();
+        batch.replace(&row).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+        let mut batch = Batch::new();
+        batch.delete::<PrincipalRow>(1).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+        assert_eq!(*backing.borrow(), before);
+    }
+}
+
+// Numeric ordering is checked against Rust's Ord, not another key encoder.
+macro_rules! integer_index_case {
+    ($test:ident, $prim:literal, $ty:ty, $values:expr) => {
+        #[test]
+        fn $test() {
+            #[entity(id=30, pk(field="id"), index(id=1,fields=["bucket","value"]),
+                                                fields(field(name="id",value(item(prim="Nat64"))),
+                                                    field(name="bucket",value(item(prim="Nat64"))),
+                                                    field(name="value",value(item(prim=$prim)))))]
+            struct Indexed {}
+            let contract = || Schema::new(&[Indexed::SCHEMA]).unwrap();
+            let backing = VectorMemory::default();
+            let runtime = host(backing.clone());
+            let key = StableKey::parse("test.db.v1").unwrap();
+            let mut db =
+                Database::create(runtime.open_memory(&key).unwrap(), contract(), [1; 16]).unwrap();
+            let values: [$ty; 5] = $values;
+            let mut expected = Vec::new();
+            let mut batch = Batch::new();
+            for (i, value) in values.into_iter().rev().enumerate() {
+                // Equal secondary values must use primary identity as the tie-breaker.
+                for id in [i as u64 + 1, i as u64 + 10] {
+                    let row = Indexed {
+                        id,
+                        bucket: 7,
+                        value,
+                    };
+                    batch.insert(&row).unwrap();
+                    expected.push(row);
+                }
+            }
+            db.commit(batch).unwrap();
+            expected.sort_by_key(|row| (row.value, row.id));
+            assert_eq!(
+                db.index_prefix::<Indexed>(1, &[7_u64.into()], 32).unwrap(),
+                expected
+            );
+            for row in &expected {
+                let matches = db
+                    .index_prefix::<Indexed>(1, &[7_u64.into(), row.value.into()], 32)
+                    .unwrap();
+                assert_eq!(matches.len(), 2);
+                assert!(matches.iter().all(|found| found.value == row.value));
+            }
+            assert!(matches!(
+                db.index_prefix::<Indexed>(1, &[7_i64.into()], 1),
+                Err(Error::InvalidOperand)
+            ));
+            assert!(matches!(
+                db.index_prefix::<Indexed>(
+                    1,
+                    &[7_u64.into(), ic_db::Principal::anonymous().into()],
+                    1
+                ),
+                Err(Error::InvalidOperand)
+            ));
+            let mut changed = expected[0].clone();
+            changed.value = values[4];
+            let mut batch = Batch::new();
+            batch.replace(&changed).unwrap();
+            batch.delete::<Indexed>(expected[1].id).unwrap();
+            db.commit(batch).unwrap();
+            let deleted = expected[1].id;
+            expected.retain(|row| row.id != changed.id && row.id != deleted);
+            expected.push(changed);
+            expected.sort_by_key(|row| (row.value, row.id));
+            drop(db);
+            drop(runtime);
+            let runtime = host(backing);
+            let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+            assert_eq!(
+                db.index_prefix::<Indexed>(1, &[7_u64.into()], 32).unwrap(),
+                expected
+            );
+            assert_eq!(db.revision(30).unwrap(), 2);
+        }
+    };
+}
+integer_index_case!(index_nat8, "Nat8", u8, [0, 1, 127, 128, u8::MAX]);
+integer_index_case!(index_nat16, "Nat16", u16, [0, 1, 32767, 32768, u16::MAX]);
+integer_index_case!(
+    index_nat32,
+    "Nat32",
+    u32,
+    [0, 1, 2147483647, 2147483648, u32::MAX]
+);
+integer_index_case!(
+    index_nat64,
+    "Nat64",
+    u64,
+    [0, 1, u64::MAX / 2, u64::MAX / 2 + 1, u64::MAX]
+);
+integer_index_case!(
+    index_nat128,
+    "Nat128",
+    u128,
+    [0, 1, u128::MAX / 2, u128::MAX / 2 + 1, u128::MAX]
+);
+integer_index_case!(index_int8, "Int8", i8, [i8::MIN, -1, 0, 1, i8::MAX]);
+integer_index_case!(index_int16, "Int16", i16, [i16::MIN, -1, 0, 1, i16::MAX]);
+integer_index_case!(index_int32, "Int32", i32, [i32::MIN, -1, 0, 1, i32::MAX]);
+integer_index_case!(index_int64, "Int64", i64, [i64::MIN, -1, 0, 1, i64::MAX]);
+integer_index_case!(
+    index_int128,
+    "Int128",
+    i128,
+    [i128::MIN, -1, 0, 1, i128::MAX]
+);
+
+#[entity(id=31,pk(field="id"),
+    index(id=1,field="owner",unique),
+    index(id=2,fields=["parent","owner","rank"]),
+    fields(field(name="id",value(item(prim="Nat64"))),
+        field(name="parent",value(item(prim="Nat64")),references(entity=1,index=2)),
+        field(name="owner",value(item(prim="Principal"))),
+        field(name="rank",value(item(prim="Int8")))))]
+struct IndexedIdentity {}
+
+#[test]
+fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniqueness() {
+    use ic_db::{IndexValue, Principal};
+    let contract = || Schema::new(&[Entry::SCHEMA, IndexedIdentity::SCHEMA]).unwrap();
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [1; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            id: 1,
+            category: 0,
+            amount: 0,
+        })
+        .unwrap();
+    let mut expected = Vec::new();
+    for (i, bytes) in [
+        vec![255],
+        vec![],
+        vec![4],
+        vec![0, 0],
+        vec![0],
+        vec![1],
+        vec![1, 0],
+        vec![255; 29],
+        vec![0; 29],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = IndexedIdentity {
+            id: i as u64 + 1,
+            parent: 1,
+            owner: Principal::try_from_slice(&bytes).unwrap(),
+            rank: -1,
+        };
+        batch.insert(&row).unwrap();
+        expected.push(row);
+    }
+    db.commit(batch).unwrap();
+    expected.sort_by_key(|row| row.owner);
+    assert_eq!(
+        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+            .unwrap(),
+        expected
+    );
+    for row in &expected {
+        assert_eq!(
+            db.index_prefix::<IndexedIdentity>(1, &[row.owner.into()], 32)
+                .unwrap(),
+            std::slice::from_ref(row)
+        );
+        assert_eq!(
+            db.index_prefix::<IndexedIdentity>(
+                2,
+                &[1_u64.into(), row.owner.into(), (-1_i8).into()],
+                32
+            )
+            .unwrap(),
+            std::slice::from_ref(row)
+        );
+    }
+    for operands in [
+        vec![],
+        vec![1_u64.into()],
+        vec![Principal::anonymous().into(), 1_u64.into()],
+    ] {
+        assert!(db.index_prefix::<IndexedIdentity>(1, &operands, 1).is_err());
+    }
+    assert!(matches!(
+        db.index_prefix::<IndexedIdentity>(
+            2,
+            &[
+                1_u64.into(),
+                Principal::anonymous().into(),
+                IndexValue::Int64(-1)
+            ],
+            1
+        ),
+        Err(Error::InvalidOperand)
+    ));
+    let before = backing.borrow().clone();
+    for collide in [false, true] {
+        let mut batch = Batch::new();
+        let owner = if collide {
+            Principal::try_from_slice(&[9]).unwrap()
+        } else {
+            expected[0].owner
+        };
+        batch
+            .insert(&IndexedIdentity {
+                id: 20,
+                parent: 1,
+                owner,
+                rank: 0,
+            })
+            .unwrap();
+        if collide {
+            batch
+                .insert(&IndexedIdentity {
+                    id: 21,
+                    parent: 1,
+                    owner,
+                    rank: 1,
+                })
+                .unwrap();
+        }
+        assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+        assert_eq!(*backing.borrow(), before);
+    }
+    let mut batch = Batch::new();
+    batch.delete::<Entry>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(*backing.borrow(), before);
+    // Exchange unique values; final-state admission must release both old keys first.
+    let mut left = expected[0].clone();
+    let mut right = expected[1].clone();
+    std::mem::swap(&mut left.owner, &mut right.owner);
+    let mut batch = Batch::new();
+    batch.replace(&left).unwrap();
+    batch.replace(&right).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.index_prefix::<IndexedIdentity>(1, &[left.owner.into()], 1)
+            .unwrap(),
+        [left.clone()]
+    );
+    let mut batch = Batch::new();
+    batch.delete::<IndexedIdentity>(left.id).unwrap();
+    let replacement = IndexedIdentity {
+        id: 30,
+        rank: i8::MIN,
+        ..left
+    };
+    batch.insert(&replacement).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(
+        db.index_prefix::<IndexedIdentity>(1, &[replacement.owner.into()], 1)
+            .unwrap(),
+        std::slice::from_ref(&replacement)
+    );
+    drop(db);
+    // Literal persisted key: entity31, index2, parent1, Principal[0], Int8::MIN, id30.
+    let physical = vec![
+        3, 0, 0, 0, 31, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30,
+    ];
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    assert_eq!(raw.get(&physical), Some(30_u64.to_be_bytes().to_vec()));
+    raw.insert(physical.clone(), right.id.to_be_bytes().to_vec());
+    drop(raw);
+    let before = backing.borrow().clone();
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert!(matches!(
+        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32),
+        Err(Error::Corrupt)
+    ));
+    let mut batch = Batch::new();
+    batch.delete::<IndexedIdentity>(30).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+    assert_eq!(*backing.borrow(), before);
+    drop(db);
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    raw.insert(physical, 30_u64.to_be_bytes().to_vec());
+    drop(raw);
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    let mut batch = Batch::new();
+    for row in db
+        .index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+        .unwrap()
+    {
+        batch.delete::<IndexedIdentity>(row.id).unwrap();
+    }
+    batch.delete::<Entry>(1).unwrap();
+    db.commit(batch).unwrap();
+    assert!(
+        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn principal_component_order_matches_the_identity_owner_at_every_length() {
+    let mut principals = vec![ic_db::Principal::management_canister()];
+    for len in 1..=29 {
+        for byte in [0, 1, 4, 255] {
+            principals.push(ic_db::Principal::try_from_slice(&vec![byte; len]).unwrap());
+        }
+    }
+    let encoded: Vec<_> = principals
+        .iter()
+        .map(|&owner| {
+            IndexedIdentity {
+                id: 1,
+                parent: 1,
+                owner,
+                rank: 0,
+            }
+            .__row_info()
+            .indexes
+            .remove(0)
+        })
+        .collect();
+    // IcyDB's length-before-contents regression: byte-prefix principals and
+    // significant zero bytes must agree with the canonical identity owner.
+    for (i, left) in principals.iter().enumerate() {
+        for (j, right) in principals.iter().enumerate() {
+            assert_eq!(encoded[i].cmp(&encoded[j]), left.cmp(right));
+        }
+    }
+}
+
+#[test]
+fn runtime_schema_admission_rejects_unsupported_index_shapes() {
+    for (value, optional) in [
+        (ic_db::FieldType::Bool, false),
+        (ic_db::FieldType::Text { max_bytes: 32 }, false),
+        (ic_db::FieldType::Blob { max_bytes: 32 }, false),
+        (ic_db::FieldType::Principal, true),
+    ] {
+        let mut fields = IndexedIdentity::SCHEMA.fields.to_vec();
+        let owner = fields
+            .iter_mut()
+            .find(|field| field.name == "owner")
+            .unwrap();
+        owner.value = value;
+        owner.optional = optional;
+        let descriptor = Box::leak(Box::new(ic_db::EntitySchema {
+            fields: Box::leak(fields.into_boxed_slice()),
+            ..*IndexedIdentity::SCHEMA
+        }));
+        assert!(matches!(
+            Schema::new(&[Entry::SCHEMA, descriptor]),
+            Err(Error::InvalidSchema)
+        ));
+    }
 }

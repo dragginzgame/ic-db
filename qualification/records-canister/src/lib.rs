@@ -2,7 +2,7 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
-use ic_db::{Batch, Database, Entity, FieldType, Schema, entity};
+use ic_db::{Batch, Database, Entity, FieldType, Principal, Schema, entity};
 use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
@@ -26,7 +26,7 @@ struct Entry {}
 #[entity(
     id = 2,
     pk(field = "id"),
-    index(id = 1, fields = ["entry_id", "id"]),
+    index(id = 1, fields = ["entry_id", "score"]),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "entry_id", value(item(prim = "Nat64")), references(entity = 1, index = 1)),
@@ -85,6 +85,18 @@ struct BinaryObject {}
 )]
 struct NarrowNumbers {}
 
+#[entity(
+    id = 6,
+    pk(field = "id"),
+    index(id = 1, field = "owner", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "owner", value(item(prim = "Principal"))),
+        field(name = "optional", value(opt, item(prim = "Principal")))
+    )
+)]
+struct IdentityRow {}
+
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
@@ -96,6 +108,7 @@ fn compiled() -> Schema {
         WideNumbers::SCHEMA,
         BinaryObject::SCHEMA,
         NarrowNumbers::SCHEMA,
+        IdentityRow::SCHEMA,
     ])
     .unwrap()
 }
@@ -126,6 +139,13 @@ fn initialize() {
     )
     .unwrap();
     let mut batch = Batch::new();
+    batch
+        .insert(&IdentityRow {
+            id: 1,
+            owner: Principal::anonymous(),
+            optional: None,
+        })
+        .unwrap();
     for id in 1..=6 {
         batch
             .insert(&Entry {
@@ -225,6 +245,7 @@ fn schema() -> (Status, Vec<EntityView>) {
                         FieldType::Nat128 => ("Nat128", None),
                         FieldType::Int128 => ("Int128", None),
                         FieldType::Bool => ("Bool", None),
+                        FieldType::Principal => ("Principal", Some(29)),
                         FieldType::Text { max_bytes } => ("Text", Some(max_bytes)),
                         FieldType::Blob { max_bytes } => ("Blob", Some(max_bytes)),
                     };
@@ -315,7 +336,7 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
 fn category(category: u64) -> Vec<(u64, u64)> {
     let host = runtime();
     let db = open(&host);
-    db.index_prefix::<Entry>(1, &[category], 32)
+    db.index_prefix::<Entry>(1, &[category.into()], 32)
         .unwrap()
         .into_iter()
         .map(|row| (row.id, row.amount))
@@ -583,4 +604,111 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
         cdk::api::trap("M1 binary application trap");
     }
     Ok(())
+}
+
+// Bytes cross the test transport; Principal admission and persistence belong to
+// their respective owners, never Wire's representation of an identity.
+type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+#[ic_wire_endpoint::query(id = 18)]
+fn principal_record() -> (PrincipalValue, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let row = db.get::<IdentityRow>(1).unwrap().unwrap();
+    (
+        (
+            row.owner.as_slice().to_vec().into(),
+            row.optional.map(|p| p.as_slice().to_vec().into()),
+        ),
+        db.revision(6).unwrap(),
+    )
+}
+#[ic_wire_endpoint::update(id = 19)]
+fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -> Result<(), u8> {
+    let row = IdentityRow {
+        id: 1,
+        owner: Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?,
+        optional: optional
+            .as_ref()
+            .map(|p| Principal::try_from_slice(p.as_ref()))
+            .transpose()
+            .map_err(|_| 1)?,
+    };
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    if trap {
+        cdk::api::trap("M1 principal application trap");
+    }
+    Ok(())
+}
+#[ic_wire_endpoint::query(id = 20)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "endpoint owns transport input; database decoder borrows it"
+)]
+fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
+    IdentityRow::decode(bytes.as_ref()).is_ok()
+}
+
+// Private qualification controls; product endpoints remain adapter-owned.
+type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
+#[ic_wire_endpoint::update(id = 21)]
+fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let document = db.get::<Document>(1).unwrap().unwrap();
+    let mut batch = Batch::new();
+    for (id, owner, score) in rows {
+        let identity = IdentityRow {
+            id,
+            owner: Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?,
+            optional: None,
+        };
+        let changed = Document {
+            id,
+            score,
+            ..document.clone()
+        };
+        if db.get::<IdentityRow>(id).unwrap().is_some() {
+            batch.replace(&identity).map_err(|_| 2)?;
+        } else {
+            batch.insert(&identity).map_err(|_| 2)?;
+        }
+        if db.get::<Document>(id).unwrap().is_some() {
+            batch.replace(&changed).map_err(|_| 2)?;
+        } else {
+            batch.insert(&changed).map_err(|_| 2)?;
+        }
+    }
+    db.commit(batch).map_err(|_| 3)?;
+    if trap {
+        cdk::api::trap("M1 indexed batch application trap");
+    }
+    Ok(())
+}
+
+type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
+#[ic_wire_endpoint::query(id = 22)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "endpoint owns transport input"
+)]
+fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
+    let principal = Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?;
+    let host = runtime();
+    let db = open(&host);
+    Ok((
+        db.index_prefix::<IdentityRow>(1, &[principal.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect(),
+        db.index_prefix::<Document>(1, &[1_u64.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.score, row.id))
+            .collect(),
+    ))
 }

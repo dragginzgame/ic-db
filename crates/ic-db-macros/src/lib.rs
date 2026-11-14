@@ -12,8 +12,8 @@ use field::Field;
 
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
 ///
-/// Supports Nat/Int8/16/32/64/128, Bool and bounded Text/Blob, optionally wrapped by `opt`.
-/// Primary/index fields currently require non-optional Nat64. Unsupported shapes
+/// Supports Nat/Int8/16/32/64/128, Bool, Principal and bounded Text/Blob, optionally wrapped by `opt`.
+/// Primary keys require Nat64; secondary indexes admit required integers and Principal. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Required Nat64 fields may declare `references(entity = 1, index = 1)`;
 /// the selected index must belong to this entity and lead with this field.
@@ -233,11 +233,11 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             || index.fields.iter().any(|name| {
                 !authored
                     .iter()
-                    .any(|field| &field.name == name && field.required_nat64())
+                    .any(|field| &field.name == name && field.indexable())
             })
         {
             return Err(fail(
-                "index currently requires 1..4 distinct non-optional Nat64 fields",
+                "index currently requires 1..4 distinct non-optional integer or Principal fields",
             ));
         }
         let fields: Vec<syn::Ident> = index
@@ -249,7 +249,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         let unique = index.unique;
         let names = index.fields;
         descriptions.push(quote! { ::ic_db::IndexSchema { id: #index_id, fields: &[#(#names),*], unique: #unique } });
-        encoded_indexes.push(quote! {{ let mut bytes = ::std::vec::Vec::new(); #(bytes.extend(row.#fields.to_be_bytes());)* bytes }});
+        encoded_indexes.push(quote! {{ let mut bytes = ::std::vec::Vec::new(); #(::ic_db::IndexValue::from(row.#fields).__append_to(&mut bytes);)* bytes }});
     }
     let name = &item.ident;
     let attrs = &item.attrs;

@@ -1,7 +1,7 @@
 //! Shared commit and traversal over one supplier-owned collection.
 //! Typed codecs stay at the boundary; no executor is generated per entity.
 
-use crate::{__private::RowInfo, Entity, EntitySchema, Error, Schema};
+use crate::{__private::RowInfo, Entity, EntitySchema, Error, IndexValue, Schema, key};
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -238,13 +238,15 @@ impl<M: Memory> Database<M> {
             rows,
         })
     }
-    /// Read the first bounded page under an exact leading Nat64 index prefix.
+    /// Read the first bounded collection under an exact, nonempty leading index prefix.
+    /// Each operand must have its field's exact integer width/signedness or Principal type.
     /// # Errors
-    /// Refuses unknown indexes, invalid prefix/limit or inconsistent index entries.
+    /// Refuses unknown indexes, mismatched operand types, invalid prefix/limit or
+    /// inconsistent index entries. This method does not yet return continuation.
     pub fn index_prefix<E: Entity>(
         &self,
         index: u32,
-        values: &[u64],
+        values: &[IndexValue],
         limit: usize,
     ) -> Result<Vec<E>, Error> {
         self.schema.admits(E::SCHEMA)?;
@@ -257,8 +259,21 @@ impl<M: Memory> Database<M> {
             return Err(Error::Limit);
         }
         let mut prefix = index_prefix(E::SCHEMA.id, index.id);
-        for value in values {
-            prefix.extend(value.to_be_bytes());
+        for (value, name) in values.iter().zip(index.fields) {
+            let field = E::SCHEMA
+                .fields
+                .iter()
+                .find(|field| field.name == *name)
+                .ok_or(Error::InvalidSchema)?;
+            if value.field_type() != field.value {
+                return Err(Error::InvalidOperand);
+            }
+            if let IndexValue::Principal(principal) = value
+                && principal.as_slice().len() > crate::codec::MAX_PRINCIPAL_BYTES
+            {
+                return Err(Error::Limit);
+            }
+            value.__append_to(&mut prefix);
         }
         let mut rows = Vec::new();
         for entry in self
@@ -486,7 +501,16 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
         .iter()
         .zip(&info.indexes)
         .map(|(index, values)| {
-            if values.len() != index.fields.len() * 8 {
+            let mut remaining = values.as_slice();
+            for name in index.fields {
+                let field = entity
+                    .fields
+                    .iter()
+                    .find(|field| field.name == *name)
+                    .ok_or(Error::Corrupt)?;
+                key::consume(&mut remaining, field.value)?;
+            }
+            if !remaining.is_empty() {
                 return Err(Error::Corrupt);
             }
             let mut key = index_prefix(entity.id, index.id);

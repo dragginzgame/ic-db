@@ -1,6 +1,6 @@
 //! One compiled scalar contract, canonical fingerprint and inspection projection.
 
-use crate::{__private::RowInfo, Error, codec::Decoder};
+use crate::{__private::RowInfo, Error, IndexValue, codec::Decoder, key};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -31,6 +31,8 @@ pub enum FieldType {
     Int128,
     /// Boolean, without numeric coercion.
     Bool,
+    /// Opaque IC identity, zero to 29 significant bytes; no authority policy.
+    Principal,
     /// Exact UTF-8 text, bounded in bytes without implicit normalization.
     Text {
         /// Maximum UTF-8 byte length (0..=4096); zero admits only empty text.
@@ -65,7 +67,7 @@ pub struct ReferenceSchema {
     pub index: u32,
 }
 
-/// A compiled index over ordered Nat64 field components.
+/// A compiled index over exact required integer or Principal components.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IndexSchema {
     /// Stable index identity within its entity.
@@ -92,7 +94,7 @@ pub struct EntitySchema {
 
 impl EntitySchema {
     // Called only for an admitted schema. Validate every stored field but retain
-    // only required Nat64 key values; no entity, owned text/blob or value cache.
+    // only selected key values; no entity or owned text/blob materialization.
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
         let mut reader = Decoder::new(bytes)?;
         let mut keys = [None; MAX_FIELDS];
@@ -100,8 +102,14 @@ impl EntitySchema {
             if field.optional && !reader.boolean()? {
                 continue;
             }
-            if field.value == FieldType::Nat64 && !field.optional {
-                *keys.get_mut(position).ok_or(Error::Corrupt)? = Some(reader.nat64()?);
+            if field.name == self.primary_key
+                || self
+                    .indexes
+                    .iter()
+                    .any(|index| index.fields.contains(&field.name))
+            {
+                *keys.get_mut(position).ok_or(Error::Corrupt)? =
+                    Some(IndexValue::read(&mut reader, field.value)?);
             } else {
                 reader.skip(field.value)?;
             }
@@ -120,15 +128,15 @@ impl EntitySchema {
             .map(|index| {
                 let mut bytes = Vec::with_capacity(index.fields.len() * 8);
                 for name in index.fields {
-                    bytes.extend(key(name)?.to_be_bytes());
+                    key(name)?.__append_to(&mut bytes);
                 }
                 Ok(bytes)
             })
             .collect::<Result<_, Error>>()?;
-        Ok(RowInfo {
-            key: key(self.primary_key)?,
-            indexes,
-        })
+        let IndexValue::Nat64(key) = key(self.primary_key)? else {
+            return Err(Error::Corrupt);
+        };
+        Ok(RowInfo { key, indexes })
     }
 }
 
@@ -187,6 +195,7 @@ impl Schema {
                     FieldType::Nat128 => 5,
                     FieldType::Int128 => 6,
                     FieldType::Bool => 2,
+                    FieldType::Principal => 14,
                     FieldType::Text { max_bytes } => {
                         if max_bytes > 4096 {
                             return Err(Error::InvalidSchema);
@@ -237,7 +246,12 @@ impl Schema {
                 bytes.push(u8::from(index.unique));
                 bytes.extend((index.fields.len() as u32).to_le_bytes());
                 for field in index.fields {
-                    if !required_nat64(entity, field) || !fields.insert(field) {
+                    if !entity.fields.iter().any(|declared| {
+                        declared.name == *field
+                            && !declared.optional
+                            && key::supports(declared.value)
+                    }) || !fields.insert(field)
+                    {
                         return Err(Error::InvalidSchema);
                     }
                     name(&mut bytes, field)?;

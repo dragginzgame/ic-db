@@ -1,5 +1,6 @@
 //! Failures inside the delivered commit path, using the real IC rollback boundary.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::native;
 
 type Status = ([u8; 32], [u8; 16], u64, u64);
@@ -40,12 +41,12 @@ async fn backing_writes_and_growth_failures_roll_back() {
             .unwrap();
         native::decode_response::<Vec<(u64, u64)>>(5, &reply, LIMITS).unwrap()
     };
-    let batch = async |first: u64, stop_after: u64, deny_growth: bool| {
+    let batch = async |first: u64, stop_after: u64, deny_growth: bool, exhaust: bool| {
         pic.update_call(
             canister,
             canister,
             "fault_batch",
-            native::encode_request(6, &(first, stop_after, deny_growth), LIMITS).unwrap(),
+            native::encode_request(6, &(first, stop_after, deny_growth, exhaust), LIMITS).unwrap(),
         )
         .await
     };
@@ -64,11 +65,29 @@ async fn backing_writes_and_growth_failures_roll_back() {
         native::decode_response::<Option<u64>>(9, &reply, LIMITS).unwrap()
     };
     let before = pic.get_stable_memory(canister).await;
+    // Exercise the real IC meter, not a synthetic counter or an explicit trap.
+    // The host burns instructions only after commit's first backing write.
+    let error = batch(0, 1, false, true).await.unwrap_err();
+    assert_eq!(
+        error.error_code,
+        ErrorCode::CanisterInstructionLimitExceeded,
+        "{error:?}"
+    );
+    assert!(pic.get_stable_memory(canister).await == before);
+    assert_eq!(status().await, original);
+    assert_eq!(reference().await, Some(1));
+    assert_eq!(category(1).await, vec![(1, 11), (3, 31), (5, 51)]);
+    assert_eq!(category(0).await, vec![(2, 20), (4, 40), (6, 60)]);
+    assert!(category(9).await.is_empty());
+    eprintln!(
+        "instruction exhaustion after a backing write: IC limit rejection and complete rollback"
+    );
+
     let mut completed = false;
     // Discover the actual number of backing writes; never bind a test to the
     // supplier's current node layout or prescribe an optimized allocation shape.
     for stop_after in 1..=1024 {
-        match batch(0, stop_after, false).await {
+        match batch(0, stop_after, false, false).await {
             Err(error) => {
                 assert!(
                     error
@@ -117,7 +136,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
     for first in (100..100 + 256 * 32).step_by(32) {
         let before = pic.get_stable_memory(canister).await;
         let prior = status().await;
-        match batch(first, 0, true).await {
+        match batch(first, 0, true, false).await {
             Ok(reply) => {
                 let (_, grows): (u64, u64) = native::decode_response(6, &reply, LIMITS).unwrap();
                 assert_eq!(grows, 0, "grow refusal must not be ignored");
@@ -133,7 +152,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                     "growth refusal changed rows, indexes, revisions or allocator state"
                 );
                 assert_eq!(status().await, prior);
-                let reply = batch(first, 0, false)
+                let reply = batch(first, 0, false, false)
                     .await
                     .expect("same batch must complete when growth is allowed");
                 let (writes, grows): (u64, u64) =

@@ -35,7 +35,6 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
             pk(field = "id"),
             fields(field(name = "id", value(item(prim = "Int64"))))
         ),
-        quote!(id=1, pk(field="id"), index(id=1,field="delta"), fields(#field, field(name="delta",value(item(prim="Int64"))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="delta",value(item(prim="Int64",max_bytes=8))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob"))))),
         quote!(id=1, pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=4097))))),
@@ -125,15 +124,24 @@ fn references_require_a_bounded_reverse_access_path() {
 }
 
 #[test]
-fn integer_storage_does_not_admit_unimplemented_keys_or_bounds() {
+fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
     for prim in [
-        "Nat8", "Nat16", "Nat32", "Int8", "Int16", "Int32", "Nat128", "Int128",
+        "Nat8",
+        "Nat16",
+        "Nat32",
+        "Int8",
+        "Int16",
+        "Int32",
+        "Int64",
+        "Nat128",
+        "Int128",
+        "Principal",
     ] {
         let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
         let wide = quote!(field(name="wide",value(item(prim=#prim))));
         for args in [
             quote!(id=1,pk(field="wide"),fields(#wide)),
-            quote!(id=1,pk(field="id"),index(id=1,field="wide"),fields(#id,#wide)),
+            quote!(id=1,pk(field="id"),index(id=1,field="wide"),fields(#id,field(name="wide",value(opt,item(prim=#prim))))),
             quote!(id=1,pk(field="id"),fields(#id,field(name="wide",value(item(prim=#prim,max_bytes=16))))),
             quote!(id=1,pk(field="id"),index(id=1,field="wide"),fields(#id,field(name="wide",value(item(prim=#prim)),references(entity=1,index=1)))),
         ] {

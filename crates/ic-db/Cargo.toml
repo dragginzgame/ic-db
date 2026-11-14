@@ -14,6 +14,7 @@ ignored = ["toko-tooling"]
 
 [dependencies]
 ic-db-macros.workspace = true
+ic-platform-types.workspace = true
 ic-storage.workspace = true
 sha2.workspace = true
 

@@ -4,6 +4,7 @@ members = [
     "icydb-baseline-canister",
     "icydb-baseline-schema",
     "maintenance-canister",
+    "records-benchmark-canister",
     "records-canister",
     "rollback-canister",
     "rollback-driver",

@@ -98,7 +98,8 @@ native driver, plus the M1 host consuming the actual product library.
 `make m1-records` selects native generated records and their Wasm/reopen/message
 boundary checks. This first scalar slice does not complete M1's type/reference,
 resource-failure or matched-performance gates.
-`make m1-commit-failures` selects backing-write traps and physical growth refusal
+`make m1-commit-failures` selects real instruction exhaustion after a backing write,
+backing-write traps and physical growth refusal
 inside real product commits. Its fault feature belongs only to qualification;
 the normal CLI host and product library do not expose injection controls.
 `make m0-setup` explicitly prepares Testkit's server;
@@ -111,6 +112,11 @@ or `db schema` / `db query --limit 2` for one noninteractive command.
 comparison host. Its source comes from the pinned Git dependency, with suppliers
 selected by the qualification lockfile. It does not read or modify the frozen
 sibling checkout, establish IC DB savings, or run implicitly in scaffold CI.
+`make m1-records-comparison` explicitly selects the same scalar workload for a
+one-entity IC DB qualification host and that frozen IcyDB host. Keep matched
+input/result checks, feature/build evidence and complete write journeys including
+IcyDB settling. Direct IC DB index reads are not yet a fluent-planner comparison;
+do not extrapolate this slice to the full retained product scope.
 
 ## Qualification and simplicity
 

@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.3.0]
+
+### ▶️ Try it
+
+Reinstall the local fixture console, then inspect `IdentityRow`'s required and
+optional `Principal` fields and unique owner index. Document's reverse index now
+orders signed scores within each entry. This remains a fresh local database;
+`query` still reads Entry rows.
+
+```sh
+make db
+db schema
+db status
+```
+
+### 🛠️ Changes
+
+- Breaking API: `index_prefix` now accepts exact `IndexValue` operands.
+  Convert numeric arguments with their declared type, such as `7_u64.into()`;
+  previously accepted integer slices no longer compile directly. Existing
+  Nat64 persisted contracts are unchanged.
+
+- Extend secondary indexes to required Nat/Int8/16/32/64/128 and Principal fields.
+  Adapt IcyDB's numeric ordering and length-first Principal rules into one shared
+  component encoder. Typed lookup operands must match their declared fields;
+  compound boundaries, duplicate ordering, unique swaps, reverse references,
+  corruption refusal and Wasm rollback/reopen are qualified. Preserve existing
+  Nat64 key bytes and fingerprints. Primary keys/references remain Nat64;
+  optional/text indexing and fluent queries remain work. No attribute is removed,
+  new durable metadata added, or supplier/transport dependency introduced.
+  The matched scalar host grows by 3,620 bytes to 170,651 Wasm bytes; indexed
+  listing uses 779,948 instructions and complete read/modify/replace uses 833,534,
+  increases of about 0.8% and 0.25% over the preceding Principal increment.
+  Both remain below the frozen-IcyDB workload ceilings; broader parity is unproven.
+
+- Add required/optional `Principal` fields using the canonical Platform Types
+  identity. Adapt IcyDB's raw-byte admission and rejection cases to IC DB's owned
+  u32-length framing. Distinguish absent, management-canister, anonymous and
+  maximum-length identities; reject malformed stored values, including during
+  key-only mutation inspection. Native/Wasm checks cover literal bytes, schema
+  identity, no-ops, reopen and late-message rollback. Tag 14 extends codec-v3
+  schemas without changing contracts that omit the new type. Principal primary
+  keys and predicates remain unimplemented; no existing attribute is removed.
+  Platform Types is a direct product dependency; its identity/text helpers are
+  reused without introducing Wire persistence, an IcyDB wrapper or a value engine.
+  The existing scalar host grows by 410 Wasm bytes; measured scalar operations
+  rise by 6–10 instructions and remain below the frozen-IcyDB comparison ceilings.
+
+- Add `make m1-records-comparison`: one independent scalar workload and tuple
+  oracle for IC DB and frozen SQL-disabled IcyDB, with matched schema/index,
+  supplier graph, transport and build profile. Record Wasm/code-section bytes,
+  instruction counts, full update cycles and IcyDB's settling work. The initial
+  slice passes its ceilings: 166,621 versus 3,085,668 Wasm bytes; complete
+  read/modify/replace uses 831,463 versus 7,022,250 measured instructions and
+  7,845,420 versus 21,196,570 cycles. Preserve scope limits in the system design:
+  direct IC DB index reads are not a completed fluent engine, and broader product
+  parity/savings remain unmeasured. One private qualification host is added;
+  no product code or runtime dependency changes.
+- Qualify actual IC instruction exhaustion inside a product commit, after its
+  first backing write. Require PocketIC's instruction-limit error and unchanged
+  raw backing, revisions, indexes and references; retry completes successfully.
+  The existing write-trap and physical-growth refusal cases still pass.
+  Carry over IcyDB's resource-refusal preservation invariant without importing
+  its budget framework or journal. Only the qualification host and driver change;
+  product code, dependencies, persisted bytes and CLI behavior remain unchanged.
+  This proves rollback at the selected failure boundary, not that all accepted
+  workload shapes complete within the instruction limit.
+
+Run the focused checks with the already prepared local PocketIC server:
+
+```sh
+make m1-commit-failures
+make m1-records-comparison
+```
+
 ## [0.2.0] - 2026-11-14
 
 ### ▶️ Try it

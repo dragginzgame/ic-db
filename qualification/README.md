@@ -39,7 +39,7 @@ This does not qualify selective fluent query execution or measure cycle savings;
 the supplier still materializes the row buffer and all fields remain validated.
 Corruption controls inject malformed rows, mismatched physical primary keys and
 stale index owners, ensuring this reduction preserves the read trust boundary.
-Stored fields now include signed/unsigned 8/16/32/64/128-bit integers, Bool, bounded UTF-8 Text, Blob and
+Stored fields now include signed/unsigned 8/16/32/64/128-bit integers, Bool, Principal, bounded UTF-8 Text, Blob and
 their optional forms.
 Signed tests cover the complete i64 endpoints, negative/zero values, absence,
 literal fixed-width little-endian vectors, truncated/extra payloads, no-op revision
@@ -58,6 +58,23 @@ bytes and invalid presence tags. Native reopen rejects changed widths/signedness
 without mutation; Wasm checks extrema, absence/zero, no-op revisions and late-trap
 rollback. Native field types enforce representability before database entry;
 there is no cast from a generic widened value that could silently truncate.
+IdentityRow carries over IcyDB's principal identity cases: management (zero bytes),
+anonymous, short opaque identities and the 29-byte maximum. Native tests use an
+independent contract fingerprint and literal framed bytes. Absent and present-empty
+optional principals differ; 30-byte values, excessive lengths, invalid presence,
+truncation and trailing bytes refuse. Corrupt accessed principal fields also refuse
+replacement/deletion during shared key inspection without changing backing.
+Wasm checks required/optional identity bytes, raw decoder refusals, no-op revisions,
+late-message rollback and unchanged upgrade. Wire transports opaque test bytes;
+the product uses Platform Types for identity and its own codec for persistence.
+Principal secondary indexes are now qualified alongside signed/unsigned integer
+indexes. Native checks cover all widths, exact operand types, Principal ordering
+at every length, compound boundaries, unique exchanges, corrupt entries and
+restricted deletion through mixed-type reverse indexes. Wasm checks exercise
+Principal uniqueness and signed score ordering, including duplicate secondary
+values, final-state swaps, refusals without writes, late traps and unchanged
+upgrades. Original Nat64 key bytes/fingerprints remain unchanged.
+
 Blob qualification carries over IcyDB's empty, zero-bound and over-limit cases.
 Literal length-framed payloads contain non-UTF-8 bytes; absence differs from an
 empty blob. A 1,024-byte bulk value is encoded directly within field/row bounds.
@@ -85,16 +102,25 @@ observed backing write in a three-row replacement including a dependent repoint,
 and rejects a real `grow()`
 request with `-1` during a maximum-cardinality insert batch. Raw backing/extent,
 indexes and revisions must revert; the identical operation must succeed on retry.
-The current five-entity fixture with codec v3 and Storage 0.74.1 covers 73 replacement writes and reaches growth
-with the insert batch starting at ID 1700: successful retry performs 1,326 backing
+It also exhausts the actual IC instruction meter after the first backing write
+inside that replacement. A fixed 4 KiB scratch buffer is repeatedly filled until
+PocketIC reports `CanisterInstructionLimitExceeded`; no synthetic budget counter
+or explicit application trap substitutes for that failure. Full raw backing,
+revision, reference and index checks remain unchanged after rejection. The later
+successful replacement proves the instruction fault does not leave the host armed
+or poison retry. This carries over IcyDB's instruction-refusal preservation
+invariant using IC DB's message rollback boundary, without its budget machinery.
+The current six-entity fixture with typed indexes, codec v3 and Storage 0.74.1 covers 73 replacement writes and reaches growth
+with the insert batch starting at ID 1700: successful retry performs 1,362 backing
 writes, one growth request and expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after
-unchanged upgrade also passes. Instruction exhaustion, corruption failure modes
-and other workload shapes remain M1 qualification work.
+unchanged upgrade also passes. Instruction exhaustion is qualified at this selected
+post-write boundary; completion within the instruction envelope for all accepted
+shapes, additional corruption cases and other workloads remain M1 work.
 
 Private Wire exports are test controls, not a production adapter. `make db`
-installs six Entry rows and one record each for Document, WideNumbers, BinaryObject and NarrowNumbers;
+installs six Entry rows and one record each for Document, WideNumbers, BinaryObject, NarrowNumbers and IdentityRow;
 every CLI session is fresh. Clap
 owns argv and console command admission; empty console lines remain silent.
 Fault controls are compiled only for the dedicated probe and excluded from the
@@ -102,9 +128,11 @@ ordinary CLI host. The product library has no injection feature or durable fault
 state; the instrumented host must not be used for comparative performance claims.
 The M0 maintenance fixture remains available only through its dedicated probe.
 Product scope still includes richer types, broader reference constraints and broad fluent
-queries. Keys/indexes still require non-optional Nat64; text and optional indexing
-remain required follow-on work. `db schema` inspects all five entity descriptions,
-including the Document-to-Entry reference and its reverse index;
+queries. Primary keys/references still require Nat64; secondary indexes admit
+required integers and Principal. Text and optional indexing remain required
+follow-on work. `db schema` inspects all six entity descriptions, including the
+Document-to-Entry reference, its `(entry_id, score)` reverse index and IdentityRow's
+unique owner index;
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 
@@ -165,10 +193,56 @@ native schema macros require generated constructor registration; the comparison
 schema permits those macro-owned internals under `deny(unsafe_code)`, while the
 ordinary probe libraries and console retain `forbid(unsafe_code)`.
 
-This is the first one-engine baseline, not proof of parity or savings. There is
-no matched IC DB engine yet. High fan-out, rich records, multi-entity growth,
-aggregate costs, maintenance and Canic composition remain separate measurements.
+This standalone target measures one engine. The matched scalar comparison below
+now covers IC DB's delivered record operations. High fan-out, rich records,
+multi-entity growth, aggregate costs, maintenance and Canic composition remain
+separate measurements.
 This focused target is not implicitly run by scaffold CI or release qualification.
+
+## Matched scalar records
+
+With the server already prepared, run:
+
+```sh
+make m1-records-comparison
+```
+
+This adds one private qualification host, not a product crate. Both hosts expose
+the same five query/update controls and use one three-Nat64 entity with a
+`(category, id)` index. A single shared driver runs the baseline's independent
+tuple oracle: 32 inserts, duplicate refusal, hit/miss reads, ordered category
+listing, index-changing read/modify/replace and all-row/index checks after upgrade.
+The IC DB host calls the actual product, without fault controls or the CLI's other
+four entities. No engine code is copied into the host.
+
+The IC DB interval includes construction of its storage runtime, compiled schema,
+manifest admission, database operation and result mapping on every request.
+There is no hoisted setup or benchmark-only cache. Initial database creation
+runs in its init hook; installation cycles are reported separately, so its first
+open call must not be presented as its entire setup cost. Subsequent writes have
+no settling message. IcyDB keeps the baseline's explicit settling policy, reported
+separately and included in complete write totals. Neither side uses Canic.
+
+Both sides use the same locked Storage/Runtime/transport, Wasm release profile
+and PocketIC application-subnet setup. The script records source commit, dirty
+diff/status, tracked and untracked source hashes, compiler, flags, feature graphs,
+build artifacts and raw measurements under `target/evidence/records-comparison/`.
+Artifact inspection checks reachable query/update endpoints and records all
+exports. Re-running replaces that local evidence; published numerical observations
+and artifact identities remain in the [system design](../docs/design/ic-db-system-design.md#first-matched-scalar-comparison).
+
+The first comparison passes the initial scalar ceilings, with all 32 IC DB insert
+positions below their IcyDB counterparts for measured instructions and update
+cycles, even before settling is included. This is an observation, not a general
+speed or size guarantee. IC DB's listing uses a direct index prefix; IcyDB admits
+the equivalent filter/order/limit through its fluent planner. Their richer
+contracts, durable machinery and reachable internal code differ. Do not attribute
+the full Wasm difference to removing SQL: SQL is disabled in the IcyDB build.
+The measurement adds no product state, codec, allocator or dependency change.
+The later Principal increment is measured separately in the design: it adds a
+canonical identity dependency and codec branch. The scalar host grows by 410
+Wasm bytes; measured operations rise by 6–10 instructions, staying below the
+IcyDB comparison ceilings. This does not measure principal-heavy query workloads.
 
 ## Numeric and schema contracts
 

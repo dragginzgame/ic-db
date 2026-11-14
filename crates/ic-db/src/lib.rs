@@ -1,7 +1,8 @@
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
-//! This M1 slice supports 8/16/32/64/128-bit integers, Bool and bounded Text/Blob, with optional
-//! values. Primary and index keys currently require non-optional Nat64 fields.
+//! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
+//! values. Secondary indexes admit required integers and Principal; primary keys
+//! and references currently require non-optional Nat64 fields.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
 //! Native callers must discard their runtime after a mutation panic. No SQL,
@@ -9,10 +10,13 @@
 
 #[doc(hidden)]
 mod codec;
+mod key;
 mod schema;
 mod store;
 
 pub use ic_db_macros::entity;
+pub use ic_platform_types::Principal;
+pub use key::IndexValue;
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
@@ -23,6 +27,8 @@ pub use store::{Batch, Database, Page};
 pub enum Error {
     /// Invalid or unsupported compiled schema.
     InvalidSchema,
+    /// An index operand has a different exact type from its declared field.
+    InvalidOperand,
     /// The typed entity is not part of this admitted schema.
     UnknownEntity,
     /// The stored manifest belongs to another schema or format.

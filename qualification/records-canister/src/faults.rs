@@ -9,6 +9,7 @@ use std::cell::Cell;
 struct Injection {
     stop_after: u64,
     deny_growth: bool,
+    exhaust_instructions: bool,
     writes: u64,
     grows: u64,
 }
@@ -50,6 +51,16 @@ impl Memory for FaultMemory {
                 state.writes += 1;
                 slot.set(Some(state));
                 if state.writes == state.stop_after {
+                    if state.exhaust_instructions {
+                        // Stay inside the actual commit after a backing write.
+                        // The IC instruction meter must terminate this message;
+                        // do not simulate exhaustion with an application trap.
+                        let mut work = [0_u8; 4096];
+                        loop {
+                            work.fill(cdk::api::instruction_counter() as u8);
+                            std::hint::black_box(&work);
+                        }
+                    }
                     cdk::api::trap("M1 injected trap after backing write");
                 }
             }
@@ -61,8 +72,11 @@ impl Memory for FaultMemory {
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
 #[ic_wire_endpoint::update(id = 6)]
-fn fault_batch((first, stop_after, deny_growth): (u64, u64, bool)) -> (u64, u64) {
+fn fault_batch(
+    (first, stop_after, deny_growth, exhaust_instructions): (u64, u64, bool, bool),
+) -> (u64, u64) {
     assert!(first <= u64::MAX - 32);
+    assert!(!exhaust_instructions || stop_after > 0);
     let host = runtime();
     let mut db = open(&host);
     let mut batch = Batch::new();
@@ -94,6 +108,7 @@ fn fault_batch((first, stop_after, deny_growth): (u64, u64, bool)) -> (u64, u64)
         slot.set(Some(Injection {
             stop_after,
             deny_growth,
+            exhaust_instructions,
             writes: 0,
             grows: 0,
         }))
