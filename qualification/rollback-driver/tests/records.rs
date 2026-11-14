@@ -61,7 +61,7 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("ICDBMF01"));
     assert!(stdout.contains("Exact match"));
     assert!(stdout.contains("Membership"));
-    assert!(stdout.contains("OptionalLink.id (index 1)"));
+    assert!(stdout.contains("OptionalLink.id (via next,id)"));
     assert!(stdout.contains("All optional keys present"));
     assert!(stdout.contains("0 rows returned; 3 candidates examined."));
     assert!(stdout.contains("Next page: db query --after 3 --limit 3 --min 100"));
@@ -244,8 +244,8 @@ async fn product_records_and_message_boundary() {
     let original = status().await;
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
-        // Independently assembled with Perl pack(V/C) and SHA-256.
-        "d99a4688c18f055d835fc875ea642ddc93233e44fa648c1dd659c3486fb685de"
+        // Independently assembled with Node byte framing and SHA-256.
+        "8aedc2e23988b6c40e4a1b6ec9b40afd170e3cb65a813cc250c5818e1e17b84c"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -258,28 +258,31 @@ async fn product_records_and_message_boundary() {
         )
         .await
         .unwrap();
-    type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
-    type IndexView = (u32, Vec<String>, bool, bool);
+    type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
+    type IndexView = (String, Vec<String>, bool, bool);
     type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
     let (admitted, entities): (Status, Vec<EntityView>) =
         native::decode_response(2, &reply, LIMITS).unwrap();
     assert_eq!(admitted, original);
+    let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
     assert_eq!(entities.len(), 7);
-    assert_eq!(entities[6].0, "OptionalLink");
+    assert_eq!(entity("OptionalLink").0, "OptionalLink");
+    assert!(entity("OptionalLink").3.contains(&(
+        "next".into(),
+        "Nat64".into(),
+        true,
+        None,
+        Some((entity("OptionalLink").1, "next,id".into()))
+    )));
+    assert_eq!(entity("IdentityRow").0, "IdentityRow");
     assert!(
-        entities[6]
-            .3
-            .contains(&("next".into(), "Nat64".into(), true, None, Some((7, 1))))
-    );
-    assert_eq!(entities[5].0, "IdentityRow");
-    assert!(
-        entities[5]
+        entity("IdentityRow")
             .3
             .iter()
             .any(|field| field.0 == "owner" && field.1 == "Principal" && field.3 == Some(29))
     );
-    assert_eq!(entities[4].0, "NarrowNumbers");
-    assert!(entities[4].4.is_empty());
+    assert_eq!(entity("NarrowNumbers").0, "NarrowNumbers");
+    assert!(entity("NarrowNumbers").4.is_empty());
     for (name, kind) in [
         ("signed8", "Int8"),
         ("signed16", "Int16"),
@@ -289,11 +292,11 @@ async fn product_records_and_message_boundary() {
         ("unsigned32", "Nat32"),
     ] {
         assert!(
-            entities[4]
+            entity("NarrowNumbers")
                 .3
                 .contains(&(name.into(), kind.into(), false, None, None))
         );
-        assert!(entities[4].3.contains(&(
+        assert!(entity("NarrowNumbers").3.contains(&(
             format!("optional_{name}"),
             kind.into(),
             true,
@@ -301,19 +304,19 @@ async fn product_records_and_message_boundary() {
             None
         )));
     }
-    assert_eq!(entities[3].0, "BinaryObject");
+    assert_eq!(entity("BinaryObject").0, "BinaryObject");
     assert_eq!(
-        entities[3].3,
+        entity("BinaryObject").3,
         vec![
             ("id".into(), "Nat64".into(), false, None, None),
             ("optional".into(), "Blob".into(), true, Some(32), None),
             ("payload".into(), "Blob".into(), false, Some(1024), None),
         ]
     );
-    assert!(entities[3].4.is_empty());
-    assert_eq!(entities[2].0, "WideNumbers");
+    assert!(entity("BinaryObject").4.is_empty());
+    assert_eq!(entity("WideNumbers").0, "WideNumbers");
     assert_eq!(
-        entities[2].3,
+        entity("WideNumbers").3,
         vec![
             ("id".into(), "Nat64".into(), false, None, None),
             ("optional_signed".into(), "Int128".into(), true, None, None),
@@ -328,18 +331,29 @@ async fn product_records_and_message_boundary() {
             ("unsigned".into(), "Nat128".into(), false, None, None),
         ]
     );
-    assert!(entities[2].4.is_empty());
-    assert_eq!(entities[0].0, "Entry");
-    assert_eq!(entities[0].2, "id");
+    assert!(entity("WideNumbers").4.is_empty());
+    assert_eq!(entity("Entry").0, "Entry");
+    assert_eq!(entity("Entry").2, "id");
     assert_eq!(
-        entities[0].4,
-        vec![(1, vec!["category".into(), "id".into()], false, false)]
+        entity("Entry").4,
+        vec![(
+            "category,id".into(),
+            vec!["category".into(), "id".into()],
+            false,
+            false
+        )]
     );
-    assert_eq!(entities[1].0, "Document");
+    assert_eq!(entity("Document").0, "Document");
     assert_eq!(
-        entities[1].3,
+        entity("Document").3,
         vec![
-            ("entry_id".into(), "Nat64".into(), false, None, Some((1, 1))),
+            (
+                "entry_id".into(),
+                "Nat64".into(),
+                false,
+                None,
+                Some((entity("Entry").1, "entry_id,score".into()))
+            ),
             ("id".into(), "Nat64".into(), false, None, None),
             ("note".into(), "Text".into(), true, Some(64), None),
             ("previous_score".into(), "Int64".into(), true, None, None),
@@ -350,11 +364,26 @@ async fn product_records_and_message_boundary() {
         ]
     );
     assert_eq!(
-        entities[1].4,
+        entity("Document").4,
         vec![
-            (1, vec!["entry_id".into(), "score".into()], false, false),
-            (2, vec!["published".into(), "title".into()], false, false),
-            (3, vec!["entry_id".into(), "priority".into()], false, false),
+            (
+                "entry_id,priority".into(),
+                vec!["entry_id".into(), "priority".into()],
+                false,
+                false
+            ),
+            (
+                "entry_id,score".into(),
+                vec!["entry_id".into(), "score".into()],
+                false,
+                false
+            ),
+            (
+                "published,title".into(),
+                vec!["published".into(), "title".into()],
+                false,
+                false
+            ),
         ]
     );
     assert_eq!(

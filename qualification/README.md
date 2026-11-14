@@ -23,6 +23,19 @@ db query --after 3 --limit 3 --min 40
 ```
 
 The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
+Its [shared declarations](records-canister/src/schema.rs) compile in both the
+[host build script](records-canister/build.rs) and Wasm target. Host-only `ctor`
+registration collects full Rust paths; the second stage validates and seals the
+selected module's schema, then emits its typed assembly and expected fingerprint.
+Document's imported Entry type and OptionalLink's Self target exercise compiler
+resolution. Logical names now define stored identity: optional entity/index
+`name` overrides replace numeric IDs, and references infer a sole reverse index
+or select one by name. Contract grammar 2 refuses old numbered manifests intact.
+Native tests include known physical-handle collisions and unchanged backing on
+admission refusal; full names remain authoritative. `make m1-records` additionally
+selects real constructor collection and deterministic/duplicate/late/missing-target
+host checks. The existing golden fingerprint and Wasm checks qualify the resulting
+runtime; ctor is absent from the Wasm dependency graph even with `ic-db/build` enabled.
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
@@ -282,8 +295,8 @@ composite order against component comparison. They do not qualify numeric
 arithmetic, aggregate precision/overflow, mixed-type promotion, Float32, production
 codecs, supplier integration or the complete retained type surface.
 
-The schema witness serializes one bounded canonical contract with field names,
-explicit entity/index IDs, named enum variants and versions for row/key codecs, comparison,
+The earlier M0 schema witness serializes one bounded canonical contract with field names,
+explicit entity/index IDs (superseded by M1 logical names), named enum variants and versions for row/key codecs, comparison,
 normalization, absence ordering, constraints, defaults/timestamps and supplier
 format. A literal byte oracle fixes the example; 19 changes to stored behavior/layout
 change its identity, including field renames. Fields are ordered by their exact

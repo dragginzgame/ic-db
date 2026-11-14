@@ -37,10 +37,22 @@ require `present_only`; ordinary indexes retain absent values. Primary keys and
 references still require Nat64.
 An optional reference's `None` has no target; `Some(id)` requires a surviving
 target. Unlinking the last dependant and deleting its target can share one batch.
+Schemas no longer require numeric entity or index IDs. Entity names default to
+the Rust type name; index names default to ordered fields such as `"category,id"`.
+Optional `name` overrides provide stable explicit identities. References use
+`references(entity = "Entry")`, with `index = "entry_id,score"` only when reverse
+selection is ambiguous. Rust resolves imports and module paths; full logical names
+define durable identity. The fixture now uses
+IcyDB's two-stage approach: host-only `ctor` registration, followed by validated
+schema assembly generated for the target. This is implemented for scalar entities;
+named nested schema types remain work. See the
+[shared schema](qualification/records-canister/src/schema.rs) and its
+[build script](qualification/records-canister/build.rs).
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
-version 1 or 2 contract refuses without changing its data.
+version 1 or 2 codec contract refuses without changing its data. The named schema
+grammar is version 2; earlier numbered contracts also refuse intact.
 The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
 No public licence or crates.io publication has been selected; packages are unpublished.
 

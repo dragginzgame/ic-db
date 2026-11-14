@@ -12,6 +12,12 @@ toko-tooling.workspace = true
 [package.metadata.cargo-machete]
 ignored = ["toko-tooling"]
 
+[features]
+build = ["dep:ctor"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ctor = { workspace = true, optional = true }
+
 [dependencies]
 ic-db-macros.workspace = true
 ic-platform-types.workspace = true

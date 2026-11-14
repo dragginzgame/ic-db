@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
 //! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
@@ -14,6 +15,24 @@ mod codec;
 mod key;
 mod schema;
 mod store;
+
+#[cfg(all(feature = "build", not(target_arch = "wasm32")))]
+pub mod build;
+
+/// Emit constructor registration only in explicitly selected host schema builds.
+#[doc(hidden)]
+#[cfg(all(feature = "build", not(target_arch = "wasm32")))]
+#[macro_export]
+macro_rules! __register_schema {
+    ($($item:item)*) => { $($item)* };
+}
+
+#[doc(hidden)]
+#[cfg(not(all(feature = "build", not(target_arch = "wasm32"))))]
+#[macro_export]
+macro_rules! __register_schema {
+    ($($item:item)*) => {};
+}
 
 pub use ic_db_macros::entity;
 pub use ic_platform_types::Principal;
@@ -67,7 +86,22 @@ impl std::error::Error for Error {
 }
 
 /// Codec boundary emitted by `#[entity]`; hand-written implementations are unsupported.
+/// Typed references use Rust resolution; an unresolved name fails compilation:
+/// ```compile_fail
+/// use ic_db::entity;
+/// #[entity(pk(field="id"), index(field="target"), fields(
+///     field(name="id",value(item(prim="Nat64"))),
+///     field(name="target",value(item(prim="Nat64")),references(entity="Missing"))))]
+/// struct Example {}
+/// ```
 pub trait Entity: Sized {
+    /// Generated handle, also usable in cyclic typed references; not authored.
+    #[doc(hidden)]
+    const ID: u32;
+    /// Logical entity name under the stored contract.
+    const NAME: &'static str;
+    /// Rust-resolved declaration path for host schema assembly, not durable identity.
+    const PATH: &'static str;
     /// This executable's compiled entity contract.
     const SCHEMA: &'static EntitySchema;
     /// Read the application's primary key without encoding or inspecting indexes.
@@ -94,6 +128,7 @@ pub trait Entity: Sized {
 pub mod __private {
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     pub use crate::key::encode_index;
+    pub use crate::schema::handle;
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
         pub key: u64,

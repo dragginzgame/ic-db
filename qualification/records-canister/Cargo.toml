@@ -27,5 +27,8 @@ ic-storage.workspace = true
 ic-wire.workspace = true
 ic-wire-endpoint.workspace = true
 
+[build-dependencies]
+ic-db = { workspace = true, features = ["build"] }
+
 [lints]
 workspace = true

@@ -1,5 +1,5 @@
 //! Parse and project stored field types at the macro boundary.
-use super::{identity, list, literal, once, text};
+use super::{list, literal, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Lit, Meta};
@@ -24,7 +24,7 @@ pub(super) struct Field {
     pub name: String,
     pub kind: Kind,
     pub optional: bool,
-    pub reference: Option<(u32, u32)>,
+    pub reference: Option<(syn::Path, Option<String>)>,
 }
 impl Field {
     pub fn parse(meta: &Meta) -> syn::Result<Self> {
@@ -44,19 +44,23 @@ impl Field {
                 let mut index = None;
                 for option in list(&part)? {
                     if option.path().is_ident("entity") {
-                        once(&mut entity, identity(&option)?, &option)?;
+                        let target = syn::parse_str(&text(&option)?)?;
+                        once(&mut entity, target, &option)?;
                     } else if option.path().is_ident("index") {
-                        once(&mut index, identity(&option)?, &option)?;
+                        once(&mut index, text(&option)?, &option)?;
                     } else {
                         return Err(syn::Error::new_spanned(
                             option,
-                            "references requires entity and index",
+                            "references accepts an entity type path and optional index name",
                         ));
                     }
                 }
-                let target = entity.zip(index).ok_or_else(|| {
-                    syn::Error::new_spanned(&part, "references requires entity and index")
-                })?;
+                let target = (
+                    entity.ok_or_else(|| {
+                        syn::Error::new_spanned(&part, "references requires an entity type path")
+                    })?,
+                    index,
+                );
                 once(&mut reference, target, &part)?;
             } else {
                 return Err(syn::Error::new_spanned(
@@ -157,10 +161,15 @@ impl Field {
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
             Kind::Blob(max_bytes) => quote!(::ic_db::FieldType::Blob {max_bytes:#max_bytes}),
         };
-        let reference = match self.reference {
+        let reference = match &self.reference {
             None => quote!(None),
             Some((entity, index)) => {
-                quote!(Some(::ic_db::ReferenceSchema {entity:#entity,index:#index}))
+                let index = index.as_ref().expect("reverse index was resolved");
+                quote!(Some(::ic_db::ReferenceSchema {
+                    entity: <#entity as ::ic_db::Entity>::ID,
+                    entity_name: <#entity as ::ic_db::Entity>::NAME,
+                    index: ::ic_db::__private::handle(#index)
+                }))
             }
         };
         quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference })

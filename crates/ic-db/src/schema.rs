@@ -6,6 +6,21 @@ use std::collections::BTreeSet;
 
 const MAX_FIELDS: usize = 16;
 
+// FNV-1a is only a compact physical handle, never schema authority. Admission
+// rejects collisions; full names and semantics enter the SHA-256 contract.
+#[doc(hidden)]
+#[must_use]
+pub const fn handle(name: &str) -> u32 {
+    let bytes = name.as_bytes();
+    let mut value = 2_166_136_261_u32;
+    let mut position = 0;
+    while position < bytes.len() {
+        value = (value ^ bytes[position] as u32).wrapping_mul(16_777_619);
+        position += 1;
+    }
+    value
+}
+
 /// Stored primitive semantics supported by this increment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldType {
@@ -62,7 +77,10 @@ pub struct FieldSchema {
 /// An absent optional value has no target; zero remains an ordinary target key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReferenceSchema {
-    /// Target entity identity; its primary key must be a required Nat64.
+    /// Full logical target identity; its primary key must be a required Nat64.
+    pub entity_name: &'static str,
+    /// Generated target storage handle.
+    #[doc(hidden)]
     pub entity: u32,
     /// Index on this entity whose first component is the referencing field.
     pub index: u32,
@@ -71,8 +89,11 @@ pub struct ReferenceSchema {
 /// A compiled index over exact integer, Principal, Bool or Text components.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IndexSchema {
-    /// Stable index identity within its entity.
+    /// Generated storage handle; use the name when selecting an index.
+    #[doc(hidden)]
     pub id: u32,
+    /// Logical identity within its entity, included in the stored contract.
+    pub name: &'static str,
     /// Fields in declared index order.
     pub fields: &'static [&'static str],
     /// Whether the complete key must be unique in the final batch state.
@@ -83,15 +104,16 @@ pub struct IndexSchema {
 
 /// Compiled entity metadata emitted by the entity macro.
 pub struct EntitySchema {
-    /// Stable entity identity.
+    /// Generated storage handle; schema authors do not assign this number.
+    #[doc(hidden)]
     pub id: u32,
-    /// Presentation label, excluded from persisted identity.
+    /// Logical entity identity, included in the stored contract.
     pub name: &'static str,
     /// Fields in canonical name order.
     pub fields: &'static [FieldSchema],
     /// Externally supplied Nat64 primary-key field.
     pub primary_key: &'static str,
-    /// Indexes ordered by identity.
+    /// Indexes ordered by logical name.
     pub indexes: &'static [IndexSchema],
 }
 
@@ -169,18 +191,18 @@ impl Schema {
             return Err(Error::InvalidSchema);
         }
         let mut entities = entities.to_vec();
-        entities.sort_by_key(|entity| entity.id);
+        entities.sort_by_key(|entity| entity.name);
         let mut bytes = b"ICDBSC01".to_vec();
         // Contract grammar, row codec, key codec, semantics, supplier contract.
         // Supplier contract 1 is qualified with Storage 0.74.1; it is not a guess
         // that every future supplier release uses a compatible collection format.
-        for version in [1, crate::codec::ROW_CODEC_VERSION, 1, 1, 1] {
+        for version in [2, crate::codec::ROW_CODEC_VERSION, 1, 1, 1] {
             bytes.extend(version.to_le_bytes());
         }
         bytes.extend((entities.len() as u32).to_le_bytes());
         let mut ids = BTreeSet::new();
         for entity in &entities {
-            if entity.id == 0
+            if entity.id != handle(entity.name)
                 || !ids.insert(entity.id)
                 || entity.fields.is_empty()
                 || entity.fields.len() > MAX_FIELDS
@@ -193,7 +215,7 @@ impl Schema {
             {
                 return Err(Error::InvalidSchema);
             }
-            bytes.extend(entity.id.to_le_bytes());
+            name(&mut bytes, entity.name)?;
             bytes.extend((entity.fields.len() as u32).to_le_bytes());
             for field in entity.fields {
                 name(&mut bytes, field.name)?;
@@ -232,7 +254,9 @@ impl Schema {
                 }
                 if let Some(reference) = field.reference {
                     if field.value != FieldType::Nat64
-                        || !entities.iter().any(|target| target.id == reference.entity)
+                        || !entities.iter().any(|target| {
+                            target.id == reference.entity && target.name == reference.entity_name
+                        })
                         || !entity.indexes.iter().any(|index| {
                             index.id == reference.index
                                 && !index.present_only
@@ -241,15 +265,24 @@ impl Schema {
                     {
                         return Err(Error::InvalidSchema);
                     }
-                    bytes.extend(reference.entity.to_le_bytes());
-                    bytes.extend(reference.index.to_le_bytes());
+                    let target = entities
+                        .iter()
+                        .find(|target| target.id == reference.entity)
+                        .ok_or(Error::InvalidSchema)?;
+                    let index = entity
+                        .indexes
+                        .iter()
+                        .find(|index| index.id == reference.index)
+                        .ok_or(Error::InvalidSchema)?;
+                    name(&mut bytes, target.name)?;
+                    name(&mut bytes, index.name)?;
                 }
             }
             name(&mut bytes, entity.primary_key)?;
             bytes.extend((entity.indexes.len() as u32).to_le_bytes());
             let mut index_ids = BTreeSet::new();
             for index in entity.indexes {
-                if index.id == 0
+                if index.id != handle(index.name)
                     || !index_ids.insert(index.id)
                     || index.fields.is_empty()
                     || index.fields.len() > 4
@@ -268,7 +301,7 @@ impl Schema {
                 {
                     return Err(Error::InvalidSchema);
                 }
-                bytes.extend(index.id.to_le_bytes());
+                name(&mut bytes, index.name)?;
                 bytes.push(u8::from(index.unique) | (u8::from(index.present_only) << 1));
                 bytes.extend((index.fields.len() as u32).to_le_bytes());
                 for field in index.fields {
@@ -286,7 +319,7 @@ impl Schema {
             if entity
                 .indexes
                 .windows(2)
-                .any(|pair| pair[0].id >= pair[1].id)
+                .any(|pair| pair[0].name >= pair[1].name)
             {
                 return Err(Error::InvalidSchema);
             }
@@ -306,7 +339,7 @@ impl Schema {
         self.fingerprint
     }
 
-    /// Compiled entities in stable identity order, for bounded inspection.
+    /// Compiled entities in logical-name order, for bounded inspection.
     #[must_use]
     pub fn entities(&self) -> &[&'static EntitySchema] {
         &self.entities
@@ -318,7 +351,8 @@ impl Schema {
             .iter()
             .find(|entity| entity.id == proposed.id)
             .ok_or(Error::UnknownEntity)?;
-        if current.fields != proposed.fields
+        if current.name != proposed.name
+            || current.fields != proposed.fields
             || current.primary_key != proposed.primary_key
             || current.indexes != proposed.indexes
         {

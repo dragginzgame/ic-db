@@ -45,8 +45,8 @@ fn help() {
     println!();
 }
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
-type IndexView = (u32, Vec<String>, bool, bool);
+type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
+type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
 fn print_schema(entities: Vec<EntityView>) {
@@ -55,8 +55,8 @@ fn print_schema(entities: Vec<EntityView>) {
         .iter()
         .map(|(name, id, primary, _, _)| (*id, format!("{name}.{primary}")))
         .collect();
-    for (name, id, primary, mut fields, indexes) in entities {
-        println!("{} (entity {id})", terminal_text(&name));
+    for (name, _, primary, mut fields, indexes) in entities {
+        println!("{}", terminal_text(&name));
         println!(
             "Primary key: {} (supplied by the application)\n",
             terminal_text(&primary)
@@ -77,7 +77,7 @@ fn print_schema(entities: Vec<EntityView>) {
                 if references {
                     row.push(reference.map_or_else(
                         || "-".into(),
-                        |(entity, index)| format!("{} (index {index})", targets[&entity]),
+                        |(entity, index)| format!("{} (via {index})", targets[&entity]),
                     ));
                 }
                 row
@@ -93,9 +93,9 @@ fn print_schema(entities: Vec<EntityView>) {
         } else {
             let rows: Vec<Vec<String>> = indexes
                 .into_iter()
-                .map(|(id, fields, unique, present_only)| {
+                .map(|(name, fields, unique, present_only)| {
                     vec![
-                        id.to_string(),
+                        name,
                         fields.join(", "),
                         if unique { "Yes" } else { "No" }.into(),
                         if present_only {
@@ -109,7 +109,10 @@ fn print_schema(entities: Vec<EntityView>) {
                 .collect();
             println!(
                 "\nIndexes\n{}\n",
-                render_bordered(&["ID", "Fields (in order)", "Unique", "Membership"], &rows)
+                render_bordered(
+                    &["Name", "Fields (in order)", "Unique", "Membership"],
+                    &rows
+                )
             );
         }
     }

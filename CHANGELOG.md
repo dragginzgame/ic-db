@@ -13,6 +13,10 @@ combines boolean and exact text ordering. This remains a fresh local database;
 all optional keys present; Document's priority index includes absent values.
 The empty `OptionalLink` entity shows an optional Nat64 self-reference and its
 ordinary reverse index; no target is required for `None`.
+The fixture now builds these declarations through host-only `ctor` collection
+and second-stage schema generation. Inspection now shows logical entity/index
+names, with no author-assigned schema numbers. Reinstall both the console and its
+fixture together; this is a new contract, not a migration.
 
 ```sh
 make db
@@ -22,6 +26,28 @@ db status
 
 ### 🛠️ Changes
 
+- Remove mandatory numeric entity/index IDs from scalar authoring. Entity names
+  default to the Rust type name; index names default to ordered comma-separated
+  fields. Optional `name` overrides preserve explicit identity. References select
+  the sole suitable reverse index, with `index = "name"` for ambiguity. Runtime
+  index lookup accepts the name and revision lookup uses the entity type. Remove
+  entity/index `id` attributes and numeric reference selectors. Full names define
+  contract grammar 2; collision-checked internal handles require no durable
+  assignment table. Old numbered manifests refuse unchanged. Native/Wasm checks
+  cover name collisions, reference resolution, old-contract refusal, persistence
+  and rollback. `db schema` shows names instead of schema ID numbers.
+
+- Implement the first two-stage schema pipeline using IcyDB's constructor/path
+  approach. `references(entity = "path::Target", ...)` resolves through Rust,
+  including imports and `Self`. Native-only
+  `ic-db/build` collects declarations, validates through the existing admission
+  owner and emits the target's schema assembly/fingerprint. The M1 fixture uses
+  the same authored module for host and Wasm, replacing its manual entity list.
+  Qualify duplicate/late registration, order independence, missing/unresolved
+  targets and unchanged Wasm persistence/rollback/reopen. No persisted catalog,
+  endpoint generation, new product crate or Wasm constructor dependency is added.
+  Named nested types remain work. Runtime and macro source retain unsafe-code
+  prohibition; native declaration builds permit ctor's generated registration.
 - Support optional Nat64 references through existing ordinary reverse indexes.
   Absence has no target; present zero is a real key. Validate existence and
   restricted deletion against the final batch, allowing explicit unlink/delete

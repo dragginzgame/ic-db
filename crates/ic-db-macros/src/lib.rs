@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Small attribute authoring boundary for the first persistent-record slice.
 //! Generates typed records/codecs and metadata, never endpoints or executors.
 
@@ -17,9 +18,15 @@ use field::Field;
 /// Bool and bounded Text, including optional forms. Optional unique indexes require
 /// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
-/// Required or optional Nat64 fields may declare `references(entity = 1, index = 1)`;
-/// the selected unfiltered index must belong to this entity and lead with this field.
+/// Entity names default to the type name; `name = "StableName"` overrides it.
+/// Index names default to comma-separated ordered fields; `name` overrides them.
+/// Required or optional Nat64 fields may declare `references(entity = "path::Target")`;
+/// select the sole unfiltered index leading with this field, or use `index = "name"`.
 /// `None` has no target; every `Some(id)` requires that target in the final batch state.
+/// `entity = "path::Target"` lets Rust resolve an entity type (including imports
+/// and `Self`) to its logical identity. Numeric authoring IDs are unsupported.
+/// With the host-only `ic-db/build` feature, declarations also register their
+/// full Rust paths for second-stage schema assembly.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
@@ -28,7 +35,7 @@ pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 struct Index {
-    id: u32,
+    name: String,
     fields: Vec<String>,
     unique: bool,
     present_only: bool,
@@ -59,18 +66,6 @@ fn text(meta: &Meta) -> syn::Result<String> {
         return Ok(value.value());
     }
     Err(syn::Error::new_spanned(meta, "expected a string"))
-}
-fn identity(meta: &Meta) -> syn::Result<u32> {
-    if let Lit::Int(value) = literal(meta)? {
-        let id = value.base10_parse()?;
-        if id != 0 {
-            return Ok(id);
-        }
-    }
-    Err(syn::Error::new_spanned(
-        meta,
-        "identity must be a nonzero u32",
-    ))
 }
 fn once<T>(slot: &mut Option<T>, value: T, meta: &Meta) -> syn::Result<()> {
     if slot.replace(value).is_some() {
@@ -112,13 +107,13 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             "entity requires an empty, nongeneric struct body",
         ));
     }
-    let mut id = None;
+    let mut logical_name = None;
     let mut primary = None;
     let mut authored = None;
     let mut indexes = Vec::new();
     for meta in metas(args)? {
-        if meta.path().is_ident("id") {
-            once(&mut id, identity(&meta)?, &meta)?;
+        if meta.path().is_ident("name") {
+            once(&mut logical_name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("pk") {
             let mut key = None;
             let mut source = None;
@@ -149,13 +144,13 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 .collect::<syn::Result<Vec<_>>>()?;
             once(&mut authored, values, &meta)?;
         } else if meta.path().is_ident("index") {
-            let mut id = None;
+            let mut index_name = None;
             let mut names = None;
             let mut unique = false;
             let mut present_only = false;
             for part in list(&meta)? {
-                if part.path().is_ident("id") {
-                    once(&mut id, identity(&part)?, &part)?;
+                if part.path().is_ident("name") {
+                    once(&mut index_name, text(&part)?, &part)?;
                 } else if part.path().is_ident("fields") {
                     once(&mut names, fields(&part)?, &part)?;
                 } else if part.path().is_ident("field") {
@@ -173,10 +168,11 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                     ));
                 }
             }
+            let fields =
+                names.ok_or_else(|| syn::Error::new_spanned(&meta, "index requires fields"))?;
             indexes.push(Index {
-                id: id.ok_or_else(|| syn::Error::new_spanned(&meta, "index requires id"))?,
-                fields: names
-                    .ok_or_else(|| syn::Error::new_spanned(&meta, "index requires fields"))?,
+                name: index_name.unwrap_or_else(|| fields.join(",")),
+                fields,
                 unique,
                 present_only,
             });
@@ -185,9 +181,12 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         }
     }
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
-    let id = id.ok_or_else(|| fail("entity requires id"))?;
+    let logical_name = logical_name.unwrap_or_else(|| item.ident.to_string());
+    if logical_name.is_empty() || logical_name.len() > 64 {
+        return Err(fail("entity name requires 1..64 UTF-8 bytes"));
+    }
     let primary = primary.ok_or_else(|| fail("entity requires pk"))?;
-    let authored = authored.ok_or_else(|| fail("entity requires fields"))?;
+    let mut authored = authored.ok_or_else(|| fail("entity requires fields"))?;
     let names: BTreeSet<_> = authored.iter().map(|field| &field.name).collect();
     if names.len() != authored.len()
         || authored.is_empty()
@@ -209,30 +208,38 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     {
         return Err(fail("primary key currently requires non-optional Nat64"));
     }
-    let mut ordered: Vec<_> = authored.iter().collect();
-    ordered.sort_by_key(|field| &field.name);
-    let ordered_ids: Vec<syn::Ident> = ordered
-        .iter()
-        .map(|field| syn::parse_str(&field.name))
-        .collect::<syn::Result<_>>()?;
     let key_id: syn::Ident = syn::parse_str(&primary)?;
-    indexes.sort_by_key(|index| index.id);
-    if indexes.len() > 8 || indexes.windows(2).any(|pair| pair[0].id == pair[1].id) {
+    indexes.sort_by(|left, right| left.name.cmp(&right.name));
+    if indexes.len() > 8
+        || indexes.windows(2).any(|pair| pair[0].name == pair[1].name)
+        || indexes
+            .iter()
+            .any(|index| index.name.is_empty() || index.name.len() > 64)
+    {
         return Err(fail(
-            "duplicate or excessive index identities (maximum eight)",
+            "indexes require distinct names of 1..64 bytes (maximum eight); use name to disambiguate",
         ));
     }
     let mut descriptions = Vec::new();
     let mut encoded_indexes = Vec::new();
-    for field in &authored {
-        if let Some((_, id)) = field.reference
-            && !indexes.iter().any(|index| {
-                index.id == id && !index.present_only && index.fields.first() == Some(&field.name)
-            })
-        {
-            return Err(fail(
-                "reference requires a declared index beginning with its field",
-            ));
+    for field in &mut authored {
+        if let Some((_, selected)) = &mut field.reference {
+            let mut candidates = indexes.iter().filter(|index| {
+                !index.present_only
+                    && index.fields.first() == Some(&field.name)
+                    && selected.as_ref().is_none_or(|name| *name == index.name)
+            });
+            let Some(index) = candidates.next() else {
+                return Err(fail(
+                    "reference requires an unfiltered declared index beginning with its field",
+                ));
+            };
+            if candidates.next().is_some() {
+                return Err(fail(
+                    "ambiguous reference access path; select an index by name",
+                ));
+            }
+            *selected = Some(index.name.clone());
         }
     }
     for index in indexes {
@@ -255,7 +262,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             .iter()
             .map(|name| syn::parse_str(name))
             .collect::<syn::Result<_>>()?;
-        let index_id = index.id;
+        let index_name = index.name;
         let unique = index.unique;
         let present_only = index.present_only;
         let has_optional = index.fields.iter().any(|name| {
@@ -284,13 +291,19 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             })
             .collect();
         let names = index.fields;
-        descriptions.push(quote! { ::ic_db::IndexSchema { id: #index_id, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
+        descriptions.push(quote! { ::ic_db::IndexSchema { id: ::ic_db::__private::handle(#index_name), name: #index_name, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
         encoded_indexes
             .push(quote! { ::ic_db::__private::encode_index(&[#(#operands),*], #present_only) });
     }
     let name = &item.ident;
     let attrs = &item.attrs;
     let visibility = &item.vis;
+    let mut ordered: Vec<_> = authored.iter().collect();
+    ordered.sort_by_key(|field| &field.name);
+    let ordered_ids: Vec<syn::Ident> = ordered
+        .iter()
+        .map(|field| syn::parse_str(&field.name))
+        .collect::<syn::Result<_>>()?;
     let writes: Vec<_> = ordered
         .iter()
         .zip(&ordered_ids)
@@ -313,8 +326,11 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
         impl ::ic_db::Entity for #name {
+            const ID: u32 = ::ic_db::__private::handle(#logical_name);
+            const NAME: &'static str = #logical_name;
+            const PATH: &'static str = concat!(module_path!(), "::", stringify!(#name));
             const SCHEMA: &'static ::ic_db::EntitySchema = &::ic_db::EntitySchema {
-                id: #id, name: stringify!(#name), fields: &[#(#descriptions_fields),*], primary_key: #primary,
+                id: Self::ID, name: Self::NAME, fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
             };
             fn key(&self) -> u64 { self.#key_id }
@@ -342,6 +358,14 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 <Self as ::ic_db::Entity>::validate(&row).map_err(|_| ::ic_db::Error::Corrupt)?;
                 Ok(row)
             }
+        }
+        ::ic_db::__register_schema! {
+            const _: () = {
+                #[::ic_db::build::__ctor::ctor(unsafe, anonymous, crate_path = ::ic_db::build::__ctor)]
+                fn register() {
+                    ::ic_db::build::__register(<#name as ::ic_db::Entity>::PATH, <#name as ::ic_db::Entity>::SCHEMA);
+                }
+            };
         }
     })
 }

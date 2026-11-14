@@ -946,6 +946,7 @@ dependencies = [
 name = "ic-db"
 version = "0.2.0"
 dependencies = [
+ "ctor",
  "ic-db-macros",
  "ic-platform-types",
  "ic-storage",
@@ -1118,9 +1119,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform"
-version = "0.33.0"
+version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ff16542d2cb6c8307afced4b0b1dc10b31640ea49f26304de6ff94e02eeb8bf"
+checksum = "4d780999e8b7e89cf9f3f78c979daaaf0299127451d904636867c61b56cd233c"
 dependencies = [
  "ic-platform-types",
  "num-bigint 0.5.1",

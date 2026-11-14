@@ -10,6 +10,7 @@ rust-version = "1.100.0"
 publish = false
 
 [workspace.dependencies]
+ctor = { version = "1.0.14", default-features = false, features = ["proc_macro", "std"] }
 ic-db-macros = { path = "crates/ic-db-macros" }
 ic-platform-types = { version = "0.20.3", default-features = false }
 ic-storage = "0.74.1"
@@ -30,7 +31,9 @@ unknown_lints = "deny"
 dead_code = "deny"
 unused_must_use = "deny"
 unfulfilled_lint_expectations = "deny"
-unsafe_code = "forbid"
+# Host schema declarations allow only ctor's generated registration internals.
+# Product runtime and macro implementation retain forbid at their crate roots.
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"
 

@@ -155,7 +155,7 @@ impl<M: Memory> Database<M> {
             incarnation,
         };
         for entity in &database.schema.entities {
-            database.revision(entity.id)?;
+            database.revision_by_id(entity.id)?;
         }
         Ok(database)
     }
@@ -172,7 +172,11 @@ impl<M: Memory> Database<M> {
     /// Read the atomic revision of one admitted entity.
     /// # Errors
     /// Refuses unknown entities and malformed revision metadata.
-    pub fn revision(&self, entity: u32) -> Result<u64, Error> {
+    pub fn revision<E: Entity>(&self) -> Result<u64, Error> {
+        self.schema.admits(E::SCHEMA)?;
+        self.revision_by_id(E::ID)
+    }
+    fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
         if !self.schema.entities.iter().any(|value| value.id == entity) {
             return Err(Error::UnknownEntity);
         }
@@ -247,7 +251,7 @@ impl<M: Memory> Database<M> {
     /// inconsistent index entries. This method does not yet return continuation.
     pub fn index_prefix<E: Entity>(
         &self,
-        index: u32,
+        index: &str,
         values: &[IndexValue<'_>],
         limit: usize,
     ) -> Result<Vec<E>, Error> {
@@ -255,7 +259,7 @@ impl<M: Memory> Database<M> {
         let index = E::SCHEMA
             .indexes
             .iter()
-            .find(|value| value.id == index)
+            .find(|value| value.name == index)
             .ok_or(Error::InvalidSchema)?;
         if values.is_empty() || values.len() > index.fields.len() || !(1..=32).contains(&limit) {
             return Err(Error::Limit);
@@ -400,7 +404,10 @@ impl<M: Memory> Database<M> {
         }
         self.validate_references(&required, &deleted, &removes, &writes)?;
         for entity in changed {
-            let next = self.revision(entity)?.checked_add(1).ok_or(Error::Limit)?;
+            let next = self
+                .revision_by_id(entity)?
+                .checked_add(1)
+                .ok_or(Error::Limit)?;
             writes.insert(revision_key(entity), next.to_le_bytes().to_vec());
         }
         // Proven IC rollback boundary: no recoverable Result branch below this line.

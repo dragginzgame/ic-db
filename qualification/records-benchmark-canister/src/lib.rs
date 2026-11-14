@@ -8,8 +8,8 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
 };
 
-#[entity(id = 1, pk(field = "id", source = "external"),
-    index(id = 1, fields = ["category", "id"]),
+#[entity( pk(field = "id", source = "external"),
+    index(fields = ["category", "id"]),
     fields(field(name = "id", value(item(prim = "Nat64"))),
         field(name = "category", value(item(prim = "Nat64"))),
         field(name = "amount", value(item(prim = "Nat64")))))]
@@ -115,7 +115,7 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     // delivered direct read, not a fluent planner that IC DB has yet to implement.
     measure(|| {
         database()
-            .index_prefix::<Entry>(1, &[category.into()], 10)
+            .index_prefix::<Entry>("category,id", &[category.into()], 10)
             .unwrap()
             .iter()
             .map(row)

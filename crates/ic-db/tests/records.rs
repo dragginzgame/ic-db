@@ -5,16 +5,15 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
-#[entity(id=1, pk(field="id", source="external"), index(id=1, fields=["category", "id"]),
+#[entity( pk(field="id", source="external"), index(fields=["category", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="category", value(item(prim="Nat64"))),
         field(name="amount", value(item(prim="Nat64")))))]
 struct Entry {}
 
 #[entity(
-    id = 2,
     pk(field = "id"),
-    index(id = 1, field = "token", unique),
+    index(field = "token", unique),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "token", value(item(prim = "Nat64")))
@@ -22,18 +21,17 @@ struct Entry {}
 )]
 struct TokenRow {}
 
-#[entity(id=1, pk(field="id"), index(id=1, fields=["category", "id"]),
+#[entity(name="Entry",  pk(field="id"), index(fields=["category", "id"]),
     fields(field(name="value", value(item(prim="Nat64"))), field(name="id", value(item(prim="Nat64"))),
         field(name="category", value(item(prim="Nat64")))))]
 struct Changed {}
 
-#[entity(id=1, pk(field="id"), index(id=1, fields=["category", "id"]),
+#[entity(name="Entry",  pk(field="id"), index(fields=["category", "id"]),
     fields(field(name="amount", value(item(prim="Nat64"))), field(name="category", value(item(prim="Nat64"))),
         field(name="id", value(item(prim="Nat64")))))]
 struct Reordered {}
 
 #[entity(
-    id = 2,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -46,7 +44,6 @@ struct Reordered {}
 struct Document {}
 
 #[entity(
-    id = 3,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -57,7 +54,6 @@ struct Document {}
 struct WideText {}
 
 #[entity(
-    id = 20,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -68,7 +64,6 @@ struct WideText {}
 struct SignedRow {}
 
 #[entity(
-    id = 21,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -81,7 +76,6 @@ struct SignedRow {}
 struct WideRow {}
 
 #[entity(
-    id = 22,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -91,7 +85,6 @@ struct WideRow {}
 )]
 struct BinaryRow {}
 #[entity(
-    id = 23,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -100,7 +93,6 @@ struct BinaryRow {}
 )]
 struct EmptyBlob {}
 #[entity(
-    id = 25,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -109,7 +101,6 @@ struct EmptyBlob {}
 )]
 struct EmptyText {}
 #[entity(
-    id = 24,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -119,7 +110,6 @@ struct EmptyText {}
 struct WideBlob {}
 
 #[entity(
-    id = 26,
     pk(field = "reader"),
     fields(
         field(name = "reader", value(item(prim = "Nat64"))),
@@ -130,7 +120,6 @@ struct WideBlob {}
 struct CodecNames {}
 
 #[entity(
-    id = 27,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -150,7 +139,7 @@ struct CodecNames {}
 )]
 struct NarrowRow {}
 
-#[entity(id=28, pk(field="id"), index(id=1,fields=["category","id"]), fields(
+#[entity( pk(field="id"), index(fields=["category","id"]), fields(
     field(name="a_blob",value(item(prim="Blob",max_bytes=2048))),
     field(name="a_note",value(opt,item(prim="Text",max_bytes=64))),
     field(name="category",value(item(prim="Nat64"))),
@@ -160,43 +149,41 @@ struct NarrowRow {}
 ))]
 struct InspectionRow {}
 
-#[entity(id=29,pk(field="id"),index(id=1,fields=["parent_id","id"]),fields(
+#[entity(pk(field="id"),index(fields=["parent_id","id"]),fields(
     field(name="id",value(item(prim="Nat64"))),
     field(name="note",value(item(prim="Text",max_bytes=32))),
-    field(name="parent_id",value(item(prim="Nat64")),references(entity=28,index=1))
+    field(name="parent_id",value(item(prim="Nat64")),references(entity="InspectionRow",index="parent_id,id"))
 ))]
 struct InspectionDependent {}
 
 #[entity(
-    id = 10,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
 struct Parent {}
-#[entity(id=11, pk(field="id"), index(id=1,fields=["parent_id","id"]), fields(
+#[entity( pk(field="id"), index(fields=["parent_id","id"]), fields(
     field(name="id",value(item(prim="Nat64"))),
-    field(name="parent_id",value(item(prim="Nat64")),references(entity=10,index=1))))]
+    field(name="parent_id",value(item(prim="Nat64")),references(entity="Parent",index="parent_id,id"))))]
 struct Child {}
 #[entity(
-    id = 12,
     pk(field = "id"),
-    index(id = 1, field = "next"),
+    index(field = "next"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(
             name = "next",
             value(item(prim = "Nat64")),
-            references(entity = 12, index = 1)
+            references(entity = "Self", index = "next")
         )
     )
 )]
 struct Node {}
 
-#[entity(id=40, pk(field="id"),
-    index(id=1, fields=["next", "id"]), index(id=2, fields=["alternate", "id"]),
+#[entity( pk(field="id"),
+    index(fields=["next", "id"]), index(fields=["alternate", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
-        field(name="next", value(opt, item(prim="Nat64")), references(entity=40,index=1)),
-        field(name="alternate", value(opt, item(prim="Nat64")), references(entity=40,index=2))))]
+        field(name="next", value(opt, item(prim="Nat64")), references(entity="Self",index="next,id")),
+        field(name="alternate", value(opt, item(prim="Nat64")), references(entity="Self",index="alternate,id"))))]
 struct OptionalLink {}
 
 fn schema() -> Schema {
@@ -278,9 +265,11 @@ fn previous_codec_identities_are_refused_without_changing_storage() {
         .unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    // Independent v1 (Wire) and v2 (owned varint) fingerprints and original bytes.
+    // Earlier numbered contracts: row codecs v1 (Wire), v2 (owned varint),
+    // and v3 (fixed width). Admission refuses before any row decoding.
     // Admission must refuse before interpreting those bytes under the new codec.
     for old in [
+        "daeb2925a2a9e739d630f56189a8956a63e88fe624984a25034c5600ca2e7b60",
         "cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa",
         "a1e8982196ded1c94a3625762e178927acc467051a8c37210a4e84c7c76ab851",
     ] {
@@ -324,11 +313,11 @@ fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
         Err(Error::Corrupt)
     ));
     let one = Schema::new(&[Entry::SCHEMA]).unwrap();
-    // Independent literal grammar assembled with Perl pack(V)/UTF-8 lengths;
+    // Independent literal grammar assembled with Node framing/UTF-8 lengths;
     // digest verified independently, not the product's schema serializer.
     assert_eq!(
         one.fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "daeb2925a2a9e739d630f56189a8956a63e88fe624984a25034c5600ca2e7b60"
+        "0b7e8c6d325ad8572c3bc388975ceebf7d26a03c266ea2e724ecf7b078aac3db"
     );
     assert_eq!(
         one.fingerprint(),
@@ -401,13 +390,13 @@ fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
     ));
 
     let contract = || Schema::new(&[SignedRow::SCHEMA]).unwrap();
-    // Independent Perl pack(V/C) and SHA-256 schema vector.
+    // Independent Node byte framing and SHA-256 schema vector.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "17daf74608b78e95125a9781e27dc415c460a9acc52ca18ca7e33ae02767d7e9"
+        "6a224092e396ae970163379edce04f0711f1e434d9e14291139fa243b2fed583"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -463,7 +452,7 @@ fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
     batch.replace(&changed).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(db.get::<SignedRow>(0).unwrap(), Some(changed));
-    assert_eq!(db.revision(20).unwrap(), 2);
+    assert_eq!(db.revision::<SignedRow>().unwrap(), 2);
 }
 
 #[test]
@@ -523,13 +512,13 @@ fn wide_integers_preserve_all_bits_and_require_exact_widths() {
     assert_ne!(zero, absent);
 
     let contract = || Schema::new(&[WideRow::SCHEMA]).unwrap();
-    // Independent Perl pack(V/C) + SHA-256 contract vector.
+    // Independent Node byte framing + SHA-256 contract vector.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "b865abdc3a28a04bdff6728de591335214cdaecb8a582c67d55dc0ae52cbf450"
+        "360359f62db210360c7f72e1df10c73f0f842aecdcc082fa9fbd06e1dd993130"
     );
     let values = [
         (i128::MIN, u128::MAX),
@@ -599,7 +588,7 @@ fn wide_integers_preserve_all_bits_and_require_exact_widths() {
     batch.replace(&changed).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(db.get::<WideRow>(0).unwrap(), Some(changed));
-    assert_eq!(db.revision(21).unwrap(), 2);
+    assert_eq!(db.revision::<WideRow>().unwrap(), 2);
 }
 
 #[test]
@@ -669,11 +658,11 @@ fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
     }
     let contract = || Schema::new(&[Entry::SCHEMA, Document::SCHEMA]).unwrap();
     let fingerprint = contract().fingerprint();
-    // Mixed-type contract assembled independently with Perl pack(V/C), UTF-8
+    // Mixed-type contract assembled independently with independent Node byte framing, UTF-8
     // name lengths and OpenSSL SHA-256, alongside the unchanged Nat64 vector.
     assert_eq!(
         fingerprint.map(|b| format!("{b:02x}")).concat(),
-        "afd4c6c415fdf7749d20c1f39a5eee7509bf657aa634e6ede4b81a3245fb6893"
+        "056ede721f96c39b2f9ef504fcd5e88104cb77f95b82da2990db0d0997cff605"
     );
     for variant in 0..3 {
         let mut fields = Document::SCHEMA.fields.to_vec();
@@ -716,14 +705,14 @@ fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
     let mut batch = Batch::new();
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.revision(2).unwrap(), 2);
-    assert_eq!(db.revision(1).unwrap(), 0);
+    assert_eq!(db.revision::<Document>().unwrap(), 2);
+    assert_eq!(db.revision::<Entry>().unwrap(), 0);
     drop(db);
     drop(runtime);
     let runtime = host(backing);
     let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(db.get::<Document>(1).unwrap(), Some(row));
-    assert_eq!(db.revision(2).unwrap(), 2);
+    assert_eq!(db.revision::<Document>().unwrap(), 2);
 }
 
 #[test]
@@ -750,13 +739,13 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     batch.insert(&TokenRow { id: 1, token: 3 }).unwrap();
     batch.insert(&TokenRow { id: 2, token: 4 }).unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.revision(1).unwrap(), 1);
-    assert_eq!(db.revision(2).unwrap(), 1);
+    assert_eq!(db.revision::<Entry>().unwrap(), 1);
+    assert_eq!(db.revision::<TokenRow>().unwrap(), 1);
     assert_eq!(db.get::<Entry>(1).unwrap().unwrap().amount, 10);
     assert!(db.get::<Entry>(99).unwrap().is_none());
     assert!(matches!(db.get::<Changed>(1), Err(Error::UnknownEntity)));
     assert_eq!(
-        db.index_prefix::<Entry>(1, &[2_u64.into()], 3)
+        db.index_prefix::<Entry>("category,id", &[2_u64.into()], 3)
             .unwrap()
             .iter()
             .map(|row| row.id)
@@ -815,17 +804,23 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         })
         .unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.revision(2).unwrap(), 2);
+    assert_eq!(db.revision::<TokenRow>().unwrap(), 2);
     assert_eq!(
-        db.index_prefix::<TokenRow>(1, &[4_u64.into()], 3).unwrap()[0].id,
+        db.index_prefix::<TokenRow>("token", &[4_u64.into()], 3)
+            .unwrap()[0]
+            .id,
         1
     );
     assert_eq!(
-        db.index_prefix::<Entry>(1, &[2_u64.into()], 3).unwrap()[0].id,
+        db.index_prefix::<Entry>("category,id", &[2_u64.into()], 3)
+            .unwrap()[0]
+            .id,
         2
     );
     assert_eq!(
-        db.index_prefix::<Entry>(1, &[9_u64.into()], 3).unwrap()[0].amount,
+        db.index_prefix::<Entry>("category,id", &[9_u64.into()], 3)
+            .unwrap()[0]
+            .amount,
         11
     );
     let mut batch = Batch::new();
@@ -833,7 +828,9 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     batch.delete::<TokenRow>(1).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(
-        db.index_prefix::<TokenRow>(1, &[4_u64.into()], 3).unwrap()[0].id,
+        db.index_prefix::<TokenRow>("token", &[4_u64.into()], 3)
+            .unwrap()[0]
+            .id,
         3
     );
     drop(db);
@@ -843,7 +840,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
     assert_eq!(db.incarnation(), [1; 16]);
     assert_eq!(db.get::<Entry>(1).unwrap().unwrap().amount, 11);
-    assert_eq!(db.revision(2).unwrap(), 3);
+    assert_eq!(db.revision::<TokenRow>().unwrap(), 3);
     drop(db);
     let before = backing.borrow().clone();
     assert!(matches!(
@@ -864,21 +861,21 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
     // Literal physical keys independently check row/index representation. A stale
     // index pointing at a decodable row must not silently return that wrong row.
-    let row = vec![2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+    let row = vec![2, 156, 191, 237, 51, 0, 0, 0, 0, 0, 0, 0, 1];
     let original = vec![
         11, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
     ];
     assert_eq!(raw.get(&row), Some(original.clone()));
     let index = vec![
-        3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-        0, 0, 1,
+        3, 156, 191, 237, 51, 16, 241, 135, 42, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+        0, 0, 0, 0, 0, 0, 1,
     ];
     assert_eq!(raw.get(&index), Some(1_u64.to_be_bytes().to_vec()));
     raw.insert(index.clone(), 2_u64.to_be_bytes().to_vec());
     drop(raw);
     let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
     assert!(matches!(
-        db.index_prefix::<Entry>(1, &[9_u64.into()], 3),
+        db.index_prefix::<Entry>("category,id", &[9_u64.into()], 3),
         Err(Error::Corrupt)
     ));
     drop(db);
@@ -901,7 +898,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         assert!(matches!(db.get::<Entry>(1), Err(Error::Corrupt)));
         assert!(matches!(db.page::<Entry>(None, 1), Err(Error::Corrupt)));
         assert!(matches!(
-            db.index_prefix::<Entry>(1, &[9_u64.into()], 1),
+            db.index_prefix::<Entry>("category,id", &[9_u64.into()], 1),
             Err(Error::Corrupt)
         ));
         assert_eq!(*backing.borrow(), before);
@@ -922,7 +919,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
 #[test]
 fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     use ic_db::EntitySchema;
-    // Independent Perl pack(V/C) + SHA-256 vector, including the reference tag,
+    // Independent Node byte framing + SHA-256 vector, including the reference tag,
     // target identity and reverse-index identity. Existing scalar vectors stay fixed.
     assert_eq!(
         Schema::new(&[Parent::SCHEMA, Child::SCHEMA])
@@ -930,16 +927,20 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "f8db0c68762edcc35e35aea372a747534023a450e8153831f896c8ad3c81c3fd"
+        "435c934513687753eebbbaab93829755aa4cfefdb2458125813ddab94a7e973e"
     );
     assert!(matches!(
         Schema::new(&[Child::SCHEMA]),
         Err(Error::InvalidSchema)
     ));
     let contract = || Schema::new(&[Parent::SCHEMA, Child::SCHEMA, Node::SCHEMA]).unwrap();
-    for target in [None, Some(12)] {
+    for target in [None, Some(Node::ID)] {
         let mut fields = Child::SCHEMA.fields.to_vec();
-        fields[1].reference = target.map(|entity| ic_db::ReferenceSchema { entity, index: 1 });
+        fields[1].reference = target.map(|entity| ic_db::ReferenceSchema {
+            entity_name: "Node",
+            entity,
+            index: Child::SCHEMA.indexes[0].id,
+        });
         // Metadata-only sensitivity control; never persist through a mismatched codec.
         let altered = Box::leak(Box::new(EntitySchema {
             fields: Box::leak(fields.into_boxed_slice()),
@@ -1002,12 +1003,13 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     db.commit(batch).unwrap();
     assert!(db.get::<Parent>(1).unwrap().is_none());
     assert!(
-        db.index_prefix::<Child>(1, &[1_u64.into()], 32)
+        db.index_prefix::<Child>("parent_id,id", &[1_u64.into()], 32)
             .unwrap()
             .is_empty()
     );
     assert_eq!(
-        db.index_prefix::<Child>(1, &[2_u64.into()], 32).unwrap(),
+        db.index_prefix::<Child>("parent_id,id", &[2_u64.into()], 32)
+            .unwrap(),
         vec![Child {
             id: 1,
             parent_id: 2
@@ -1104,12 +1106,12 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     batch.replace(&changed).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<InspectionRow>(1, &[2_u64.into()], 3)
+        db.index_prefix::<InspectionRow>("category,id", &[2_u64.into()], 3)
             .unwrap()
             .is_empty()
     );
     assert_eq!(
-        db.index_prefix::<InspectionRow>(1, &[3_u64.into()], 3)
+        db.index_prefix::<InspectionRow>("category,id", &[3_u64.into()], 3)
             .unwrap(),
         [changed]
     );
@@ -1117,7 +1119,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let physical_key = vec![2, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 1];
+    let physical_key = vec![2, 16, 218, 7, 153, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut oversized_blob = original.clone();
     oversized_blob[..4].copy_from_slice(&[1, 8, 0, 0]); // 2049 exceeds field bound
     let mut bad_option = original.clone();
@@ -1173,7 +1175,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     db.commit(batch).unwrap();
     drop(db);
     // Reverse-reference inspection also rejects corruption outside its key fields.
-    let dependent_key = vec![2, 0, 0, 0, 29, 0, 0, 0, 0, 0, 0, 0, 1];
+    let dependent_key = vec![2, 25, 91, 71, 26, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut invalid = vec![1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 255];
     invalid.extend([1, 0, 0, 0, 0, 0, 0, 0]);
     let mut raw =
@@ -1197,7 +1199,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     batch.delete::<InspectionDependent>(1).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<InspectionRow>(1, &[2_u64.into()], 3)
+        db.index_prefix::<InspectionRow>("category,id", &[2_u64.into()], 3)
             .unwrap()
             .is_empty()
     );
@@ -1236,13 +1238,13 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
     assert_eq!(golden.len(), 28);
     assert_eq!(NarrowRow::decode(&golden).unwrap(), row);
     let contract = || Schema::new(&[NarrowRow::SCHEMA]).unwrap();
-    // Independent Perl pack(V/C) + SHA-256 contract vector.
+    // Independent Node byte framing + SHA-256 contract vector.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "f6354d993e0b2f35571ed07b24c8fb11a2d521a1a5ccdfa0b9c4ea94f1df01a1"
+        "3029c2e983acc5c3626c2bea9ef7b125a81a0392f52c8c2e2b071948d151ffba"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1316,7 +1318,7 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
         assert_eq!(db.get::<NarrowRow>(1).unwrap(), Some(value.clone()));
         last = value;
     }
-    assert_eq!(db.revision(27).unwrap(), 6);
+    assert_eq!(db.revision::<NarrowRow>().unwrap(), 6);
     let before = backing.borrow().clone();
     let mut batch = Batch::new();
     batch.replace(&last).unwrap();
@@ -1356,7 +1358,7 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
     }
     let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(db.get::<NarrowRow>(1).unwrap(), Some(last));
-    assert_eq!(db.revision(27).unwrap(), 6);
+    assert_eq!(db.revision::<NarrowRow>().unwrap(), 6);
 }
 
 #[test]
@@ -1465,13 +1467,13 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
     assert!(matches!(wide.encode(), Err(Error::Limit))); // framing exceeds whole-row envelope
 
     let contract = || Schema::new(&[BinaryRow::SCHEMA]).unwrap();
-    // Independent Perl pack(V/C) + SHA-256 schema vector.
+    // Independent Node byte framing + SHA-256 schema vector.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "109a99d350ab1d8ccb0e1c84f7b8765b36eac680f2c81bfcbc19e310df788f24"
+        "926b0ca5f7aabb15cb4b1a6c90e5d6db2bb6cd935fc934c17be3da885db05a2c"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1512,11 +1514,10 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
     }
     let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(db.get::<BinaryRow>(1).unwrap(), Some(full));
-    assert_eq!(db.revision(22).unwrap(), 2);
+    assert_eq!(db.revision::<BinaryRow>().unwrap(), 2);
 }
 
 #[entity(
-    id = 28,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -1539,13 +1540,13 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
     assert_eq!(row.encode().unwrap(), golden);
     assert_eq!(PrincipalRow::decode(&golden).unwrap(), row);
     let contract = || Schema::new(&[PrincipalRow::SCHEMA]).unwrap();
-    // Independent Perl pack(V/C) and SHA-256 contract vector.
+    // Independent Node byte framing and SHA-256 contract vector.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "ae56866e84ba009f54e4efb48d505099e38b29a150a842ecf3923021418a6478"
+        "2517ad1b3a1f777349f3bf1575d7f2d3c94beb9681c76639c76132a0279fe42b"
     );
 
     let backing = VectorMemory::default();
@@ -1633,7 +1634,7 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
     optional_too_long.extend_from_slice(&[0, 0, 0, 0]);
     invalid.push(optional_too_long);
     let mut physical_key = vec![2];
-    physical_key.extend_from_slice(&28_u32.to_be_bytes());
+    physical_key.extend_from_slice(&334826855_u32.to_be_bytes());
     physical_key.extend_from_slice(&1_u64.to_be_bytes());
     for bytes in invalid {
         assert!(matches!(PrincipalRow::decode(&bytes), Err(Error::Corrupt)));
@@ -1661,7 +1662,7 @@ macro_rules! integer_index_case {
     ($test:ident, $prim:literal, $ty:ty, $values:expr) => {
         #[test]
         fn $test() {
-            #[entity(id=30, pk(field="id"), index(id=1,fields=["bucket","value"]),
+            #[entity( pk(field="id"), index(fields=["bucket","value"]),
                                                 fields(field(name="id",value(item(prim="Nat64"))),
                                                     field(name="bucket",value(item(prim="Nat64"))),
                                                     field(name="value",value(item(prim=$prim)))))]
@@ -1690,23 +1691,22 @@ macro_rules! integer_index_case {
             db.commit(batch).unwrap();
             expected.sort_by_key(|row| (row.value, row.id));
             assert_eq!(
-                db.index_prefix::<Indexed>(1, &[7_u64.into()], 32).unwrap(),
+                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32).unwrap(),
                 expected
             );
             for row in &expected {
                 let matches = db
-                    .index_prefix::<Indexed>(1, &[7_u64.into(), row.value.into()], 32)
+                    .index_prefix::<Indexed>("bucket,value", &[7_u64.into(), row.value.into()], 32)
                     .unwrap();
                 assert_eq!(matches.len(), 2);
                 assert!(matches.iter().all(|found| found.value == row.value));
             }
             assert!(matches!(
-                db.index_prefix::<Indexed>(1, &[7_i64.into()], 1),
+                db.index_prefix::<Indexed>("bucket,value", &[7_i64.into()], 1),
                 Err(Error::InvalidOperand)
             ));
             assert!(matches!(
-                db.index_prefix::<Indexed>(
-                    1,
+                db.index_prefix::<Indexed>("bucket,value",
                     &[7_u64.into(), ic_db::Principal::anonymous().into()],
                     1
                 ),
@@ -1727,10 +1727,10 @@ macro_rules! integer_index_case {
             let runtime = host(backing);
             let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
             assert_eq!(
-                db.index_prefix::<Indexed>(1, &[7_u64.into()], 32).unwrap(),
+                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32).unwrap(),
                 expected
             );
-            assert_eq!(db.revision(30).unwrap(), 2);
+            assert_eq!(db.revision::<Indexed>().unwrap(), 2);
         }
     };
 }
@@ -1765,11 +1765,11 @@ integer_index_case!(
     [i128::MIN, -1, 0, 1, i128::MAX]
 );
 
-#[entity(id=31,pk(field="id"),
-    index(id=1,field="owner",unique),
-    index(id=2,fields=["parent","owner","rank"]),
+#[entity(pk(field="id"),
+    index(field="owner",unique),
+    index(fields=["parent","owner","rank"]),
     fields(field(name="id",value(item(prim="Nat64"))),
-        field(name="parent",value(item(prim="Nat64")),references(entity=1,index=2)),
+        field(name="parent",value(item(prim="Nat64")),references(entity="Entry",index="parent,owner,rank")),
         field(name="owner",value(item(prim="Principal"))),
         field(name="rank",value(item(prim="Int8")))))]
 struct IndexedIdentity {}
@@ -1817,19 +1817,19 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     db.commit(batch).unwrap();
     expected.sort_by_key(|row| row.owner);
     assert_eq!(
-        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+        db.index_prefix::<IndexedIdentity>("parent,owner,rank", &[1_u64.into()], 32)
             .unwrap(),
         expected
     );
     for row in &expected {
         assert_eq!(
-            db.index_prefix::<IndexedIdentity>(1, &[row.owner.into()], 32)
+            db.index_prefix::<IndexedIdentity>("owner", &[row.owner.into()], 32)
                 .unwrap(),
             std::slice::from_ref(row)
         );
         assert_eq!(
             db.index_prefix::<IndexedIdentity>(
-                2,
+                "parent,owner,rank",
                 &[1_u64.into(), row.owner.into(), (-1_i8).into()],
                 32
             )
@@ -1842,11 +1842,14 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
         vec![1_u64.into()],
         vec![Principal::anonymous().into(), 1_u64.into()],
     ] {
-        assert!(db.index_prefix::<IndexedIdentity>(1, &operands, 1).is_err());
+        assert!(
+            db.index_prefix::<IndexedIdentity>("owner", &operands, 1)
+                .is_err()
+        );
     }
     assert!(matches!(
         db.index_prefix::<IndexedIdentity>(
-            2,
+            "parent,owner,rank",
             &[
                 1_u64.into(),
                 Principal::anonymous().into(),
@@ -1898,7 +1901,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     batch.replace(&right).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(
-        db.index_prefix::<IndexedIdentity>(1, &[left.owner.into()], 1)
+        db.index_prefix::<IndexedIdentity>("owner", &[left.owner.into()], 1)
             .unwrap(),
         [left.clone()]
     );
@@ -1914,14 +1917,15 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     drop(db);
     let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(
-        db.index_prefix::<IndexedIdentity>(1, &[replacement.owner.into()], 1)
+        db.index_prefix::<IndexedIdentity>("owner", &[replacement.owner.into()], 1)
             .unwrap(),
         std::slice::from_ref(&replacement)
     );
     drop(db);
     // Literal persisted key: entity31, index2, parent1, Principal[0], Int8::MIN, id30.
     let physical = vec![
-        3, 0, 0, 0, 31, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30,
+        3, 66, 196, 205, 224, 22, 173, 240, 168, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 30,
     ];
     let mut raw =
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
@@ -1931,7 +1935,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     let before = backing.borrow().clone();
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert!(matches!(
-        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32),
+        db.index_prefix::<IndexedIdentity>("parent,owner,rank", &[1_u64.into()], 32),
         Err(Error::Corrupt)
     ));
     let mut batch = Batch::new();
@@ -1946,7 +1950,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     let mut batch = Batch::new();
     for row in db
-        .index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+        .index_prefix::<IndexedIdentity>("parent,owner,rank", &[1_u64.into()], 32)
         .unwrap()
     {
         batch.delete::<IndexedIdentity>(row.id).unwrap();
@@ -1954,7 +1958,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     batch.delete::<Entry>(1).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<IndexedIdentity>(2, &[1_u64.into()], 32)
+        db.index_prefix::<IndexedIdentity>("parent,owner,rank", &[1_u64.into()], 32)
             .unwrap()
             .is_empty()
     );
@@ -2017,9 +2021,9 @@ fn runtime_schema_admission_rejects_unsupported_index_shapes() {
     }
 }
 
-#[entity(id=32,pk(field="id"),
-    index(id=1,fields=["bucket","first","second"]),
-    index(id=2,fields=["first","second"],unique),
+#[entity(pk(field="id"),
+    index(fields=["bucket","first","second"]),
+    index(fields=["first","second"],unique),
     fields(field(name="id",value(item(prim="Nat64"))),
         field(name="bucket",value(item(prim="Bool"))),
         field(name="first",value(item(prim="Text",max_bytes=128))),
@@ -2071,18 +2075,19 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     db.commit(batch).unwrap();
     expected.sort_by(|a, b| (&a.first, &a.second, a.id).cmp(&(&b.first, &b.second, b.id)));
     assert_eq!(
-        db.index_prefix::<TextIndex>(1, &[false.into()], 32)
+        db.index_prefix::<TextIndex>("bucket,first,second", &[false.into()], 32)
             .unwrap(),
         expected
     );
     assert_eq!(
-        db.index_prefix::<TextIndex>(1, &[true.into()], 32).unwrap(),
+        db.index_prefix::<TextIndex>("bucket,first,second", &[true.into()], 32)
+            .unwrap(),
         [other]
     );
     for row in &expected {
         let exact = db
             .index_prefix::<TextIndex>(
-                2,
+                "first,second",
                 &[row.first.as_str().into(), row.second.as_str().into()],
                 32,
             )
@@ -2095,27 +2100,27 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
         .cloned()
         .collect();
     assert_eq!(
-        db.index_prefix::<TextIndex>(1, &[false.into(), "a".into()], 32)
+        db.index_prefix::<TextIndex>("bucket,first,second", &[false.into(), "a".into()], 32)
             .unwrap(),
         starts_with_a
     );
     // Prefix means whole leading fields, not a starts-with predicate on text.
     assert!(
-        db.index_prefix::<TextIndex>(2, &["e".into()], 32)
+        db.index_prefix::<TextIndex>("first,second", &["e".into()], 32)
             .unwrap()
             .is_empty()
     );
     let before = backing.borrow().clone();
     assert!(matches!(
-        db.index_prefix::<TextIndex>(1, &[0_u8.into()], 32),
+        db.index_prefix::<TextIndex>("bucket,first,second", &[0_u8.into()], 32),
         Err(Error::InvalidOperand)
     ));
     assert!(matches!(
-        db.index_prefix::<TextIndex>(2, &[false.into()], 32),
+        db.index_prefix::<TextIndex>("first,second", &[false.into()], 32),
         Err(Error::InvalidOperand)
     ));
     assert!(matches!(
-        db.index_prefix::<TextIndex>(2, &["é".repeat(65).as_str().into()], 32),
+        db.index_prefix::<TextIndex>("first,second", &["é".repeat(65).as_str().into()], 32),
         Err(Error::Limit)
     ));
     let mut batch = Batch::new();
@@ -2153,12 +2158,12 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     drop(db);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(
-        db.index_prefix::<TextIndex>(2, &["a\0".into(), "b".into()], 32)
+        db.index_prefix::<TextIndex>("first,second", &["a\0".into(), "b".into()], 32)
             .unwrap(),
         std::slice::from_ref(&left)
     );
     assert_eq!(
-        db.index_prefix::<TextIndex>(2, &["a".into(), "\0b".into()], 32)
+        db.index_prefix::<TextIndex>("first,second", &["a".into(), "\0b".into()], 32)
             .unwrap(),
         std::slice::from_ref(&right)
     );
@@ -2166,7 +2171,7 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     batch.delete::<TextIndex>(1).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<TextIndex>(2, &["a\0".into(), "b".into()], 32)
+        db.index_prefix::<TextIndex>("first,second", &["a\0".into(), "b".into()], 32)
             .unwrap()
             .is_empty()
     );
@@ -2174,14 +2179,16 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     let mut raw =
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
     // Independent literal unique key: entity32/index2, "a", "NULb".
-    let physical = vec![3, 0, 0, 0, 32, 0, 0, 0, 2, 97, 0, 0, 0, 255, 98, 0, 0];
+    let physical = vec![
+        3, 197, 121, 161, 226, 150, 181, 59, 31, 97, 0, 0, 0, 255, 98, 0, 0,
+    ];
     assert_eq!(raw.get(&physical), Some(2_u64.to_be_bytes().to_vec()));
     raw.insert(physical, 3_u64.to_be_bytes().to_vec());
     drop(raw);
     let before = backing.borrow().clone();
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert!(matches!(
-        db.index_prefix::<TextIndex>(2, &["a".into(), "\0b".into()], 32),
+        db.index_prefix::<TextIndex>("first,second", &["a".into(), "\0b".into()], 32),
         Err(Error::Corrupt)
     ));
     let mut batch = Batch::new();
@@ -2191,9 +2198,8 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
 }
 
 #[entity(
-    id = 33,
     pk(field = "id"),
-    index(id = 1, field = "text", unique),
+    index(field = "text", unique),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "text", value(item(prim = "Text", max_bytes = 4096)))
@@ -2217,7 +2223,7 @@ fn indexed_text_retains_field_and_row_bounds_even_when_escaping_doubles_bytes() 
     batch.insert(&row).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(
-        db.index_prefix::<LargeTextIndex>(1, &[row.text.as_str().into()], 1)
+        db.index_prefix::<LargeTextIndex>("text", &[row.text.as_str().into()], 1)
             .unwrap(),
         std::slice::from_ref(&row)
     );
@@ -2231,29 +2237,29 @@ fn indexed_text_retains_field_and_row_bounds_even_when_escaping_doubles_bytes() 
         Err(Error::Limit)
     ));
     assert!(matches!(
-        db.index_prefix::<LargeTextIndex>(1, &["\0".repeat(4097).as_str().into()], 1),
+        db.index_prefix::<LargeTextIndex>("text", &["\0".repeat(4097).as_str().into()], 1),
         Err(Error::Limit)
     ));
     assert_eq!(*backing.borrow(), before);
     drop(db);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     assert_eq!(
-        db.index_prefix::<LargeTextIndex>(1, &[row.text.as_str().into()], 1)
+        db.index_prefix::<LargeTextIndex>("text", &[row.text.as_str().into()], 1)
             .unwrap(),
         [row]
     );
     let mut batch = Batch::new();
     batch.delete::<LargeTextIndex>(1).unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.revision(33).unwrap(), 2);
+    assert_eq!(db.revision::<LargeTextIndex>().unwrap(), 2);
 }
 
-#[entity(id=34,pk(field="id"),
-    index(id=1,fields=["parent","alias","code"]),
-    index(id=2,fields=["alias","code"],unique,present_only),
-    index(id=3,fields=["active","principal"]),
+#[entity(pk(field="id"),
+    index(fields=["parent","alias","code"]),
+    index(fields=["alias","code"],unique,present_only),
+    index(fields=["active","principal"]),
     fields(field(name="id",value(item(prim="Nat64"))),
-        field(name="parent",value(item(prim="Nat64")),references(entity=1,index=1)),
+        field(name="parent",value(item(prim="Nat64")),references(entity="Entry",index="parent,alias,code")),
         field(name="alias",value(opt,item(prim="Text",max_bytes=32))),
         field(name="code",value(opt,item(prim="Int64"))),
         field(name="active",value(opt,item(prim="Bool"))),
@@ -2306,47 +2312,59 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     db.commit(batch).unwrap();
     expected.sort_by(|a, b| (&a.alias, a.code, a.id).cmp(&(&b.alias, b.code, b.id)));
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(1, &[1_u64.into()], 32)
+        db.index_prefix::<OptionalIndex>("parent,alias,code", &[1_u64.into()], 32)
             .unwrap(),
         expected
     );
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(1, &[1_u64.into(), IndexValue::Absent], 32)
-            .unwrap()
-            .iter()
-            .map(|r| r.id)
-            .collect::<Vec<_>>(),
+        db.index_prefix::<OptionalIndex>(
+            "parent,alias,code",
+            &[1_u64.into(), IndexValue::Absent],
+            32
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.id)
+        .collect::<Vec<_>>(),
         [1, 2, 4, 7]
     );
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(1, &[1_u64.into(), "".into(), IndexValue::Absent], 32)
-            .unwrap()[0]
+        db.index_prefix::<OptionalIndex>(
+            "parent,alias,code",
+            &[1_u64.into(), "".into(), IndexValue::Absent],
+            32
+        )
+        .unwrap()[0]
             .id,
         3
     );
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(2, &["".into(), 0_i64.into()], 32)
+        db.index_prefix::<OptionalIndex>("alias,code", &["".into(), 0_i64.into()], 32)
             .unwrap()[0]
             .id,
         5
     );
     assert!(matches!(
-        db.index_prefix::<OptionalIndex>(2, &[IndexValue::Absent], 32),
+        db.index_prefix::<OptionalIndex>("alias,code", &[IndexValue::Absent], 32),
         Err(Error::InvalidOperand)
     ));
     assert!(matches!(
-        db.index_prefix::<OptionalIndex>(1, &[IndexValue::Absent], 32),
+        db.index_prefix::<OptionalIndex>("parent,alias,code", &[IndexValue::Absent], 32),
         Err(Error::InvalidOperand)
     ));
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(3, &[false.into(), IndexValue::Absent], 32)
-            .unwrap()[0]
+        db.index_prefix::<OptionalIndex>(
+            "active,principal",
+            &[false.into(), IndexValue::Absent],
+            32
+        )
+        .unwrap()[0]
             .id,
         5
     );
     assert_eq!(
         db.index_prefix::<OptionalIndex>(
-            3,
+            "active,principal",
             &[false.into(), Principal::management_canister().into()],
             32
         )
@@ -2382,7 +2400,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     batch.insert(&replacement).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(
-        db.index_prefix::<OptionalIndex>(2, &["a".into()], 32)
+        db.index_prefix::<OptionalIndex>("alias,code", &["a".into()], 32)
             .unwrap()[0]
             .id,
         8
@@ -2390,7 +2408,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     drop(db);
     let raw =
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
-    let unique_prefix = vec![3, 0, 0, 0, 34, 0, 0, 0, 2];
+    let unique_prefix = vec![3, 55, 73, 182, 239, 202, 184, 185, 40];
     assert_eq!(
         raw.range(unique_prefix.clone()..)
             .take_while(|entry| entry.key().starts_with(&unique_prefix))
@@ -2399,7 +2417,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     );
     // Literal optional unique key: present empty text, present signed zero.
     let unique = vec![
-        3, 0, 0, 0, 34, 0, 0, 0, 2, 1, 0, 0, 1, 128, 0, 0, 0, 0, 0, 0, 0,
+        3, 55, 73, 182, 239, 202, 184, 185, 40, 1, 0, 0, 1, 128, 0, 0, 0, 0, 0, 0, 0,
     ];
     assert_eq!(raw.get(&unique), Some(6_u64.to_be_bytes().to_vec()));
     drop(raw);
@@ -2425,7 +2443,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     assert_eq!(*backing.borrow(), before);
     let mut batch = Batch::new();
     for row in db
-        .index_prefix::<OptionalIndex>(1, &[1_u64.into()], 32)
+        .index_prefix::<OptionalIndex>("parent,alias,code", &[1_u64.into()], 32)
         .unwrap()
     {
         batch.delete::<OptionalIndex>(row.id).unwrap();
@@ -2433,7 +2451,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     batch.delete::<Entry>(1).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<OptionalIndex>(1, &[1_u64.into()], 32)
+        db.index_prefix::<OptionalIndex>("parent,alias,code", &[1_u64.into()], 32)
             .unwrap()
             .is_empty()
     );
@@ -2442,16 +2460,20 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
 #[test]
 fn optional_membership_admission_and_corrupt_presence_fail_closed() {
     let contract = || Schema::new(&[Entry::SCHEMA, OptionalIndex::SCHEMA]).unwrap();
-    let altered = |index: usize, unique: bool, present_only: bool| {
+    let altered = |index: &str, unique: bool, present_only: bool| {
         let indexes: Vec<_> = OptionalIndex::SCHEMA
             .indexes
             .iter()
-            .enumerate()
-            .map(|(i, value)| ic_db::IndexSchema {
+            .map(|value| ic_db::IndexSchema {
                 id: value.id,
+                name: value.name,
                 fields: value.fields,
-                unique: if i == index { unique } else { value.unique },
-                present_only: if i == index {
+                unique: if value.name == index {
+                    unique
+                } else {
+                    value.unique
+                },
+                present_only: if value.name == index {
                     present_only
                 } else {
                     value.present_only
@@ -2464,14 +2486,14 @@ fn optional_membership_admission_and_corrupt_presence_fail_closed() {
         }))
     };
     assert!(matches!(
-        Schema::new(&[Entry::SCHEMA, altered(1, true, false)]),
+        Schema::new(&[Entry::SCHEMA, altered("alias,code", true, false)]),
         Err(Error::InvalidSchema)
     ));
     assert!(matches!(
-        Schema::new(&[Entry::SCHEMA, altered(0, true, true)]),
+        Schema::new(&[Entry::SCHEMA, altered("parent,alias,code", true, true)]),
         Err(Error::InvalidSchema)
     ));
-    let changed = Schema::new(&[Entry::SCHEMA, altered(1, false, false)]).unwrap();
+    let changed = Schema::new(&[Entry::SCHEMA, altered("alias,code", false, false)]).unwrap();
     assert_ne!(changed.fingerprint(), contract().fingerprint());
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -2504,7 +2526,7 @@ fn optional_membership_admission_and_corrupt_presence_fail_closed() {
     assert_eq!(*backing.borrow(), before);
     let mut raw =
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
-    let row_key = vec![2, 0, 0, 0, 34, 0, 0, 0, 0, 0, 0, 0, 1];
+    let row_key = vec![2, 55, 73, 182, 239, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut bytes = raw.get(&row_key).unwrap();
     bytes[0] = 2; // invalid active presence; this row has no unique-index entry.
     raw.insert(row_key, bytes);
@@ -2554,20 +2576,20 @@ fn optional_references_distinguish_absence_from_zero_and_validate_final_state() 
     batch.insert(&link(0, None, None)).unwrap(); // Target can come last.
     db.commit(batch).unwrap();
     assert_eq!(
-        db.index_prefix::<OptionalLink>(1, &[0_u64.into()], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[0_u64.into()], 32)
             .unwrap(),
         vec![link(1, Some(0), None)]
     );
     assert_eq!(
-        db.index_prefix::<OptionalLink>(1, &[IndexValue::Absent], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[IndexValue::Absent], 32)
             .unwrap(),
         vec![link(0, None, None)]
     );
-    let revision = db.revision(40).unwrap();
+    let revision = db.revision::<OptionalLink>().unwrap();
     let mut batch = Batch::new();
     batch.replace(&link(1, Some(0), None)).unwrap();
     db.commit(batch).unwrap();
-    assert_eq!(db.revision(40).unwrap(), revision);
+    assert_eq!(db.revision::<OptionalLink>().unwrap(), revision);
     let before = backing.borrow().clone();
     let mut batch = Batch::new();
     batch.delete::<OptionalLink>(0).unwrap();
@@ -2583,12 +2605,12 @@ fn optional_references_distinguish_absence_from_zero_and_validate_final_state() 
     batch.replace(&link(1, None, None)).unwrap();
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<OptionalLink>(1, &[0_u64.into()], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[0_u64.into()], 32)
             .unwrap()
             .is_empty()
     );
     assert_eq!(
-        db.index_prefix::<OptionalLink>(1, &[IndexValue::Absent], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[IndexValue::Absent], 32)
             .unwrap(),
         vec![link(1, None, None)]
     );
@@ -2621,13 +2643,13 @@ fn optional_references_distinguish_absence_from_zero_and_validate_final_state() 
     }
     db.commit(batch).unwrap();
     assert!(
-        db.index_prefix::<OptionalLink>(1, &[1_u64.into()], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[1_u64.into()], 32)
             .unwrap()
             .is_empty()
     );
     let expected: Vec<_> = (2..=32).map(|id| link(id, None, None)).collect();
     assert_eq!(
-        db.index_prefix::<OptionalLink>(1, &[IndexValue::Absent], 32)
+        db.index_prefix::<OptionalLink>("next,id", &[IndexValue::Absent], 32)
             .unwrap(),
         expected
     );
@@ -2641,13 +2663,13 @@ fn optional_references_distinguish_absence_from_zero_and_validate_final_state() 
 #[test]
 fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     let contract = || Schema::new(&[OptionalLink::SCHEMA]).unwrap();
-    // Independently assembled with Perl pack(V/C) and SHA-256.
+    // Independently assembled with Node byte framing and SHA-256.
     assert_eq!(
         contract()
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "59b9ade487b4c0b21bf3ded8fe89b86ddb9e734521b082881bb81eeea5e9b98f"
+        "16f3579cad339704f809d47e96ce7e36f0e618541bb55b8f11688bd1eced42bb"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -2686,18 +2708,18 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     assert_eq!(*backing.borrow(), before);
     let mut raw =
         StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
-    // Literal independent reverse keys: entity 40, index 1, presence, target,
+    // Literal independent reverse keys: OptionalLink/next,id handles, presence, target,
     // explicit id component, then nonunique primary-key tie-breaker.
     let absent = vec![
-        3, 0, 0, 0, 40, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        3, 16, 29, 126, 205, 119, 143, 133, 129, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     let present = vec![
-        3, 0, 0, 0, 40, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0, 0, 1,
+        3, 16, 29, 126, 205, 119, 143, 133, 129, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        0, 0, 0, 0, 0, 0, 0, 1,
     ];
     assert_eq!(raw.get(&absent), Some(vec![0; 8]));
     assert_eq!(raw.get(&present), Some(vec![0, 0, 0, 0, 0, 0, 0, 1]));
-    let row_key = vec![2, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, 1];
+    let row_key = vec![2, 16, 29, 126, 205, 0, 0, 0, 0, 0, 0, 0, 1];
     let original = raw.get(&row_key).unwrap();
     // Stored order is alternate, id, next. An invalid tag cannot hide an edge.
     let mut corrupt = original.clone();
@@ -2724,5 +2746,92 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     let mut batch = Batch::new();
     batch.delete::<OptionalLink>(0).unwrap();
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn logical_names_remain_authoritative_when_compact_handles_collide() {
+    #[entity(
+        name = "costarring",
+        pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))))
+    )]
+    struct First {}
+    #[entity(
+        name = "liquid",
+        pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))))
+    )]
+    struct Second {}
+    #[entity(
+        name = "costarring",
+        pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))))
+    )]
+    struct Renamed {}
+    #[entity(
+        pk(field = "id"),
+        index(name = "costarring", field = "id"),
+        index(name = "liquid", field = "id", unique),
+        fields(field(name = "id", value(item(prim = "Nat64"))))
+    )]
+    struct CollidingIndexes {}
+    #[entity(
+        pk(field = "id"),
+        index(field = "target"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(
+                name = "target",
+                value(item(prim = "Nat64")),
+                references(entity = "Second")
+            )
+        )
+    )]
+    struct Dependent {}
+
+    // Independent known FNV-1a/32 collision; a storage handle is not authority.
+    assert_eq!(First::ID, 1_582_148_253);
+    assert_eq!(Second::ID, 1_582_148_253);
+    for entities in [
+        vec![First::SCHEMA, Second::SCHEMA],
+        vec![CollidingIndexes::SCHEMA],
+        vec![First::SCHEMA, Dependent::SCHEMA],
+    ] {
+        assert!(matches!(Schema::new(&entities), Err(Error::InvalidSchema)));
+    }
+    assert!(Schema::new(&[Second::SCHEMA, Dependent::SCHEMA]).is_ok());
+    let contract = || Schema::new(&[First::SCHEMA]).unwrap();
+    assert_ne!(
+        contract().fingerprint(),
+        Schema::new(&[Second::SCHEMA]).unwrap().fingerprint()
+    );
+    assert_eq!(
+        contract().fingerprint(),
+        Schema::new(&[Renamed::SCHEMA]).unwrap().fingerprint()
+    );
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [8; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&First { id: 7 }).unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    assert!(matches!(db.get::<Second>(7), Err(Error::UnknownEntity)));
+    assert!(matches!(db.revision::<Second>(), Err(Error::UnknownEntity)));
+    let mut batch = Batch::new();
+    batch.delete::<Second>(7).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::UnknownEntity)));
+    assert_eq!(db.get::<Renamed>(7).unwrap(), Some(Renamed { id: 7 }));
+    drop(db);
+    assert!(matches!(
+        Database::open(
+            runtime.open_memory(&key).unwrap(),
+            Schema::new(&[Second::SCHEMA]).unwrap()
+        ),
+        Err(Error::IncompatibleSchema)
+    ));
     assert_eq!(*backing.borrow(), before);
 }

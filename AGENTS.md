@@ -41,8 +41,17 @@ installer. Do not edit vendor files or copy upstream reference documents.
   still not required; avoid mechanisms added only for hypothetical flexibility.
   Field declarations must not require numeric IDs. Use field names as their
   contract identity; renames require an explicit supported schema transition,
-  not inferred matching or a hidden ID registry. Entity/index identity policy
-  is separate. Nested types and enum variants also use declared schema names;
+  not inferred matching or a hidden ID registry. Latest maintainer direction also
+  removes mandatory numeric entity/index/key identifiers from schema authoring.
+  Use compiler-resolved types, field paths and unambiguous derived or explicit
+  schema/index names; keep any numeric storage handles internal. Select an existing
+  bounded reverse index automatically when unambiguous, with a named selector
+  when needed; missing access paths still refuse. The scalar macros now use logical names, optional `name` overrides and typed
+  reference paths. Internal generated handles are collision-checked, never schema
+  authority; the full named contract is versioned. Earlier numbered data refuses
+  intact until a supported transition exists. Record primary-key
+  values remain application data, distinct from schema identifiers.
+  Nested types and enum variants also use declared schema names;
   compact stored enum ordinals come from canonical variant-name order under the
   admitted contract. Renames require transitions; declaration reorderings do not.
   Attribute removals are permitted with a concrete reason: report
@@ -62,12 +71,18 @@ installer. Do not edit vendor files or copy upstream reference documents.
   writes is not promised. Jobs may expire and incompatible upgrades invalidate
   them. Capacity exhaustion refuses with bounded cleanup, without automatic spill.
   Decimal averages use a documented precision/rounding contract and overflow
-  errors. Explicit entity/index IDs remain accepted; numeric field IDs were
-  rejected in the subsequent authoring review. Common read/write performance
+  errors. Earlier acceptance of explicit entity/index IDs is superseded by the
+  subsequent name/path-based authoring decision above. Common read/write performance
   regressions require an explicit tradeoff decision even when Wasm is smaller.
 - Use small typed boundaries over shared execution machinery. Measure
   monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
+- Retain IcyDB's two-stage schema path expansion: Rust resolves typed paths,
+  host-only `ctor` registration collects declarations, then a second stage
+  validates/seals the graph and emits target artifacts. Keep collection and ctor
+  out of deployed Wasm. The scalar entity pipeline is implemented through the
+  optional `ic-db/build` feature; named/nested schema types remain work. Build-time
+  Rust paths do not silently replace declared durable names.
 - IC DB owns its durable row codec. Keep `ic-wire` and transport serialization
   out of product dependencies and persisted encoding. Transport adapters may
   convert at their boundary; wire-format optimization must not alter stored

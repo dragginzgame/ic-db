@@ -1,0 +1,82 @@
+//! Exercise real host constructors and Rust name resolution, not manual registration.
+#![cfg(feature = "build")]
+use ic_db::{Entity, Schema, entity};
+
+mod destination {
+    use super::*;
+    #[entity(
+        pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))))
+    )]
+    pub struct Target {}
+}
+mod source {
+    use super::*;
+    use destination::Target as ImportedTarget;
+    #[entity(
+        name = "SourceLink",
+        pk(field = "id"),
+        index(field = "target"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(
+                name = "target",
+                value(opt, item(prim = "Nat64")),
+                references(entity = "ImportedTarget")
+            )
+        )
+    )]
+    pub struct Link {}
+}
+mod cycle {
+    use super::*;
+    #[entity(
+        name = "CycleLink",
+        pk(field = "id"),
+        index(field = "next"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(
+                name = "next",
+                value(opt, item(prim = "Nat64")),
+                references(entity = "Self")
+            )
+        )
+    )]
+    pub struct Link {}
+}
+
+#[test]
+fn constructors_collect_full_paths_and_compiler_resolved_references() {
+    assert_eq!(
+        source::Link::PATH,
+        concat!(module_path!(), "::source::Link")
+    );
+    assert_eq!(
+        source::Link::SCHEMA.fields[1].reference.unwrap().entity,
+        destination::Target::ID
+    );
+    assert_eq!(
+        cycle::Link::SCHEMA.fields[1].reference.unwrap().entity,
+        cycle::Link::ID
+    );
+    let output = ic_db::build::generate(module_path!(), "crate::schema").unwrap();
+    // Same short names in distinct modules remain separate declarations.
+    for path in ["destination::Target", "source::Link", "cycle::Link"] {
+        assert!(output.contains(&format!(
+            "<crate::schema::{path} as ::ic_db::Entity>::SCHEMA"
+        )));
+    }
+    let fingerprint = Schema::new(&[
+        cycle::Link::SCHEMA,
+        source::Link::SCHEMA,
+        destination::Target::SCHEMA,
+    ])
+    .unwrap()
+    .fingerprint();
+    assert!(output.contains(&format!("schema.fingerprint(), {fingerprint:?}")));
+    assert_eq!(
+        ic_db::build::generate(module_path!(), "crate::schema").unwrap(),
+        output
+    );
+}

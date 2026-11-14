@@ -211,15 +211,44 @@ IcyDB's existing options or generated artifacts.
 
 ### Authoring and inspection contract for M1
 
-Keep field definitions inside the entity attribute. Do not require numeric field
-IDs. This stored-field spelling is now implemented for the initial subset below;
-richer key and index types remain implementation work:
+Keep field definitions inside the entity attribute. Latest maintainer direction:
+do not require authors to allocate numeric field, entity, index or schema-key IDs.
+Use resolved types and field paths, derive unambiguous names, and allow meaningful
+explicit names where selection or stable identity needs them. Keep any compact
+numeric physical handles internal. Record primary-key values are application data
+and are unaffected by this authoring decision.
+
+This supersedes the earlier acceptance of explicit entity/index IDs and is now
+implemented for scalar entities. The default logical entity name is its Rust type
+name; optional `name = "StableName"` preserves identity across source renames or
+disambiguates types with the same short name. Rust module paths remain build-time
+resolution metadata, so host and Wasm crate roots do not change stored identity.
+Index names default to their ordered field names joined by a comma, for example
+`"amount,id"`; optional `name = "by_amount"` overrides that identity. Names are
+1–64 UTF-8 bytes. Longer derived names require an override. Two indexes on the
+same fields require distinct names; uniqueness and membership remain part of each
+index's complete contract. No numeric authoring ID syntax remains supported.
+
+References name their target Rust type. Select a declared unfiltered reverse index
+leading with the reference field when unambiguous; use `index = "name"` to select
+among multiple candidates. Missing/ambiguous paths refuse during macro expansion;
+missing target declarations refuse schema admission. This does not create indexes
+or authorize unbounded reverse scans. For example, `references(entity = "User")`
+uses Rust resolution, including imports and `Self`.
+
+Full logical names define the contract. A const FNV-1a/32 of each name supplies
+compact internal storage handles; admission rejects collisions among entities or
+among one entity's indexes. Handles never substitute for full-name admission,
+including reference targets. This avoids a durable assignment registry while
+retaining the compact physical prefixes. The grammar is version 2; old numbered
+contracts refuse intact. There is no automatic migration or data recreation.
+
+The implemented scalar spelling is:
 
 ```rust
 #[entity(
-    id = 100,
     pk(field = "id", source = "external"),
-    index(id = 1, fields = ["amount", "id"]),
+    index(fields = ["amount", "id"]),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "category", value(item(prim = "Text", max_bytes = 64))),
@@ -239,7 +268,8 @@ include the exact names, never declaration positions, inferred numeric identitie
 or a hidden assignment registry. Renaming a field changes the contract and requires
 an explicit supported transition; do not silently infer a rename from similar
 types or names. Reordering declarations is compatible only if the selected codec
-preserves the stored layout. Entity/index IDs retain their separate current policy.
+preserves the stored layout. Entity/index authoring follows the name/path policy
+above; existing numeric contracts remain identifiable and refuse intact.
 References resolve to the target identity and complete key contract.
 Codec, comparator and supplier versions remain part of the canonical contract;
 an entity ID alone never authorizes reading changed bytes.
@@ -268,10 +298,31 @@ and [graph collection/sealing](https://github.com/dragginzgame/icydb/blob/6d421e
 without importing endpoint generation or runtime schema reconciliation.
 Rust resolution paths and durable schema identity remain distinct: map resolved
 nodes to their declared schema names/identities under the compiled-contract rules.
-The current flat scalar macro emits descriptors directly and does not yet implement
-this two-stage pipeline. Familiar attribute syntax alone is not completion of that
-carryover; qualify cross-module/type references and deterministic graph assembly
-when delivering named/nested schema types.
+The scalar entity slice now implements both stages. `Entity::PATH` carries the
+compiler-resolved declaration path; typed reference spelling such as
+`references(entity = "Entry")` lowers through `Entity::NAME` and its generated
+handle, independently of the target descriptor, so self/cyclic relationships do
+not create recursive constant evaluation. Numeric target IDs are no longer accepted. The optional native-only `ic-db/build` feature collects nodes
+using `ctor`; `build::generate(source_module, target_module)` selects a module
+subtree, validates it through the existing `Schema::new`, seals registration and
+emits typed schema assembly with an expected fingerprint. The target compiler
+resolves the generated paths; target admission refuses host/target contract drift.
+The build script explicitly maps its module root to the target module root; this
+is not a source-file/import resolver. Declaration visibility must permit the emitted
+Rust references. No second persisted schema representation is introduced.
+
+The actual M1 Wasm fixture now compiles the same schema module in its host build
+script and target, replacing the manually maintained entity list. It exercises
+a cross-module re-export and an optional self-reference with an unchanged golden
+fingerprint. Native checks adapt IcyDB's order-independent assembly, duplicate
+registration and late-registration cases; missing targets and unresolved Rust names
+refuse. Wasm record/rollback/upgrade checks pass. The ctor dependency and collection
+state are excluded on Wasm even if the build feature is selected. Workspace
+`unsafe_code = deny` permits ctor's narrowly generated host internals; the runtime
+and macro implementation crates retain `forbid(unsafe_code)`. No hand-written
+unsafe code or extra product crate is added. Named nested records/enums and their
+graph traversal remain implementation work; this entity slice does not complete
+the richer compiled type graph or prove code-generation growth costs.
 
 | Generated or shared surface | Initial responsibility |
 | --- | --- |
@@ -304,7 +355,8 @@ M1 acceptance includes compile failures for duplicate field names/other identiti
 fields, unsupported key types and contradictory declarations; round trips of
 typed optional/nested values; identical descriptor meaning in typed access and
 inspection; and refusal of field renames without an admitted transition. Other
-same-ID source renames reopen only when encoding/semantics remain compatible.
+source renames preserving explicit logical names reopen only when encoding/semantics
+remain compatible.
 The existing native identity probe supports the candidate sensitivity
 rules, not these macro/runtime integration claims. Implement and qualify them in
 the product once M1 begins rather than adding another disposable macro framework.
@@ -412,7 +464,7 @@ from this compiled metadata requirement.
 | Key, index, reference | Ordered field-name paths and directions, unique/present-only membership rules, target entity identity and full key contract, restricted-deletion semantics |
 
 Names identify nested types and enum variants as well as fields; authors need no
-numeric IDs for these. Explicit entity/index IDs remain separate. A name change
+numeric IDs for these. Entity/index authoring follows the name/path policy above. A name change
 requires an admitted transition; ordinary source declaration reordering does not
 change names or canonical order. A compact stored ordinal is a position within
 an already admitted contract, not a separately persisted identity assignment.
@@ -462,7 +514,8 @@ not require an editable runtime catalog. If this arrangement fails, identify the
 missing invariant and reconsider its mechanism explicitly, without silently
 restoring runtime DDL or implementing two permanent schema-authority modes.
 
-Persist explicit entity/index identities and field names in the canonical contract.
+Include logical entity/index identities and field names in the canonical contract;
+the intended authoring surface no longer requires numeric entity/index IDs.
 Field renames are contract changes; never infer identity from similar names. Permit
 unambiguous ergonomic index names with explicit overrides rather than requiring
 users to invent every name. Exact identity encoding and allocation are M0/M1
@@ -566,7 +619,8 @@ cannot detect a change; it does not require several competing hashes.
 
 | Change | Proposed admission requirement |
 | --- | --- |
-| Entity/index source rename preserving explicit identities; documentation/presentation only | Same contract if encoding and stored semantics are unchanged |
+| Rust source rename preserving declared logical schema identity; documentation/presentation only | Same contract if encoding and stored semantics are unchanged |
+| Logical entity/index identity rename | New contract with an explicit supported transition; no automatic matching |
 | Field, nested-type or enum-variant rename | New contract with an explicit supported transition; update references; no automatic name matching |
 | Row encoding | Identify accepted source decoder and admitted transition |
 | Index key encoding or text order | New contract; reconstruct affected indexes |
@@ -576,7 +630,8 @@ cannot detect a change; it does not require several competing hashes.
 The native M0 witness exercises these inputs in one bounded canonical byte
 contract. Fields are ordered by their exact names, which are included in identity;
 enum variant names are included too; entity/index display names and declaration
-order are excluded. Index column order
+order are excluded. Those witnesses use the earlier numbered entity/index contract;
+the M1 native/Wasm witnesses separately qualify the new named contract. Index column order
 and versioned stored semantics are included. This does not detect
 an unversioned codec/comparator code change. The selected SHA-256 fingerprint has
 a fixed domain and independent golden vector. The type-graph grammar above is
@@ -1413,7 +1468,7 @@ contract. The CLI uses
 compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
 terminal rendering and test endpoints stay outside the product crates.
 
-Required or optional Nat64 fields accept `references(entity = 1, index = 1)` alongside
+Required or optional Nat64 fields accept `references(entity = "Entry")` alongside
 their `value(...)` declaration. The target must be in the admitted schema; the
 selected ordinary index belongs to the dependent entity and must lead with this
 field. Target existence and restricted deletion are validated against prepared
@@ -1463,27 +1518,28 @@ incarnation; opening refuses missing authority or an incompatible fingerprint.
 There is no production maintenance gate yet; this format is experimental and
 must not be deployed as an upgrade-compatible product ahead of M3 admission.
 
-The scalar contract grammar is `ICDBSC01`: five little-endian `u32` versions
-(grammar, row codec, key codec, semantics, supplier contract), entity count, then
-entities ordered by nonzero ID. Each contains its ID, field count, sorted
-length-prefixed UTF-8 field names and type tags, primary-key name,
-index count, then indexes ordered by ID (ID, flags byte, ordered field names).
-Index flags use bit 0 for unique and bit 1 for present-only membership.
-Counts/name lengths are `u32` little-endian. SHA-256 uses domain
-`ic-db:schema:v1\0`; presentation entity names are excluded. Row codec version is
-3; the other four versions remain 1, with supplier contract 1 qualified here
-against Storage 0.74.1. Version 1 used Wire's decoding contract and version 2
-used the provisional database-owned varint codec. Both old manifests are refused
-intact before decoding their rows; no implicit migration or historical fallback
-decoder is provided. Existing data is not deleted or recreated automatically.
+The scalar contract grammar uses header `ICDBSC01`: five little-endian `u32`
+versions (grammar=2, row codec=3, key codec=1, semantics=1, supplier contract=1),
+entity count, then entities ordered by logical name. Each contains its
+length-prefixed name, field count, sorted field names and type tags, primary-key
+name, index count, then indexes ordered by logical name (name, flags byte, ordered
+field names). Index flags use bit 0 for unique and bit 1 for present-only membership.
+Counts/name lengths are `u32` little-endian; names are exact UTF-8. SHA-256 uses
+domain `ic-db:schema:v1\0`. Generated physical handles are derived, not separately
+serialized into the canonical contract. Supplier contract 1 is qualified here
+against Storage 0.74.1. Earlier grammar 1 used explicit entity/index IDs and excluded
+entity display names. Row codec 1 used Wire, 2 used provisional owned varints,
+and 3 uses owned fixed-width scalars. Earlier numbered manifests refuse intact
+before row decoding, including those already using row codec 3. No implicit
+migration or historical fallback decoder is provided; data is not recreated.
 Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
 Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, and Principal=`14`.
 optional fields set bit `0x80`.
 Text and Blob append their `u32` little-endian maximum byte length. These new tags
 extend the grammar without altering unused type definitions. The codec version
 change independently changes every schema fingerprint and integer row encoding.
-References set tag bit `0x40` and append target entity ID and reverse index ID as
-little-endian `u32`s after the type payload. Adding new tags preserves contracts
+References set tag bit `0x40` and append length-prefixed target entity name and
+reverse-index name after the type payload. Adding new tags preserves contracts
 that do not use them; changed codec semantics require a declared version change.
 Independent golden fingerprints remain in the
 [native record tests](../../crates/ic-db/tests/records.rs) and
@@ -1491,9 +1547,18 @@ Independent golden fingerprints remain in the
 rather than a second fixture-identity ledger here. CLI sessions create fresh data;
 changes to these examples are not migrations of an existing deployment.
 
+The naming change retains IcyDB's automatic/explicit naming ergonomics and its
+lesson that distinct definitions must not be conflated (frozen `6d421e3`,
+`icydb-schema/src/naming` and `icydb-model/tests/index_names.rs`). It does not copy
+IcyDB's expression/predicate-aware slug-and-digest labels: the present scalar index
+surface needs ordered field tuples and optional names. Known handle collisions,
+source renames preserving explicit names, ambiguous reverse paths, and old-format
+refusal have focused regression witnesses. Broader future index forms must extend
+this contract deliberately, rather than silently changing derived names.
+
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
-Revision/row/index keys start with tags 1/2/3, then big-endian entity ID; rows add
-the big-endian Nat64 primary key. Index keys add the index ID and declared components.
+Revision/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
+the big-endian Nat64 primary key. Index keys add the generated index handle and declared components.
 Integers occupy their exact width in big-endian order, with signed values' leading
 sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
 Bool occupies one strict 0/1 byte; Text escapes zero as `00 FF` and ends with
@@ -1771,19 +1836,18 @@ IC DB artifact SHA-256:
 The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
-After optional references, the scalar host is 172,493 Wasm bytes and 152,625
-code-section bytes. Hit/miss/listing cost 484,596/490,044/779,278 instructions;
-complete read/modify/replace costs 835,395 instructions and 7,849,352 cycles.
-All scalar ceilings still hold; small code-layout deltas do not measure optional
-relationship workloads. IcyDB's artifact and measured costs remain unchanged.
-IC DB artifact SHA-256 is
-`9cc771e856abb2efb12e3dcd69f780f9ebb5e6e8cc2745c7d94b463c4521d512`.
-A concurrent qualification-only dependency refresh selected Testkit 0.104.1,
-Host artifacts/fs/process 0.77.3 and Platform 0.33.0; the two Wasm dependency/feature
-graphs are unchanged. The captured qualification lockfile SHA-256 is
-`0d525fd895d2895c7826962757f8df5faf27118f9ee97d6067cf7a34242c4b2a`.
-The ordinary comparison directory contains this run; the preceding evidence is
-preserved under `qualification/target/evidence/records-comparison-before-optional-references/`.
+After named schema authoring, the scalar host is 173,310 Wasm bytes and 153,407
+code-section bytes. Hit/miss/listing cost 485,562/491,010/780,867 instructions;
+complete read/modify/replace costs 836,877 instructions and 7,850,834 cycles.
+The preceding optional-reference slice measured 172,493/152,625 bytes and
+484,596/490,044/779,278 instructions, with 835,395 instructions/7,849,352 cycles
+for read/modify/replace. Named admission adds 817 Wasm bytes and roughly 0.2% to
+these operations; all remain below the frozen comparison baseline. This change
+adds full-name validation and reference identity metadata, not a durable mapping
+registry. The normal Wasm graph has no constructor dependency. Raw comparison
+artifacts record the source diff, feature graph and exact input/result checks;
+the previous run is retained locally under `records-comparison-before-named-schema`.
+These figures still qualify only the scalar workload, not full fluent-query parity.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,

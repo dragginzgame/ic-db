@@ -2,7 +2,7 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
-use ic_db::{Batch, Database, Entity, FieldType, Principal, Schema, entity};
+use ic_db::{Batch, Database, Entity, FieldType, Principal};
 use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
@@ -16,111 +16,16 @@ type Backing = faults::FaultMemory;
 #[cfg(not(feature = "fault-injection"))]
 type Backing = DefaultMemoryImpl;
 
-#[entity(id=1, pk(field="id", source="external"),
-    index(id=1, fields=["category", "id"]),
-    fields(field(name="id", value(item(prim="Nat64"))),
-        field(name="category", value(item(prim="Nat64"))),
-        field(name="amount", value(item(prim="Nat64")))))]
-struct Entry {}
-
-#[entity(
-    id = 2,
-    pk(field = "id"),
-    index(id = 1, fields = ["entry_id", "score"]),
-    index(id = 2, fields = ["published", "title"]),
-    index(id = 3, fields = ["entry_id", "priority"]),
-    fields(
-        field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "entry_id", value(item(prim = "Nat64")), references(entity = 1, index = 1)),
-        field(name = "title", value(item(prim = "Text", max_bytes = 32))),
-        field(name = "note", value(opt, item(prim = "Text", max_bytes = 64))),
-        field(name = "published", value(item(prim = "Bool"))),
-        field(name = "score", value(item(prim = "Int64"))),
-        field(name = "previous_score", value(opt, item(prim = "Int64"))),
-        field(name = "priority", value(opt, item(prim = "Nat64")))
-    )
-)]
-struct Document {}
-
-#[entity(
-    id = 3,
-    pk(field = "id"),
-    fields(
-        field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "signed", value(item(prim = "Int128"))),
-        field(name = "unsigned", value(item(prim = "Nat128"))),
-        field(name = "optional_signed", value(opt, item(prim = "Int128"))),
-        field(name = "optional_unsigned", value(opt, item(prim = "Nat128")))
-    )
-)]
-struct WideNumbers {}
-
-#[entity(
-    id = 4,
-    pk(field = "id"),
-    fields(
-        field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "payload", value(item(prim = "Blob", max_bytes = 1024))),
-        field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 32)))
-    )
-)]
-struct BinaryObject {}
-
-#[entity(
-    id = 5,
-    pk(field = "id"),
-    fields(
-        field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "signed8", value(item(prim = "Int8"))),
-        field(name = "signed16", value(item(prim = "Int16"))),
-        field(name = "signed32", value(item(prim = "Int32"))),
-        field(name = "unsigned8", value(item(prim = "Nat8"))),
-        field(name = "unsigned16", value(item(prim = "Nat16"))),
-        field(name = "unsigned32", value(item(prim = "Nat32"))),
-        field(name = "optional_signed8", value(opt, item(prim = "Int8"))),
-        field(name = "optional_signed16", value(opt, item(prim = "Int16"))),
-        field(name = "optional_signed32", value(opt, item(prim = "Int32"))),
-        field(name = "optional_unsigned8", value(opt, item(prim = "Nat8"))),
-        field(name = "optional_unsigned16", value(opt, item(prim = "Nat16"))),
-        field(name = "optional_unsigned32", value(opt, item(prim = "Nat32"))),
-    )
-)]
-struct NarrowNumbers {}
-
-#[entity(
-    id = 6,
-    pk(field = "id"),
-    index(id = 1, field = "owner", unique),
-    index(id = 2, field = "optional", unique, present_only),
-    fields(
-        field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "owner", value(item(prim = "Principal"))),
-        field(name = "optional", value(opt, item(prim = "Principal")))
-    )
-)]
-struct IdentityRow {}
-
-#[entity(id=7, pk(field="id"), index(id=1, fields=["next", "id"]),
-    fields(field(name="id", value(item(prim="Nat64"))),
-        field(name="next", value(opt, item(prim="Nat64")), references(entity=7,index=1))))]
-struct OptionalLink {}
+mod schema;
+use schema::{
+    BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, WideNumbers,
+};
 
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
 
-fn compiled() -> Schema {
-    Schema::new(&[
-        Entry::SCHEMA,
-        Document::SCHEMA,
-        WideNumbers::SCHEMA,
-        BinaryObject::SCHEMA,
-        NarrowNumbers::SCHEMA,
-        IdentityRow::SCHEMA,
-        OptionalLink::SCHEMA,
-    ])
-    .unwrap()
-}
+include!(concat!(env!("OUT_DIR"), "/schema.rs"));
 fn runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
     let declarations =
@@ -215,7 +120,7 @@ fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
     (
         db.schema().fingerprint(),
         db.incarnation(),
-        db.revision(1).unwrap(),
+        db.revision::<Entry>().unwrap(),
         host.diagnostics().unwrap().physical_pages,
     )
 }
@@ -226,8 +131,8 @@ fn inspect() -> Status {
     status(&db, &host)
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
-type IndexView = (u32, Vec<String>, bool, bool);
+type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
+type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 #[ic_wire_endpoint::query(id = 2)]
 fn schema() -> (Status, Vec<EntityView>) {
@@ -263,9 +168,18 @@ fn schema() -> (Status, Vec<EntityView>) {
                         kind.into(),
                         field.optional,
                         limit,
-                        field
-                            .reference
-                            .map(|reference| (reference.entity, reference.index)),
+                        field.reference.map(|reference| {
+                            (
+                                reference.entity,
+                                entity
+                                    .indexes
+                                    .iter()
+                                    .find(|index| index.id == reference.index)
+                                    .unwrap()
+                                    .name
+                                    .into(),
+                            )
+                        }),
                     )
                 })
                 .collect();
@@ -274,7 +188,7 @@ fn schema() -> (Status, Vec<EntityView>) {
                 .iter()
                 .map(|index| {
                     (
-                        index.id,
+                        index.name.into(),
                         index.fields.iter().map(|name| (*name).into()).collect(),
                         index.unique,
                         index.present_only,
@@ -346,7 +260,7 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
 fn category(category: u64) -> Vec<(u64, u64)> {
     let host = runtime();
     let db = open(&host);
-    db.index_prefix::<Entry>(1, &[category.into()], 32)
+    db.index_prefix::<Entry>("category,id", &[category.into()], 32)
         .unwrap()
         .into_iter()
         .map(|row| (row.id, row.amount))
@@ -368,7 +282,7 @@ fn document() -> (DocumentValue, u64) {
             row.score,
             row.previous_score,
         ),
-        db.revision(2).unwrap(),
+        db.revision::<Document>().unwrap(),
     )
 }
 #[ic_wire_endpoint::update(id = 8)]
@@ -473,7 +387,7 @@ fn wide_numbers() -> (WideValue, u64) {
             row.optional_signed,
             row.optional_unsigned,
         ),
-        db.revision(3).unwrap(),
+        db.revision::<WideNumbers>().unwrap(),
     )
 }
 #[ic_wire_endpoint::update(id = 12)]
@@ -534,7 +448,7 @@ fn narrow_numbers() -> (NarrowValue, u64) {
                 row.optional_unsigned32,
             ),
         ),
-        db.revision(5).unwrap(),
+        db.revision::<NarrowNumbers>().unwrap(),
     )
 }
 
@@ -594,7 +508,7 @@ fn binary_object() -> (BinaryValue, u64) {
     let row = db.get::<BinaryObject>(1).unwrap().unwrap();
     (
         (row.payload.into(), row.optional.map(Into::into)),
-        db.revision(4).unwrap(),
+        db.revision::<BinaryObject>().unwrap(),
     )
 }
 #[ic_wire_endpoint::update(id = 14)]
@@ -629,7 +543,7 @@ fn principal_record() -> (PrincipalValue, u64) {
             row.owner.as_slice().to_vec().into(),
             row.optional.map(|p| p.as_slice().to_vec().into()),
         ),
-        db.revision(6).unwrap(),
+        db.revision::<IdentityRow>().unwrap(),
     )
 }
 #[ic_wire_endpoint::update(id = 19)]
@@ -710,12 +624,12 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     let host = runtime();
     let db = open(&host);
     Ok((
-        db.index_prefix::<IdentityRow>(1, &[principal.into()], 32)
+        db.index_prefix::<IdentityRow>("owner", &[principal.into()], 32)
             .unwrap()
             .into_iter()
             .map(|row| row.id)
             .collect(),
-        db.index_prefix::<Document>(1, &[1_u64.into()], 32)
+        db.index_prefix::<Document>("entry_id,score", &[1_u64.into()], 32)
             .unwrap()
             .into_iter()
             .map(|row| (row.score, row.id))
@@ -757,7 +671,7 @@ fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String,
     if let Some(title) = title.as_deref() {
         prefix.push(title.into());
     }
-    db.index_prefix::<Document>(2, &prefix, 32)
+    db.index_prefix::<Document>("published,title", &prefix, 32)
         .map(|rows| rows.into_iter().map(|row| (row.title, row.id)).collect())
         .map_err(|_| 1)
 }
@@ -819,12 +733,12 @@ fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
         .map(|v| Principal::try_from_slice(v.as_ref()).map(ic_db::IndexValue::from))
         .transpose();
     let owners = operand.map_err(|_| 1).and_then(|v| {
-        db.index_prefix::<IdentityRow>(2, &[v.unwrap_or(ic_db::IndexValue::Absent)], 32)
+        db.index_prefix::<IdentityRow>("optional", &[v.unwrap_or(ic_db::IndexValue::Absent)], 32)
             .map(|rows| rows.into_iter().map(|row| row.id).collect())
             .map_err(|_| 2)
     });
     let priorities = db
-        .index_prefix::<Document>(3, &[1_u64.into()], 32)
+        .index_prefix::<Document>("entry_id,priority", &[1_u64.into()], 32)
         .unwrap()
         .into_iter()
         .map(|row| (row.priority, row.id))
@@ -873,7 +787,7 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
         .collect();
     let dependants = db
         .index_prefix::<OptionalLink>(
-            1,
+            "next,id",
             &[target
                 .map(ic_db::IndexValue::from)
                 .unwrap_or(ic_db::IndexValue::Absent)],
@@ -883,5 +797,5 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
         .into_iter()
         .map(|row| row.id)
         .collect();
-    (rows, dependants, db.revision(7).unwrap())
+    (rows, dependants, db.revision::<OptionalLink>().unwrap())
 }
