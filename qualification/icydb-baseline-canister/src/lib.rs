@@ -16,6 +16,8 @@ mod __icydb_host {
     thread_local! {
         pub(super) static RECOVERY_PENDING: Cell<bool> = const { Cell::new(false) };
     }
+    // Generated native test code installs its own wakeup stub.
+    #[cfg(not(all(test, not(target_arch = "wasm32"))))]
     pub(crate) fn ensure_startup_watchdog_scheduled_immediately() {
         RECOVERY_PENDING.set(true);
     }

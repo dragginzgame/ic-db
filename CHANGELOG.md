@@ -36,6 +36,8 @@ current `query` command still reads Entry; Document writes/reopen are covered by
   Defer qualification-only Platform's optional `0.32.3` → `0.33.0` update to the
   next dependency-maintenance pass; retain this release's tested graph.
   Product crates remain unpublished and do not depend on Wire.
+  Match the comparison host's wakeup stub to IcyDB's generated native-test
+  configuration so full-workspace linting passes without relaxing lints.
 - Record the accepted IcyDB carryover sequence in the system design: borrowed
   access and selective reads, shared equality/ordering/hashing, and owned rich-type
   codecs; offset tables and caches remain evidence-gated choices.
