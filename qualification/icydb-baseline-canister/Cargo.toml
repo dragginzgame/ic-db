@@ -16,10 +16,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ic-db-icydb-baseline-schema.workspace = true
+ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["cdk"] }
-ic-wire.workspace = true
 icydb.workspace = true
-serde.workspace = true
 
 [build-dependencies]
 ic-db-icydb-baseline-schema = { workspace = true, features = ["build"] }

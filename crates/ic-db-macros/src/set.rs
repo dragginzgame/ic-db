@@ -41,6 +41,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
     let max = max.expect("many requires max_items");
     let field = Field {
+        default: None,
+        managed: None,
         name: "item".into(),
         kind,
         optional,

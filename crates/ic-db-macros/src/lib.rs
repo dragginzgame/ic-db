@@ -10,12 +10,13 @@ use syn::{Expr, ItemStruct, Lit, Meta, Token, parse::Parser, punctuated::Punctua
 
 mod enumeration;
 mod field;
+mod insert;
 mod map;
 mod record;
 mod set;
 use field::Field;
 
-/// Author a typed record with named fields, a supplied integer/Ulid key and indexes.
+/// Author a typed record with named fields, a supplied integer/Ulid/Principal key and indexes.
 ///
 /// Field types follow the implemented `ic_db::FieldType` contract, with explicit
 /// bounds for variable-size values. Secondary indexes admit supported ordered
@@ -31,6 +32,13 @@ use field::Field;
 /// and `Self`) to its logical identity. Numeric authoring IDs are unsupported.
 /// With the host-only `ic-db/build` feature, declarations also register their
 /// full Rust paths for second-stage schema assembly.
+/// Fields may declare `default = LITERAL` for integers, Bool and bounded Text.
+/// `Entity::insert()` builds typed omission-aware input for `Batch::insert_input`;
+/// explicit optional `None` is never replaced by a default. Primary-key and nested
+/// record defaults are not implemented. Defaults never run on decode/replacement.
+/// Nonoptional Timestamp fields may declare `managed = "created_at"` or
+/// `managed = "updated_at"`, once per role. These fields have no insert setters;
+/// use `Batch::at(time)` to supply one operation time for the entire batch.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
@@ -249,7 +257,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .find(|field| field.name == primary && field.required_key())
         .ok_or_else(|| {
-            fail("primary key currently requires a non-optional fixed-width integer, U256 or Ulid")
+            fail("primary key currently requires a non-optional fixed-width integer, U256, Ulid or Principal")
         })?
         .rust_type();
     let key_id: syn::Ident = syn::parse_str(&primary)?;
@@ -376,7 +384,41 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .zip(&field_ids)
         .map(|(field, id)| field.validation(id))
         .collect();
+    if authored
+        .iter()
+        .any(|field| field.name == primary && field.default.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "supplied primary keys cannot declare an insert default",
+        ));
+    }
+    let insert_input = insert::emit(&item, &authored)?;
+    let mut managed_ids = [None, None];
+    for (field, id) in authored.iter().zip(&field_ids) {
+        if let Some(policy) = field.managed {
+            let slot = usize::from(policy == field::Management::UpdatedAt);
+            if managed_ids[slot].replace(id).is_some() {
+                return Err(syn::Error::new_spanned(
+                    id,
+                    "each managed timestamp role may appear once per entity",
+                ));
+            }
+        }
+    }
+    let managed_check = |owner: Tokens| {
+        if managed_ids.iter().all(Option::is_none) {
+            return quote!();
+        }
+        let values = managed_ids
+            .iter()
+            .map(|id| id.map_or_else(|| quote!(None), |id| quote!(Some(#owner.#id))));
+        quote!(::ic_db::__private::validate_managed_order([#(#values),*])?;)
+    };
+    let validate_managed = managed_check(quote!(self));
+    let decode_managed = managed_check(quote!(row));
     Ok(quote! {
+        #insert_input
         #(#attrs)*
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
@@ -398,11 +440,13 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 }
             }
             fn validate(&self) -> Result<(), ::ic_db::Error> {
+                #validate_managed
                 #(#validations)*
                 #nested_validation
                 Ok(())
             }
             fn encode(&self) -> Result<::std::vec::Vec<u8>, ::ic_db::Error> {
+                #validate_managed
                 let mut writer = ::ic_db::__private::Encoder::new();
                 #(#writes)*
                 Ok(writer.finish())
@@ -411,6 +455,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 let mut reader = ::ic_db::__private::Decoder::new(bytes)?;
                 let row = Self { #(#reads)* };
                 reader.finish()?;
+                #decode_managed
                 Ok(row)
             }
         }

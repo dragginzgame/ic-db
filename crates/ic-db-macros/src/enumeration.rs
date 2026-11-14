@@ -39,6 +39,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             }
             let payload = payload.map(|(kind, optional, many)| {
                 let mut f = Field {
+                    default: None,
+                    managed: None,
                     name: "payload".into(),
                     kind,
                     optional,

@@ -8,7 +8,7 @@
 //! and total collection-item limits. Named sets/maps use strict scalar key order.
 //! Secondary indexes admit integers, Ulid, Date, Timestamp, Duration, Decimal, finite floats,
 //! Account/Subaccount, Principal, Bool and Text, including optional values; primary keys
-//! require non-optional fixed-width integer, U256 or Ulid fields. References use
+//! require non-optional integer, U256, Ulid or Principal fields. References use
 //! the target’s exact key type;
 //! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
@@ -20,8 +20,10 @@
 mod codec;
 mod date;
 mod decimal;
+mod defaults;
 mod float;
 mod key;
+mod managed;
 mod primary;
 mod schema;
 mod store;
@@ -49,15 +51,17 @@ macro_rules! __register_schema {
 
 pub use date::Date;
 pub use decimal::{Decimal, ParseDecimalError};
+pub use defaults::{InsertInput, LiteralDefault};
 /// Exact unsigned 256-bit integer. IC DB owns its durable and index encodings.
 pub use ethnum::U256;
 pub use float::{Float32, Float64};
 pub use ic_db_macros::{entity, enum_, map, record, set};
 pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
+pub use managed::ManagedTimestamp;
 pub use primary::PrimaryKey;
 pub use time::{Duration, TimeParseError, Timestamp};
-pub use ulid::{Ulid, UlidParseError};
+pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
@@ -66,6 +70,14 @@ pub use store::{Batch, Database, Page};
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// Managed insert/replacement requires an explicitly captured batch time.
+    MissingOperationTime,
+    /// A caller attempted to assign a database-managed field.
+    ManagedField,
+    /// A real change would move managed time behind its stored value.
+    TimestampRegression,
+    /// An insert input omitted a required field with no declared default.
+    MissingField(&'static str),
     /// Invalid or unsupported compiled schema.
     InvalidSchema,
     /// An index operand has a different exact type from its declared field.
@@ -167,6 +179,7 @@ pub trait Entity: Sized {
 pub mod __private {
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     pub use crate::key::encode_index;
+    pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
     pub use crate::schema::handle;
     /// Primary/index keys extracted at the small typed codec boundary.

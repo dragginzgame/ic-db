@@ -240,7 +240,10 @@ impl TypeGraph {
                         return Err(Error::InvalidSchema);
                     }
                     for field in *fields {
-                        if field.reference.is_some() {
+                        if field.reference.is_some()
+                            || field.default.is_some()
+                            || field.managed.is_some()
+                        {
                             return Err(Error::InvalidSchema);
                         }
                         name(bytes, field.name)?;

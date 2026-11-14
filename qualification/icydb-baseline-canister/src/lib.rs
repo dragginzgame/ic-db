@@ -3,8 +3,7 @@
 //! Frozen IcyDB measurement host. These Wire exports are private test controls.
 //! Startup is advanced explicitly by the harness; no Canic lifecycle is measured.
 
-#[path = "../../transport.rs"]
-mod transport;
+use ic_db_qualification_transport as transport;
 
 use ic_db_icydb_baseline_schema::{Entry, EntryInsert, EntryReplace};
 use ic_platform_runtime::cdk;

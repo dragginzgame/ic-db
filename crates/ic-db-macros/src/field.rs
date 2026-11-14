@@ -32,11 +32,26 @@ pub(super) enum Kind {
     Blob(u32),
 }
 pub(super) struct Field {
+    pub managed: Option<Management>,
+    pub default: Option<super::insert::Literal>,
     pub name: String,
     pub kind: Kind,
     pub optional: bool,
     pub many: Option<u32>,
     pub reference: Option<(syn::Path, Option<String>)>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Management {
+    CreatedAt,
+    UpdatedAt,
+}
+impl Management {
+    pub fn description(self) -> TokenStream {
+        match self {
+            Self::CreatedAt => quote!(::ic_db::ManagedTimestamp::CreatedAt),
+            Self::UpdatedAt => quote!(::ic_db::ManagedTimestamp::UpdatedAt),
+        }
+    }
 }
 impl Field {
     pub fn parse(meta: &Meta) -> syn::Result<Self> {
@@ -46,11 +61,27 @@ impl Field {
         let mut name = None;
         let mut value = None;
         let mut reference = None;
+        let mut default = None;
+        let mut managed = None;
         for part in list(meta)? {
             if part.path().is_ident("name") {
                 once(&mut name, text(&part)?, &part)?;
             } else if part.path().is_ident("value") {
                 once(&mut value, parse_value(&part)?, &part)?;
+            } else if part.path().is_ident("default") {
+                once(&mut default, part.clone(), &part)?;
+            } else if part.path().is_ident("managed") {
+                let policy = match text(&part)?.as_str() {
+                    "created_at" => Management::CreatedAt,
+                    "updated_at" => Management::UpdatedAt,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &part,
+                            "managed requires created_at or updated_at",
+                        ));
+                    }
+                };
+                once(&mut managed, policy, &part)?;
             } else if part.path().is_ident("references") {
                 let mut entity = None;
                 let mut index = None;
@@ -84,13 +115,30 @@ impl Field {
         let name = name.ok_or_else(|| syn::Error::new_spanned(meta, "field requires name"))?;
         let (kind, optional, many) =
             value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
+        if managed.is_some()
+            && (!matches!(kind, Kind::Timestamp)
+                || optional
+                || many.is_some()
+                || default.is_some()
+                || reference.is_some())
+        {
+            return Err(syn::Error::new_spanned(
+                meta,
+                "managed fields require a nonoptional scalar Timestamp without a default or reference",
+            ));
+        }
         if reference.is_some() && (many.is_some() || !kind.primary_key()) {
             return Err(syn::Error::new_spanned(
                 meta,
-                "references currently require a fixed-width integer, U256 or Ulid",
+                "references currently require a fixed-width integer, U256, Ulid or Principal",
             ));
         }
         Ok(Self {
+            managed,
+            default: default
+                .as_ref()
+                .map(|meta| super::insert::Literal::parse(meta, &kind, many))
+                .transpose()?,
             name,
             kind,
             optional,
@@ -189,9 +237,23 @@ impl Field {
         }
     }
     pub fn description(&self) -> TokenStream {
+        let managed = self.managed.map_or_else(
+            || quote!(None),
+            |value| {
+                let value = value.description();
+                quote!(Some(#value))
+            },
+        );
         let name = &self.name;
         let optional = self.optional;
         let value = self.type_description();
+        let default = self.default.as_ref().map_or_else(
+            || quote!(None),
+            |value| {
+                let value = value.description();
+                quote!(Some(&#value))
+            },
+        );
         let reference = match &self.reference {
             None => quote!(None),
             Some((entity, index)) => {
@@ -203,7 +265,7 @@ impl Field {
                 }))
             }
         };
-        quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference })
+        quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference, default:#default, managed:#managed })
     }
     pub fn type_description(&self) -> TokenStream {
         let item = match &self.kind {
@@ -538,6 +600,7 @@ impl Kind {
                 | Self::Int128
                 | Self::U256
                 | Self::Ulid
+                | Self::Principal
         )
     }
 }

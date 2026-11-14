@@ -295,7 +295,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
         // Independently assembled with Node byte framing and SHA-256.
-        "a03af61b8e549975322a8724a656f18289cb3dae48f17885fe42e19892744a02"
+        "606ead81e464255bf5482dffea866809b3b2d8dbde15ff924968a5476366e15f"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -316,8 +316,22 @@ async fn product_records_and_message_boundary() {
         native::decode_response(2, &reply, LIMITS).unwrap();
     assert_eq!(admitted, original);
     let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
-    assert_eq!(entities.len(), 24);
+    assert_eq!(entities.len(), 27);
     assert_eq!(types.len(), 8);
+    assert!(entity("ManagedRow").3.contains(&(
+        "updated".into(),
+        "Timestamp".into(),
+        false,
+        "8 bytes; Unix milliseconds; managed updated_at".into(),
+        None,
+    )));
+    assert!(entity("DefaultRow").3.contains(&(
+        "label".into(),
+        "Text".into(),
+        true,
+        "max 8 bytes; default \"draft\"".into(),
+        None,
+    )));
     assert!(entity("UlidRow").3.contains(&(
         "value".into(),
         "Ulid".into(),

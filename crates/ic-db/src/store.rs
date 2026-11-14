@@ -16,6 +16,7 @@ type Map<M> = StableBTreeMap<Vec<u8>, Vec<u8>, M>;
 /// A bounded synchronous batch; preparation is internal to `Database::commit`.
 #[derive(Default)]
 pub struct Batch {
+    operation_time: Option<crate::Timestamp>,
     mutations: Vec<Mutation>,
     bytes: usize,
 }
@@ -36,15 +37,41 @@ impl Batch {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Begin a batch with one host-captured operation time for all managed fields.
+    /// The database reads no clock; this value remains fixed for the whole batch.
+    #[must_use]
+    pub fn at(time: crate::Timestamp) -> Self {
+        Self {
+            operation_time: Some(time),
+            ..Self::default()
+        }
+    }
     /// Insert a typed record. Primary-key/uniqueness admission happens at commit.
     /// # Errors
-    /// Refuses encoding or batch capacity before persistent mutation.
+    /// Refuses managed-field entities (use `insert_input`), encoding or batch capacity.
     pub fn insert<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
+        if E::SCHEMA.has_managed() {
+            return Err(Error::ManagedField);
+        }
         self.put(row, false)
     }
-    /// Replace an existing typed record, retaining its primary key.
+    /// Resolve a typed insert input, append it to this batch and return its full row.
+    /// This is preparation, not a commit; the returned row is not yet persistent.
+    /// Explicit `None` remains absence, while omitted fields select their declared
+    /// literal default or optional absence. No defaults run during replacement.
     /// # Errors
-    /// Refuses encoding or batch capacity before persistent mutation.
+    /// Refuses missing required values, field/row bounds or batch capacity.
+    /// A refused input appends no mutation to the batch.
+    pub fn insert_input<I: crate::InsertInput>(&mut self, input: I) -> Result<I::Entity, Error> {
+        let row = input.__into_entity(self.operation_time)?;
+        self.put(&row, false)?;
+        Ok(row)
+    }
+    /// Replace an existing typed record, retaining its primary key.
+    /// Managed fields must echo the current stored values; commit sets update time
+    /// only on a real change. Read the row after commit to obtain that assigned time.
+    /// # Errors
+    /// Refuses missing operation time, encoding or batch capacity before mutation.
     pub fn replace<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
         self.put(row, true)
     }
@@ -62,6 +89,9 @@ impl Batch {
         )
     }
     fn put<E: Entity>(&mut self, row: &E, replace: bool) -> Result<(), Error> {
+        if E::SCHEMA.has_managed() && self.operation_time.is_none() {
+            return Err(Error::MissingOperationTime);
+        }
         let bytes = row.encode()?;
         if bytes.len() > crate::__private::MAX_ROW_BYTES {
             return Err(Error::Limit);
@@ -314,7 +344,7 @@ impl<M: Memory> Database<M> {
         let mut changed = BTreeSet::new();
         let mut required = BTreeSet::new();
         let mut deleted = Vec::new();
-        for mutation in batch.mutations {
+        for mut mutation in batch.mutations {
             self.schema.admits(mutation.entity)?;
             let key = row_key(mutation.entity.id, mutation.key);
             if !targets.insert(key.clone()) {
@@ -325,6 +355,26 @@ impl<M: Memory> Database<M> {
                 (Kind::Insert(..), Some(_)) => return Err(Error::Exists),
                 (Kind::Replace(..) | Kind::Delete, None) => return Err(Error::Missing),
                 _ => {}
+            }
+            if mutation.entity.has_managed() {
+                match &mut mutation.kind {
+                    Kind::Insert(bytes, _) => crate::managed::validate_insert(
+                        mutation.entity,
+                        bytes,
+                        batch.operation_time.ok_or(Error::MissingOperationTime)?,
+                    )?,
+                    Kind::Replace(bytes, info) => {
+                        if crate::managed::replace(
+                            mutation.entity,
+                            bytes,
+                            old.as_deref().ok_or(Error::Missing)?,
+                            batch.operation_time.ok_or(Error::MissingOperationTime)?,
+                        )? {
+                            *info = mutation.entity.inspect_row(bytes)?;
+                        }
+                    }
+                    Kind::Delete => {}
+                }
             }
             if let (Kind::Replace(bytes, _), Some(old)) = (&mutation.kind, &old)
                 && bytes == old
@@ -380,9 +430,10 @@ impl<M: Memory> Database<M> {
                                     _ => return Err(Error::Corrupt),
                                 }
                             }
-                            let width = RowKey::width(field.value)?;
+                            let mut remaining = bytes;
+                            key::consume(&mut remaining, field.value)?;
                             let target = RowKey::decode(
-                                bytes.get(..width).ok_or(Error::Corrupt)?,
+                                &bytes[..bytes.len() - remaining.len()],
                                 field.value,
                             )?;
                             required.insert((reference.entity, target));

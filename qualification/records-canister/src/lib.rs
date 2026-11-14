@@ -2,8 +2,12 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
-#[path = "../../transport.rs"]
-mod transport;
+use ic_db_qualification_transport as transport;
+
+mod defaults;
+mod generation;
+mod managed;
+mod principal_keys;
 
 use ic_db::{Batch, Database, Entity, FieldType, Principal};
 use ic_platform_runtime::cdk;
@@ -22,7 +26,7 @@ type Backing = faults::FaultMemory;
 #[cfg(not(feature = "fault-injection"))]
 type Backing = DefaultMemoryImpl;
 
-mod schema;
+use ic_db_m1_records_schema as schema;
 use schema::{
     BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, WideNumbers,
 };
@@ -162,7 +166,25 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                 .fields
                 .iter()
                 .map(|field| {
-                    let (kind, info) = type_view(field.value);
+                    let (kind, mut info) = type_view(field.value);
+                    if let Some(default) = field.default {
+                        let value = match default {
+                            ic_db::LiteralDefault::Nat(v) => v.to_string(),
+                            ic_db::LiteralDefault::Int(v) => v.to_string(),
+                            ic_db::LiteralDefault::Bool(v) => v.to_string(),
+                            ic_db::LiteralDefault::Text(v) => format!("{v:?}"),
+                        };
+                        info = joined_info(info, &format!("default {value}"));
+                    }
+                    if let Some(managed) = field.managed {
+                        info = joined_info(
+                            info,
+                            match managed {
+                                ic_db::ManagedTimestamp::CreatedAt => "managed created_at",
+                                ic_db::ManagedTimestamp::UpdatedAt => "managed updated_at",
+                            },
+                        );
+                    }
                     (
                         field.name.into(),
                         kind,
@@ -1062,7 +1084,9 @@ fn type_view(value: FieldType) -> (String, String) {
     }
 }
 fn joined_info(bound: String, nested: &str) -> String {
-    if nested.is_empty() {
+    if bound.is_empty() {
+        nested.to_owned()
+    } else if nested.is_empty() {
         bound
     } else {
         format!("{bound}; {nested}")

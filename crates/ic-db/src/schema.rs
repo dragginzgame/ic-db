@@ -93,9 +93,13 @@ pub enum FieldType {
     },
 }
 
-/// One named stored field; names, types, bounds and optionality define identity.
+/// One named stored field; type, bounds, optionality and write policy define identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldSchema {
+    /// Database-owned insertion/update time policy, never applied during decode.
+    pub managed: Option<crate::ManagedTimestamp>,
+    /// Compiled insert-omission policy; no default is applied during decode/update.
+    pub default: Option<&'static crate::LiteralDefault>,
     /// Stable field identity within its entity.
     pub name: &'static str,
     /// Declared primitive and its bounds.
@@ -106,11 +110,11 @@ pub struct FieldSchema {
     pub reference: Option<ReferenceSchema>,
 }
 
-/// A required or optional Nat64 reference using an ordinary reverse-lookup index.
+/// A required or optional typed reference using an ordinary reverse-lookup index.
 /// An absent optional value has no target; zero remains an ordinary target key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReferenceSchema {
-    /// Full logical target identity; its primary key must be a required Nat64.
+    /// Full logical target identity; its required key type must match this field.
     pub entity_name: &'static str,
     /// Generated target storage handle.
     #[doc(hidden)]
@@ -144,13 +148,16 @@ pub struct EntitySchema {
     pub name: &'static str,
     /// Fields in canonical name order.
     pub fields: &'static [FieldSchema],
-    /// Supplied fixed-width integer, U256 or Ulid primary-key field.
+    /// Supplied integer, U256, Ulid or Principal primary-key field.
     pub primary_key: &'static str,
     /// Indexes ordered by logical name.
     pub indexes: &'static [IndexSchema],
 }
 
 impl EntitySchema {
+    pub(crate) fn has_managed(&self) -> bool {
+        self.fields.iter().any(|field| field.managed.is_some())
+    }
     pub(crate) fn key_type(&self) -> Result<FieldType, Error> {
         self.fields
             .iter()
@@ -163,11 +170,16 @@ impl EntitySchema {
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
         let mut reader = Decoder::new(bytes)?;
         let mut keys = [IndexValue::Absent; MAX_FIELDS];
+        let mut times = [None; 2];
         for (position, field) in self.fields.iter().enumerate() {
             if field.optional && !reader.boolean()? {
                 continue;
             }
-            if field.name == self.primary_key
+            if let Some(managed) = field.managed {
+                let value = reader.timestamp()?;
+                times[managed.slot()] = Some(value);
+                keys[position] = IndexValue::from(value);
+            } else if field.name == self.primary_key
                 || self
                     .indexes
                     .iter()
@@ -180,6 +192,7 @@ impl EntitySchema {
             }
         }
         reader.finish()?;
+        crate::managed::validate_order(times)?;
         let key = |name: &str| {
             self.fields
                 .iter()
@@ -247,7 +260,7 @@ impl Schema {
                 || entity.fields.is_empty()
                 || entity.fields.len() > MAX_FIELDS
                 || entity.indexes.len() > 8
-                || entity.key_type().and_then(RowKey::width).is_err()
+                || !entity.key_type().is_ok_and(RowKey::supports)
                 || entity
                     .fields
                     .windows(2)
@@ -267,7 +280,7 @@ impl Schema {
                 )?;
                 types.include(field.value)?;
                 if let Some(reference) = field.reference {
-                    if RowKey::width(field.value).is_err()
+                    if !RowKey::supports(field.value)
                         || !entities.iter().any(|target| {
                             target.id == reference.entity
                                 && target.name == reference.entity_name
@@ -341,6 +354,59 @@ impl Schema {
             }
         }
         types.encode(&mut bytes)?;
+        // Versioned policy trailer only for schemas that declare defaults. Existing
+        // contracts retain their bytes; the trailer is not a second durable catalog.
+        let defaults: Vec<_> = entities
+            .iter()
+            .flat_map(|entity| {
+                entity
+                    .fields
+                    .iter()
+                    .filter_map(move |field| field.default.map(|value| (entity, field, value)))
+            })
+            .collect();
+        if !defaults.is_empty() {
+            bytes.extend(b"ic-db:insert-defaults:v1\0");
+            bytes.extend((defaults.len() as u32).to_le_bytes());
+            for (entity, field, value) in defaults {
+                if field.name == entity.primary_key {
+                    return Err(Error::InvalidSchema);
+                }
+                name(&mut bytes, entity.name)?;
+                name(&mut bytes, field.name)?;
+                let encoded = value.encode(field.value)?;
+                bytes.extend((encoded.len() as u32).to_le_bytes());
+                bytes.extend(encoded);
+            }
+        }
+        let mut policies = Vec::new();
+        for entity in &entities {
+            let mut seen = [false; 2];
+            for field in entity.fields {
+                if let Some(managed) = field.managed {
+                    if field.value != FieldType::Timestamp
+                        || field.optional
+                        || field.default.is_some()
+                        || field.reference.is_some()
+                        || field.name == entity.primary_key
+                        || seen[managed.slot()]
+                    {
+                        return Err(Error::InvalidSchema);
+                    }
+                    seen[managed.slot()] = true;
+                    policies.push((entity.name, field.name, managed));
+                }
+            }
+        }
+        if !policies.is_empty() {
+            bytes.extend(b"ic-db:managed-times:v1\0");
+            bytes.extend((policies.len() as u32).to_le_bytes());
+            for (entity, field, managed) in policies {
+                name(&mut bytes, entity)?;
+                name(&mut bytes, field)?;
+                bytes.push(managed.slot() as u8 + 1);
+            }
+        }
         let mut hash = Sha256::new();
         hash.update(b"ic-db:schema:v1\0");
         hash.update(bytes);

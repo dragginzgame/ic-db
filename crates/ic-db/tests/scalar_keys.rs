@@ -1,5 +1,5 @@
-//! Exact integer primary-key families share ordering, references and corruption checks.
-use ic_db::{Batch, Database, Entity, Error, Schema, U256, entity};
+//! Scalar primary keys share ordering, references and corruption checks.
+use ic_db::{Batch, Database, Entity, Error, Principal, Schema, U256, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -16,7 +16,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
-// Keep the independent oracle outside the generated declarations: raw fixed-width
+// Keep the independent oracle outside the generated declarations: raw literal
 // vectors below specify byte order; this helper never calls a product key encoder.
 fn exercise<E: Entity + Clone + PartialEq + Debug>(
     ids: &[E::Key],
@@ -186,6 +186,84 @@ signed_case!(int64, "Int64", i64, 8);
 signed_case!(int128, "Int128", i128, 16);
 #[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(field(name="id",value(item(prim="U256"))),field(name="next",value(opt,item(prim="U256")),references(entity="Self")),field(name="rank",value(item(prim="Nat64"))),field(name="zone",value(item(prim="Bool")))))]
 struct U256Row {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
+    field(name="id",value(item(prim="Principal"))),
+    field(name="next",value(opt,item(prim="Principal")),references(entity="Self")),
+    field(name="rank",value(item(prim="Nat64"))),
+    field(name="zone",value(item(prim="Bool")))
+))]
+struct PrincipalRow {}
+
+#[test]
+fn principals_keep_length_first_order_and_empty_identity() {
+    let payloads = [vec![], vec![9], vec![1, 0], vec![0; 29], vec![255; 29]];
+    let ids: Vec<_> = payloads.iter().map(|p| Principal::from_slice(p)).collect();
+    let mut low = vec![29];
+    low.extend([0; 29]);
+    let mut high = vec![29];
+    high.extend([255; 29]);
+    assert!(ids.windows(2).all(|p| p[0] < p[1]));
+    exercise(
+        &ids,
+        &[vec![0], vec![1, 9], vec![2, 1, 0], low, high],
+        |id, next, rank| PrincipalRow {
+            id,
+            next,
+            rank,
+            zone: true,
+        },
+    );
+}
+
+#[test]
+fn malformed_principal_owners_refuse_without_mutating_backing() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let schema = || Schema::new(&[PrincipalRow::SCHEMA]).unwrap();
+    let row = PrincipalRow {
+        id: Principal::from_slice(&[9]),
+        next: None,
+        rank: 0,
+        zone: true,
+    };
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [13; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let index = PrincipalRow::SCHEMA
+        .indexes
+        .iter()
+        .find(|i| i.name == "rank")
+        .unwrap();
+    let mut key = vec![3];
+    key.extend(PrincipalRow::ID.to_be_bytes());
+    key.extend(index.id.to_be_bytes());
+    key.extend(0_u64.to_be_bytes());
+    // Missing length, truncation, trailing bytes, oversized principal, and a
+    // valid but wrong owner all fail at the storage boundary.
+    let mut oversized = vec![30];
+    oversized.extend([1; 30]);
+    for invalid in [vec![], vec![2, 9], vec![1, 9, 0], oversized, vec![1, 8]] {
+        let mut raw =
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
+                .unwrap();
+        raw.insert(key.clone(), invalid);
+        drop(raw);
+        let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            db.index_prefix::<PrincipalRow>("rank", &[0_u64.into()], 1),
+            Err(Error::Corrupt)
+        ));
+        let mut batch = Batch::new();
+        batch.delete::<PrincipalRow>(row.id).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+        assert_eq!(*backing.borrow(), before);
+    }
+}
 #[test]
 fn u256_keeps_high_half() {
     let mut one = vec![0; 32];

@@ -18,10 +18,9 @@ category = "tests"
 crate-type = ["cdylib"]
 
 [dependencies]
+ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["cdk"] }
 ic-storage.workspace = true
-ic-wire.workspace = true
-serde.workspace = true
 
 [lints]
 workspace = true

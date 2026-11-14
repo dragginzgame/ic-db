@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ctor",
  "ethnum",
@@ -950,10 +950,9 @@ name = "ic-db-icydb-baseline-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-icydb-baseline-schema",
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
- "ic-wire",
  "icydb",
- "serde",
  "toko-tooling",
 ]
 
@@ -969,10 +968,9 @@ dependencies = [
 name = "ic-db-m0-aggregation-canister"
 version = "0.0.0"
 dependencies = [
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
- "serde",
  "toko-tooling",
 ]
 
@@ -980,10 +978,9 @@ dependencies = [
 name = "ic-db-m0-maintenance-canister"
 version = "0.0.0"
 dependencies = [
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
- "serde",
  "toko-tooling",
 ]
 
@@ -991,10 +988,10 @@ dependencies = [
 name = "ic-db-m0-rollback-canister"
 version = "0.0.0"
 dependencies = [
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
  "ic-wire",
- "serde",
  "toko-tooling",
 ]
 
@@ -1018,16 +1015,25 @@ name = "ic-db-m1-records-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db",
+ "ic-db-m1-records-schema",
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
  "ic-wire",
- "serde",
+ "toko-tooling",
+]
+
+[[package]]
+name = "ic-db-m1-records-schema"
+version = "0.0.0"
+dependencies = [
+ "ic-db",
  "toko-tooling",
 ]
 
 [[package]]
 name = "ic-db-macros"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1035,14 +1041,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-db-qualification-transport"
+version = "0.0.0"
+dependencies = [
+ "ic-platform-runtime",
+ "ic-wire",
+ "serde",
+ "toko-tooling",
+]
+
+[[package]]
 name = "ic-db-records-benchmark-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db",
+ "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
- "serde",
  "toko-tooling",
 ]
 
@@ -1057,9 +1072,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-artifacts"
-version = "0.78.0"
+version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97b20433ae31b443a2e8f270e07508b5fefb8cb9aa75c5461e5d0266dc3c13cd"
+checksum = "80c115b14974a670676e62940473886a1b2b289ee1ca1258aae89534f1fddb22"
 dependencies = [
  "flate2",
  "leb128",
@@ -1069,9 +1084,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-fs"
-version = "0.78.0"
+version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e55cb58f52c5e81a8c73043ffff1c6095feb59a97dbc40c76c5cd776e0e73eaf"
+checksum = "9ef7770c178efe33ca0d9fcb54e78ad45f0c9c3d499f2e1bac70fb1ba5bba182"
 dependencies = [
  "ic-host-artifacts",
  "rustix",
@@ -1080,9 +1095,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-process"
-version = "0.78.0"
+version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e709d0e7566a1a68364724f3abf0704fc6cca71cdb4b9f0dfd92a4f2540813b"
+checksum = "3bfc02220bee55d050f8ebedce5f5ff71764028afcef8b58c1ae2bceb945e650"
 dependencies = [
  "ic-host-artifacts",
  "ic-host-fs",
@@ -1092,9 +1107,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-text"
-version = "0.75.0"
+version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df16fad97f3e46454e45c55470326a0f8c3a39087ee50c95e20e118f8454ffc8"
+checksum = "7e4ca740ecd5342a449b401fca5ce2521e34ea3ab482dc67d989de3862b75c4a"
 dependencies = [
  "unicode-width",
 ]
@@ -1112,9 +1127,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform"
-version = "0.33.3"
+version = "0.33.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74c6e194ce3a80487320edef0041e286fd89d6d96e8a9f641811c7e38b856e51"
+checksum = "9e61489a7377a2a67791f949a70976ec1445c75ac3dcc0ab5229cc1ea569385a"
 dependencies = [
  "ic-platform-types",
  "num-bigint 0.5.1",
@@ -1124,9 +1139,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-macros"
-version = "0.22.4"
+version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cbf358924a3c46f8b5d6c75e2704c0d8599c1dcf488811a281f4d792eef4ed7"
+checksum = "9de8495d8ca3ff74e9d458b89674cc7a916460fdd1b5c6764bcc03760cd8c65c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1135,9 +1150,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime"
-version = "0.22.4"
+version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e6f21438c0da085688e3ae56429145e6f907a2e79e611e4cc9f4b7167a366ab"
+checksum = "92a494623fc12ba0673eb18518612e95e9a103d88ba71d4bd8fa902a227fde80"
 dependencies = [
  "ic-platform-macros",
  "ic-platform-runtime-guard",
@@ -1151,9 +1166,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime-guard"
-version = "0.22.4"
+version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e175a496297a650acadba356f6218489c983be6ac5f8e40b386a5f92d285ca7c"
+checksum = "93880ece1df84dd6462c4b42e7b454c603d216e3f8f2265f258f1153a82cd842"
 
 [[package]]
 name = "ic-platform-types"
@@ -1181,9 +1196,9 @@ dependencies = [
 
 [[package]]
 name = "ic-testkit"
-version = "0.105.0"
+version = "0.106.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf262da9066c039d1e875754379c3f5c2f61ab14a1f6eee779515c2f15eabb13"
+checksum = "090cea21af2208dad7a359e99fe803b356fe8daa27cdc52d545df7de3b32c43e"
 dependencies = [
  "ic-host-artifacts",
  "ic-host-fs",
@@ -1217,9 +1232,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.22.1"
+version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f1edacb3dd444614ec734dc3b8a46a4ec5887d505522d771245b80d185f05ec"
+checksum = "be2bdd6a6d430182fa2ce49ea7e53461ea20d4790c5f299f6b0d04860f8bbd84"
 dependencies = [
  "bytemuck",
  "postcard",
@@ -2755,9 +2770,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.43.1"
+version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "467162f616caafe69c965fe4e96173a0df37256f4767bfefd28114781aad76b3"
+checksum = "cb81a5f9c13f50614af8468b599c3a05327f09f643aa954dc8e6878aa649263f"
 
 [[package]]
 name = "toml_datetime"

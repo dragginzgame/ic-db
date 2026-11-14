@@ -1,11 +1,11 @@
 //! Small typed identity boundary over shared commit/traversal execution.
 //! Primary and secondary keys share their ordered component encoding.
-use crate::{Error, FieldType, IndexValue, U256, Ulid};
+use crate::{Error, FieldType, IndexValue, Principal, U256, Ulid, key};
 
 mod sealed {
     pub trait Sealed {}
 }
-/// Supported supplied primary key: fixed-width integers, U256 or Ulid.
+/// Supported supplied primary key: fixed-width integers, U256, Ulid or Principal.
 /// This sealed boundary keeps lookup/delete/page arguments typed to their entity.
 pub trait PrimaryKey: sealed::Sealed + Copy + Eq {
     /// Convert at the generated entity boundary.
@@ -31,6 +31,9 @@ macro_rules! primary_keys {
             }
         )*
         impl RowKey {
+            pub(crate) fn supports(field: FieldType) -> bool {
+                matches!(field, $( FieldType::$variant )|*)
+            }
             pub(crate) fn from_index(value: IndexValue<'_>) -> Result<Self, Error> {
                 match value { $( IndexValue::$variant(value) => Ok(Self::$variant(value)), )* _ => Err(Error::Corrupt) }
             }
@@ -52,26 +55,10 @@ primary_keys!(
     Int64(i64),
     Int128(i128),
     U256(U256),
-    Ulid(Ulid)
+    Ulid(Ulid),
+    Principal(Principal)
 );
 impl RowKey {
-    pub(crate) fn width(field: FieldType) -> Result<usize, Error> {
-        match field {
-            FieldType::Nat8 => Ok(1),
-            FieldType::Nat16 => Ok(2),
-            FieldType::Nat32 => Ok(4),
-            FieldType::Nat64 => Ok(8),
-            FieldType::Nat128 => Ok(16),
-            FieldType::Int8 => Ok(1),
-            FieldType::Int16 => Ok(2),
-            FieldType::Int32 => Ok(4),
-            FieldType::Int64 => Ok(8),
-            FieldType::Int128 => Ok(16),
-            FieldType::U256 => Ok(32),
-            FieldType::Ulid => Ok(16),
-            _ => Err(Error::Corrupt),
-        }
-    }
     pub(crate) fn decode(bytes: &[u8], field: FieldType) -> Result<Self, Error> {
         match field {
             FieldType::Nat8 => Ok(Self::Nat8(u8::from_be_bytes(
@@ -120,6 +107,16 @@ impl RowKey {
             FieldType::Ulid => Ok(Self::Ulid(Ulid::from_bytes(
                 bytes.try_into().map_err(|_| Error::Corrupt)?,
             ))),
+            FieldType::Principal => {
+                let mut remaining = bytes;
+                key::consume(&mut remaining, field)?;
+                if !remaining.is_empty() {
+                    return Err(Error::Corrupt);
+                }
+                Principal::try_from_slice(&bytes[1..])
+                    .map(Self::Principal)
+                    .map_err(|_| Error::Corrupt)
+            }
             _ => Err(Error::Corrupt),
         }
     }

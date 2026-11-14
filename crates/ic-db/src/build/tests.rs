@@ -5,6 +5,8 @@ static PARENT: EntitySchema = EntitySchema {
     id: crate::schema::handle("Parent"),
     name: "Parent",
     fields: &[FieldSchema {
+        default: None,
+        managed: None,
         name: "id",
         value: FieldType::Nat64,
         optional: false,
@@ -18,12 +20,16 @@ static CHILD: EntitySchema = EntitySchema {
     name: "Child",
     fields: &[
         FieldSchema {
+            default: None,
+            managed: None,
             name: "id",
             value: FieldType::Nat64,
             optional: false,
             reference: None,
         },
         FieldSchema {
+            default: None,
+            managed: None,
             name: "parent",
             value: FieldType::Nat64,
             optional: true,

@@ -210,6 +210,9 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
+    pub(crate) const fn position(&self) -> usize {
+        self.position
+    }
     pub fn new(bytes: &'a [u8]) -> Result<Self, Error> {
         if bytes.len() > MAX_ROW_BYTES {
             return Err(Error::Corrupt);

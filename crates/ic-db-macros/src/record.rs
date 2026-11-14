@@ -38,6 +38,14 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
     let name = name.unwrap_or_else(|| item.ident.to_string());
     let mut fields = fields.ok_or_else(|| fail("record requires fields"))?;
+    if fields
+        .iter()
+        .any(|f| f.default.is_some() || f.managed.is_some())
+    {
+        return Err(fail(
+            "defaults and managed times currently belong to entity fields, not nested record fields",
+        ));
+    }
     fields.sort_by(|a, b| a.name.cmp(&b.name));
     if name.is_empty()
         || name.len() > 64

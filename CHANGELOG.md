@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.6.0] - 2026-11-14 (development checkpoint)
+
+### ▶️ Try it
+
+The CLI still inspects a fresh local fixture and queries `Entry`. Look for
+`DefaultRow`: its **Info** column now shows literal defaults beside field bounds.
+`ManagedRow` shows database-owned creation/update timestamps in the same column.
+`PrincipalKey` demonstrates a Principal primary key and optional self-reference.
+ULID issuance remains an explicit Rust API.
+
+```sh
+make db
+db schema
+db query --limit 2
+```
+
+### 🛠️ Changes
+
+- Support supplied Principal primary keys and exact typed references through the
+  existing batch, lookup and pagination paths. Empty and full-width principals
+  retain length-first ordering; invalid stored lengths/owners refuse intact.
+  Reuse the shared index codec and remove the fixed-width reference assumption;
+  no new executor, durable metadata or authored attribute is needed.
+
+- Add `managed = "created_at"` / `"updated_at"` for Timestamp fields and
+  `Batch::at(time)`. Inserts share one captured time; replacements preserve
+  creation and update time only for real changes. No-op timestamps/revisions
+  remain unchanged, while authored/stale managed values and backward real-change
+  clocks refuse before mutation. No hidden clock, callback or durable journal.
+  Managed policy enters schema identity; no existing attribute is removed.
+  Native and Wasm regressions retain IcyDB's no-op and corrupt-order guarantees.
+  Shared overhead adds 3.9 KB of Wasm and less than 0.1% to measured scalar
+  query/write instructions; managed-write costs remain a separate workload.
+
+- Adopt Toko Tooling 0.43.2 through its published snapshot installer. Refresh
+  qualification to Testkit 0.106.0, Host Artifacts/FS/Process 0.79.0 and Host Text
+  0.76.0, plus the newly selected Platform Runtime/macros/guard 0.22.5 patch.
+  Storage, Wire, Platform Types and the native Platform facade are already current.
+  Remove shared-source path overrides and use directory modules where children
+  exist. The private record-schema fixture becomes a normal Cargo dependency
+  for host collection and target compilation; product crates and schema identity
+  stay unchanged.
+  The matched scalar benchmark preserves IC DB's query/write execution costs;
+  the design records the small artifact changes from the Runtime patch separately.
+
+- Add typed `Entity::insert()` inputs and `Batch::insert_input`. Omitted fields
+  use declared integer, Bool or bounded Text defaults; explicit values, including
+  `None`, remain unchanged. Missing required fields refuse. Use
+  `field(..., default = 7)` in the existing attribute syntax; no attribute is
+  removed. Replacements and decoding never reapply defaults.
+- Include defaults in schema identity and inspection. Changed default policy
+  refuses incompatible stored contracts intact; contracts without defaults keep
+  their fingerprints. Native and installed Wasm checks cover default collisions,
+  exact integer limits, refusal/trap rollback and upgrade preservation. Richer
+  defaults and primary-key defaults remain separate work.
+
+- Add `UlidGenerator` with an explicit operation timestamp and host-provided
+  randomness. Preserve monotonic ordering at equal/backward times and refuse
+  invalid timestamps or suffix exhaustion without changing state. Hosts own
+  issuance checkpoints; ordinary refusals may leave gaps, while IC traps roll
+  back the current execution. No clock, RNG dependency or stored-format change.
+
+- Give the shared fixture transport an ordinary private qualification crate,
+  replacing source-path sharing. Keep the same bounded Platform hooks; product
+  crates acquire no transport dependency. Benchmark source capture now records
+  intentional tracked deletions through its existing source diff.
+
 ## [0.5.0] - 2026-11-14 (development checkpoint)
 
 ### ▶️ Try it

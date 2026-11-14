@@ -3,8 +3,7 @@
 //! One fixed, bounded grouped sum to probe revision invalidation and durable progress.
 //! This fixture is not a query API, schema admission implementation or job framework.
 
-#[path = "../../transport.rs"]
-mod transport;
+use ic_db_qualification_transport as transport;
 
 use ic_platform_runtime::cdk;
 use ic_storage::{

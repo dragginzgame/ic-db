@@ -2,6 +2,193 @@ use super::expand;
 use quote::quote;
 
 #[test]
+fn managed_timestamps_reject_ambiguous_or_authored_policies() {
+    for field in [
+        quote!(field(
+            name = "time",
+            value(item(prim = "Nat64")),
+            managed = "created_at"
+        )),
+        quote!(field(
+            name = "time",
+            value(opt, item(prim = "Timestamp")),
+            managed = "created_at"
+        )),
+        quote!(field(
+            name = "time",
+            value(many, max_items = 2, item(prim = "Timestamp")),
+            managed = "created_at"
+        )),
+        quote!(field(
+            name = "time",
+            value(item(prim = "Timestamp")),
+            managed = "unknown"
+        )),
+        quote!(field(
+            name = "time",
+            value(item(prim = "Timestamp")),
+            managed = "created_at",
+            default = 0
+        )),
+        quote!(field(
+            name = "time",
+            value(item(prim = "Timestamp")),
+            managed = "created_at",
+            managed = "updated_at"
+        )),
+    ] {
+        assert!(
+            expand(
+                quote!(pk(field="id"), fields(field(name="id",value(item(prim="Nat64"))),#field)),
+                quote!(
+                    struct Entry {}
+                )
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        expand(
+            quote!(
+                pk(field = "id"),
+                fields(
+                    field(name = "id", value(item(prim = "Nat64"))),
+                    field(
+                        name = "a",
+                        value(item(prim = "Timestamp")),
+                        managed = "created_at"
+                    ),
+                    field(
+                        name = "b",
+                        value(item(prim = "Timestamp")),
+                        managed = "created_at"
+                    )
+                )
+            ),
+            quote!(
+                struct Entry {}
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        super::record::expand(
+            quote!(fields(field(
+                name = "time",
+                value(item(prim = "Timestamp")),
+                managed = "created_at"
+            ))),
+            quote!(
+                struct Nested {}
+            )
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn literal_defaults_reject_wrong_types_ranges_and_unimplemented_shapes() {
+    for field in [
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = 256
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Int8")),
+            default = -129
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Int8")),
+            default = 128
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = -1
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = 1_u8
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Bool")),
+            default = 0
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = true
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Text", max_bytes = 3)),
+            default = "éé"
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = 1 + 2
+        )),
+        quote!(field(
+            name = "value",
+            value(many, max_items = 3, item(prim = "Nat8")),
+            default = 1
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Timestamp")),
+            default = 0
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Nat8")),
+            default = 1,
+            default = 2
+        )),
+    ] {
+        assert!(
+            expand(
+                quote!(pk(field="id"), fields(field(name="id",value(item(prim="Nat64"))),#field)),
+                quote!(
+                    struct Entry {}
+                )
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        expand(
+            quote!(
+                pk(field = "id"),
+                fields(field(name = "id", value(item(prim = "Nat64")), default = 1))
+            ),
+            quote!(
+                struct Entry {}
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        super::record::expand(
+            quote!(fields(field(
+                name = "value",
+                value(item(prim = "Nat8")),
+                default = 1
+            ))),
+            quote!(
+                struct Nested {}
+            )
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn invalid_authoring_refuses_before_emitting_a_schema() {
     let field = quote!(field(name = "id", value(item(prim = "Nat64"))));
     for args in [
@@ -150,7 +337,6 @@ fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
         "Subaccount",
         "Float32",
         "Float64",
-        "Principal",
     ] {
         let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
         let wide = quote!(field(name="wide",value(item(prim=#prim))));
@@ -636,10 +822,21 @@ fn ulid_keys_are_supplied_nonoptional_scalars() {
 }
 
 #[test]
-fn integer_keys_require_nonoptional_scalar_fields() {
+fn primary_keys_require_nonoptional_scalar_fields() {
     for prim in [
-        "Nat8", "Nat16", "Nat32", "Nat64", "Nat128", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "Nat8",
+        "Nat16",
+        "Nat32",
+        "Nat64",
+        "Nat128",
+        "Int8",
+        "Int16",
+        "Int32",
+        "Int64",
+        "Int128",
         "U256",
+        "Ulid",
+        "Principal",
     ] {
         let id = quote!(field(name="id",value(item(prim=#prim))));
         assert!(

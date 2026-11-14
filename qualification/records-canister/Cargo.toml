@@ -22,13 +22,14 @@ fault-injection = []
 
 [dependencies]
 ic-db.workspace = true
+ic-db-m1-records-schema.workspace = true
+ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["cdk"] }
 ic-storage.workspace = true
 ic-wire.workspace = true
-serde.workspace = true
 
 [build-dependencies]
-ic-db = { workspace = true, features = ["build"] }
+ic-db-m1-records-schema = { workspace = true, features = ["build"] }
 
 [lints]
 workspace = true

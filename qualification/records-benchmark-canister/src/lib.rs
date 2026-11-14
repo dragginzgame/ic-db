@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 //! One-entity host matching the frozen IcyDB scalar workload, without fault controls.
 
-#[path = "../../transport.rs"]
-mod transport;
+use ic_db_qualification_transport as transport;
 
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
 use ic_platform_runtime::cdk;

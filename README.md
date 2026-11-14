@@ -26,7 +26,7 @@ exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers,
 U256, Ulid, Date, Timestamp, Duration, Decimal, finite floats, Bool, Principal,
 Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
-batches with required/optional integer or Ulid references and indexed restricted deletion. This is
+batches with required/optional integer, Ulid or Principal references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
@@ -37,8 +37,13 @@ support Nat/Int8/16/32/64/128, U256, Ulid, Date, Timestamp, Duration, Decimal,
 finite Float32/Float64, Account/Subaccount,
 Principal, Bool and bounded Text fields, including
 optional values, compound keys and uniqueness. Optional unique indexes explicitly
-require `present_only`; ordinary indexes retain absent values. Primary keys support supplied signed/unsigned 8–128-bit integers, U256 and Ulid;
+require `present_only`; ordinary indexes retain absent values. Primary keys support supplied signed/unsigned 8–128-bit integers, U256, Ulid and Principal;
 references must match the target’s exact key type.
+For Principal identities, declare `pk(field = "id")` and an `id` field with
+`value(item(prim = "Principal"))`. Lookup, delete and page cursors take
+`ic_db::Principal` directly. Ordering is length first, then bytes; the empty
+management principal is a valid identity, distinct from an absent reference.
+`db schema` shows the `PrincipalKey` example and its indexed self-reference.
 An optional reference's `None` has no target; `Some(id)` requires a surviving
 target. Unlinking the last dependant and deleting its target can share one batch.
 Schemas no longer require numeric entity or index IDs. Entity names default to
@@ -50,7 +55,7 @@ define durable identity. The fixture now uses
 IcyDB's two-stage approach: host-only `ctor` registration, followed by validated
 schema assembly generated for the target. This is implemented for scalar entities;
 named records and payload enums participate through typed fields. See the
-[shared schema](qualification/records-canister/src/schema.rs) and its
+[shared schema](qualification/records-schema/src/lib.rs) and its
 [build script](qualification/records-canister/build.rs).
 Records use `#[record(fields(...))]` and enums use
 `#[enum_(variant(name = "Ready"), variant(name = "Data", value(item(is = "Details"))))]`.
@@ -97,6 +102,39 @@ a clock or acquire entropy. The `ulid` dependency's default RNG feature is disab
 Declare `pk(field = "id")` with `id` of `prim = "Ulid"` to use ULID primary keys.
 `get`, `delete` and `page` then accept ULIDs, including typed continuation keys.
 Inspect `KeyRow` and its mixed-key references with `db schema`.
+`UlidGenerator::generate(operation_timestamp, randomness)` now offers explicit
+issuance from a `Timestamp` and 10 host-provided random bytes. Equal/backward time
+increments the preceding suffix; invalid time and exhaustion refuse unchanged.
+The host owns the stream and any upgrade checkpoint via `last()` / `resume_after()`.
+Resetting state can repeat IDs, and issuance before a normally refused batch can
+leave gaps. Schema-owned automatic identity generation
+remain separate work; no clock or RNG is introduced into the database.
+
+Entity fields can now declare literal defaults, for example
+`field(name = "count", value(item(prim = "Nat16")), default = 7)`.
+The first supported defaults are integers, Bool and bounded Text. Construct a
+typed insert with `batch.insert_input(MyEntity::insert().id(1))?`, then commit the
+batch normally. The returned row is prepared, not yet persistent. Setters supply
+explicit values; `.label(None)` keeps optional absence even if `label` has a
+default. Omitted optional fields without defaults become `None`; missing required
+fields refuse. Fully specified `batch.insert(&row)` remains available.
+Defaults never run on replacement, decode or reopen. Changing a declared default
+changes the schema contract; it does not silently backfill stored rows. Inspect
+`DefaultRow` with `db schema`. Nested-record and primary-key defaults are not yet
+supported; no existing authoring attributes were removed.
+
+For database-managed time, declare nonoptional Timestamp fields with
+`managed = "created_at"` or `managed = "updated_at"`. Each role may appear once,
+independently of the other. Begin writes with `Batch::at(operation_timestamp)`;
+the host supplies one captured time for the whole batch. The insert builder omits
+managed setters, and direct fully authored inserts refuse for these entities.
+For replacement, read the entity, change authorable fields and call `replace`.
+Commit rejects changed or stale managed values, preserves creation and sets update
+time only on a real change. Read after commit when the assigned update time is
+needed. No-op replacements preserve timestamps and revisions; real changes with
+a clock earlier than stored time refuse. Decode/reopen never assign time. Inspect
+`ManagedRow` with `db schema` for the roles beside their units in **Info**.
+
 Integer primary keys use the same `pk(field = "id")` declaration. Lookups, deletes
 and page cursors use the exact Rust field type; references do not implicitly
 widen or change signedness. `SignedKey` and `WideKey` demonstrate Int128/U256

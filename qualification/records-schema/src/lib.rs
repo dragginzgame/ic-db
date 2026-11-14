@@ -1,17 +1,21 @@
+#![expect(
+    missing_docs,
+    reason = "Synthetic schema declarations are private qualification inputs, not a product API."
+)]
 //! Shared authored schema: compiled once for host collection and again for the target.
 
 use ic_db::entity;
 
-pub(crate) mod entries {
+pub mod entries {
     use ic_db::entity;
     #[entity( pk(field="id", source="external"),
     index(fields=["category", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="category", value(item(prim="Nat64"))),
         field(name="amount", value(item(prim="Nat64")))))]
-    pub(crate) struct Entry {}
+    pub struct Entry {}
 }
-pub(crate) use entries::Entry;
+pub use entries::Entry;
 
 #[entity(
     pk(field = "id"),
@@ -29,7 +33,7 @@ pub(crate) use entries::Entry;
         field(name = "priority", value(opt, item(prim = "Nat64")))
     )
 )]
-pub(crate) struct Document {}
+pub struct Document {}
 
 #[entity(
     pk(field = "id"),
@@ -41,7 +45,7 @@ pub(crate) struct Document {}
         field(name = "optional_unsigned", value(opt, item(prim = "Nat128")))
     )
 )]
-pub(crate) struct WideNumbers {}
+pub struct WideNumbers {}
 
 #[entity(
     pk(field = "id"),
@@ -51,7 +55,7 @@ pub(crate) struct WideNumbers {}
         field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 32)))
     )
 )]
-pub(crate) struct BinaryObject {}
+pub struct BinaryObject {}
 
 #[entity(
     pk(field = "id"),
@@ -71,7 +75,7 @@ pub(crate) struct BinaryObject {}
         field(name = "optional_unsigned32", value(opt, item(prim = "Nat32"))),
     )
 )]
-pub(crate) struct NarrowNumbers {}
+pub struct NarrowNumbers {}
 
 #[entity(
     pk(field = "id"),
@@ -83,19 +87,19 @@ pub(crate) struct NarrowNumbers {}
         field(name = "optional", value(opt, item(prim = "Principal")))
     )
 )]
-pub(crate) struct IdentityRow {}
+pub struct IdentityRow {}
 
 #[entity( pk(field="id"), index(fields=["next", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="next", value(opt, item(prim="Nat64")), references(entity="Self",index="next,id"))))]
-pub(crate) struct OptionalLink {}
+pub struct OptionalLink {}
 
 #[ic_db::enum_(
     variant(name = "Ready"),
     variant(name = "Archived"),
     variant(name = "Draft")
 )]
-pub(crate) struct Lifecycle {}
+pub struct Lifecycle {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -104,18 +108,18 @@ pub(crate) struct Lifecycle {}
         field(name = "previous", value(opt, item(is = "Lifecycle")))
     )
 )]
-pub(crate) struct EnumRow {}
+pub struct EnumRow {}
 
 #[ic_db::record(fields(
     field(name = "label", value(item(prim = "Text", max_bytes = 8))),
     field(name = "x", value(item(prim = "Nat16")))
 ))]
-pub(crate) struct Details {}
+pub struct Details {}
 #[ic_db::record(fields(
     field(name = "left", value(item(indirect, is = "NestedPayload"))),
     field(name = "right", value(item(indirect, is = "NestedPayload")))
 ))]
-pub(crate) struct Branch {}
+pub struct Branch {}
 #[ic_db::enum_(
     variant(name = "Data", value(item(is = "Details"))),
     variant(name = "Idle"),
@@ -123,7 +127,7 @@ pub(crate) struct Branch {}
     variant(name = "Maybe", value(opt, item(prim = "Nat64"))),
     variant(name = "Pair", value(item(is = "Branch")))
 )]
-pub(crate) struct NestedPayload {}
+pub struct NestedPayload {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -132,10 +136,10 @@ pub(crate) struct NestedPayload {}
         field(name = "payload", value(item(is = "NestedPayload")))
     )
 )]
-pub(crate) struct NestedRow {}
+pub struct NestedRow {}
 
 #[ic_db::record(fields(field(name = "children", value(many, max_items = 4, item(is = "Self")))))]
-pub(crate) struct ListNode {}
+pub struct ListNode {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -148,10 +152,10 @@ pub(crate) struct ListNode {}
         field(name = "trees", value(many, max_items = 4, item(is = "ListNode")))
     )
 )]
-pub(crate) struct ListRow {}
+pub struct ListRow {}
 
 #[ic_db::set(item(prim = "Int16"), max_items = 3)]
-pub(crate) struct Scores {}
+pub struct Scores {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -159,14 +163,14 @@ pub(crate) struct Scores {}
         field(name = "scores", value(item(is = "Scores")))
     )
 )]
-pub(crate) struct SetRow {}
+pub struct SetRow {}
 
 #[ic_db::map(
     key(prim = "Int16"),
     value(opt, item(prim = "Text", max_bytes = 4)),
     max_items = 3
 )]
-pub(crate) struct Rates {}
+pub struct Rates {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -174,10 +178,10 @@ pub(crate) struct Rates {}
         field(name = "values", value(item(is = "Rates")))
     )
 )]
-pub(crate) struct MapRow {}
+pub struct MapRow {}
 
 #[ic_db::map(key(prim = "Nat16"), value(item(is = "Self")), max_items = 256)]
-pub(crate) struct MapTree {}
+pub struct MapTree {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -185,7 +189,7 @@ pub(crate) struct MapTree {}
         field(name = "tree", value(item(is = "MapTree")))
     )
 )]
-pub(crate) struct MapTreeRow {}
+pub struct MapTreeRow {}
 
 #[entity(
     pk(field = "id"),
@@ -198,7 +202,7 @@ pub(crate) struct MapTreeRow {}
         field(name = "zone", value(item(prim = "Bool")))
     )
 )]
-pub(crate) struct BigNumbers {}
+pub struct BigNumbers {}
 
 #[entity(
     pk(field="id"),
@@ -213,7 +217,7 @@ pub(crate) struct BigNumbers {}
         field(name="zone",value(item(prim="Bool")))
     )
 )]
-pub(crate) struct FloatRow {}
+pub struct FloatRow {}
 
 #[entity(
     pk(field="id"),
@@ -228,7 +232,7 @@ pub(crate) struct FloatRow {}
         field(name="zone",value(item(prim="Bool")))
     )
 )]
-pub(crate) struct AccountRow {}
+pub struct AccountRow {}
 
 #[entity(
     pk(field = "id"),
@@ -241,7 +245,7 @@ pub(crate) struct AccountRow {}
         field(name = "zone", value(item(prim = "Bool")))
     )
 )]
-pub(crate) struct UlidRow {}
+pub struct UlidRow {}
 
 #[entity(
     pk(field = "id"),
@@ -254,7 +258,7 @@ pub(crate) struct UlidRow {}
         field(name = "zone", value(item(prim = "Bool")))
     )
 )]
-pub(crate) struct DateRow {}
+pub struct DateRow {}
 
 #[entity(
     pk(field="id"),
@@ -271,7 +275,7 @@ pub(crate) struct DateRow {}
         field(name="zone",value(item(prim="Bool")))
     )
 )]
-pub(crate) struct TimeRow {}
+pub struct TimeRow {}
 
 #[entity(pk(field="id"),index(fields=["zone","value","id"]),index(field="maybe",unique,present_only),fields(
     field(name="id",value(item(prim="Nat64"))),
@@ -279,29 +283,85 @@ pub(crate) struct TimeRow {}
     field(name="value",value(item(prim="Decimal",scale=2))),
     field(name="zone",value(item(prim="Bool")))
 ))]
-pub(crate) struct DecimalRow {}
+pub struct DecimalRow {}
 
 #[entity(pk(field="id"),index(field="value",unique),index(fields=["owner","id"]),fields(
     field(name="id",value(item(prim="Ulid"))),
     field(name="owner",value(opt,item(prim="Nat64")),references(entity="Numbered")),
     field(name="value",value(item(prim="Nat64")))
 ))]
-pub(crate) struct KeyRow {}
+pub struct KeyRow {}
 #[entity(pk(field="id"),index(fields=["target","id"]),fields(
     field(name="id",value(item(prim="Nat64"))),
     field(name="target",value(opt,item(prim="Ulid")),references(entity="KeyRow"))
 ))]
-pub(crate) struct Numbered {}
+pub struct Numbered {}
 
 #[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
     field(name="id",value(item(prim="Int128"))),
     field(name="peer",value(opt,item(prim="U256")),references(entity="WideKey")),
     field(name="rank",value(item(prim="Nat64")))
 ))]
-pub(crate) struct SignedKey {}
+pub struct SignedKey {}
 #[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
     field(name="id",value(item(prim="U256"))),
     field(name="peer",value(opt,item(prim="Int128")),references(entity="SignedKey")),
     field(name="rank",value(item(prim="Nat64")))
 ))]
-pub(crate) struct WideKey {}
+pub struct WideKey {}
+
+#[entity(
+    pk(field = "id"),
+    index(field = "label", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "count", value(item(prim = "Nat16")), default = 7),
+        field(name = "enabled", value(item(prim = "Bool")), default = true),
+        field(
+            name = "label",
+            value(opt, item(prim = "Text", max_bytes = 8)),
+            default = "draft"
+        )
+    )
+)]
+pub struct DefaultRow {}
+
+#[entity(
+    pk(field = "id"),
+    index(field = "body", unique),
+    index(field = "updated"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "body",
+            value(item(prim = "Text", max_bytes = 32)),
+            default = "ready"
+        ),
+        field(
+            name = "created",
+            value(item(prim = "Timestamp")),
+            managed = "created_at"
+        ),
+        field(
+            name = "updated",
+            value(item(prim = "Timestamp")),
+            managed = "updated_at"
+        )
+    )
+)]
+pub struct ManagedRow {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["next","id"]),fields(
+    field(name="id",value(item(prim="Principal"))),
+    field(name="next",value(opt,item(prim="Principal")),references(entity="Self")),
+    field(name="rank",value(item(prim="Nat64")))
+))]
+pub struct PrincipalKey {}
+
+/// Collect this crate’s declarations and emit their target schema assembly.
+/// # Errors
+/// Refuses an invalid schema graph or target path.
+#[cfg(feature = "build")]
+pub fn generate(target: &str) -> Result<String, ic_db::build::Error> {
+    ic_db::build::generate(module_path!(), target)
+}

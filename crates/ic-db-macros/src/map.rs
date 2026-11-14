@@ -43,6 +43,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
     let max = max.expect("many requires max_items");
     let key = Field {
+        default: None,
+        managed: None,
         name: "key".into(),
         kind,
         optional,
@@ -51,6 +53,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     };
     let (kind, optional, many) = value.ok_or_else(|| fail("map requires value(...)"))?;
     let mut value = Field {
+        default: None,
+        managed: None,
         name: "value".into(),
         kind,
         optional,

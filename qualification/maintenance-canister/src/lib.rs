@@ -5,8 +5,7 @@
 
 mod capacity;
 
-#[path = "../../transport.rs"]
-mod transport;
+use ic_db_qualification_transport as transport;
 
 use ic_platform_runtime::cdk;
 use ic_storage::{

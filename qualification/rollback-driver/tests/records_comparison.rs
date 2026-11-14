@@ -1,6 +1,6 @@
 //! Same scalar workload, transport and supplier graph; different engine contracts.
-#[path = "support/scalar_workload.rs"]
-mod scalar_workload;
+mod support;
+use support::scalar_workload;
 
 #[tokio::test]
 async fn matched_scalar_records() {

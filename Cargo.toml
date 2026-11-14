@@ -4,7 +4,7 @@ members = ["crates/ic-db", "crates/ic-db-macros"]
 resolver = "3"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.100.0"
 publish = false
@@ -19,7 +19,7 @@ proc-macro2 = "1.0.107"
 quote = "1.0.47"
 sha2 = { version = "0.11.1", default-features = false }
 syn = "3.0.10"
-toko-tooling = "=0.43.1"
+toko-tooling = "=0.43.2"
 # IC DB owns generation policy; ulid's std feature enables native rand.
 ulid = { version = "3.0.0", default-features = false }
 

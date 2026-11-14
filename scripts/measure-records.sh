@@ -11,7 +11,16 @@ git status --short > "$evidence/source-status.txt"
 git diff --binary HEAD > "$evidence/source.diff"
 git ls-files -z --cached --others --exclude-standard -- \
     Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates qualification scripts Makefile |
-    xargs -0 shasum -a 256 > "$evidence/source-sha256.txt"
+    while IFS= read -r -d '' input; do
+        # An intentional tracked deletion is captured by source.diff, not hashed
+        # as if the old path still existed. Other unreadable inputs must fail.
+        if [[ ! -e "$input" && ! -L "$input" ]] &&
+            [[ "$(git diff --name-only --diff-filter=D HEAD -- "$input")" == "$input" ]]; then
+            printf 'Recorded deletion in source.diff: %s\n' "$input" >&2
+        else
+            shasum -a 256 -- "$input"
+        fi
+    done > "$evidence/source-sha256.txt"
 printf 'RUSTFLAGS=%s\nCARGO_ENCODED_RUSTFLAGS=%s\n' \
     "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" > "$evidence/build-environment.txt"
 

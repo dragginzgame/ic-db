@@ -49,7 +49,7 @@ case "${1:-}" in
         CARGO_NET_OFFLINE=true VALIDATION_REPOSITORY_ROOT="$PWD" \
           bash "$shared/run-validation-targets.sh" --fail-fast \
           tools-check release-lint fmt-check test doc docs-check m0-contracts \
-          m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance \
+          m0-endpoints m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance \
           m1-records-wasm m1-commit-failures
         bash "$shared/check-release-source.sh"
         [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]]

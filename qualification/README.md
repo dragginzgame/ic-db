@@ -14,7 +14,8 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 ## Standalone endpoint hooks
 
 All six canister hosts use Platform's generic `guard`, `decode_with` and
-`encode_with` hooks with the [fixed fixture codecs](transport.rs). No Canic or
+`encode_with` hooks with the [fixed fixture codecs](transport/src/lib.rs), shared
+through one private qualification crate with ordinary Cargo dependencies. No Canic or
 Wire Endpoint dependency is needed. The [standalone example](rollback-canister/src/entrypoints.rs)
 is executable qualification, not a new product API or endpoint framework.
 Platform owns execution/reply; Wire owns native frames. Existing method names,
@@ -48,9 +49,42 @@ db query --limit 3 --min 40
 db query --after 3 --limit 3 --min 40
 ```
 
+The explicit ULID issuance witness runs with `make m1-records-wasm`. It passes
+operation time and deterministic test randomness to the real `UlidGenerator`,
+inserts generated primary keys, and checks same/backward-time ordering, unchanged
+invalid-time refusal, consumed IDs after normal application/database refusals,
+complete rollback after a late trap, and explicit checkpoint restoration after
+upgrade. The fixture's heap state intentionally disappears on upgrade; this does
+not qualify automatic durable issuer recovery or cross-canister uniqueness.
+No schema default or managed timestamp attribute is implemented by this witness.
+
+The separate literal-default witness in `make m1-records-wasm` uses `DefaultRow`
+and the real typed insert builder. It checks omission versus explicit zero/false/
+`None`, unique default collisions, missing/oversized inputs, full backing rollback
+after refusal or a late trap, replacement/no-op revisions and unchanged upgrade.
+Native cases cover every integer width, canonical default identity and refusing a
+changed policy without touching storage. The schema fixture has 27 entities and
+eight named types; its expected hash includes independently framed default and
+managed-policy bytes. `db schema` displays those policies in **Info**.
+
+The managed-time witness uses `ManagedRow` and `Batch::at` with deterministic
+host-supplied times. It checks one batch time across rows, preserved creation,
+changed update indexes, byte-identical no-ops at earlier/equal/later times,
+ownership/regression/uniqueness refusals, late-trap rollback and unchanged upgrade.
+Native cases also cover independently selected roles, full-batch refusal,
+corrupt stored timestamp order, exact policy admission and incompatible reopening.
+No new clock, transport policy, persistent counter or historical reader is added.
+
+The Principal-key witness uses `PrincipalKey`: management/short/29-byte identities,
+length-first pages, exact lookup, cycles including `Some(empty Principal)`, unique
+rank exchanges, restricted deletion, no-ops, late traps and upgrade preservation.
+Native scalar-key tests add literal row/index frames, malformed lengths and wrong
+owners; previously supported integer/ULID schemas retain their fingerprints.
+
 The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
-Its [shared declarations](records-canister/src/schema.rs) compile in both the
-[host build script](records-canister/build.rs) and Wasm target. Host-only `ctor`
+Its [shared declarations](records-schema/src/lib.rs) are a private qualification
+crate used by both the [host build script](records-canister/build.rs) and Wasm
+target through ordinary Cargo dependencies. Host-only `ctor`
 registration collects full Rust paths; the second stage validates and seals the
 selected module's schema, then emits its typed assembly and expected fingerprint.
 Document's imported Entry type and OptionalLink's Self target exercise compiler
@@ -262,7 +296,7 @@ ordinary CLI host. The product library has no injection feature or durable fault
 state; the instrumented host must not be used for comparative performance claims.
 The M0 maintenance fixture remains available only through its dedicated probe.
 Remaining scope includes other identity/composite primary keys, nested references
-and broad fluent queries. Supplied integer/ULID primary keys and exact reference
+and broad fluent queries. Supplied integer/ULID/Principal primary keys and exact reference
 types use the shared paths qualified above. Secondary-index capabilities follow
 the current product type contract.
 Ordinary indexes retain absent values; optional unique indexes require explicit
@@ -277,7 +311,7 @@ unique owner and present-only optional identity indexes, plus Document's
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 
-The current M1 selection uses Storage 0.74.1, Runtime/macros/guard 0.22.4 and
+The current M1 selection uses Storage 0.74.1, Runtime/macros/guard 0.22.5 and
 Types 0.20.4. Testkit's transitive Platform now resolves to published 0.33.3;
 the earlier dependency-update check preceded its publication.
 Prior recorded M0/baseline results used the versions stated with that evidence;
@@ -548,13 +582,19 @@ Setup explicitly provisions PocketIC through Testkit's authenticated installer
 under `.tools/m0-pocketic`; the probe only checks that prepared selection. Testkit
 owns server and instance lifecycle. Cargo's artifact messages select the compiled
 Wasm; the probe does not infer an internal target-directory filename.
-The locked Testkit is 0.105.0 with PocketIC 16.1.0. Calls use raw client methods
+The locked Testkit is 0.106.0 with PocketIC 16.1.0. Calls use raw client methods
 and this workspace's explicit Wire codec/budgets; no `ic-testkit-wire` adapter is
-required. Direct benchmark inspection uses `ic-host-artifacts` 0.78.0; the CLI
-uses `ic-host-text` 0.75.0. Testkit's Artifacts/FS/Process dependencies now also
-resolve to 0.78.0, with one Artifacts version. Tests use fresh instances and do
-not need the reusable pools retired in Testkit 0.105.0. No host package enters
+required. Direct benchmark inspection uses `ic-host-artifacts` 0.79.0; the CLI
+uses `ic-host-text` 0.76.0. Testkit's Artifacts/FS/Process dependencies also
+resolve to 0.79.0, with one Artifacts version. Tests use fresh instances and do
+not need the reusable pools retired in Testkit 0.105.0 or the diagnostic reports
+retired in 0.106.0. The CLI uses Text's retained escaping/width/table APIs, not
+its removed domain formatters. No host package enters
 the database product or deployed Wasm.
+The adoption was qualified with native/Wasm Clippy, record/default/generator and
+endpoint-boundary Wasm tests, the schema fingerprint oracle and the matched scalar
+comparison. Earlier probe runs retain their own dependency evidence; this refresh
+does not relabel every historical M0 result as a new run.
 
 The fixture uses published IC Storage collections with one row map and two index
 maps. Wire/Platform exports are private experiment controls, not product endpoints;

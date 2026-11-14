@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           scanner="$(bash vendor/toko-tooling/scripts/ci/install-ci-tool.sh gitleaks --install-dir "$RUNNER_TEMP/ic-db-ci-tools")"
-          "$scanner" git . --redact --no-banner
+          "$scanner" git . --redact=100 --no-banner --no-color --log-level error
   scaffold:
     strategy:
       fail-fast: false

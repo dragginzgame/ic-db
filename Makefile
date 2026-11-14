@@ -128,11 +128,11 @@ m1-records-artifact:
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
 m1-records:
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test dates --test times --test time_values --test decimals --test primary_keys --test integer_keys --test schema_build --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test defaults --test managed --test generation --test principal_keys -- --nocapture
 
 .PHONY: m1-commit-failures
 m1-commit-failures:

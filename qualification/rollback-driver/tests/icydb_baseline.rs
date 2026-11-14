@@ -1,6 +1,6 @@
 //! Standalone measurement of frozen SQL-disabled IcyDB using the shared workload.
-#[path = "support/scalar_workload.rs"]
-mod scalar_workload;
+mod support;
+use support::scalar_workload;
 
 #[tokio::test]
 async fn frozen_icydb_baseline() {

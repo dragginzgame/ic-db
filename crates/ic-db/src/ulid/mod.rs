@@ -2,6 +2,9 @@
 //! Generation, clocks and entropy are separate write-policy responsibilities.
 use std::{fmt, str::FromStr};
 
+mod generator;
+pub use generator::{UlidGenerationError, UlidGenerator};
+
 /// A 128-bit ULID with exact 16-byte storage and canonical uppercase text.
 ///
 /// This value has no automatic generator or randomness requirement. Construct

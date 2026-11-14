@@ -699,27 +699,78 @@ and arbitrary partial-index predicates remain separate work.
 Application-specific naming, normalization and length policies are not built into
 the engine; its declared type/comparison semantics remain shared and exact.
 
-Authoring/write policies must be settled before choosing generated input types.
-The following candidates retain useful IcyDB write guarantees without requiring
+The following write policies retain useful IcyDB guarantees without requiring
 its public structural mutation lane or SQL `DEFAULT` syntax:
 
-| Input or operation | Initial contract candidate |
+| Input or operation | Selected contract; implementation status below |
 | --- | --- |
 | Explicit optional `None` | Store absence; never reinterpret it as omission or request a default |
 | Insert omission | Resolve a declared default, otherwise optional absence; refuse a missing required value |
 | Partial update omission | Preserve the current value; no implicit default reapplication |
 | Whole-row update/replacement | Supply all authorable fields and preserve the selected primary key; missing-row behavior must be explicit, not an implicit generated-key insert |
 | Database-generated identity | Allocate during bounded preparation, validate the final key before mutation, publish any persistent allocator change with the batch; return the assigned key/row; no gap-free or secret-ID promise |
-| Managed timestamps | Capture one time per batch; insert sets creation/update time; a semantic change preserves creation and sets update time; a semantic no-op preserves both; reject time regression before mutation |
+| Managed timestamps | Capture one time per batch; insert sets declared creation/update roles; a semantic change preserves creation and sets update time; no-ops preserve both even with an earlier clock; reject regression on real changes and corrupt stored ordering on every path |
 | Reopen and maintenance | Do not rerun defaults, key generation or timestamp assignment on decode; transformations preserve values unless their recorded identity explicitly authorizes a change |
 
 Database-owned inputs must be structurally unauthorable or explicitly refused;
 they cannot silently override managed policy. Default/generator outputs still
 pass ordinary type, size, uniqueness and reference admission before mutation.
-Version semantic changes to these policies in the compiled contract. These are
-design requirements, not new probe coverage: generation across upgrades/refusals,
-timestamp no-op/regression and exact replacement/default behavior need focused
-M1 acceptance cases. No generated helper family is justified solely by this table.
+Version semantic changes to these policies in the compiled contract.
+
+The 0.6 typed insert slice implements omission with `Entity::insert()` and
+`Batch::insert_input`, returning the materialized entity before commit. One small
+input per entity contains optional supplied fields; an optional stored field has
+an outer omission marker, so explicit `None` remains distinct. This construction
+feeds existing encoding, constraints and commit logic. Fully specified inserts
+and replacements remain available; there is no partial-update builder yet.
+Literal defaults initially support signed/unsigned 8–128-bit integers, Bool and
+bounded Text, including optional present defaults. Missing required inputs refuse.
+Primary-key defaults, nested-record defaults and richer producers remain separate
+increments, not retired capabilities.
+
+Static literal metadata uses the owned scalar codec in a versioned schema-hash
+trailer. Default-free contracts retain their fingerprints; changing a default
+requires an admitted transition. No row layout, manifest field, journal or
+dependency is added. Inspection shows defaults beside bounds in the Info column.
+Native and real Wasm witnesses cover exact integer boundaries, explicit values,
+default uniqueness conflicts, refused/trapped writes, no-op replacements and
+unchanged reopen/upgrade. A separately assembled byte/hash oracle covers the
+fixture contract.
+
+The subsequent 0.6 managed-time slice declares nonoptional scalar Timestamp
+fields with `managed = "created_at"` or `"updated_at"`, at most one of each.
+Either role may stand alone; nested/optional managed fields refuse. `Batch::at`
+holds one explicit host-supplied Timestamp and never reads a clock or awaits.
+Generated insert inputs omit managed setters. Direct fully authored insertion of
+these entities refuses; the typed input returns its prepared assigned times.
+Replacement takes a complete entity with its current stored timestamps: changed
+or stale timestamp values refuse, creation is preserved, and a real change sets
+update time. The caller reads after commit if it needs the final assigned value.
+Equal timestamps are not an optimistic-concurrency token: distinct changes may
+share an operation time.
+Deletes need no operation time because they assign none.
+
+This retains IcyDB's frozen-time, no-op and corrupt-order regressions from
+`persisted_row/patch/tests.rs`, including rejection of inverted stored time even
+when authorable fields do not change. The canonical row codec makes byte equality
+the current semantic no-op test. A shared bounded preparation function locates only
+the two fixed-width time fields, checks ownership/progression and rewrites update
+bytes; ordinary index extraction and commit then enforce final-state constraints.
+No generic slot/provenance overlay, mutation interpreter or per-entity executor
+is introduced. A no-op validates stored order without rebuilding its index keys.
+
+Managed policy has its own versioned fingerprint trailer; entities without it
+retain their existing identities. Row codecs and manifest fields are unchanged.
+The added state is transient batch time and static field policy, plus the timestamp
+values explicitly authored into an application's rows. Reopen/decode preserve them;
+changed policy requires an explicit supported transition. Clock trust remains with
+the host, and no cross-canister or strictly increasing timestamp promise is made.
+
+This carries forward frozen IcyDB `6d421e3`'s omission, explicit-value and
+insert-only default guarantees, including its narrow-integer regression lessons
+from `db/data/persisted_row/patch`. It does not copy that structural mutation
+engine, slot/provenance model or SQL default lane: typed construction resolves
+omission before the single existing write path. No authoring attribute is removed.
 
 The initial operation matrix below is a proposed product contract, not delivered
 coverage. `Conditional` means an explicit component/comparator and encoded-size
@@ -1492,10 +1543,10 @@ Field validation runs before encoding and after decoding; whole-row bounds apply
 independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Ulid, Date,
 Timestamp, Duration, Decimal, finite Float32/Float64, Account/Subaccount, Principal,
 Bool and bounded Text components, including optional values; primary keys require
-non-optional signed/unsigned 8–128-bit integers, U256 or Ulid. Required/optional
+non-optional signed/unsigned 8–128-bit integers, U256, Ulid or Principal. Required/optional
 references match the target key type exactly.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
-Richer types, broader references, managed policies and fluent queries remain work;
+Richer types, broader references, generated identities and fluent queries remain work;
 no retained capability or product attribute has been retired.
 
 Date fields use `value(item(prim="Date"))`, including optional/list forms and
@@ -1599,21 +1650,43 @@ Independent byte/schema vectors, malformed text/widths, collection duplicates,
 row limits, uniqueness/no-ops, message rollback and unchanged upgrade qualify
 storage. They do not qualify generation or cross-canister uniqueness.
 
-**ULID generation carryover for the later write-policy increment.** IcyDB owns
+**ULID generation carryover and the first 0.6 increment.** IcyDB owns
 its generator because the upstream generator requires std. Native IcyDB lazily
 seeds an `ic-entropy` stream from `getrandom`; Wasm instead constructs a
 deterministic component from timestamp bits and a process-local sequence. It
 increments the previous 80-bit suffix for equal/backward timestamps and refuses
 overflow without changing the previous value. Commit `4cedc33e` changed the
 generator to accept the write operation's timestamp; generated fields must use
-that same captured time rather than independent clock reads. These are concrete
-invariants to retain/test, not permission to import the entire generator now.
-The generated-ID contract must explicitly settle 48-bit timestamp range,
-same/backward time, exhaustion, refusal/trap consumption, upgrade/reset state and
-cross-canister collision behavior. Process-local monotonicity alone does not prove
-uniqueness after a reset or across canisters. Generated identifiers are not secret
-tokens. Any entropy acquisition must occur outside the synchronous mutation
-boundary; no inter-canister randomness call may split an ordinary batch.
+that same captured time rather than independent clock reads.
+
+The explicit product `UlidGenerator` retains these ordering/overflow invariants
+without copying IcyDB's global generator or its target-specific randomness paths.
+Construction and suffix increment delegate to the existing feature-free `ulid`
+dependency. The caller supplies one operation `Timestamp` and 80 bits of host
+randomness. Negative or greater-than-48-bit millisecond times refuse before any
+state change. A first issuance at epoch zero uses the supplied randomness rather
+than treating a nil ID as an earlier issuance. Equal/backward times increment
+the previous suffix; exhaustion refuses without wrapping into another timestamp.
+The logical timestamp in that ID may differ from the operation time that future
+managed timestamp fields use.
+
+Successful issuance advances caller-owned state before database preparation.
+Expected application or database refusals may therefore consume IDs and leave
+gaps; an IC trap reverts state in its current execution. `last()` and
+`resume_after()` expose explicit checkpoint/restoration, without adding database
+metadata. The host must retain its authoritative last-issued value to preserve
+monotonicity across upgrades. Reset/stale state can repeat IDs; separate streams
+require independently provisioned randomness. This does not promise cross-canister
+uniqueness or secret-token suitability. The native and installed Wasm witnesses
+cover range/exhaustion, ordering, refusal/trap consumption, real indexed inserts
+and explicit restoration. They do not qualify an automatic recovery service.
+Any asynchronous entropy acquisition must precede the synchronous mutation
+boundary; no randomness call may split an ordinary batch. Literal schema defaults
+and managed timestamps are implemented separately above; automatic identity
+generation attributes remain a later write-policy
+increment, with one captured operation time and existing-row values preserved
+where required. The explicit ULID utility itself changes no authoring attribute
+or persisted contract; schema-owned policies are separate, versioned additions.
 
 Account/Subaccount fields use `value(item(prim="Account"))` or
 `prim="Subaccount"`, including optional/list forms and scalar set/map keys.
@@ -1707,8 +1780,8 @@ not removable padding. Decode and key inspection use the same admission rule,
 with only a small stack identity copy and no heap field allocation.
 Canonical identity ownership adds Platform Types as a direct dependency, including
 its text-support dependencies, but no transport, facade wrapper or general value
-layer. Secondary-index ordering is now admitted as described below; Principal
-primary keys and predicates remain separate work.
+layer. Secondary indexes and primary keys are now admitted as described below;
+general predicates remain separate work.
 
 Secondary keys adapt IcyDB's
 [ordered scalar rules](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/ordered/semantics.rs)
@@ -1820,16 +1893,17 @@ contract. The CLI uses
 compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
 terminal rendering and test endpoints stay outside the product crates.
 
-Supplied primary keys use `Entity::Key` (signed/unsigned 8–128-bit integers, U256
-or Ulid); `get`, `delete` and entity-page continuation retain that exact Rust type.
+Supplied primary keys use `Entity::Key` (signed/unsigned 8–128-bit integers, U256,
+Ulid or Principal); `get`, `delete` and entity-page continuation retain that exact Rust type.
 The sealed typed boundary converts to a small concrete key enum for shared
 batch/reference execution. A local macro emits only identical typed conversions; it
 adds neither a per-entity executor nor a general runtime value representation.
-The compiled primary field selects exact-width row keys, index owner values and
+The compiled primary field selects the framing of row keys, index owner values and
 nonunique index suffixes. Primary and secondary key encoding share the existing
 ordered scalar encoder: signed integers bias the sign bit, unsigned integers use
 big-endian bytes, and ULIDs retain their exact atom bytes. Payload widths are
-1/2/4/8/16/32 bytes. Nat64/ULID bytes and admitted schema identities are unchanged;
+1/2/4/8/16/32 bytes for fixed-width keys; Principal uses a length byte and 0–29
+significant bytes. Existing key bytes and admitted schema identities are unchanged;
 new primary-key types were previously refused and cannot reopen another key type’s
 data. No width or signedness conversion is implicit in arguments or references.
 
@@ -1837,7 +1911,7 @@ This retains IcyDB `6d421e3`'s entity-aware key validation and the corruption
 regressions in `db/data/key/tests.rs` and `db/commit/prepare/tests/mod.rs`:
 truncated/trailing keys, wrong row identity and inconsistent index ownership refuse
 before mutation. Its broader structural/composite key taxonomy and raw-key caches
-are not imported for these bounded fixed-width types. IcyDB’s structural primary-key
+are not imported for these bounded scalar types. IcyDB’s structural primary-key
 integer decoders enforce declared ranges before returning Int64/Nat64 components;
 IC DB retains each exact field width instead of adding that normalization layer.
 Native vectors cover every integer width, signed extrema and U256’s high half,
@@ -1847,7 +1921,17 @@ pages ending at MAX, unique swaps, mixed-key cycles and unchanged upgrade/rollba
 No schema attribute is removed or added. Other identity/composite primary keys,
 nested references and generated identities remain work.
 
-Required or optional supported integer/Ulid fields accept `references(entity = "Entry")` alongside
+Principal primary keys additionally retain the length-first encoding and
+missing/oversized/truncated-length regressions from IcyDB `6d421e3`'s
+`db/key_taxonomy/{mod,tests}.rs`. This extends our existing Principal index codec;
+it does not copy the structural taxonomy or add a persistent representation.
+Reference extraction consumes one framed component instead of assuming fixed width.
+Empty management-principal identity remains distinct from optional absence.
+Native/Wasm witnesses cover pages, lookup, full-width identities, cyclic references,
+unique exchanges, no-ops, refusal/late-trap rollback and unchanged upgrades;
+literal native vectors additionally reject malformed and wrong index owners.
+
+Required or optional supported integer/Ulid/Principal fields accept `references(entity = "Entry")` alongside
 their `value(...)` declaration. The target must be in the admitted schema and its
 primary-key type must match exactly; the
 selected ordinary index belongs to the dependent entity and must lead with this
@@ -1960,7 +2044,8 @@ this contract deliberately, rather than silently changing derived names.
 
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
 Revision/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
-the exact ordered primary-key bytes (declared-width integer or 16-byte ULID). Index keys
+the exact ordered primary-key bytes (declared-width integer, 16-byte ULID or
+length-framed Principal). Index keys
 add the generated index handle and declared components.
 Integers occupy their exact width in big-endian order, with signed values' leading
 sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
@@ -2240,10 +2325,11 @@ The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
 With named records, payload enums, lists, sets, maps, U256, finite floats,
-Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID
-primary keys, the current scalar host is 208,996 Wasm bytes and 188,913 code-section
-bytes. Hit/miss cost 488,157/493,646 instructions; listing costs 784,141. Complete
-read/modify/replace costs 842,942 instructions and 7,856,726 cycles.
+Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID/Principal
+primary keys, literal defaults and managed-time admission, the current scalar host
+is 216,496 Wasm bytes and 196,140 code-section bytes. Hit/miss cost 488,538/494,027
+instructions; listing costs 785,610. Complete read/modify/replace costs 843,961
+instructions and 7,857,728 cycles.
 
 Both hosts now use direct Platform guard/decode/encode hooks with the same bounded
 Wire transport. Relative to the preceding Wire Endpoint run, IC DB loses
@@ -2256,23 +2342,64 @@ Runtime/macros/guard 0.22.4, Types 0.20.4 and Testkit 0.105.0; the native Testki
 edge selects Platform 0.33.3. No supplier version was refreshed by this migration.
 Common-path performance acceptance remains an explicit M1 decision.
 
-Frozen IcyDB now measures 3,084,278 Wasm bytes and 2,976,080 code-section bytes,
-hit/miss 1,098,758/1,072,921 instructions, and listing 3,083,766. Its complete
-read/modify/replace includes 2,933,391 operation plus 4,090,192 settling
-instructions (7,023,583 total), and 10,027,739 plus 11,169,983 cycles
-(21,197,722 total). Every measured IC DB scalar operation remains below the
+Frozen IcyDB now measures 3,083,054 Wasm bytes and 2,974,858 code-section bytes,
+hit/miss 1,099,006/1,073,169 instructions, and listing 3,083,748. Its complete
+read/modify/replace includes 2,932,321 operation plus 4,091,031 settling
+instructions (7,023,352 total), and 10,026,728 plus 11,170,845 cycles
+(21,197,573 total). Every measured IC DB scalar operation remains below the
 matched ceiling. Physical allocation is unchanged for both hosts. This measures
-shared-code overhead on the existing scalar workload, not wider-integer/ULID-primary
+shared-code overhead on the existing scalar workload, not wider-integer/ULID/Principal-primary
 workloads, Decimal-heavy queries, time parsing/arithmetic, nested/collection
 workloads or full fluent parity. The normal product graph has no constructor or
 Wire dependency; ethnum and ulid have no enabled features. ULID adds the value/text
 dependency and its declared Wasm web-time graph, without reachable browser imports
 or RNG. Evidence records source diffs, features and exact results under
 records-comparison; the preceding run is retained locally under
+records-comparison-before-explicit-generation. The first 0.6 run, with the shared
+transport in its own qualification crate, preserves both hosts' total/code bytes,
+instructions, cycles and physical allocation exactly. Explicit ULID generation
+is not exercised by this scalar workload; its costs are not inferred here.
+The subsequent literal-default slice adds 2,432 total/2,379 code bytes to IC DB,
+203 instructions to each lookup/listing and 281 to read/modify/replace (under
+0.05% for each). This is measured schema-admission/shared metadata overhead, not
+the cost of exercising defaulted inserts: the benchmark entity declares none.
+The added code supports default validation and identity while unused typed input
+builders remain outside this workload. Frozen IcyDB's artifact and measurements
+are unchanged; both hosts retain their physical allocation. The previous run is
+preserved under records-comparison-before-defaults. The current native Testkit
+driver lock selects Platform 0.33.4; the Wasm supplier versions remain as above.
+Requalification with Toko Tooling 0.43.2, Testkit 0.106.0, Host Artifacts/FS/Process
+0.79.0 and Host Text 0.76.0 reproduces both artifacts and every measured scalar
+cost exactly. The preceding run remains under records-comparison-before-tooling-0432.
+These host-library updates do not enter the deployed benchmark graphs.
+The final lock selection also advances Runtime/macros/guard to 0.22.5. Rebuilding
+that patch keeps IC DB's code-section size and query/write instructions/cycles
+unchanged; total Wasm is one byte smaller and installation uses 2,000 fewer cycles.
+IcyDB gains 276 total/271 code bytes; hit/miss add eight instructions each and
+complete read/modify/replace adds 41 instructions/cycles. Listing and physical
+allocation remain unchanged. These are dependency-build effects, not database
+optimizations; the previous exact run is under records-comparison-before-runtime-0225.
+Managed-time policy adds 3,853 total/3,743 code bytes. On this unchanged scalar
+workload, hit/miss add 200 instructions each, listing adds 272 and complete
+read/modify/replace adds 540 instructions/cycles; insert adds 530 instructions.
+Each query/write instruction increase is below 0.1%, and both hosts retain their
+physical allocation. This measures shared policy/metadata overhead on an entity
+without managed fields, not the cost of managed replacements themselves. The
+frozen IcyDB artifact and execution measurements are unchanged. This run selects
+native Platform 0.33.5 under Testkit; deployed suppliers remain unchanged. Prior
+evidence is retained under records-comparison-before-managed-times.
+The Principal-key run adds 1,216 total/1,105 code bytes relative to that managed-time
+run. Hit/miss lose 22 instructions each; listing adds 994 (about 0.13%) and complete
+read/modify/replace adds 198 instructions (about 0.02%). Physical allocation stays
+unchanged. This run also preserves the concurrently refreshed qualification lock's
+Wire 0.22.2 transport dependency; the artifact/cost delta is not isolated to the key
+extension. Both benchmark hosts use that same transport. Product crates still do
+not depend on Wire. Earlier evidence is under records-comparison-before-principal-keys.
+The earlier Wire Endpoint comparison remains under
 records-comparison-before-endpoint-hooks. Earlier increment details remain with
 their evidence. Current artifact SHA-256 values:
-IC DB `34a7c7148c6f7d39acebcf49c53e6af19bc8e1f6ad7de0f5b38617b987ed043a`;
-IcyDB `8955e6302c3ae181303fe7818949223516f7d5e9fe4bcbb429988d071b4d4201`.
+IC DB `a0a6359c76fcb3b170ad7ac8638413abd2c4e56b7cae59948af239d92f49b91d`;
+IcyDB `50e5dae63176e5e71c5ea0281d48d309b771f2a344adf0418b26db920929e9da`.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,
@@ -2412,18 +2539,28 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.43.1. Qualification selects
-IC Storage 0.74.1, Testkit 0.105.0 (PocketIC 16.1.0), Platform Runtime 0.22.4
+The current tooling baseline is Toko Tooling 0.43.2. Qualification selects
+IC Storage 0.74.1, Testkit 0.106.0 (PocketIC 16.1.0), Platform Runtime 0.22.5
 and Wire 0.22.1, with exact resolution in its own lockfile. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions
 are probe inputs, not a product compatibility promise. Earlier M0 runs used the
 versions recorded with their evidence; product codec carryover from IcyDB is
 identified in the corresponding implementation sections above.
+Host Artifacts/FS/Process select 0.79.0 and Host Text selects 0.76.0; the CLI and
+probes use their retained APIs. The tooling installer updates the qualification
+release-lock planner; no product release or publication is part of adoption.
+Runtime/macros/guard 0.22.5 adds supplier-owned guard/codec-hook qualification;
+its executable source is unchanged from 0.22.4. Keep the compatible manifest
+minimum and qualify the exact new lock selection at the consumer boundaries.
+Shared fixture declarations now live in a private qualification schema crate,
+preserving two-stage collection with ordinary host/target Cargo dependencies.
+Directory modules and ordinary test modules replace the remaining source-path
+overrides without changing product module paths, schema names or stored bytes.
 
 ### M0 evidence so far (updated 2026-11-14)
 
-The Wasm probes below pass in local PocketIC with the published supplier versions
-above, Rust 1.100.0 and the qualification Wasm release profile. `m0-contracts`
+The Wasm probes below passed in local PocketIC with the published supplier versions
+recorded by their runs, Rust 1.100.0 and the qualification Wasm release profile. `m0-contracts`
 instead runs native semantic checks without PocketIC. Full
 contracts, limits and run instructions live with the [executable probes](../../qualification/README.md).
 These are synthetic mechanism witnesses, not product qualification or comparative

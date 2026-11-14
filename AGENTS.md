@@ -82,10 +82,14 @@ installer. Do not edit vendor files or copy upstream reference documents.
   transport helpers outside product crates. Do not restore Wire Endpoint, a second
   executor or an endpoint registry. `make m0-endpoints` checks admission and reply
   failure across synchronous and callback execution boundaries.
+  Shared fixture codecs live in the private `qualification/transport` crate,
+  with ordinary Cargo dependencies rather than shared-source path modules.
 - Retain IcyDB's two-stage schema path expansion: Rust resolves typed paths,
   host-only `ctor` registration collects declarations, then a second stage
   validates/seals the graph and emits target artifacts. Keep collection and ctor
-  out of deployed Wasm. The scalar entity pipeline is implemented through the
+  out of deployed Wasm. Qualification's `records-schema` crate supplies the same
+  declarations to host and target through ordinary Cargo dependencies; keep it
+  private and outside the product workspace. The scalar entity pipeline is implemented through the
   optional `ic-db/build` feature. Named records and unit/payload enums resolve through entity field
   type paths and enter one finite compiled graph. Recursive values use explicit
   `item(indirect, is = "...")` boxing and need a finite constructor. All nested
@@ -124,10 +128,32 @@ installer. Do not edit vendor files or copy upstream reference documents.
   not authorize an OS RNG, a hidden clock read or automatic generation. Before
   generated-ID work, carry forward the operation-timestamp, same/backward-time,
   overflow, entropy and upgrade/reset lessons recorded in the current design.
-  Supplied integer/ULID primary keys keep lookups, deletes and page cursors typed
+  The explicit `UlidGenerator` now accepts an operation Timestamp and host-provided
+  80-bit randomness. The host owns its state/checkpoint; errors preserve state,
+  expected post-issuance refusals may consume IDs, and an IC trap rolls back the
+  current execution. Do not infer automatic generation attributes or durable
+  issuer recovery from this utility. Never substitute a timestamp/sequence for
+  independently provisioned randomness across separate/reset streams.
+  Supplied integer/ULID/Principal primary keys keep lookups, deletes and page cursors typed
   to the entity, including signed/unsigned 8–128-bit integers and U256. References
   must match the target key type exactly; other identity/composite keys
-  and automatic generation remain separate increments.
+  and automatic generation remain separate increments. Principal keys reuse the
+  length-first index encoding, including the empty management principal. Consume
+  framed reference components instead of assuming every target has a fixed width.
+  Typed `Entity::insert()` inputs distinguish omission from explicit values and
+  enter the ordinary batch through `insert_input`. Integer, Bool and bounded Text
+  literals may declare `field(..., default = ...)`; optional defaults supply a
+  present value, while explicit `None` remains absent. Required fields without a
+  default refuse omission. Defaults belong to schema identity and never run on
+  replacement, decode or reopen. Primary-key/nested-record defaults, versioned
+  producers remain separate work; no SQL mutation lane. Nonoptional Timestamp
+  fields may use `managed = "created_at"` or `"updated_at"`, once per role.
+  `Batch::at(time)` carries one host-captured time, without reading a clock.
+  Managed insert setters are absent; fully authored inserts refuse. Replacements
+  must echo stored timestamps, preserve creation, and update time only for real
+  changes. No-ops retain time even with an earlier clock, but inverted stored
+  timestamp order refuses. Changed policies enter schema identity; decode/reopen
+  never assign timestamps. Keep this in the existing bounded commit path.
   Decimal fields retain an explicit declared scale (0–28), as confirmed by the
   maintainer. Excess precision and fixed-scale coefficient overflow refuse;
   storage never silently rounds. Aggregate arithmetic has its own contract.
