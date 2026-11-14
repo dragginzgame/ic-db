@@ -38,6 +38,8 @@ current `query` command still reads Entry; Document writes/reopen are covered by
   Product crates remain unpublished and do not depend on Wire.
   Match the comparison host's wakeup stub to IcyDB's generated native-test
   configuration so full-workspace linting passes without relaxing lints.
+  Move the installed-console smoke test from the historical maintenance fixture
+  to M1 records; check the current tables, continuation and silent blank input.
 - Record the accepted IcyDB carryover sequence in the system design: borrowed
   access and selective reads, shared equality/ordering/hashing, and owned rich-type
   codecs; offset tables and caches remain evidence-gated choices.

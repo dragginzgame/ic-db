@@ -1,9 +1,112 @@
 //! Real product records in Wasm, with raw stable backing as the rollback oracle.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::native;
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
 
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type Page = (Vec<(u64, u64)>, Option<u64>, u64);
+
+#[test]
+fn console_inspects_and_queries() {
+    let prefix = std::env::temp_dir().join(format!("ic-db-console-{}", std::process::id()));
+    std::fs::create_dir(&prefix).unwrap();
+    std::fs::create_dir(prefix.join("bin")).unwrap();
+    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
+    let binary = prefix.join("bin/db");
+    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
+    std::fs::copy(
+        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"),
+        prefix.join("share/ic-db/m1/records.wasm"),
+    )
+    .unwrap();
+    let mut child = Command::new(&binary)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"\n\nschema\nstatus\nquery --min 100\nquery --after 3 --limit 2\nquit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("LOCAL M1 FIXTURE"));
+    assert!(
+        !stdout.contains("Usage: db"),
+        "blank input must not print help"
+    );
+    for entity in [
+        "Entry",
+        "Document",
+        "WideNumbers",
+        "BinaryObject",
+        "NarrowNumbers",
+    ] {
+        assert!(stdout.contains(entity));
+    }
+    assert!(stdout.contains("ICDBMF01"));
+    assert!(stdout.contains("Exact match"));
+    assert!(stdout.contains("0 rows returned; 3 candidates examined."));
+    assert!(stdout.contains("Next page: db query --after 3 --limit 3 --min 100"));
+    let contains_row = |text: &str, id: &str, amount: &str| {
+        text.lines().any(|line| {
+            line.split(['|', '│'])
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .eq([id, amount])
+        })
+    };
+    assert!(contains_row(&stdout, "4", "40"));
+    assert!(contains_row(&stdout, "5", "51"));
+    let output = Command::new(&binary)
+        .current_dir(std::env::temp_dir())
+        .args(["query", "--after", "3", "--limit", "2"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(contains_row(&stdout, "4", "40"));
+    assert!(contains_row(&stdout, "5", "51"));
+    for command in [
+        "query --limit 0",
+        "query --limit 1 --limit 2",
+        "SELECT * FROM rows",
+    ] {
+        let output = Command::new(&binary)
+            .args(command.split_whitespace())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+    }
+    std::fs::remove_dir_all(prefix).unwrap();
+    // Help must work even for the uninstalled build artifact with no adjacent fixture.
+    let output = Command::new(env!("CARGO_BIN_EXE_db"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Usage: db [COMMAND]")
+    );
+}
 
 #[tokio::test]
 async fn references_follow_final_batch_state_in_wasm() {
