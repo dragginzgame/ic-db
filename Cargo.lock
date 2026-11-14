@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ic-db-macros",
  "ic-storage",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
