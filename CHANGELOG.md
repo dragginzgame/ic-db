@@ -4,12 +4,17 @@
 
 ### ▶️ Try it
 
-`db schema` now shows `ListRow` with bounded ordered lists and recursive `ListNode`,
+`db schema` now also shows `BigNumbers`, its required/optional U256 fields and
+compound/unique indexes. U256 preserves the full unsigned 256-bit domain.
+
+`db schema` now shows `MapRow`/`Rates` and recursive `MapTree`,
+`SetRow` and its bounded scalar `Scores` set,
+`ListRow` with bounded ordered lists and recursive `ListNode`,
 alongside `NestedRow`, its `Details` record, and unit/payload/recursive
 `NestedPayload` variants. Named definitions appear once, with fields, payloads
 and optionality. No numeric field or variant IDs are authored.
 
-Reinstall the local fixture console, then inspect `IdentityRow`'s required and
+From the repository root, reinstall the local fixture console, then inspect `IdentityRow`'s required and
 optional `Principal` fields and unique owner index. Document's reverse index now
 orders signed scores within each entry, and its new `(published, title)` index
 combines boolean and exact text ordering. This remains a fresh local database;
@@ -31,6 +36,43 @@ db status
 
 ### 🛠️ Changes
 
+- Adopt published `ic-host-artifacts` 0.78.0 for benchmark Wasm inspection.
+  `ic-host-text` 0.75.0 remains current. Testkit 0.104.1 still selects
+  Artifacts/FS/Process 0.77.3; moving those helpers awaits publication of the
+  announced Testkit 0.105.0. Product codecs, schema identities and Wasm
+  dependencies are unchanged.
+
+- Add `prim = "U256"` using the feature-free `ethnum` integer type re-exported
+  as `ic_db::U256`. Adapt IcyDB’s owned 32-byte big-endian payload and boundary
+  cases, without its wrapper, numeric conversion engine or Wire serialization.
+  Support exact secondary-index operands, optional uniqueness and collection
+  elements/keys/values. Native/Wasm checks cover high bits, independent bytes and
+  fingerprints, malformed data, row limits, uniqueness swaps, no-op revisions,
+  rollback and unchanged upgrade. Existing contracts without U256 are unchanged;
+  aggregate arithmetic and non-Nat64 primary keys remain separate work.
+
+- Add named maps with scalar keys and ordinary optional/list/named values through
+  `#[map(key(...), value(...), max_items = N)]`. Retain IcyDB's `BTreeMap` wrapper
+  and immutable-key rule. Shared ordered traversal rejects stored duplicate or
+  descending keys before insertion can overwrite a value. Missing keys, absent
+  values and empty values remain distinct. Recursive maps have an empty base and
+  use the existing depth, node, byte and collection-entry budgets. Native/Wasm
+  checks cover exact bytes/fingerprints, malformed keys/payloads, shared limits,
+  refused writes, no-op revisions, late traps and upgrade/reopen. No new crate,
+  dependency, durable state or value engine. Existing contracts without maps
+  remain unchanged; non-scalar keys and member indexes/references remain work.
+
+- Add named scalar sets using IcyDB's `#[set(item(...))]` wrapper shape with
+  explicit `max_items`. Preserve logical ordering, construction-order independence
+  and absence versus empty. Decode refuses duplicate or descending stored elements
+  before insertion can erase the evidence. Typed decoding and borrowed inspection
+  share the order check; lists and sets share the existing 256-item row budget.
+  Native/Wasm checks cover independent bytes/fingerprints, numeric and identity
+  order, bounds, corruption refusal, no-op revisions, traps and upgrade/reopen.
+  Existing contracts without sets remain unchanged. No new crate, dependency,
+  durable catalog or generic value representation. Non-scalar elements, member
+  indexes and normalization policies remain implementation work.
+
 - Adopt Toko Tooling 0.43.1 in both workspaces and refresh the authenticated vendor
   snapshot. Frozen release tooling now retains phase timings across failures and
   resumes; database dependencies and behavior are unchanged by this refresh.
@@ -45,8 +87,8 @@ db status
   independent bytes/fingerprints, malformed counts/elements, sibling and recursive
   limits, no-op writes, refusals, late traps and upgrade/reopen. New list metadata
   binds these limits; contracts without lists remain unchanged. No new dependency,
-  durable state or generic value tree. List indexes/references, optional elements,
-  sets and maps remain future increments; no existing attribute is removed.
+  durable state or generic value tree. List indexes/references and optional
+  list elements remain future work; no existing attribute is removed.
 
 - Support named records and unit/payload enums through the familiar attribute-owned
   `record`, `enum_`, `variant(value(...))` and `item(is = "...")` spelling.
@@ -61,7 +103,7 @@ db status
   materialized generic value tree, additional product crate or journal is added.
   Native/Wasm checks cover exact bytes, transitive schema changes, reorderings,
   malformed payloads, boundary limits, no-op writes, late traps and upgrade/reopen.
-  Nested indexes/references, sets and maps remain implementation work.
+  Nested indexes/references remain implementation work.
 
 - Remove mandatory numeric entity/index IDs from scalar authoring. Entity names
   default to the Rust type name; index names default to ordered comma-separated

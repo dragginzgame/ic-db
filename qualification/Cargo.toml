@@ -20,7 +20,7 @@ publish = false
 clap = { version = "4.6.7", features = ["derive"] }
 ic-db = { path = "../crates/ic-db" }
 ic-db-icydb-baseline-schema = { path = "icydb-baseline-schema" }
-ic-host-artifacts = "0.77.2"
+ic-host-artifacts = "0.78.0"
 ic-host-text = "0.75.0"
 ic-platform-runtime = { version = "0.22.3", default-features = false }
 ic-storage = "0.74.1"

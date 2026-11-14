@@ -49,7 +49,7 @@ type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
-type TypeView = (String, bool, Vec<(String, String, bool)>);
+type TypeView = (String, String, Vec<(String, String, bool)>);
 
 fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
     println!("\nSchema: {} entities\n", entities.len());
@@ -118,12 +118,8 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             );
         }
     }
-    for (name, record, members) in types {
-        println!(
-            "{}: {}",
-            if record { "Record" } else { "Enum" },
-            terminal_text(&name)
-        );
+    for (name, kind, members) in types {
+        println!("{}: {}", terminal_text(&kind), terminal_text(&name));
         let rows: Vec<Vec<String>> = members
             .into_iter()
             .map(|(name, ty, optional)| {
@@ -138,8 +134,13 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             "{}\n",
             render_bordered(
                 &[
-                    if record { "Field" } else { "Variant" },
-                    if record { "Type" } else { "Payload" },
+                    match kind.as_str() {
+                        "Enum" => "Variant",
+                        "Set" => "Item",
+                        "Map" => "Role",
+                        _ => "Field",
+                    },
+                    if kind == "Enum" { "Payload" } else { "Type" },
                     "Optional"
                 ],
                 &rows

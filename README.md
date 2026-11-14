@@ -31,7 +31,7 @@ measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.
 Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Secondary indexes now
-support Nat/Int8/16/32/64/128, Principal, Bool and bounded Text fields, including
+support Nat/Int8/16/32/64/128, U256, Principal, Bool and bounded Text fields, including
 optional values, compound keys and uniqueness. Optional unique indexes explicitly
 require `present_only`; ordinary indexes retain absent values. Primary keys and
 references still require Nat64.
@@ -56,10 +56,25 @@ and need a finite base case. Encoding, decoding and stored-row inspection share
 32-level, 256-structured-value and 4 KiB row bounds. Lists use
 `value(many, max_items = 3, item(prim = "Nat16"))`, or a named item type;
 adding `opt` gives `Option<Vec<T>>`. Order and duplicates are preserved, with
-at most 256 items across the entire row and an explicit per-list maximum.
+at most 256 collection items across the entire row and an explicit per-list maximum.
+Named scalar sets use `#[set(item(prim = "Int16"), max_items = 3)]` on an empty
+struct, producing a tuple wrapper over `BTreeSet<i16>`. Fields refer to that type
+with `item(is = "Scores")`. Stored elements must be strictly increasing in logical
+order; duplicates and out-of-order data refuse. Sets share the collection budget.
 `db schema` shows `ListRow`, recursive `ListNode`, and each reachable
-record/enum definition once, including payload types and recursive links.
-Enum/nested/list indexes, nested references, sets and maps remain work.
+record/enum/set/map definition once, including payload types and recursive links.
+`SetRow` and its `Scores` definition are also available for inspection.
+Maps use `#[map(key(prim = "Int16"), value(opt, item(prim = "Text", max_bytes = 4)), max_items = 3)]`
+on an empty struct, producing a tuple wrapper over `BTreeMap<i16, Option<String>>`.
+Keys are ordered scalars; values may also be lists or named types. Stored duplicate
+or descending keys refuse without overwriting values. Map entries share the row's
+collection budget, and their nested contents consume the same budget. Inspect
+`MapRow`/`Rates` and recursive `MapTree` with `db schema`.
+`value(item(prim = "U256"))` uses `ic_db::U256` (ethnum), with exact 32-byte
+big-endian storage and secondary-index keys. Optional values and collection
+elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`;
+aggregate arithmetic and wider primary keys remain separate work.
+Enum/nested/collection indexes, nested references and non-scalar keys/set elements remain work.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a

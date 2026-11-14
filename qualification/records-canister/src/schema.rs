@@ -149,3 +149,53 @@ pub(crate) struct ListNode {}
     )
 )]
 pub(crate) struct ListRow {}
+
+#[ic_db::set(item(prim = "Int16"), max_items = 3)]
+pub(crate) struct Scores {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "scores", value(item(is = "Scores")))
+    )
+)]
+pub(crate) struct SetRow {}
+
+#[ic_db::map(
+    key(prim = "Int16"),
+    value(opt, item(prim = "Text", max_bytes = 4)),
+    max_items = 3
+)]
+pub(crate) struct Rates {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "values", value(item(is = "Rates")))
+    )
+)]
+pub(crate) struct MapRow {}
+
+#[ic_db::map(key(prim = "Nat16"), value(item(is = "Self")), max_items = 256)]
+pub(crate) struct MapTree {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "tree", value(item(is = "MapTree")))
+    )
+)]
+pub(crate) struct MapTreeRow {}
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "U256"))),
+        field(name = "value", value(item(prim = "U256"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
+pub(crate) struct BigNumbers {}

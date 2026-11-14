@@ -151,6 +151,7 @@ fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
         "Int32",
         "Int64",
         "Nat128",
+        "U256",
         "Int128",
         "Principal",
     ] {
@@ -517,4 +518,74 @@ fn list_authoring_requires_explicit_bounds_and_refuses_unsupported_key_shapes() 
         .is_err()
     );
     assert!(expand(quote!(pk(field="id"),index(field="items"),fields(#id,field(name="items",value(many,max_items=4,item(prim="Nat64")),references(entity="Target")))),quote!(struct Row{})).is_err());
+}
+
+#[test]
+fn named_sets_require_bounded_ordered_scalar_elements() {
+    let declaration = quote!(
+        struct Scores {}
+    );
+    assert!(
+        super::set::expand(
+            quote!(item(prim = "Int16"), max_items = 3),
+            declaration.clone()
+        )
+        .is_ok()
+    );
+    for args in [
+        quote!(item(prim = "Int16")),
+        quote!(item(prim = "Int16"), max_items = 257),
+        quote!(item(is = "Other"), max_items = 3),
+        quote!(item(prim = "Text"), max_items = 3),
+        quote!(item(prim = "Int16"), max_items = 3, opt),
+        quote!(item(prim = "Int16"), max_items = 3, max_items = 2),
+    ] {
+        assert!(super::set::expand(args, declaration.clone()).is_err());
+    }
+}
+
+#[test]
+fn maps_require_scalar_keys_bounded_counts_and_an_explicit_value() {
+    let declaration = quote!(
+        struct Rates {}
+    );
+    assert!(
+        super::map::expand(
+            quote!(
+                key(prim = "Int16"),
+                value(opt, many, max_items = 3, item(is = "Self")),
+                max_items = 3
+            ),
+            declaration.clone()
+        )
+        .is_ok()
+    );
+    for args in [
+        quote!(key(prim = "Int16"), value(item(prim = "Nat8"))),
+        quote!(key(prim = "Int16"), max_items = 3),
+        quote!(key(is = "Other"), value(item(prim = "Nat8")), max_items = 3),
+        quote!(
+            key(prim = "Text"),
+            value(item(prim = "Nat8")),
+            max_items = 3
+        ),
+        quote!(
+            key(prim = "Int16", opt),
+            value(item(prim = "Nat8")),
+            max_items = 3
+        ),
+        quote!(
+            key(prim = "Nat8"),
+            value(item(prim = "Bool")),
+            max_items = 257
+        ),
+        quote!(
+            key(prim = "Nat8"),
+            value(item(prim = "Bool")),
+            max_items = 3,
+            max_items = 2
+        ),
+    ] {
+        assert!(super::map::expand(args, declaration.clone()).is_err());
+    }
 }

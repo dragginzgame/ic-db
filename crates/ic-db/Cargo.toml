@@ -19,6 +19,7 @@ build = ["dep:ctor"]
 ctor = { workspace = true, optional = true }
 
 [dependencies]
+ethnum.workspace = true
 ic-db-macros.workspace = true
 ic-platform-types.workspace = true
 ic-storage.workspace = true

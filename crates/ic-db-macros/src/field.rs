@@ -15,6 +15,7 @@ pub(super) enum Kind {
     Nat64,
     Int64,
     Nat128,
+    U256,
     Int128,
     Bool,
     Principal,
@@ -100,6 +101,7 @@ impl Field {
                     | Kind::Nat32
                     | Kind::Nat64
                     | Kind::Nat128
+                    | Kind::U256
                     | Kind::Int8
                     | Kind::Int16
                     | Kind::Int32
@@ -141,6 +143,7 @@ impl Field {
             Kind::Nat64 => quote!(u64),
             Kind::Int64 => quote!(i64),
             Kind::Nat128 => quote!(u128),
+            Kind::U256 => quote!(::ic_db::U256),
             Kind::Int128 => quote!(i128),
             Kind::Bool => quote!(bool),
             Kind::Principal => quote!(::ic_db::Principal),
@@ -189,6 +192,7 @@ impl Field {
             Kind::Nat64 => quote!(::ic_db::FieldType::Nat64),
             Kind::Int64 => quote!(::ic_db::FieldType::Int64),
             Kind::Nat128 => quote!(::ic_db::FieldType::Nat128),
+            Kind::U256 => quote!(::ic_db::FieldType::U256),
             Kind::Int128 => quote!(::ic_db::FieldType::Int128),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
             Kind::Principal => quote!(::ic_db::FieldType::Principal),
@@ -235,6 +239,7 @@ impl Field {
             Kind::Int32 => quote!(writer.int32(*value)?),
             Kind::Nat64 => quote!(writer.nat64(*value)?),
             Kind::Nat128 => quote!(writer.nat128(*value)?),
+            Kind::U256 => quote!(writer.u256(*value)?),
             Kind::Int64 => quote!(writer.int64(*value)?),
             Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
@@ -264,8 +269,8 @@ impl Field {
         let value = self.read_value();
         quote!(#ident: #value,)
     }
-    pub fn read_value(&self) -> TokenStream {
-        let read = match &self.kind {
+    fn read_item_result(&self) -> TokenStream {
+        match &self.kind {
             Kind::Named(path, indirect) => {
                 if *indirect {
                     quote!(reader.named::<#path>().map(::std::boxed::Box::new))
@@ -281,23 +286,31 @@ impl Field {
             Kind::Int32 => quote!(reader.int32()),
             Kind::Nat64 => quote!(reader.nat64()),
             Kind::Nat128 => quote!(reader.nat128()),
+            Kind::U256 => quote!(reader.u256()),
             Kind::Int64 => quote!(reader.int64()),
             Kind::Int128 => quote!(reader.int128()),
             Kind::Bool => quote!(reader.boolean()),
             Kind::Principal => quote!(reader.principal()),
             Kind::Text(max) => quote!(reader.text(#max as usize)),
             Kind::Blob(max) => quote!(reader.blob(#max as usize)),
-        };
+        }
+    }
+    pub fn read_result(&self) -> TokenStream {
+        let item = self.read_item_result();
         let read = if let Some(max) = self.many {
-            quote!(reader.list(#max, |reader| #read)?)
+            quote!(reader.list(#max, |reader| #item))
         } else {
-            quote!(#read?)
+            item
         };
         if self.optional {
-            quote!(if reader.boolean()? { Some(#read) } else { None })
+            quote!(if reader.boolean()? { (#read).map(Some) } else { Ok(None) })
         } else {
-            quote!(#read)
+            read
         }
+    }
+    pub fn read_value(&self) -> TokenStream {
+        let read = self.read_result();
+        quote!((#read)?)
     }
 }
 pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)> {
@@ -403,6 +416,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Nat64"), None) => Ok(Kind::Nat64),
         (Some("Int64"), None) => Ok(Kind::Int64),
         (Some("Nat128"), None) => Ok(Kind::Nat128),
+        (Some("U256"), None) => Ok(Kind::U256),
         (Some("Int128"), None) => Ok(Kind::Int128),
         (Some("Bool"), None) => Ok(Kind::Bool),
         (Some("Principal"), None) => Ok(Kind::Principal),
@@ -412,7 +426,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Blob"), None) => Err(syn::Error::new_spanned(meta, "Blob requires max_bytes")),
         _ => Err(syn::Error::new_spanned(
             meta,
-            "supported here: Nat/Int8/16/32/64/128, Bool, Principal, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
+            "supported here: Nat/Int8/16/32/64/128, U256, Bool, Principal, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
         )),
     }
 }

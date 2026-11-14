@@ -32,7 +32,7 @@ pub enum FieldType {
         /// Maximum number of elements, from zero through 256.
         max_items: u32,
     },
-    /// A named record or enum; not yet admitted as a key or reference.
+    /// A named record, enum, set or map; not yet admitted as a key or reference.
     Named(TypeLink),
     /// Exact unsigned 8-bit integer.
     Nat8,
@@ -54,6 +54,8 @@ pub enum FieldType {
     Nat128,
     /// Exact signed 128-bit integer, without narrowing or floating-point coercion.
     Int128,
+    /// Exact unsigned 256-bit integer, stored as 32 big-endian bytes.
+    U256,
     /// Boolean, without numeric coercion.
     Bool,
     /// Opaque IC identity, zero to 29 significant bytes; no authority policy.
@@ -403,6 +405,7 @@ pub(crate) fn encode_type(
         FieldType::Principal => 14,
         FieldType::Named(_) => 15,
         FieldType::List { .. } => 16,
+        FieldType::U256 => 17,
     };
     bytes.push(tag | if optional { 0x80 } else { 0 } | if reference { 0x40 } else { 0 });
     match value {
@@ -414,7 +417,7 @@ pub(crate) fn encode_type(
         }
         FieldType::Named(link) => name(bytes, link.name)?,
         FieldType::List { item, max_items } => {
-            if max_items > crate::types::MAX_LIST_ITEMS as u32
+            if max_items > crate::types::MAX_COLLECTION_ITEMS as u32
                 || matches!(item, FieldType::List { .. })
             {
                 return Err(Error::InvalidSchema);
@@ -423,7 +426,7 @@ pub(crate) fn encode_type(
                 max_items,
                 crate::types::MAX_DEPTH as u32,
                 crate::types::MAX_NODES as u32,
-                crate::types::MAX_LIST_ITEMS as u32,
+                crate::types::MAX_COLLECTION_ITEMS as u32,
             ] {
                 bytes.extend(bound.to_le_bytes());
             }

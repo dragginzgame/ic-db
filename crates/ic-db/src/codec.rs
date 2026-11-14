@@ -7,9 +7,10 @@
 //! Extend that scalar approach to 128 bits; omit its slot envelope/value layer.
 
 use crate::{
-    Error, FieldType, Principal, TypeBody, TypeLink, Value,
-    types::{MAX_DEPTH, MAX_LIST_ITEMS, MAX_NODES},
+    Error, FieldType, Principal, TypeBody, TypeLink, U256, Value, ValueSchema,
+    types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES},
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const ROW_CODEC_VERSION: u32 = 3;
 pub const MAX_ROW_BYTES: usize = 4096;
@@ -48,11 +49,9 @@ impl Encoder {
         max: u32,
         write: fn(&mut Self, &T) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        self.budget
-            .list(values.len(), max)
-            .map_err(|_| Error::Limit)?;
+        self.collection_header(values.len(), max)?;
+        self.budget.enter().map_err(|_| Error::Limit)?;
         let result = (|| {
-            self.nat32(values.len() as u32)?;
             for value in values {
                 write(self, value)?;
             }
@@ -63,6 +62,38 @@ impl Encoder {
     }
     pub fn nat64(&mut self, value: u64) -> Result<(), Error> {
         self.append(&value.to_le_bytes())
+    }
+
+    // Called inside a named set; named() already accounts for its depth/node.
+    pub fn set<T>(
+        &mut self,
+        values: &BTreeSet<T>,
+        max: u32,
+        write: fn(&mut Self, &T) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.collection_header(values.len(), max)?;
+        for value in values {
+            write(self, value)?;
+        }
+        Ok(())
+    }
+
+    pub fn map<K, V>(
+        &mut self,
+        values: &BTreeMap<K, V>,
+        max: u32,
+        write: fn(&mut Self, &K, &V) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.collection_header(values.len(), max)?;
+        for (key, value) in values {
+            write(self, key, value)?;
+        }
+        Ok(())
+    }
+
+    fn collection_header(&mut self, count: usize, max: u32) -> Result<(), Error> {
+        self.budget.items(count, max).map_err(|_| Error::Limit)?;
+        self.nat32(count as u32)
     }
 
     pub fn nat8(&mut self, value: u8) -> Result<(), Error> {
@@ -91,6 +122,12 @@ impl Encoder {
 
     pub fn nat128(&mut self, value: u128) -> Result<(), Error> {
         self.append(&value.to_le_bytes())
+    }
+
+    // IcyDB's owned U256 payload is exactly 32 big-endian bytes. Preserve that
+    // choice independently of its slot envelope or transport serialization.
+    pub fn u256(&mut self, value: U256) -> Result<(), Error> {
+        self.append(&value.to_be_bytes())
     }
 
     pub fn int64(&mut self, value: i64) -> Result<(), Error> {
@@ -155,8 +192,13 @@ impl<'a> Decoder<'a> {
         result
     }
     fn list_count(&mut self, max: u32) -> Result<usize, Error> {
+        let count = self.collection_count(max)?;
+        self.budget.enter()?;
+        Ok(count)
+    }
+    fn collection_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = usize::try_from(self.nat32()?).map_err(|_| Error::Corrupt)?;
-        self.budget.list(count, max)?;
+        self.budget.items(count, max)?;
         Ok(count)
     }
     pub fn list<T>(
@@ -179,6 +221,12 @@ impl<'a> Decoder<'a> {
         self.budget.enter()?;
         let result = (|| {
             match &(link.definition)().body {
+                TypeBody::Set { item, max_items } => self.skip_ordered(*item, *max_items, None)?,
+                TypeBody::Map {
+                    key,
+                    value,
+                    max_items,
+                } => self.skip_ordered(*key, *max_items, Some(*value))?,
                 TypeBody::Record(fields) => {
                     for field in *fields {
                         if !field.optional || self.boolean()? {
@@ -207,6 +255,109 @@ impl<'a> Decoder<'a> {
         let bytes = self.bytes.get(self.position..end).ok_or(Error::Corrupt)?;
         self.position = end;
         Ok(bytes)
+    }
+
+    pub fn set<T: Ord>(
+        &mut self,
+        max: u32,
+        read: fn(&mut Self) -> Result<T, Error>,
+    ) -> Result<BTreeSet<T>, Error> {
+        let count = self.collection_count(max)?;
+        let mut values = BTreeSet::new();
+        self.ordered(
+            count,
+            read,
+            |_| Ok(()),
+            |value, ()| {
+                values.insert(value);
+            },
+        )?;
+        Ok(values)
+    }
+
+    pub fn map<K: Ord, V>(
+        &mut self,
+        max: u32,
+        read_key: fn(&mut Self) -> Result<K, Error>,
+        read_value: fn(&mut Self) -> Result<V, Error>,
+    ) -> Result<BTreeMap<K, V>, Error> {
+        let count = self.collection_count(max)?;
+        let mut values = BTreeMap::new();
+        self.ordered(count, read_key, read_value, |key, value| {
+            values.insert(key, value);
+        })?;
+        Ok(values)
+    }
+
+    // Validate before materialization can erase duplicate/order evidence. The
+    // same walk serves typed construction and borrowed stored-row inspection.
+    fn ordered<K: Ord, V>(
+        &mut self,
+        count: usize,
+        mut read_key: impl FnMut(&mut Self) -> Result<K, Error>,
+        mut read_value: impl FnMut(&mut Self) -> Result<V, Error>,
+        mut accept: impl FnMut(K, V),
+    ) -> Result<(), Error> {
+        let mut previous = None;
+        for _ in 0..count {
+            let key = read_key(self)?;
+            if let Some((last, value)) = previous {
+                if last >= key {
+                    return Err(Error::Corrupt);
+                }
+                accept(last, value);
+            }
+            previous = Some((key, read_value(self)?));
+        }
+        if let Some((key, value)) = previous {
+            accept(key, value);
+        }
+        Ok(())
+    }
+
+    fn skip_ordered(
+        &mut self,
+        item: FieldType,
+        max: u32,
+        payload: Option<ValueSchema>,
+    ) -> Result<(), Error> {
+        let count = self.collection_count(max)?;
+        let read_value = |reader: &mut Self| {
+            if let Some(value) = payload
+                && (!value.optional || reader.boolean()?)
+            {
+                reader.skip(value.value)?;
+            }
+            Ok(())
+        };
+        match item {
+            FieldType::Nat8 => self.ordered(count, Self::nat8, read_value, |_, ()| {}),
+            FieldType::Nat16 => self.ordered(count, Self::nat16, read_value, |_, ()| {}),
+            FieldType::Nat32 => self.ordered(count, Self::nat32, read_value, |_, ()| {}),
+            FieldType::Nat64 => self.ordered(count, Self::nat64, read_value, |_, ()| {}),
+            FieldType::Nat128 => self.ordered(count, Self::nat128, read_value, |_, ()| {}),
+            FieldType::U256 => self.ordered(count, Self::u256, read_value, |_, ()| {}),
+            FieldType::Int8 => self.ordered(count, Self::int8, read_value, |_, ()| {}),
+            FieldType::Int16 => self.ordered(count, Self::int16, read_value, |_, ()| {}),
+            FieldType::Int32 => self.ordered(count, Self::int32, read_value, |_, ()| {}),
+            FieldType::Int64 => self.ordered(count, Self::int64, read_value, |_, ()| {}),
+            FieldType::Int128 => self.ordered(count, Self::int128, read_value, |_, ()| {}),
+            FieldType::Bool => self.ordered(count, Self::boolean, read_value, |_, ()| {}),
+            FieldType::Principal => self.ordered(count, Self::principal, read_value, |_, ()| {}),
+            FieldType::Text { max_bytes } => self.ordered(
+                count,
+                |r| r.text_ref(max_bytes as usize),
+                read_value,
+                |_, ()| {},
+            ),
+            FieldType::Blob { max_bytes } => self.ordered(
+                count,
+                |r| r.blob_ref(max_bytes as usize),
+                read_value,
+                |_, ()| {},
+            ),
+            FieldType::Named(_) | FieldType::List { .. } => Err(Error::Corrupt),
+        }
     }
 
     // IcyDB's decode_fixed uses this exact slice-to-array check. Here the admitted
@@ -238,6 +389,10 @@ impl<'a> Decoder<'a> {
     }
     pub fn nat128(&mut self) -> Result<u128, Error> {
         Ok(u128::from_le_bytes(self.fixed()?))
+    }
+
+    pub fn u256(&mut self) -> Result<U256, Error> {
+        Ok(U256::from_be_bytes(self.fixed()?))
     }
     pub fn int64(&mut self) -> Result<i64, Error> {
         Ok(i64::from_le_bytes(self.fixed()?))
@@ -310,6 +465,9 @@ impl<'a> Decoder<'a> {
             FieldType::Nat128 => {
                 self.nat128()?;
             }
+            FieldType::U256 => {
+                self.u256()?;
+            }
             FieldType::Int8 => {
                 self.int8()?;
             }
@@ -353,18 +511,17 @@ impl<'a> Decoder<'a> {
 struct Budget {
     depth: usize,
     nodes: usize,
-    list_items: usize,
+    collection_items: usize,
 }
 impl Budget {
-    fn list(&mut self, count: usize, max: u32) -> Result<(), Error> {
-        if max > MAX_LIST_ITEMS as u32
+    fn items(&mut self, count: usize, max: u32) -> Result<(), Error> {
+        if max > MAX_COLLECTION_ITEMS as u32
             || count > max as usize
-            || count > MAX_LIST_ITEMS - self.list_items
+            || count > MAX_COLLECTION_ITEMS - self.collection_items
         {
             return Err(Error::Corrupt);
         }
-        self.enter()?;
-        self.list_items += count;
+        self.collection_items += count;
         Ok(())
     }
     fn enter(&mut self) -> Result<(), Error> {

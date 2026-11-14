@@ -39,6 +39,11 @@ runtime; ctor is absent from the Wasm dependency graph even with `ic-db/build` e
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
+The `BigNumbers` fixture adds full-domain U256 values, optional unique ownership
+and compound index ordering. Its independent byte vectors cross the 128-bit
+boundary and highest bit; native collection tests also exercise U256 keys and
+row-byte limits. Wasm checks cover final-state swaps, refused/no-op writes, late
+traps and unchanged upgrade, comparing complete backing as well as rows.
 Typed reads decode once; generated key extraction reuses the decoded value.
 Batch construction extracts keys from the value it has just validated/encoded.
 Stored-key inspection in mutation and reference preparation now uses one shared
@@ -134,8 +139,25 @@ UTF-8/counts/truncation, and enforce sibling item totals, empty-record node coun
 depth and the full 4 KiB row envelope. Wasm checks include malformed input,
 preparation refusals, no-op writes, late traps and exact upgrade preservation.
 Counts are admitted before allocation or traversal; all lists in a row share a
-256-item budget alongside the 32-depth/256-structured-value bounds. List indexes,
-nested references/indexes, sets and maps remain unimplemented.
+256-item budget alongside the 32-depth/256-structured-value bounds. SetRow adds a
+named Int16 Scores set. Native cases exercise every admitted scalar family and
+borrowed stored inspection, numeric order versus row-byte order, construction
+order independence, absence/empty, mixed list/set totals, whole-row bytes,
+duplicates/descending entries, incompatible reopen and unchanged failed writes.
+The Wasm set case verifies literal bytes, malformed input, no-op revision/backing,
+preparation refusal, a late trap and unchanged upgrade. Inspection names the set
+and its element/count bounds. Collection indexes, nested references/indexes,
+non-scalar set elements remain unimplemented.
+MapRow adds an Int16-keyed Rates map with optional bounded text values. Native
+checks distinguish missing/absent/empty values, prove canonical key order and
+refuse duplicate keys with different payloads before overwrite. Recursive maps,
+lists inside map values, zero counts and the 4 KiB row boundary exercise shared
+budgets. Corrupt unindexed map contents refuse reads, replacement and deletion
+without changing backing. Wasm checks exact bytes, malformed entries, no-op
+revisions, preparation refusals, late traps and unchanged upgrade. MapTree's
+independent bytes exercise the exact 32-depth/256-node limits in Wasm. Inspection
+shows key/value roles, optionality and map bounds. Non-scalar keys, map member
+indexes and nested references remain unimplemented.
 The Wasm host checks generated inspection, sparse page progress, indexes,
 normal errors versus late application traps, atomic revisions and unchanged
 upgrade/reopen. Full raw stable-memory comparisons include supplier metadata.
@@ -454,9 +476,14 @@ Setup explicitly provisions PocketIC through Testkit's authenticated installer
 under `.tools/m0-pocketic`; the probe only checks that prepared selection. Testkit
 owns server and instance lifecycle. Cargo's artifact messages select the compiled
 Wasm; the probe does not infer an internal target-directory filename.
-The selected Testkit is 0.104.0 with PocketIC 16.1.0. Calls use raw client methods
+The locked Testkit is 0.104.1 with PocketIC 16.1.0. Calls use raw client methods
 and this workspace's explicit Wire codec/budgets; no `ic-testkit-wire` adapter is
-required. Testkit's native host helpers resolve to 0.77.2.
+required. Direct benchmark inspection uses `ic-host-artifacts` 0.78.0; the CLI
+uses the current `ic-host-text` 0.75.0. Testkit still requires Artifacts/FS/Process
+0.77.x (locked at 0.77.3). Its announced 0.105.0 release was not published at the
+2026-11-14 registry check, so those transitive helpers remain unchanged. The two
+Artifacts versions have separate roles and exchange no public values here;
+no host package enters the database product or deployed Wasm.
 
 The fixture uses published IC Storage collections with one row map and two index
 maps. Wire/Platform exports are private experiment controls, not product endpoints;

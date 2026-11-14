@@ -134,7 +134,7 @@ fn inspect() -> Status {
 type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
-type TypeView = (String, bool, Vec<(String, String, bool)>);
+type TypeView = (String, String, Vec<(String, String, bool)>);
 #[ic_wire_endpoint::query(id = 2)]
 fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
@@ -160,6 +160,7 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                         FieldType::Nat64 => ("Nat64", None),
                         FieldType::Int64 => ("Int64", None),
                         FieldType::Nat128 => ("Nat128", None),
+                        FieldType::U256 => ("U256", None),
                         FieldType::Int128 => ("Int128", None),
                         FieldType::Bool => ("Bool", None),
                         FieldType::Principal => ("Principal", Some(29)),
@@ -215,16 +216,39 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
         .schema()
         .types()
         .map(|definition| {
-            let (record, members) = match &definition.body {
+            let (kind, members) = match &definition.body {
+                ic_db::TypeBody::Map {
+                    key,
+                    value,
+                    max_items,
+                } => (
+                    "Map",
+                    vec![
+                        (
+                            "key".into(),
+                            format!("{} (map max {max_items} entries)", type_label(*key)),
+                            false,
+                        ),
+                        ("value".into(), type_label(value.value), value.optional),
+                    ],
+                ),
+                ic_db::TypeBody::Set { item, max_items } => (
+                    "Set",
+                    vec![(
+                        "element".into(),
+                        format!("{} (max {max_items} items)", type_label(*item)),
+                        false,
+                    )],
+                ),
                 ic_db::TypeBody::Record(fields) => (
-                    true,
+                    "Record",
                     fields
                         .iter()
                         .map(|f| (f.name.into(), type_label(f.value), f.optional))
                         .collect(),
                 ),
                 ic_db::TypeBody::Enum(variants) => (
-                    false,
+                    "Enum",
                     variants
                         .iter()
                         .map(|v| {
@@ -238,7 +262,7 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                         .collect(),
                 ),
             };
-            (definition.name.into(), record, members)
+            (definition.name.into(), kind.into(), members)
         })
         .collect();
     (status(&db, &host), entities, types)
@@ -1025,4 +1049,185 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
 )]
 fn list_decodes(bytes: Vec<u8>) -> bool {
     schema::ListRow::decode(&bytes).is_ok()
+}
+
+#[ic_wire_endpoint::update(id = 35)]
+fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8> {
+    use schema::{Scores, SetRow};
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        let mut values: Vec<i16> = [-1, 0, 256, 257].into_iter().take(size.into()).collect();
+        if reverse {
+            values.reverse();
+        }
+        let row = SetRow {
+            id: 1,
+            scores: Scores(values.into_iter().collect()),
+        };
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 1_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            cdk::api::trap("after set replacement");
+        }
+    }
+    Ok((
+        db.get::<SetRow>(1)
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<SetRow>().unwrap(),
+    ))
+}
+#[ic_wire_endpoint::query(id = 36)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn set_decodes(bytes: Vec<u8>) -> bool {
+    schema::SetRow::decode(&bytes).is_ok()
+}
+
+#[ic_wire_endpoint::update(id = 37)]
+fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
+    use schema::{MapRow, Rates};
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        let mut entries = vec![
+            (256, Some("é".into())),
+            (-1, None),
+            (0, Some(String::new())),
+        ];
+        match shape {
+            0 => {}
+            1 => entries.reverse(),
+            2 => entries.push((1, None)),
+            3 => entries[0].1 = Some("12345".into()),
+            4 => entries.clear(),
+            _ => return Err(1),
+        }
+        let row = MapRow {
+            id: 1,
+            values: Rates(entries.into_iter().collect()),
+        };
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 1_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            cdk::api::trap("after map replacement");
+        }
+    }
+    Ok((
+        db.get::<MapRow>(1)
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<MapRow>().unwrap(),
+    ))
+}
+#[ic_wire_endpoint::query(id = 38)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn map_decodes(bytes: Vec<u8>) -> bool {
+    schema::MapRow::decode(&bytes).is_ok()
+}
+
+#[ic_wire_endpoint::query(id = 39)]
+fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
+    use schema::{MapTree, MapTreeRow};
+    if (star && size > 256) || (!star && size > 32) {
+        return Err(1);
+    }
+    let tree = if star {
+        MapTree((0..size).map(|key| (key, MapTree::default())).collect())
+    } else {
+        (0..size).fold(MapTree::default(), |child, _| MapTree([(0, child)].into()))
+    };
+    MapTreeRow { id: 1, tree }.encode().map_err(|_| 1)
+}
+#[ic_wire_endpoint::query(id = 40)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn map_tree_decodes(bytes: Vec<u8>) -> bool {
+    schema::MapTreeRow::decode(&bytes).is_ok()
+}
+
+type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
+#[ic_wire_endpoint::update(id = 41)]
+fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
+    use schema::BigNumbers;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, value) in rows {
+        let row = BigNumbers {
+            id,
+            maybe: maybe.map(ic_db::U256::from_be_bytes),
+            value: ic_db::U256::from_be_bytes(value),
+            zone: true,
+        };
+        if db.get::<BigNumbers>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after U256 batch");
+    }
+    Ok(())
+}
+#[ic_wire_endpoint::query(id = 42)]
+fn u256_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::BigNumbers;
+    let host = runtime();
+    let db = open(&host);
+    (
+        db.index_prefix::<BigNumbers>("zone,value,id", &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.id, row.encode().unwrap()))
+            .collect(),
+        db.revision::<BigNumbers>().unwrap(),
+    )
+}
+#[ic_wire_endpoint::query(id = 43)]
+fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
+    let host = runtime();
+    open(&host)
+        .index_prefix::<schema::BigNumbers>(
+            "zone,value,id",
+            &[true.into(), ic_db::U256::from_be_bytes(value).into()],
+            32,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect()
+}
+#[ic_wire_endpoint::query(id = 44)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn u256_decodes(bytes: Vec<u8>) -> bool {
+    schema::BigNumbers::decode(&bytes).is_ok()
 }

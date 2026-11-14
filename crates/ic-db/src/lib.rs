@@ -4,7 +4,7 @@
 //! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
 //! values. Named records and unit/payload enums support bounded recursion via explicit
 //! indirection and ordered lists; traversals share byte, depth, structured-value
-//! and total list-item limits.
+//! and total collection-item limits. Named sets/maps use strict scalar key order.
 //! Secondary indexes admit integers, Principal, Bool and Text, including optional values; primary keys
 //! require non-optional Nat64 fields. References admit required or optional Nat64;
 //! absence has no target, while every present target must survive the batch.
@@ -38,7 +38,9 @@ macro_rules! __register_schema {
     ($($item:item)*) => {};
 }
 
-pub use ic_db_macros::{entity, enum_, record};
+/// Exact unsigned 256-bit integer. IC DB owns its durable and index encodings.
+pub use ethnum::U256;
+pub use ic_db_macros::{entity, enum_, map, record, set};
 pub use ic_platform_types::Principal;
 pub use key::IndexValue;
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.

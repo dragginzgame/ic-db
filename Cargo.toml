@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 ctor = { version = "1.0.14", default-features = false, features = ["proc_macro", "std"] }
+ethnum = { version = "1.5.3", default-features = false }
 ic-db-macros = { path = "crates/ic-db-macros" }
 ic-platform-types = { version = "0.20.3", default-features = false }
 ic-storage = "0.74.1"

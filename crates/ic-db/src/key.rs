@@ -1,6 +1,6 @@
 //! Exact typed index operands and ordered component bytes; no query execution.
 
-use crate::{Error, FieldType, Principal, codec::Decoder};
+use crate::{Error, FieldType, Principal, U256, codec::Decoder};
 
 /// One exact leading index component. Operand types must match declared fields;
 /// integers are never implicitly widened, narrowed or coerced across signedness.
@@ -19,6 +19,8 @@ pub enum IndexValue<'a> {
     Nat64(u64),
     /// Exact u128 component.
     Nat128(u128),
+    /// Exact unsigned 256-bit component, without narrower-integer coercion.
+    U256(U256),
     /// Exact i8 component.
     Int8(i8),
     /// Exact i16 component.
@@ -52,6 +54,7 @@ impl<'a> IndexValue<'a> {
             | (Self::Nat32(_), FieldType::Nat32)
             | (Self::Nat64(_), FieldType::Nat64)
             | (Self::Nat128(_), FieldType::Nat128)
+            | (Self::U256(_), FieldType::U256)
             | (Self::Int8(_), FieldType::Int8)
             | (Self::Int16(_), FieldType::Int16)
             | (Self::Int32(_), FieldType::Int32)
@@ -85,6 +88,7 @@ impl<'a> IndexValue<'a> {
             Self::Nat32(value) => out.extend(value.to_be_bytes()),
             Self::Nat64(value) => out.extend(value.to_be_bytes()),
             Self::Nat128(value) => out.extend(value.to_be_bytes()),
+            Self::U256(value) => out.extend(value.to_be_bytes()),
             Self::Int8(value) => {
                 let mut bytes = value.to_be_bytes();
                 bytes[0] ^= 0x80;
@@ -144,6 +148,7 @@ impl<'a> IndexValue<'a> {
             FieldType::Nat32 => Self::Nat32(reader.nat32()?),
             FieldType::Nat64 => Self::Nat64(reader.nat64()?),
             FieldType::Nat128 => Self::Nat128(reader.nat128()?),
+            FieldType::U256 => Self::U256(reader.u256()?),
             FieldType::Int8 => Self::Int8(reader.int8()?),
             FieldType::Int16 => Self::Int16(reader.int16()?),
             FieldType::Int32 => Self::Int32(reader.int32()?),
@@ -227,6 +232,12 @@ impl From<Principal> for IndexValue<'_> {
     }
 }
 
+impl From<U256> for IndexValue<'_> {
+    fn from(value: U256) -> Self {
+        Self::U256(value)
+    }
+}
+
 // Schema admission and byte framing share the fixed-width contract here.
 fn fixed_width(field: FieldType) -> Option<usize> {
     match field {
@@ -235,6 +246,7 @@ fn fixed_width(field: FieldType) -> Option<usize> {
         FieldType::Nat32 | FieldType::Int32 => Some(4),
         FieldType::Nat64 | FieldType::Int64 => Some(8),
         FieldType::Nat128 | FieldType::Int128 => Some(16),
+        FieldType::U256 => Some(32),
         _ => None,
     }
 }

@@ -87,14 +87,26 @@ installer. Do not edit vendor files or copy upstream reference documents.
   encoding, decoding and stored inspection share row byte/depth/node bounds.
   Ordered lists use `value(many, max_items = N, item(...))`, optionally `opt`.
   Count admission precedes allocation/traversal; per-row limits also cover total
-  list items and structured values. Recursive list edges provide an empty base
-  without Box. Nested indexes/references, list indexes, maps and sets remain work. Build-time
+  collection items and structured values. Recursive list edges provide an empty base
+  without Box. Named scalar sets use `#[set(item(...), max_items = N)]` and
+  `BTreeSet`; stored duplicates or non-increasing elements refuse before
+  materialization can erase them. Lists and sets share one row item budget.
+  Named maps use `#[map(key(...), value(...), max_items = N)]` over `BTreeMap`:
+  scalar keys have the set ordering rules; values use ordinary field shapes,
+  including optional, list and recursive named values. Stored duplicate keys
+  refuse before insertion can overwrite them. A map entry counts once in the
+  shared collection budget, with nested collection contents counted additionally.
+  Nested indexes/references, collection indexes and non-scalar keys/set elements
+  remain work. Build-time
   Rust paths do not silently replace declared durable names.
 - IC DB owns its durable row codec. Keep `ic-wire` and transport serialization
   out of product dependencies and persisted encoding. Transport adapters may
   convert at their boundary; wire-format optimization must not alter stored
   bytes or decoding. Version durable codec changes explicitly and refuse
   unsupported old contracts intact until a supported transition exists.
+  U256 uses the re-exported feature-free `ethnum::U256` with an explicitly owned
+  32-byte big-endian row/index codec, adapted from IcyDB. Do not introduce Wire
+  serialization or a numeric conversion engine for that storage boundary.
   Start codec work from IcyDB's database-owned implementations and regression
   tests; adapt them to this compiled-schema contract instead of using its Wire
   paths. Explain departures and qualify the resulting bytes independently.

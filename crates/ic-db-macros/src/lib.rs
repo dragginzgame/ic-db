@@ -10,7 +10,9 @@ use syn::{Expr, ItemStruct, Lit, Meta, Token, parse::Parser, punctuated::Punctua
 
 mod enumeration;
 mod field;
+mod map;
 mod record;
+mod set;
 use field::Field;
 
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
@@ -43,6 +45,26 @@ pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
     enumeration::expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a named scalar set with `item(...)` and `max_items = N` (0..256).
+/// The empty struct becomes a tuple wrapper over `BTreeSet<T>`. Stored elements
+/// use strict logical order; malformed duplicates/order refuse on decoding.
+#[proc_macro_attribute]
+pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
+    set::expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a named `BTreeMap` wrapper using `key(...)`, `value(...)` and
+/// `max_items = N` (0..256). Keys are required ordered scalars. Values use the
+/// ordinary optional/list/named field rules; stored duplicate keys refuse.
+#[proc_macro_attribute]
+pub fn map(args: TokenStream, item: TokenStream) -> TokenStream {
+    map::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

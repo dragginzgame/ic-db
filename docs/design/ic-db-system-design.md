@@ -508,7 +508,7 @@ named Rust value but does not change its stored representation or contract.
 
 Typed encoding, decoding and borrowed stored-row inspection share a 32-level depth
 limit, 256 structured-value visits across the whole row, and the existing 4 KiB byte
-limit. Each entered record/enum/list counts once, including empty records, empty
+limit. Each entered record/enum/list/set/map counts once, including empty records, empty
 lists and unit variants; absent optional values do not count. Scalars retain their existing byte
 and field limits. Write exhaustion returns Limit during preparation; malformed or
 over-budget stored values return Corrupt. Nested writes reuse one output buffer;
@@ -522,7 +522,7 @@ typed codec interface, not IcyDB's materialized universal value representation.
 Named metadata uses `ICDBTY02`, including traversal limits and payload shapes.
 Earlier unit-only manifests refuse intact; scalar-only identities remain unchanged.
 No fallback decoder or migration is implied. `db schema` renders each reachable
-record/enum definition once, using names for recursive links.
+record/enum/set/map definition once, using names for recursive links.
 
 This adapts frozen IcyDB’s authoring and its duplicate-definition, malformed
 payload, recursive graph/depth and exact-admission lessons (`6d421e3`,
@@ -530,7 +530,7 @@ payload, recursive graph/depth and exact-admission lessons (`6d421e3`,
 `icydb-core/src/db/schema/enum_catalog/codec/tests.rs`). It does not copy catalog
 publication, persisted variant assignments, per-slot framing or Wire conversion.
 Independent bytes/hashes and native/Wasm boundary, rollback and reopen witnesses
-qualify this implementation. Nested references/indexes, sets, maps, tuples,
+qualify this implementation. Nested references/indexes, non-scalar keys/set elements, tuples,
 managed policies and other retained types remain later increments.
 
 Ordered lists are now implemented for entity/record fields and enum payloads:
@@ -552,10 +552,67 @@ IC DB uses its own sequential codec and shared budget, without importing a
 materialized universal list value, Wire encoding or durable catalog. Recursive
 `Vec<Self>` edges need no Box and have an empty constructor. Direct inline lists
 of lists and optional elements are not yet authored; named records can contain
-further lists. List keys/indexes/references, sets and maps remain unimplemented.
+further lists. List keys/indexes/references remain unimplemented.
 No existing attribute is removed. The fixture's ListRow and ListNode expose these
 shapes in `db schema`; native/Wasm probes cover exact bytes, shared bounds,
 malformed stored elements, rollback and unchanged upgrade.
+
+Named scalar sets now use `#[set(item(prim = "Int16"), max_items = 3)]` on an
+empty struct and `value(item(is = "Scores"))` at its use sites. The generated
+type is a tuple wrapper over `BTreeSet<T>`, retaining IcyDB's named set shape
+(`icydb-model-macros/src/node/set.rs` at frozen `6d421e3`). Its stored count is a
+u32 followed by elements in strictly increasing logical order: exact integer
+order, false before true, exact text/blob byte order, and principal length then
+significant bytes. This is not lexicographic order of little-endian row payloads.
+The decoder checks each adjacent pair before inserting into the result; duplicate
+or descending stored entries refuse as Corrupt. Application construction retains
+normal `BTreeSet` behavior, including explicit insert's duplicate result. No
+database normalizer or implicit transformation runs on keys.
+
+All existing scalar families are supported; named/container elements await an
+explicit logical comparator. Sets are usable in entity/record fields, enum
+payloads and lists through existing named links. Optional sets distinguish absence
+from empty. Empty sets are finite constructors and consume one structured value;
+their elements share the 256-item row total with lists, in addition to declared
+0..256 counts, depth 32 and 4 KiB bytes. Typed reads and borrowed inspection share
+one strict ordered traversal; inspection retains only the preceding scalar or
+borrowed slice. There is no new value tree, persistent catalog, index or crate.
+This carries forward IcyDB's immutable-key lesson from
+`icydb-model/tests/ui/collection_normalizers/immutable_keys.rs`; normalization
+policies and set-member queries/indexes remain separate work. Independent golden
+bytes/hashes and native/Wasm checks qualify ordering, mixed collection bounds,
+refused corrupt writes, no-op revisions, late traps and upgrade/reopen.
+
+Named maps now use `#[map(key(prim = "Int16"), value(opt, item(prim = "Text",
+max_bytes = 4)), max_items = 3)]` on an empty struct. This generates a tuple
+wrapper over `BTreeMap<i16, Option<String>>`; fields use the usual named path.
+Retain IcyDB's `key(...)`/`value(...)` spelling, scalar-key and immutable-key rules
+from `icydb-model-macros/src/node/map/mod.rs` and
+`icydb-model/tests/ui/collection_normalizers/immutable_keys.rs` at `6d421e3`.
+Key order is the same exact scalar order as sets. Values use ordinary scalar,
+optional, bounded-list and named-type semantics, without an ordering requirement.
+Keys cannot be optional, indirect, named or containers in this increment.
+Nested entity references, normalizers and member indexes remain unimplemented.
+
+Map bytes are a u32 entry count followed by ordered key/value pairs. One shared
+set/map traversal rejects non-increasing keys before a Rust collection can erase
+duplicate evidence; values do not participate in key identity. Missing keys,
+present keys with absent values, and empty values remain distinct. Application
+construction retains ordinary explicit `BTreeMap` insertion/replacement semantics.
+Count admission precedes traversal/allocation. Each entry consumes one of the
+row's 256 collection items; nested collections consume additional items. Empty
+maps are finite constructors and count as one structured value. Recursive map
+values need no Box; the existing explicit Box option also remains usable, unlike
+IcyDB's old blanket indirect-map-value refusal. The compiled graph and shared
+32-depth/256-node/4 KiB traversal limits establish the current boundary instead.
+
+Borrowed inspection traverses values without materializing them and retains only
+the preceding scalar key or borrowed slice. MapTree's Wasm witness checks the
+exact depth/node boundaries with independently framed bytes. Native/Wasm probes
+also qualify scalar key order, optional values, list/map shared counts, malformed
+entries, incompatible reopen, unchanged refused writes, no-op revisions, late
+traps and upgrade preservation. No new durable state, dependency, crate or
+universal value representation is added.
 
 Policy functions are identified by a declared semantic name/version and canonical
 typed fixed inputs. Changed behavior requires a version change; hashing source
@@ -569,8 +626,8 @@ Stored records traverse canonical fields and write no per-row field names. Enums
 write the admitted ordinal and that variant's payload; reject unknown ordinals or
 payload mismatch. Sets/maps use strictly ordered canonical elements/keys under
 the declared logical comparator, not lexicographic row-payload bytes. Validate
-decoded entry sequences before constructing a Rust map/set, so duplicate keys or
-elements cannot be silently overwritten/deduplicated. Input normalization precedes
+each decoded entry before insertion into a Rust map/set can silently overwrite
+or deduplicate it. Input normalization precedes
 uniqueness checks; normalization collisions refuse rather than select a winner.
 This does not add member indexes, flattening or implicit nested-reference checking.
 
@@ -1409,6 +1466,7 @@ or a performance improvement until matched workloads qualify them here.
 
 | Stored family | Implemented semantics |
 | --- | --- |
+| U256 | Exact unsigned 256-bit domain; 32-byte big-endian row/index payload |
 | Nat/Int8/16/32/64/128 | Exact Rust integer domains; no narrowing or floating-point coercion |
 | Bool | Exact true/false values |
 | Principal | Canonical Platform Types identity; zero to 29 significant raw bytes |
@@ -1417,12 +1475,35 @@ or a performance improvement until matched workloads qualify them here.
 | Optional forms of these types | Absence remains distinct from empty, zero and false |
 
 Field validation runs before encoding and after decoding; whole-row bounds apply
-independently. Secondary indexes admit Nat/Int8/16/32/64/128, Principal,
+independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Principal,
 Bool and bounded Text components, including optional values; primary keys require
 non-optional Nat64, while references admit required or optional Nat64.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, managed policies and fluent queries remain work;
 no retained capability or product attribute has been retired.
+
+U256 fields use `value(item(prim="U256"))`, optionally with `opt`; the public
+Rust type is `ic_db::U256`, re-exported from feature-free ethnum 1.5.3. The owned
+row codec preserves IcyDB's exact 32-byte big-endian U256 payload, rather than
+applying native-width integers' little-endian row convention. Ordered keys use
+the same fixed-width bytes; index operands must be U256, without implicit Nat128
+coercion. Lists, scalar sets and map keys/values preserve the full domain through
+the existing shared codec. Tag 17 binds this type into the compiled contract;
+contracts without U256 keep their identities. Primary keys/references remain Nat64.
+
+This adapts frozen IcyDB `6d421e3`'s
+`icydb-core/src/db/data/persisted_row/codec/scalar/{mod,tests}.rs` payload and
+malformed-width regressions, plus the high-bit/maximum cases from
+`icydb-schema/src/u256/tests.rs`. It uses IcyDB's underlying integer supplier
+without copying its wrapper, Serde/Wire conversion or NumericValue/Decimal
+machinery. There is one new product dependency, no new product crate, durable
+state or executor. Database arithmetic and aggregate accumulator rules remain
+separate work; Rust integer methods alone do not implement aggregate semantics.
+Native/Wasm qualification covers literal bytes and independently framed schema
+hashes, ordering across 128 bits and the highest bit, optional uniqueness swaps,
+row byte exhaustion, malformed keys, preparation refusals, late message traps
+and unchanged reopen/upgrade. Shared stored inspection also checks U256 map keys
+before a deletion, so unindexed malformed data cannot bypass preparation.
 
 Principal fields use `value(item(prim="Principal"))`, optionally with `opt`.
 The Rust value is the re-exported `ic_platform_types::Principal`, not another
@@ -1617,16 +1698,23 @@ and 3 uses owned fixed-width scalars. Earlier numbered manifests refuse intact
 before row decoding, including those already using row codec 3. No implicit
 migration or historical fallback decoder is provided; data is not recreated.
 Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
-Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, and Principal=`14`.
+Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, Principal=`14`, and U256=`17`.
 Lists use tag `16`, followed by four little-endian u32 bounds (declared maximum
-items, row depth 32, structured values 256, total list items 256), then the item
+items, row depth 32, structured values 256, total collection items 256), then the item
 type tag and payload. The item is required and has no reference flag. Including
 these limits in each list descriptor binds scalar-only lists as well as named
 lists to their traversal contract; contracts without lists remain unchanged.
 Optional fields set bit `0x80`. Named types use tag `15` and their length-prefixed
 logical name. If any named definitions are reachable, append `ICDBTY02`,
 u32 depth/node limits (32/256), a u32 definition count and definitions ordered by
-name. Each begins with kind byte (1=enum, 2=record), name and u32 member count.
+name. Each begins with kind byte (1=enum, 2=record, 3=set, 4=map), name and u32 member count.
+Sets have one item definition: member count 1, declared maximum count (u32),
+shared collection-item bound 256 (u32), then the required scalar item tag/payload.
+The existing named suffix binds their depth/node limits. Adding set definitions
+does not change contracts that have no sets.
+Maps have member count 2, declared maximum count (u32), shared collection-item
+bound 256 (u32), the required scalar key tag/payload, then the value's type
+tag/optionality/payload. Existing contracts without maps remain unchanged.
 Record members encode name, type tag/optionality and type payload. Enum members
 encode name, strict payload-presence byte and, if present, the payload's type tag,
 optionality and type payload. Counts/name lengths remain little-endian u32.
@@ -1932,26 +2020,23 @@ IC DB artifact SHA-256:
 The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
-After nested records and payload enums, the scalar host is 184,442 Wasm bytes
-and 164,427 code-section bytes. Hit/miss/listing cost 486,622/492,069/781,873
-instructions; complete read/modify/replace costs 838,382 instructions and
-7,852,339 cycles. Relative to the preceding unit-enum slice (177,571/157,622
-bytes), shared graph and traversal support adds 6,871 Wasm bytes. Measured common
-operation instructions change by at most 0.2%; all remain below the frozen
-IcyDB baseline. This scalar workload measures shared-code overhead, not nested
-workload performance or full fluent-query parity. The normal Wasm graph has no
-constructor dependency. Evidence records source diffs, features and exact results;
-the prior run is retained locally under `records-comparison-before-nested`.
-
-After ordered lists, the scalar host is 185,346 Wasm bytes (+904) and 165,329
-code-section bytes (+902). Hit/miss/listing cost 486,876/492,316/782,208
-instructions; complete read/modify/replace costs 838,673 instructions and
-7,852,630 cycles. Those measured read/update instruction changes are at most
-0.06%; the frozen IcyDB artifact and comparison results are unchanged. These
-figures measure shared-code overhead, not list workloads. The current IC DB
+With named records, payload enums, lists, sets, maps and U256, the current scalar
+host is 191,771 Wasm bytes and 171,748 code-section bytes. U256 support adds
+1,550/1,548 bytes relative to the preceding map slice. Hit/miss cost remains
+486,876/492,316 instructions; listing costs 782,347 (+139, about 0.018%). Complete
+read/modify/replace costs 839,163 instructions (+490, about 0.058%) and 7,853,120
+cycles (+490). These small scalar dispatch costs are a measured capability tradeoff,
+not an efficiency improvement; common-path performance acceptance remains an
+explicit M1 decision. Results remain below the frozen IcyDB scalar comparison;
+its artifact and results are unchanged. This measures shared-code overhead, not
+U256 arithmetic, nested/collection workloads or full fluent-query parity. The
+normal product graph has no constructor or Wire dependency; ethnum has no enabled
+features. Evidence records source diffs, features and exact results under
+records-comparison; the preceding map run is retained locally under
+records-comparison-before-u256. Earlier increment details remain in Git history
+rather than accumulating another current-result ledger. The current IC DB
 artifact SHA-256 is
-`061a36b2cdbdd2c6ba98ec518c1386b4a4eb76e194b0c08451c3c5c8fb0070ba`;
-the preceding evidence is retained under `records-comparison-before-lists`.
+`c43d3596d98f5bc0474f4ebb02eb132ac59f38bcb16e260a4c034d9931488d96`.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,
