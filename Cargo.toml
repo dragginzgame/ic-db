@@ -13,13 +13,15 @@ publish = false
 ctor = { version = "1.0.14", default-features = false, features = ["proc_macro", "std"] }
 ethnum = { version = "1.5.3", default-features = false }
 ic-db-macros = { path = "crates/ic-db-macros" }
-ic-platform-types = { version = "0.20.3", default-features = false }
+ic-platform-types = { version = "0.20.4", default-features = false }
 ic-storage = "0.74.1"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 sha2 = { version = "0.11.1", default-features = false }
 syn = "3.0.10"
 toko-tooling = "=0.43.1"
+# IC DB owns generation policy; ulid's std feature enables native rand.
+ulid = { version = "3.0.0", default-features = false }
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

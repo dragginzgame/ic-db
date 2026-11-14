@@ -7,7 +7,8 @@
 //! Extend that scalar approach to 128 bits; omit its slot envelope/value layer.
 
 use crate::{
-    Error, FieldType, Principal, TypeBody, TypeLink, U256, Value, ValueSchema,
+    Account, Error, FieldType, Float32, Float64, Principal, Subaccount, TypeBody, TypeLink, U256,
+    Ulid, Value, ValueSchema,
     types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,6 +107,25 @@ impl Encoder {
 
     pub fn nat32(&mut self, value: u32) -> Result<(), Error> {
         self.append(&value.to_le_bytes())
+    }
+
+    pub fn float32(&mut self, value: Float32) -> Result<(), Error> {
+        self.append(&value.get().to_bits().to_le_bytes())
+    }
+
+    pub fn float64(&mut self, value: Float64) -> Result<(), Error> {
+        self.append(&value.get().to_bits().to_le_bytes())
+    }
+
+    pub fn subaccount(&mut self, value: Subaccount) -> Result<(), Error> {
+        self.append(&value)
+    }
+    pub fn ulid(&mut self, value: Ulid) -> Result<(), Error> {
+        self.append(&value.to_bytes())
+    }
+    pub fn account(&mut self, value: Account) -> Result<(), Error> {
+        self.principal(&value.owner)?;
+        self.subaccount(*value.effective_subaccount())
     }
 
     pub fn int8(&mut self, value: i8) -> Result<(), Error> {
@@ -336,6 +356,11 @@ impl<'a> Decoder<'a> {
             FieldType::Nat32 => self.ordered(count, Self::nat32, read_value, |_, ()| {}),
             FieldType::Nat64 => self.ordered(count, Self::nat64, read_value, |_, ()| {}),
             FieldType::Nat128 => self.ordered(count, Self::nat128, read_value, |_, ()| {}),
+            FieldType::Float32 => self.ordered(count, Self::float32, read_value, |_, ()| {}),
+            FieldType::Float64 => self.ordered(count, Self::float64, read_value, |_, ()| {}),
+            FieldType::Subaccount => self.ordered(count, Self::subaccount, read_value, |_, ()| {}),
+            FieldType::Account => self.ordered(count, Self::account, read_value, |_, ()| {}),
+            FieldType::Ulid => self.ordered(count, Self::ulid, read_value, |_, ()| {}),
             FieldType::U256 => self.ordered(count, Self::u256, read_value, |_, ()| {}),
             FieldType::Int8 => self.ordered(count, Self::int8, read_value, |_, ()| {}),
             FieldType::Int16 => self.ordered(count, Self::int16, read_value, |_, ()| {}),
@@ -378,6 +403,29 @@ impl<'a> Decoder<'a> {
     pub fn nat32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
+    pub fn float32(&mut self) -> Result<Float32, Error> {
+        Float32::from_canonical_bits(u32::from_le_bytes(self.fixed()?)).ok_or(Error::Corrupt)
+    }
+
+    pub fn float64(&mut self) -> Result<Float64, Error> {
+        Float64::from_canonical_bits(u64::from_le_bytes(self.fixed()?)).ok_or(Error::Corrupt)
+    }
+
+    pub fn subaccount(&mut self) -> Result<Subaccount, Error> {
+        self.fixed()
+    }
+    pub fn ulid(&mut self) -> Result<Ulid, Error> {
+        Ok(Ulid::from_bytes(self.fixed()?))
+    }
+    pub fn account(&mut self) -> Result<Account, Error> {
+        let owner = self.principal()?;
+        let bytes = self.subaccount()?;
+        Ok(Account {
+            owner,
+            subaccount: (bytes != [0; 32]).then_some(bytes),
+        })
+    }
+
     pub fn int8(&mut self) -> Result<i8, Error> {
         Ok(i8::from_le_bytes(self.fixed()?))
     }
@@ -464,6 +512,21 @@ impl<'a> Decoder<'a> {
             }
             FieldType::Nat128 => {
                 self.nat128()?;
+            }
+            FieldType::Float32 => {
+                self.float32()?;
+            }
+            FieldType::Float64 => {
+                self.float64()?;
+            }
+            FieldType::Subaccount => {
+                self.subaccount()?;
+            }
+            FieldType::Ulid => {
+                self.ulid()?;
+            }
+            FieldType::Account => {
+                self.account()?;
             }
             FieldType::U256 => {
                 self.u256()?;

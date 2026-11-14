@@ -15,7 +15,12 @@ pub(super) enum Kind {
     Nat64,
     Int64,
     Nat128,
+    Float32,
+    Float64,
+    Subaccount,
+    Account,
     U256,
+    Ulid,
     Int128,
     Bool,
     Principal,
@@ -101,7 +106,12 @@ impl Field {
                     | Kind::Nat32
                     | Kind::Nat64
                     | Kind::Nat128
+                    | Kind::Float32
+                    | Kind::Float64
+                    | Kind::Subaccount
+                    | Kind::Account
                     | Kind::U256
+                    | Kind::Ulid
                     | Kind::Int8
                     | Kind::Int16
                     | Kind::Int32
@@ -143,7 +153,12 @@ impl Field {
             Kind::Nat64 => quote!(u64),
             Kind::Int64 => quote!(i64),
             Kind::Nat128 => quote!(u128),
+            Kind::Float32 => quote!(::ic_db::Float32),
+            Kind::Float64 => quote!(::ic_db::Float64),
+            Kind::Subaccount => quote!(::ic_db::Subaccount),
+            Kind::Account => quote!(::ic_db::Account),
             Kind::U256 => quote!(::ic_db::U256),
+            Kind::Ulid => quote!(::ic_db::Ulid),
             Kind::Int128 => quote!(i128),
             Kind::Bool => quote!(bool),
             Kind::Principal => quote!(::ic_db::Principal),
@@ -192,7 +207,12 @@ impl Field {
             Kind::Nat64 => quote!(::ic_db::FieldType::Nat64),
             Kind::Int64 => quote!(::ic_db::FieldType::Int64),
             Kind::Nat128 => quote!(::ic_db::FieldType::Nat128),
+            Kind::Float32 => quote!(::ic_db::FieldType::Float32),
+            Kind::Float64 => quote!(::ic_db::FieldType::Float64),
+            Kind::Subaccount => quote!(::ic_db::FieldType::Subaccount),
+            Kind::Account => quote!(::ic_db::FieldType::Account),
             Kind::U256 => quote!(::ic_db::FieldType::U256),
+            Kind::Ulid => quote!(::ic_db::FieldType::Ulid),
             Kind::Int128 => quote!(::ic_db::FieldType::Int128),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
             Kind::Principal => quote!(::ic_db::FieldType::Principal),
@@ -239,7 +259,12 @@ impl Field {
             Kind::Int32 => quote!(writer.int32(*value)?),
             Kind::Nat64 => quote!(writer.nat64(*value)?),
             Kind::Nat128 => quote!(writer.nat128(*value)?),
+            Kind::Float32 => quote!(writer.float32(*value)?),
+            Kind::Float64 => quote!(writer.float64(*value)?),
+            Kind::Subaccount => quote!(writer.subaccount(*value)?),
+            Kind::Account => quote!(writer.account(*value)?),
             Kind::U256 => quote!(writer.u256(*value)?),
+            Kind::Ulid => quote!(writer.ulid(*value)?),
             Kind::Int64 => quote!(writer.int64(*value)?),
             Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
@@ -286,7 +311,12 @@ impl Field {
             Kind::Int32 => quote!(reader.int32()),
             Kind::Nat64 => quote!(reader.nat64()),
             Kind::Nat128 => quote!(reader.nat128()),
+            Kind::Float32 => quote!(reader.float32()),
+            Kind::Float64 => quote!(reader.float64()),
+            Kind::Subaccount => quote!(reader.subaccount()),
+            Kind::Account => quote!(reader.account()),
             Kind::U256 => quote!(reader.u256()),
+            Kind::Ulid => quote!(reader.ulid()),
             Kind::Int64 => quote!(reader.int64()),
             Kind::Int128 => quote!(reader.int128()),
             Kind::Bool => quote!(reader.boolean()),
@@ -416,7 +446,12 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Nat64"), None) => Ok(Kind::Nat64),
         (Some("Int64"), None) => Ok(Kind::Int64),
         (Some("Nat128"), None) => Ok(Kind::Nat128),
+        (Some("Float32"), None) => Ok(Kind::Float32),
+        (Some("Float64"), None) => Ok(Kind::Float64),
+        (Some("Subaccount"), None) => Ok(Kind::Subaccount),
+        (Some("Account"), None) => Ok(Kind::Account),
         (Some("U256"), None) => Ok(Kind::U256),
+        (Some("Ulid"), None) => Ok(Kind::Ulid),
         (Some("Int128"), None) => Ok(Kind::Int128),
         (Some("Bool"), None) => Ok(Kind::Bool),
         (Some("Principal"), None) => Ok(Kind::Principal),
@@ -426,7 +461,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Blob"), None) => Err(syn::Error::new_spanned(meta, "Blob requires max_bytes")),
         _ => Err(syn::Error::new_spanned(
             meta,
-            "supported here: Nat/Int8/16/32/64/128, U256, Bool, Principal, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
+            "supported here: Nat/Int8/16/32/64/128, U256, Ulid, Float32/Float64, Bool, Principal, Subaccount, Account, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
         )),
     }
 }

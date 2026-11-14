@@ -1,6 +1,8 @@
 //! Exact typed index operands and ordered component bytes; no query execution.
 
-use crate::{Error, FieldType, Principal, U256, codec::Decoder};
+use crate::{
+    Account, Error, FieldType, Float32, Float64, Principal, Subaccount, U256, Ulid, codec::Decoder,
+};
 
 /// One exact leading index component. Operand types must match declared fields;
 /// integers are never implicitly widened, narrowed or coerced across signedness.
@@ -21,6 +23,16 @@ pub enum IndexValue<'a> {
     Nat128(u128),
     /// Exact unsigned 256-bit component, without narrower-integer coercion.
     U256(U256),
+    /// Exact ULID identity, without integer or text coercion.
+    Ulid(Ulid),
+    /// Exact account identity; no coercion from another key type.
+    Account(Account),
+    /// Exact subaccount identity; no coercion from another key type.
+    Subaccount(Subaccount),
+    /// Finite canonical 64-bit float; no cross-width or integer coercion.
+    Float64(Float64),
+    /// Finite canonical 32-bit float; no cross-width or integer coercion.
+    Float32(Float32),
     /// Exact i8 component.
     Int8(i8),
     /// Exact i16 component.
@@ -54,13 +66,20 @@ impl<'a> IndexValue<'a> {
             | (Self::Nat32(_), FieldType::Nat32)
             | (Self::Nat64(_), FieldType::Nat64)
             | (Self::Nat128(_), FieldType::Nat128)
+            | (Self::Float32(_), FieldType::Float32)
+            | (Self::Float64(_), FieldType::Float64)
+            | (Self::Subaccount(_), FieldType::Subaccount)
             | (Self::U256(_), FieldType::U256)
+            | (Self::Ulid(_), FieldType::Ulid)
             | (Self::Int8(_), FieldType::Int8)
             | (Self::Int16(_), FieldType::Int16)
             | (Self::Int32(_), FieldType::Int32)
             | (Self::Int64(_), FieldType::Int64)
             | (Self::Int128(_), FieldType::Int128)
             | (Self::Bool(_), FieldType::Bool) => Ok(()),
+            (Self::Account(value), FieldType::Account) => {
+                Self::Principal(value.owner).admit(FieldType::Principal, false)
+            }
             (Self::Principal(value), FieldType::Principal) => {
                 if value.as_slice().len() <= crate::codec::MAX_PRINCIPAL_BYTES {
                     Ok(())
@@ -88,7 +107,15 @@ impl<'a> IndexValue<'a> {
             Self::Nat32(value) => out.extend(value.to_be_bytes()),
             Self::Nat64(value) => out.extend(value.to_be_bytes()),
             Self::Nat128(value) => out.extend(value.to_be_bytes()),
+            Self::Float32(value) => out.extend(value.ordered_bytes()),
+            Self::Float64(value) => out.extend(value.ordered_bytes()),
+            Self::Subaccount(value) => out.extend(value),
+            Self::Account(value) => {
+                Self::Principal(value.owner).append_to(out);
+                out.extend(value.effective_subaccount());
+            }
             Self::U256(value) => out.extend(value.to_be_bytes()),
+            Self::Ulid(value) => out.extend(value.to_bytes()),
             Self::Int8(value) => {
                 let mut bytes = value.to_be_bytes();
                 bytes[0] ^= 0x80;
@@ -148,7 +175,12 @@ impl<'a> IndexValue<'a> {
             FieldType::Nat32 => Self::Nat32(reader.nat32()?),
             FieldType::Nat64 => Self::Nat64(reader.nat64()?),
             FieldType::Nat128 => Self::Nat128(reader.nat128()?),
+            FieldType::Float32 => Self::Float32(reader.float32()?),
+            FieldType::Float64 => Self::Float64(reader.float64()?),
+            FieldType::Subaccount => Self::Subaccount(reader.subaccount()?),
+            FieldType::Account => Self::Account(reader.account()?),
             FieldType::U256 => Self::U256(reader.u256()?),
+            FieldType::Ulid => Self::Ulid(reader.ulid()?),
             FieldType::Int8 => Self::Int8(reader.int8()?),
             FieldType::Int16 => Self::Int16(reader.int16()?),
             FieldType::Int32 => Self::Int32(reader.int32()?),
@@ -238,21 +270,55 @@ impl From<U256> for IndexValue<'_> {
     }
 }
 
+impl From<Ulid> for IndexValue<'_> {
+    fn from(value: Ulid) -> Self {
+        Self::Ulid(value)
+    }
+}
+
+impl From<Float32> for IndexValue<'_> {
+    fn from(value: Float32) -> Self {
+        Self::Float32(value)
+    }
+}
+
+impl From<Float64> for IndexValue<'_> {
+    fn from(value: Float64) -> Self {
+        Self::Float64(value)
+    }
+}
+
+impl From<Subaccount> for IndexValue<'_> {
+    fn from(value: Subaccount) -> Self {
+        Self::Subaccount(value)
+    }
+}
+
+impl From<Account> for IndexValue<'_> {
+    fn from(value: Account) -> Self {
+        Self::Account(value)
+    }
+}
+
 // Schema admission and byte framing share the fixed-width contract here.
 fn fixed_width(field: FieldType) -> Option<usize> {
     match field {
         FieldType::Nat8 | FieldType::Int8 | FieldType::Bool => Some(1),
         FieldType::Nat16 | FieldType::Int16 => Some(2),
-        FieldType::Nat32 | FieldType::Int32 => Some(4),
-        FieldType::Nat64 | FieldType::Int64 => Some(8),
-        FieldType::Nat128 | FieldType::Int128 => Some(16),
-        FieldType::U256 => Some(32),
+        FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 => Some(4),
+        FieldType::Nat64 | FieldType::Int64 | FieldType::Float64 => Some(8),
+        FieldType::Nat128 | FieldType::Int128 | FieldType::Ulid => Some(16),
+        FieldType::U256 | FieldType::Subaccount => Some(32),
         _ => None,
     }
 }
 
 pub(crate) fn supports(field: FieldType) -> bool {
-    fixed_width(field).is_some() || matches!(field, FieldType::Principal | FieldType::Text { .. })
+    fixed_width(field).is_some()
+        || matches!(
+            field,
+            FieldType::Principal | FieldType::Account | FieldType::Text { .. }
+        )
 }
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
@@ -281,16 +347,28 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
     if field == FieldType::Bool && !matches!(bytes.first(), Some(0 | 1)) {
         return Err(Error::Corrupt);
     }
-    let width = if field == FieldType::Principal {
+    let width = if matches!(field, FieldType::Principal | FieldType::Account) {
         let (&len, _) = bytes.split_first().ok_or(Error::Corrupt)?;
         if usize::from(len) > crate::codec::MAX_PRINCIPAL_BYTES {
             return Err(Error::Corrupt);
         }
-        usize::from(len) + 1
+        usize::from(len) + 1 + if field == FieldType::Account { 32 } else { 0 }
     } else {
         fixed_width(field).ok_or(Error::Corrupt)?
     };
-    *bytes = bytes.get(width..).ok_or(Error::Corrupt)?;
+    let component = bytes.get(..width).ok_or(Error::Corrupt)?;
+    match field {
+        FieldType::Float32 => {
+            Float32::from_ordered_bytes(component.try_into().map_err(|_| Error::Corrupt)?)
+                .ok_or(Error::Corrupt)?;
+        }
+        FieldType::Float64 => {
+            Float64::from_ordered_bytes(component.try_into().map_err(|_| Error::Corrupt)?)
+                .ok_or(Error::Corrupt)?;
+        }
+        _ => {}
+    }
+    *bytes = &bytes[width..];
     Ok(())
 }
 

@@ -56,10 +56,20 @@ pub enum FieldType {
     Int128,
     /// Exact unsigned 256-bit integer, stored as 32 big-endian bytes.
     U256,
+    /// Exact 16-byte ULID, ordered by timestamp prefix then remaining bits.
+    Ulid,
+    /// Finite IEEE-754 single precision, canonical positive zero.
+    Float32,
+    /// Finite IEEE-754 double precision, canonical positive zero.
+    Float64,
     /// Boolean, without numeric coercion.
     Bool,
     /// Opaque IC identity, zero to 29 significant bytes; no authority policy.
     Principal,
+    /// Exact 32-byte opaque subaccount, ordered lexicographically.
+    Subaccount,
+    /// Platform account identity: owner then effective subaccount; absent and zero agree.
+    Account,
     /// Exact UTF-8 text, bounded in bytes without implicit normalization.
     Text {
         /// Maximum UTF-8 byte length (0..=4096); zero admits only empty text.
@@ -98,7 +108,7 @@ pub struct ReferenceSchema {
     pub index: u32,
 }
 
-/// A compiled index over exact integer, Principal, Bool or Text components.
+/// A compiled index over supported exact scalar components.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IndexSchema {
     /// Generated storage handle; use the name when selecting an index.
@@ -406,6 +416,11 @@ pub(crate) fn encode_type(
         FieldType::Named(_) => 15,
         FieldType::List { .. } => 16,
         FieldType::U256 => 17,
+        FieldType::Float32 => 18,
+        FieldType::Float64 => 19,
+        FieldType::Subaccount => 20,
+        FieldType::Account => 21,
+        FieldType::Ulid => 22,
     };
     bytes.push(tag | if optional { 0x80 } else { 0 } | if reference { 0x40 } else { 0 });
     match value {

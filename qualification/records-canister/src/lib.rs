@@ -131,10 +131,10 @@ fn inspect() -> Status {
     status(&db, &host)
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
+type FieldView = (String, String, bool, String, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
-type TypeView = (String, String, Vec<(String, String, bool)>);
+type TypeView = (String, String, Vec<(String, String, bool, String)>);
 #[ic_wire_endpoint::query(id = 2)]
 fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
@@ -148,34 +148,12 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                 .fields
                 .iter()
                 .map(|field| {
-                    let (kind, limit) = match field.value {
-                        FieldType::List { .. } => ("List", None),
-                        FieldType::Named(link) => (link.name, None),
-                        FieldType::Nat8 => ("Nat8", None),
-                        FieldType::Nat16 => ("Nat16", None),
-                        FieldType::Nat32 => ("Nat32", None),
-                        FieldType::Int8 => ("Int8", None),
-                        FieldType::Int16 => ("Int16", None),
-                        FieldType::Int32 => ("Int32", None),
-                        FieldType::Nat64 => ("Nat64", None),
-                        FieldType::Int64 => ("Int64", None),
-                        FieldType::Nat128 => ("Nat128", None),
-                        FieldType::U256 => ("U256", None),
-                        FieldType::Int128 => ("Int128", None),
-                        FieldType::Bool => ("Bool", None),
-                        FieldType::Principal => ("Principal", Some(29)),
-                        FieldType::Text { max_bytes } => ("Text", Some(max_bytes)),
-                        FieldType::Blob { max_bytes } => ("Blob", Some(max_bytes)),
-                    };
+                    let (kind, info) = type_view(field.value);
                     (
                         field.name.into(),
-                        if matches!(field.value, FieldType::List { .. }) {
-                            type_label(field.value)
-                        } else {
-                            kind.into()
-                        },
+                        kind,
                         field.optional,
-                        limit,
+                        info,
                         field.reference.map(|reference| {
                             (
                                 reference.entity,
@@ -221,30 +199,42 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                     key,
                     value,
                     max_items,
-                } => (
-                    "Map",
-                    vec![
-                        (
-                            "key".into(),
-                            format!("{} (map max {max_items} entries)", type_label(*key)),
+                } => {
+                    let (key_type, key_info) = type_view(*key);
+                    let (value_type, value_info) = type_view(value.value);
+                    (
+                        "Map",
+                        vec![
+                            (
+                                "key".into(),
+                                key_type,
+                                false,
+                                joined_info(format!("map max {max_items} entries"), &key_info),
+                            ),
+                            ("value".into(), value_type, value.optional, value_info),
+                        ],
+                    )
+                }
+                ic_db::TypeBody::Set { item, max_items } => {
+                    let (kind, info) = type_view(*item);
+                    (
+                        "Set",
+                        vec![(
+                            "element".into(),
+                            kind,
                             false,
-                        ),
-                        ("value".into(), type_label(value.value), value.optional),
-                    ],
-                ),
-                ic_db::TypeBody::Set { item, max_items } => (
-                    "Set",
-                    vec![(
-                        "element".into(),
-                        format!("{} (max {max_items} items)", type_label(*item)),
-                        false,
-                    )],
-                ),
+                            joined_info(format!("max {max_items} items"), &info),
+                        )],
+                    )
+                }
                 ic_db::TypeBody::Record(fields) => (
                     "Record",
                     fields
                         .iter()
-                        .map(|f| (f.name.into(), type_label(f.value), f.optional))
+                        .map(|f| {
+                            let (kind, info) = type_view(f.value);
+                            (f.name.into(), kind, f.optional, info)
+                        })
                         .collect(),
                 ),
                 ic_db::TypeBody::Enum(variants) => (
@@ -252,11 +242,15 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                     variants
                         .iter()
                         .map(|v| {
+                            let (kind, info) = v.payload.map_or_else(
+                                || ("-".into(), String::new()),
+                                |p| type_view(p.value),
+                            );
                             (
                                 v.name.into(),
-                                v.payload
-                                    .map_or_else(|| "-".into(), |p| type_label(p.value)),
+                                kind,
                                 v.payload.is_some_and(|p| p.optional),
+                                info,
                             )
                         })
                         .collect(),
@@ -908,15 +902,39 @@ fn enum_decode(bytes: Vec<u8>) -> bool {
     schema::EnumRow::decode(&bytes).is_ok()
 }
 
-fn type_label(value: FieldType) -> String {
+// Inspection projection only: names and constraints stay separate from terminal layout.
+fn type_view(value: FieldType) -> (String, String) {
     match value {
         FieldType::List { item, max_items } => {
-            format!("List<{}> (max {max_items} items)", type_label(*item))
+            let (kind, info) = type_view(*item);
+            let item_info = if info.is_empty() {
+                info
+            } else {
+                format!("item {info}")
+            };
+            (
+                format!("List<{kind}>"),
+                joined_info(format!("max {max_items} items"), &item_info),
+            )
         }
-        FieldType::Named(link) => link.name.into(),
-        FieldType::Text { max_bytes } => format!("Text (max {max_bytes} bytes)"),
-        FieldType::Blob { max_bytes } => format!("Blob (max {max_bytes} bytes)"),
-        scalar => format!("{scalar:?}"),
+        FieldType::Named(link) => (link.name.into(), String::new()),
+        FieldType::Text { max_bytes } => ("Text".into(), format!("max {max_bytes} bytes")),
+        FieldType::Blob { max_bytes } => ("Blob".into(), format!("max {max_bytes} bytes")),
+        FieldType::Principal => ("Principal".into(), "max 29 bytes".into()),
+        FieldType::Subaccount => ("Subaccount".into(), "32 bytes".into()),
+        FieldType::Ulid => ("Ulid".into(), "16 bytes".into()),
+        FieldType::Account => (
+            "Account".into(),
+            "owner max 29 bytes; subaccount 32 bytes".into(),
+        ),
+        scalar => (format!("{scalar:?}"), String::new()),
+    }
+}
+fn joined_info(bound: String, nested: &str) -> String {
+    if nested.is_empty() {
+        bound
+    } else {
+        format!("{bound}; {nested}")
     }
 }
 
@@ -1230,4 +1248,219 @@ fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
 )]
 fn u256_decodes(bytes: Vec<u8>) -> bool {
     schema::BigNumbers::decode(&bytes).is_ok()
+}
+
+type FloatInput = (u64, Option<u64>, u32, u64);
+#[ic_wire_endpoint::update(id = 45)]
+fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
+    use ic_db::{Float32, Float64};
+    use schema::FloatRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, small, value) in rows {
+        let maybe = maybe
+            .map(|bits| Float64::try_new(f64::from_bits(bits)).ok_or(1_u8))
+            .transpose()?;
+        let row = FloatRow {
+            id,
+            maybe,
+            zone: true,
+            small: Float32::try_new(f32::from_bits(small)).ok_or(1_u8)?,
+            value: Float64::try_new(f64::from_bits(value)).ok_or(1_u8)?,
+        };
+        if db.get::<FloatRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after float batch");
+    }
+    Ok(())
+}
+#[ic_wire_endpoint::query(id = 46)]
+fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::FloatRow;
+    let host = runtime();
+    let db = open(&host);
+    let index = if small {
+        "zone,small,id"
+    } else {
+        "zone,value,id"
+    };
+    (
+        db.index_prefix::<FloatRow>(index, &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.id, row.encode().unwrap()))
+            .collect(),
+        db.revision::<FloatRow>().unwrap(),
+    )
+}
+#[ic_wire_endpoint::query(id = 47)]
+fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
+    let value = ic_db::Float64::try_new(f64::from_bits(bits)).ok_or(1_u8)?;
+    let host = runtime();
+    Ok(open(&host)
+        .index_prefix::<schema::FloatRow>("maybe", &[value.into()], 32)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect())
+}
+#[ic_wire_endpoint::query(id = 48)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn float_decodes(bytes: Vec<u8>) -> bool {
+    schema::FloatRow::decode(&bytes).is_ok()
+}
+
+type AccountInput = (Vec<u8>, Option<[u8; 32]>);
+type AccountRowInput = (u64, Option<AccountInput>, [u8; 32], AccountInput);
+fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account, u8> {
+    Ok(ic_db::Account {
+        owner: Principal::try_from_slice(&owner).map_err(|_| 1_u8)?,
+        subaccount,
+    })
+}
+#[ic_wire_endpoint::update(id = 49)]
+fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
+    use schema::AccountRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, sub, value) in rows {
+        let row = AccountRow {
+            id,
+            maybe: maybe.map(admitted_account).transpose()?,
+            sub,
+            value: admitted_account(value)?,
+            zone: true,
+        };
+        if db.get::<AccountRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after account batch");
+    }
+    Ok(())
+}
+#[ic_wire_endpoint::query(id = 50)]
+fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::AccountRow;
+    let host = runtime();
+    let db = open(&host);
+    let index = if sub { "zone,sub,id" } else { "zone,value,id" };
+    (
+        db.index_prefix::<AccountRow>(index, &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.encode().unwrap()))
+            .collect(),
+        db.revision::<AccountRow>().unwrap(),
+    )
+}
+#[ic_wire_endpoint::query(id = 51)]
+fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
+    let value = admitted_account(value)?;
+    let host = runtime();
+    Ok(open(&host)
+        .index_prefix::<schema::AccountRow>("maybe", &[value.into()], 32)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect())
+}
+#[ic_wire_endpoint::query(id = 52)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn account_decodes(bytes: Vec<u8>) -> bool {
+    schema::AccountRow::decode(&bytes).is_ok()
+}
+
+type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
+#[ic_wire_endpoint::update(id = 53)]
+fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
+    use schema::UlidRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, value) in rows {
+        let row = UlidRow {
+            id,
+            maybe: maybe.map(ic_db::Ulid::from_bytes),
+            value: ic_db::Ulid::from_bytes(value),
+            zone: true,
+        };
+        if db.get::<UlidRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after Ulid batch");
+    }
+    Ok(())
+}
+#[ic_wire_endpoint::query(id = 54)]
+fn ulid_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::UlidRow;
+    let host = runtime();
+    let db = open(&host);
+    (
+        db.index_prefix::<UlidRow>("zone,value,id", &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.id, row.encode().unwrap()))
+            .collect(),
+        db.revision::<UlidRow>().unwrap(),
+    )
+}
+#[ic_wire_endpoint::query(id = 55)]
+fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
+    let host = runtime();
+    open(&host)
+        .index_prefix::<schema::UlidRow>(
+            "zone,value,id",
+            &[true.into(), ic_db::Ulid::from_bytes(value).into()],
+            32,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect()
+}
+#[ic_wire_endpoint::query(id = 56)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn ulid_decodes(bytes: Vec<u8>) -> bool {
+    schema::UlidRow::decode(&bytes).is_ok()
+}
+
+#[ic_wire_endpoint::query(id = 57)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
+    let value = text.parse::<ic_db::Ulid>().map_err(|_| 1_u8)?;
+    Ok((value.to_string(), value.to_bytes()))
 }

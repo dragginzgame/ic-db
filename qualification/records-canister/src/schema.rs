@@ -199,3 +199,46 @@ pub(crate) struct MapTreeRow {}
     )
 )]
 pub(crate) struct BigNumbers {}
+
+#[entity(
+    pk(field="id"),
+    index(fields=["zone","small","id"]),
+    index(fields=["zone","value","id"]),
+    index(field="maybe",unique,present_only),
+    fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="maybe",value(opt,item(prim="Float64"))),
+        field(name="small",value(item(prim="Float32"))),
+        field(name="value",value(item(prim="Float64"))),
+        field(name="zone",value(item(prim="Bool")))
+    )
+)]
+pub(crate) struct FloatRow {}
+
+#[entity(
+    pk(field="id"),
+    index(fields=["zone","value","id"]),
+    index(fields=["zone","sub","id"]),
+    index(field="maybe",unique,present_only),
+    fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="maybe",value(opt,item(prim="Account"))),
+        field(name="sub",value(item(prim="Subaccount"))),
+        field(name="value",value(item(prim="Account"))),
+        field(name="zone",value(item(prim="Bool")))
+    )
+)]
+pub(crate) struct AccountRow {}
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Ulid"))),
+        field(name = "value", value(item(prim = "Ulid"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
+pub(crate) struct UlidRow {}

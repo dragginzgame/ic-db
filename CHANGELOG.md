@@ -1,6 +1,65 @@
 # Changelog
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-11-14 (development checkpoint)
+
+### ▶️ Try it
+
+`db schema` now includes `UlidRow` with supplied ULID values and ordered/unique
+indexes, plus `AccountRow` with Account/Subaccount fields, alongside
+`FloatRow` with finite Float32/Float64 fields and compound/optional unique indexes.
+Reinstall with `make db` to refresh the fixture.
+
+Type bounds now appear in a separate **Info** column. This console still uses
+a fresh local fixture; `query` reads Entry rows.
+
+```sh
+make db
+db schema
+db query --limit 2
+```
+
+### 🛠️ Changes
+
+- Add `prim = "Ulid"` for supplied values, optional fields, collection elements/
+  keys and secondary indexes. Adapt IcyDB's 16-byte codec and canonical uppercase
+  text wrapper. Keep `ulid` 3.0.0 default features disabled: no native RNG or
+  automatic generator. Native/Wasm witnesses cover full-width values, timestamp
+  boundaries, malformed widths/text, unique exchanges, rollback and reopen.
+  Document IcyDB's separate timestamp/entropy/monotonicity lessons for generated
+  IDs; primary keys remain Nat64 in this increment.
+
+- Adopt published Platform Runtime/macros/guard 0.22.4 and set the product's
+  Types minimum to 0.20.4. Platform itself remains transitively selected at
+  0.33.2: announced 0.33.3 was unavailable from crates.io at this update.
+  Keep the coordinated runtime singleton and database-owned identity codecs.
+
+- Adopt IC Testkit 0.105.0 for qualification and the local `db` host. Keep fresh
+  test instances; no retired pooling API is needed. Its host helpers now share
+  Artifacts/FS/Process 0.78.0, removing the duplicate Artifacts version and obsolete
+  process dependencies. PocketIC remains 16.1.0; product codecs are unchanged.
+
+- Add `prim = "Account"` and `prim = "Subaccount"`, using the re-exported
+  Platform Types values with database-owned codecs. Account identity treats an
+  absent subaccount and an explicit zero subaccount identically. Support optional
+  values, collections and exact secondary indexes; ordering follows owner then
+  effective subaccount. Native/Wasm checks cover independent bytes, all owner
+  lengths, duplicate keys, uniqueness swaps, bounds, rollback and reopen. No new
+  dependency, account wrapper or durable metadata is introduced. Primary keys
+  and references remain Nat64.
+
+- Move schema table bounds into a separate **Info** column for entity fields,
+  records, enum payloads, lists, sets and maps. Type names no longer contain
+  parenthesized limits. Run `make db`, then `db schema`, to refresh the console.
+
+- Add finite `Float32`/`Float64` fields, collection elements/keys and exact
+  secondary-index operands. Adapt IcyDB’s finite wrappers and owned IEEE-byte
+  codec: constructors normalize signed zero, while non-finite inputs refuse.
+  Persisted NaN, infinities and noncanonical negative-zero bytes refuse as corrupt.
+  Equality, hashing, ordering and unique ownership agree across the finite domain,
+  including subnormal values. No new dependency or durable state is added;
+  aggregate arithmetic and cross-type coercion remain separate work.
+
+## [0.3.0] - 2026-11-14 (development checkpoint)
 
 ### ▶️ Try it
 

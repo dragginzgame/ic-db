@@ -107,6 +107,18 @@ installer. Do not edit vendor files or copy upstream reference documents.
   U256 uses the re-exported feature-free `ethnum::U256` with an explicitly owned
   32-byte big-endian row/index codec, adapted from IcyDB. Do not introduce Wire
   serialization or a numeric conversion engine for that storage boundary.
+  Float32/Float64 use finite wrappers with one positive-zero representation.
+  Constructors normalize signed zero; stored non-finite/negative-zero bytes refuse.
+  Equality, hashing, collections and ordered keys must share this contract.
+  Account/Subaccount reuse Platform Types values with database-owned codecs.
+  Account identity and bytes use the effective 32-byte subaccount: absent and
+  explicit zero agree. Ordering compares owner then effective subaccount;
+  optional account absence remains distinct from a present default account.
+  Ulid retains IcyDB's exact 16-byte atom and canonical uppercase text wrapper.
+  Keep the ulid crate's default std/rand features disabled. Storage support does
+  not authorize an OS RNG, a hidden clock read or automatic generation. Before
+  generated-ID work, carry forward the operation-timestamp, same/backward-time,
+  overflow, entropy and upgrade/reset lessons recorded in the current design.
   Start codec work from IcyDB's database-owned implementations and regression
   tests; adapt them to this compiled-schema contract instead of using its Wire
   paths. Explain departures and qualify the resulting bytes independently.

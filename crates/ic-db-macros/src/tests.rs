@@ -152,6 +152,11 @@ fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
         "Int64",
         "Nat128",
         "U256",
+        "Ulid",
+        "Account",
+        "Subaccount",
+        "Float32",
+        "Float64",
         "Int128",
         "Principal",
     ] {

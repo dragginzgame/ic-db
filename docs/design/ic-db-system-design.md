@@ -1466,21 +1466,119 @@ or a performance improvement until matched workloads qualify them here.
 
 | Stored family | Implemented semantics |
 | --- | --- |
+| Finite Float32/Float64 | Exact finite IEEE values; both zero signs normalize to positive zero |
 | U256 | Exact unsigned 256-bit domain; 32-byte big-endian row/index payload |
+| Ulid | Exact 16-byte identity; canonical uppercase text; timestamp-prefix byte order |
 | Nat/Int8/16/32/64/128 | Exact Rust integer domains; no narrowing or floating-point coercion |
 | Bool | Exact true/false values |
 | Principal | Canonical Platform Types identity; zero to 29 significant raw bytes |
+| Subaccount | Exact 32-byte opaque value; lexicographic order |
+| Account | Owner then effective subaccount; absent and explicit-zero subaccounts share one identity |
 | Bounded Text | Exact UTF-8 bytes, without normalization |
 | Bounded Blob | Arbitrary raw bytes; explicit length framing, including empty values |
 | Optional forms of these types | Absence remains distinct from empty, zero and false |
 
 Field validation runs before encoding and after decoding; whole-row bounds apply
-independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Principal,
+independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Ulid, finite Float32/Float64, Account/Subaccount, Principal,
 Bool and bounded Text components, including optional values; primary keys require
 non-optional Nat64, while references admit required or optional Nat64.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, managed policies and fluent queries remain work;
 no retained capability or product attribute has been retired.
+
+ULID fields use `value(item(prim="Ulid"))`, including optional/list forms and
+scalar set/map keys. `ic_db::Ulid` adapts IcyDB's schema-owned 16-byte atom and
+strict canonical uppercase text wrapper. Unlike re-exporting the upstream value,
+this preserves IcyDB's rejection of lowercase/alias text and does not expose an
+automatic generator. Both row and ordered-key codecs store the exact 16 bytes,
+with the six-byte timestamp prefix first. All 128-bit patterns are valid; truncated
+or surplus payloads refuse. There is no coercion from Nat128 or Text. Tag 22 binds
+the new type; schemas without ULID retain their identities. Primary keys and
+references remain Nat64 for this increment.
+
+The inspected frozen IcyDB `6d421e3` sources are `icydb-schema/src/atom/mod.rs`,
+the database-owned `persisted_row/codec/scalar` implementation, and
+`icydb-core/src/types/ulid/{generator,tests}.rs`. The 16-byte codec and canonical
+text behavior carry over, without Serde/Wire or generated endpoint layers.
+The `ulid` 3.0.0 dependency supplies text conversion with default features disabled,
+matching IcyDB: its `std` feature would enable native `rand`. It nevertheless
+declares `web-time` for wasm32-unknown-unknown, adding browser-related packages to
+the resolved graph; the actual fixture, including reachable text parsing/display,
+imports only `ic0`. This is a dependency/build cost, not an enabled browser clock.
+Independent byte/schema vectors, malformed text/widths, collection duplicates,
+row limits, uniqueness/no-ops, message rollback and unchanged upgrade qualify
+storage. They do not qualify generation or cross-canister uniqueness.
+
+**ULID generation carryover for the later write-policy increment.** IcyDB owns
+its generator because the upstream generator requires std. Native IcyDB lazily
+seeds an `ic-entropy` stream from `getrandom`; Wasm instead constructs a
+deterministic component from timestamp bits and a process-local sequence. It
+increments the previous 80-bit suffix for equal/backward timestamps and refuses
+overflow without changing the previous value. Commit `4cedc33e` changed the
+generator to accept the write operation's timestamp; generated fields must use
+that same captured time rather than independent clock reads. These are concrete
+invariants to retain/test, not permission to import the entire generator now.
+The generated-ID contract must explicitly settle 48-bit timestamp range,
+same/backward time, exhaustion, refusal/trap consumption, upgrade/reset state and
+cross-canister collision behavior. Process-local monotonicity alone does not prove
+uniqueness after a reset or across canisters. Generated identifiers are not secret
+tokens. Any entropy acquisition must occur outside the synchronous mutation
+boundary; no inter-canister randomness call may split an ordinary batch.
+
+Account/Subaccount fields use `value(item(prim="Account"))` or
+`prim="Subaccount"`, including optional/list forms and scalar set/map keys.
+The public values are re-exported Platform Types, with no extra database wrapper.
+Subaccount rows and keys contain exactly 32 raw bytes. Account rows contain the
+existing Principal encoding (u32 little-endian owner length, then raw owner)
+followed by 32 effective subaccount bytes. Absent and explicit-zero subaccounts
+therefore encode identically; decoding zero returns `subaccount: None`. This
+deliberately spends 32 bytes on default subaccounts for one simple canonical
+layout. A whole optional account's absence remains a separate presence tag.
+Account keys use the Principal key's one-byte length and raw owner, then the
+same 32 subaccount bytes. Ordering agrees with Platform Types: owner length,
+owner bytes, then effective subaccount. Operand types must match exactly.
+
+This retains frozen IcyDB `6d421e3`'s default-account equality and boundary cases
+from `icydb-schema/src/account/tests.rs` and `subaccount/tests.rs`, and adapts the
+owned scalar codec's fixed 32-byte Subaccount payload. The Account row composition
+is new; it is not copied from a Wire representation. IcyDB's separate wrapper,
+transport conversions and packed presence-first account ordering are not retained:
+the existing platform value already supplies the selected equality/hash/order.
+Tags 20/21 bind Subaccount/Account into the contract; schemas without them retain
+their identities. No new dependency, durable metadata or authorization policy is
+added. Independent byte/order witnesses cover owner lengths 0–29, zero identity,
+duplicate stored map keys, malformed lengths and row limits. Wasm probes cover
+unique exchanges, no-ops/refusals, complete-message rollback and unchanged reopen.
+
+Float fields use `value(item(prim="Float32"))` or `prim="Float64"`, with
+optional/list forms and scalar set/map keys. Public `Float32`/`Float64` wrappers
+admit finite primitives through `try_new` and expose them through `get`. Both
+zero signs normalize to positive zero at construction. No integer/other-width
+coercion, float arithmetic operators or aggregate implementation is implied.
+
+The row codec stores exactly four/eight little-endian IEEE-754 bytes. Finite
+extrema and subnormal bits remain exact; decoding refuses NaN, infinities and
+negative-zero bytes instead of repairing persisted data. Secondary keys transform
+the canonical bits by complementing all bits for negative values, or flipping
+the sign bit for nonnegative values, then store big-endian bytes. This yields
+numeric order over the finite domain; key validation also refuses noncanonical
+encodings. Equality, hashing, collection keys, no-op detection and uniqueness
+share one zero representation. Absence remains distinct from zero.
+
+This adapts frozen IcyDB `6d421e3`'s `icydb-schema/src/atom/mod.rs` finite
+wrappers, its owned `persisted_row/codec/scalar` payloads, and the ordering/domain
+regressions in `db/index/key/tests/ordered_semantics.rs` and
+`db/numeric/tests.rs`. The existing M0 finite-order probe is also retained as
+independent evidence. IcyDB's numeric conversion engine, Serde/Wire paths and
+SQL float literal machinery are omitted; their finite-domain failure cases still
+apply. Strict refusal of persisted negative zero is an explicit tightening from
+IcyDB's normalizing decoder. New tags 18/19 bind these semantics; schemas without
+floats keep their identities. This adds two small scalar types and extends shared
+codec/key traversal, with no new dependency, durable metadata or numeric engine.
+Native/Wasm witnesses cover independently framed schema/row bytes, extreme and
+subnormal ordering, malformed payloads, zero no-ops/unique refusals, final-state
+swaps, complete-message rollback and unchanged upgrade/reopen. Aggregate
+accumulation/rounding and fluent grouping/DISTINCT remain M2 work.
 
 U256 fields use `value(item(prim="U256"))`, optionally with `opt`; the public
 Rust type is `ic_db::U256`, re-exported from feature-free ethnum 1.5.3. The owned
@@ -1698,7 +1796,8 @@ and 3 uses owned fixed-width scalars. Earlier numbered manifests refuse intact
 before row decoding, including those already using row codec 3. No implicit
 migration or historical fallback decoder is provided; data is not recreated.
 Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
-Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, Principal=`14`, and U256=`17`.
+Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, Principal=`14`, U256=`17`,
+Float32/Float64=`18/19`, Subaccount/Account=`20/21`, and Ulid=`22`.
 Lists use tag `16`, followed by four little-endian u32 bounds (declared maximum
 items, row depth 32, structured values 256, total collection items 256), then the item
 type tag and payload. The item is required and has no reference flag. Including
@@ -2020,23 +2119,33 @@ IC DB artifact SHA-256:
 The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
-With named records, payload enums, lists, sets, maps and U256, the current scalar
-host is 191,771 Wasm bytes and 171,748 code-section bytes. U256 support adds
-1,550/1,548 bytes relative to the preceding map slice. Hit/miss cost remains
-486,876/492,316 instructions; listing costs 782,347 (+139, about 0.018%). Complete
-read/modify/replace costs 839,163 instructions (+490, about 0.058%) and 7,853,120
-cycles (+490). These small scalar dispatch costs are a measured capability tradeoff,
-not an efficiency improvement; common-path performance acceptance remains an
-explicit M1 decision. Results remain below the frozen IcyDB scalar comparison;
-its artifact and results are unchanged. This measures shared-code overhead, not
-U256 arithmetic, nested/collection workloads or full fluent-query parity. The
-normal product graph has no constructor or Wire dependency; ethnum has no enabled
-features. Evidence records source diffs, features and exact results under
-records-comparison; the preceding map run is retained locally under
-records-comparison-before-u256. Earlier increment details remain in Git history
-rather than accumulating another current-result ledger. The current IC DB
-artifact SHA-256 is
-`c43d3596d98f5bc0474f4ebb02eb132ac59f38bcb16e260a4c034d9931488d96`.
+With named records, payload enums, lists, sets, maps, U256, finite floats,
+Account/Subaccount and ULID, the current scalar host is 197,467 Wasm bytes and
+177,290 code-section bytes. Hit/miss cost 487,429/492,905 instructions; listing
+costs 777,601. Complete read/modify/replace costs 839,355 instructions and
+7,853,352 cycles. Relative to the preceding Account run this is +713/+702 bytes,
++551/+587 lookup instructions (about 0.12%), -5,401 listing instructions and
+-38 read/modify/replace instructions with +2 cycles. The graph also advances
+Runtime/macros/guard 0.22.3 to 0.22.4 and Testkit 0.104.1 to 0.105.0, so these
+deltas are combined-change evidence, not isolated ULID implementation costs.
+Common-path performance acceptance remains an explicit M1 decision.
+
+Both hosts were rebuilt with the current qualification lockfile. Frozen IcyDB
+now measures 3,085,457 Wasm bytes and 2,976,850 code-section bytes, hit/miss
+1,098,690/1,072,853 instructions, and listing 3,082,943. Its complete
+read/modify/replace includes 2,932,293 operation plus 4,089,425 settling
+instructions (7,021,718 total), and 10,026,753 plus 11,169,285 cycles
+(21,196,038 total). Every measured IC DB scalar operation remains below the
+matched ceiling. This measures shared-code overhead on the existing scalar
+workload, not ULID-heavy queries, nested/collection workloads or full fluent
+parity. The normal product graph has no constructor or Wire dependency; ethnum
+and ulid have no enabled features. ULID adds the value/text dependency and its
+declared Wasm web-time graph, without reachable browser imports or RNG. Evidence records
+source diffs, features and exact results under records-comparison; the preceding
+run is retained locally under records-comparison-before-ulids. Earlier
+increment details remain in Git history. Current artifact SHA-256 values:
+IC DB `37d6e2652c783d382e74cdc42d8abeb104f7aa6b581661e0d83ef240aceeed2b`;
+IcyDB `41a59e02e5ee4698700ee9fed8cfe001a370cf0eb5c9920073d0ff776396c7dc`.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,

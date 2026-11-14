@@ -39,6 +39,24 @@ runtime; ctor is absent from the Wasm dependency graph even with `ic-db/build` e
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
+`UlidRow` qualifies exact 16-byte ULID values across the 80-bit suffix boundary,
+the top bit and the full maximum. Native checks cover independent row/schema
+bytes, canonical uppercase text, collection keys and the 4 KiB row limit. Wasm
+checks cover parsing, byte order, optional uniqueness exchanges, no-ops/refusals,
+late traps and unchanged upgrades. The built fixture imports only `ic0`.
+The feature-disabled `ulid` dependency still declares `web-time` on Wasm, but its
+browser code is not reachable here. No ULID generation or entropy path is enabled.
+`AccountRow` qualifies Account/Subaccount storage and secondary indexes. Native
+checks cover all owner lengths 0–29, independent bytes/order, default-subaccount
+identity in sets/maps, duplicate stored keys and the row byte limit. Wasm checks
+cover optional uniqueness, zero no-ops, final-state exchanges, malformed input,
+late traps and unchanged upgrade, including complete backing comparisons.
+`FloatRow` qualifies finite Float32/Float64 extremes, normals/subnormals, zero
+normalization and optional unique exchanges. Native tests compare key order to
+primitive numeric comparisons, including deterministic raw-bit samples, and
+check collection-key equality and malformed unindexed data. Wasm tests check
+exact bytes, refusal before mutation, no-op zero rewrites, late traps and upgrade.
+
 The `BigNumbers` fixture adds full-domain U256 values, optional unique ownership
 and compound index ordering. Its independent byte vectors cross the 128-bit
 boundary and highest bit; native collection tests also exercise U256 keys and
@@ -207,7 +225,9 @@ unique owner and present-only optional identity indexes, plus Document's
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 
-The M1 selection updates Storage to 0.74.1, Runtime to 0.22.3 and Types to 0.20.3.
+The current M1 selection uses Storage 0.74.1, Runtime/macros/guard 0.22.4 and
+Types 0.20.4. Testkit's transitive Platform remains 0.33.2; the announced 0.33.3
+was unavailable from crates.io at the update check.
 Prior recorded M0/baseline results used the versions stated with that evidence;
 the updated lockfile does not retroactively requalify those results.
 
@@ -476,14 +496,13 @@ Setup explicitly provisions PocketIC through Testkit's authenticated installer
 under `.tools/m0-pocketic`; the probe only checks that prepared selection. Testkit
 owns server and instance lifecycle. Cargo's artifact messages select the compiled
 Wasm; the probe does not infer an internal target-directory filename.
-The locked Testkit is 0.104.1 with PocketIC 16.1.0. Calls use raw client methods
+The locked Testkit is 0.105.0 with PocketIC 16.1.0. Calls use raw client methods
 and this workspace's explicit Wire codec/budgets; no `ic-testkit-wire` adapter is
 required. Direct benchmark inspection uses `ic-host-artifacts` 0.78.0; the CLI
-uses the current `ic-host-text` 0.75.0. Testkit still requires Artifacts/FS/Process
-0.77.x (locked at 0.77.3). Its announced 0.105.0 release was not published at the
-2026-11-14 registry check, so those transitive helpers remain unchanged. The two
-Artifacts versions have separate roles and exchange no public values here;
-no host package enters the database product or deployed Wasm.
+uses `ic-host-text` 0.75.0. Testkit's Artifacts/FS/Process dependencies now also
+resolve to 0.78.0, with one Artifacts version. Tests use fresh instances and do
+not need the reusable pools retired in Testkit 0.105.0. No host package enters
+the database product or deployed Wasm.
 
 The fixture uses published IC Storage collections with one row map and two index
 maps. Wire/Platform exports are private experiment controls, not product endpoints;

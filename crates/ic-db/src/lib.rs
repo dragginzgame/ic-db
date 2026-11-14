@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
-//! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
+//! This M1 slice supports 8/16/32/64/128-bit integers, U256, Ulid, finite Float32/Float64, Bool, Principal, Account/Subaccount and bounded Text/Blob, with optional
 //! values. Named records and unit/payload enums support bounded recursion via explicit
 //! indirection and ordered lists; traversals share byte, depth, structured-value
 //! and total collection-item limits. Named sets/maps use strict scalar key order.
-//! Secondary indexes admit integers, Principal, Bool and Text, including optional values; primary keys
+//! Secondary indexes admit integers, Ulid, finite floats, Account/Subaccount, Principal, Bool and Text, including optional values; primary keys
 //! require non-optional Nat64 fields. References admit required or optional Nat64;
 //! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
@@ -15,10 +15,12 @@
 
 #[doc(hidden)]
 mod codec;
+mod float;
 mod key;
 mod schema;
 mod store;
 mod types;
+mod ulid;
 
 #[cfg(all(feature = "build", not(target_arch = "wasm32")))]
 pub mod build;
@@ -40,9 +42,11 @@ macro_rules! __register_schema {
 
 /// Exact unsigned 256-bit integer. IC DB owns its durable and index encodings.
 pub use ethnum::U256;
+pub use float::{Float32, Float64};
 pub use ic_db_macros::{entity, enum_, map, record, set};
-pub use ic_platform_types::Principal;
+pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
+pub use ulid::{Ulid, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};

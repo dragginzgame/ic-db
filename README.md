@@ -22,7 +22,8 @@ delivery require an explicit decision to resume. Existing work and data are reta
 
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
 `crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
-exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob with optional
+exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers,
+U256, Ulid, finite floats, Bool, Principal, Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required/optional Nat64 references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
@@ -31,7 +32,8 @@ measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.
 Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Secondary indexes now
-support Nat/Int8/16/32/64/128, U256, Principal, Bool and bounded Text fields, including
+support Nat/Int8/16/32/64/128, U256, Ulid, finite Float32/Float64, Account/Subaccount,
+Principal, Bool and bounded Text fields, including
 optional values, compound keys and uniqueness. Optional unique indexes explicitly
 require `present_only`; ordinary indexes retain absent values. Primary keys and
 references still require Nat64.
@@ -74,6 +76,22 @@ collection budget, and their nested contents consume the same budget. Inspect
 big-endian storage and secondary-index keys. Optional values and collection
 elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`;
 aggregate arithmetic and wider primary keys remain separate work.
+`prim = "Float32"` / `prim = "Float64"` use finite `ic_db::Float32` /
+`ic_db::Float64` wrappers. Construct with `try_new(value)`; NaN/infinities refuse,
+while either signed zero becomes positive zero. Row bytes, ordering, uniqueness
+and collection keys agree on that canonical value. Inspect `FloatRow` with
+`db schema`. Aggregate arithmetic and cross-type coercion remain separate work.
+`prim = "Account"` / `prim = "Subaccount"` use the re-exported Platform Types
+`ic_db::Account` and `ic_db::Subaccount` (32 bytes). An account's absent and
+explicit-zero subaccounts share one identity and encoding; decoding returns
+`None` for that default. Account ordering compares the owner first, then the
+effective subaccount. Optional fields and collections use the same rules.
+Inspect `AccountRow` with `db schema`; the Info column shows byte widths.
+`prim = "Ulid"` uses `ic_db::Ulid`, with exact 16-byte storage and ordered keys.
+Construct supplied values with `Ulid::from_bytes`, `Ulid::from_u128`, or parse
+canonical uppercase 26-character text. `db schema` shows `UlidRow`. Automatic
+generation and ULID primary keys remain separate work; this value does not read
+a clock or acquire entropy. The `ulid` dependency's default RNG feature is disabled.
 Enum/nested/collection indexes, nested references and non-scalar keys/set elements remain work.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
@@ -133,7 +151,8 @@ The current console reads an explicitly labelled, temporary M1 database with six
 and an empty `OptionalLink` entity showing an optional self-reference,
 running in local PocketIC. Each session starts fresh and is discarded on exit.
 `db schema` presents generated fields and indexes in bordered tables, with the
-primary key first and separate type, optionality and byte-limit columns. The CLI
+primary key first and separate Type, Optional and Info columns. Info contains
+byte/item/entry limits, including list-element bounds; type names stay uncluttered. The CLI
 uses `ic-host-text`, as IcyDB's describe renderer did. `db status` contains the
 full manifest fingerprint, incarnation, Entry revision and physical pages.
 `query` currently reads Entry and shows `id` and `amount`; its `--min` filter runs over a

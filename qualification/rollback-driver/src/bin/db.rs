@@ -45,11 +45,11 @@ fn help() {
     println!();
 }
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
+type FieldView = (String, String, bool, String, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
-type TypeView = (String, String, Vec<(String, String, bool)>);
+type TypeView = (String, String, Vec<(String, String, bool, String)>);
 
 fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
     println!("\nSchema: {} entities\n", entities.len());
@@ -67,14 +67,14 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
         let references = fields.iter().any(|field| field.4.is_some());
         let rows: Vec<Vec<String>> = fields
             .into_iter()
-            .map(|(name, kind, optional, max, reference)| {
+            .map(|(name, kind, optional, info, reference)| {
                 let key = if name == primary { "Primary" } else { "-" };
                 let mut row = vec![
                     name,
                     kind,
                     if optional { "Yes" } else { "No" }.into(),
                     key.into(),
-                    max.map_or_else(|| "-".into(), |bytes| format!("{bytes} bytes")),
+                    if info.is_empty() { "-".into() } else { info },
                 ];
                 if references {
                     row.push(reference.map_or_else(
@@ -85,7 +85,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                 row
             })
             .collect();
-        let mut columns = vec!["Field", "Type", "Optional", "Key", "Limit"];
+        let mut columns = vec!["Field", "Type", "Optional", "Key", "Info"];
         if references {
             columns.push("References");
         }
@@ -122,11 +122,12 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
         println!("{}: {}", terminal_text(&kind), terminal_text(&name));
         let rows: Vec<Vec<String>> = members
             .into_iter()
-            .map(|(name, ty, optional)| {
+            .map(|(name, ty, optional, info)| {
                 vec![
                     terminal_text(&name).into_owned(),
                     terminal_text(&ty).into_owned(),
                     if optional { "Yes" } else { "No" }.into(),
+                    if info.is_empty() { "-".into() } else { info },
                 ]
             })
             .collect();
@@ -141,7 +142,8 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                         _ => "Field",
                     },
                     if kind == "Enum" { "Payload" } else { "Type" },
-                    "Optional"
+                    "Optional",
+                    "Info"
                 ],
                 &rows
             )
