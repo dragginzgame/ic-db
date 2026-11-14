@@ -71,7 +71,11 @@ impl Memory for FaultMemory {
 // first=0 changes two entries and repoints their dependent. Otherwise insert
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
-#[ic_wire_endpoint::update(id = 6)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<6>",
+    decode_with = "crate::transport::decode::<_, 6>",
+    encode_with = "crate::transport::encode::<_, 6>"
+)]
 fn fault_batch(
     (first, stop_after, deny_growth, exhaust_instructions): (u64, u64, bool, bool),
 ) -> (u64, u64) {

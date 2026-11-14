@@ -17,6 +17,7 @@ help:
 	  'make m0-setup                    Explicitly prepare M0 PocketIC server' \
 	  'make m0-contracts                Check native numeric/schema/row/query contracts' \
 	  'make m0-rollback                 Run only the Wasm write-rollback probe' \
+	  'make m0-endpoints                Check standalone hooks and reply rollback' \
 	  'make m0-batch                    Run final-state batch constraint probe' \
 	  'make m0-reads                    Run bounded ordering/page/DISTINCT probe' \
 	  'make m0-aggregation              Run only the resumable grouped-sum probe' \
@@ -78,6 +79,14 @@ m0-rollback:
 	  export IC_DB_M0_WASM && \
 	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback message_rollback -- --nocapture
 
+.PHONY: m0-endpoints
+m0-endpoints:
+	@mkdir -p qualification/target/evidence/m0
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/entrypoints-build.jsonl
+	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/entrypoints-build.jsonl)" && \
+	  export IC_DB_M0_WASM && \
+	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints -- --nocapture
+
 m0-aggregation:
 	@mkdir -p qualification/target/evidence/m0
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-aggregation-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/aggregation-build.jsonl
@@ -119,7 +128,7 @@ m1-records-artifact:
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
 m1-records:
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test schema_build --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test dates --test times --test time_values --test decimals --test primary_keys --test integer_keys --test schema_build --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact

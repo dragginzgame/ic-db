@@ -77,6 +77,11 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Use small typed boundaries over shared execution machinery. Measure
   monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
+  Standalone hosts may use Platform's generic entrypoint/guard/codec hooks without
+  Canic. Qualification uses those hooks with bounded Wire frames; keep its small
+  transport helpers outside product crates. Do not restore Wire Endpoint, a second
+  executor or an endpoint registry. `make m0-endpoints` checks admission and reply
+  failure across synchronous and callback execution boundaries.
 - Retain IcyDB's two-stage schema path expansion: Rust resolves typed paths,
   host-only `ctor` registration collects declarations, then a second stage
   validates/seals the graph and emits target artifacts. Keep collection and ctor
@@ -119,6 +124,13 @@ installer. Do not edit vendor files or copy upstream reference documents.
   not authorize an OS RNG, a hidden clock read or automatic generation. Before
   generated-ID work, carry forward the operation-timestamp, same/backward-time,
   overflow, entropy and upgrade/reset lessons recorded in the current design.
+  Supplied integer/ULID primary keys keep lookups, deletes and page cursors typed
+  to the entity, including signed/unsigned 8–128-bit integers and U256. References
+  must match the target key type exactly; other identity/composite keys
+  and automatic generation remain separate increments.
+  Decimal fields retain an explicit declared scale (0–28), as confirmed by the
+  maintainer. Excess precision and fixed-scale coefficient overflow refuse;
+  storage never silently rounds. Aggregate arithmetic has its own contract.
   Start codec work from IcyDB's database-owned implementations and regression
   tests; adapt them to this compiled-schema contract instead of using its Wire
   paths. Explain departures and qualify the resulting bytes independently.

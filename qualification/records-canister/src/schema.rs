@@ -242,3 +242,66 @@ pub(crate) struct AccountRow {}
     )
 )]
 pub(crate) struct UlidRow {}
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Date"))),
+        field(name = "value", value(item(prim = "Date"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
+pub(crate) struct DateRow {}
+
+#[entity(
+    pk(field="id"),
+    index(fields=["zone","duration","id"]),
+    index(fields=["zone","timestamp","id"]),
+    index(field="delay",unique,present_only),
+    index(field="maybe",unique,present_only),
+    fields(
+        field(name="delay",value(opt,item(prim="Duration"))),
+        field(name="duration",value(item(prim="Duration"))),
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="maybe",value(opt,item(prim="Timestamp"))),
+        field(name="timestamp",value(item(prim="Timestamp"))),
+        field(name="zone",value(item(prim="Bool")))
+    )
+)]
+pub(crate) struct TimeRow {}
+
+#[entity(pk(field="id"),index(fields=["zone","value","id"]),index(field="maybe",unique,present_only),fields(
+    field(name="id",value(item(prim="Nat64"))),
+    field(name="maybe",value(opt,item(prim="Decimal",scale=2))),
+    field(name="value",value(item(prim="Decimal",scale=2))),
+    field(name="zone",value(item(prim="Bool")))
+))]
+pub(crate) struct DecimalRow {}
+
+#[entity(pk(field="id"),index(field="value",unique),index(fields=["owner","id"]),fields(
+    field(name="id",value(item(prim="Ulid"))),
+    field(name="owner",value(opt,item(prim="Nat64")),references(entity="Numbered")),
+    field(name="value",value(item(prim="Nat64")))
+))]
+pub(crate) struct KeyRow {}
+#[entity(pk(field="id"),index(fields=["target","id"]),fields(
+    field(name="id",value(item(prim="Nat64"))),
+    field(name="target",value(opt,item(prim="Ulid")),references(entity="KeyRow"))
+))]
+pub(crate) struct Numbered {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
+    field(name="id",value(item(prim="Int128"))),
+    field(name="peer",value(opt,item(prim="U256")),references(entity="WideKey")),
+    field(name="rank",value(item(prim="Nat64")))
+))]
+pub(crate) struct SignedKey {}
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
+    field(name="id",value(item(prim="U256"))),
+    field(name="peer",value(opt,item(prim="Int128")),references(entity="SignedKey")),
+    field(name="rank",value(item(prim="Nat64")))
+))]
+pub(crate) struct WideKey {}

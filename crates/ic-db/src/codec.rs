@@ -7,8 +7,8 @@
 //! Extend that scalar approach to 128 bits; omit its slot envelope/value layer.
 
 use crate::{
-    Account, Error, FieldType, Float32, Float64, Principal, Subaccount, TypeBody, TypeLink, U256,
-    Ulid, Value, ValueSchema,
+    Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
+    Timestamp, TypeBody, TypeLink, U256, Ulid, Value, ValueSchema,
     types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,6 +122,22 @@ impl Encoder {
     }
     pub fn ulid(&mut self, value: Ulid) -> Result<(), Error> {
         self.append(&value.to_bytes())
+    }
+    pub fn timestamp(&mut self, value: Timestamp) -> Result<(), Error> {
+        self.int64(value.as_millis())
+    }
+    pub fn decimal(&mut self, value: Decimal, scale: u32) -> Result<(), Error> {
+        let coefficient = value
+            .coefficient_at_scale(scale)
+            .ok_or(Error::InvalidOperand)?;
+        self.append(&coefficient.to_be_bytes())?;
+        self.nat8(scale as u8)
+    }
+    pub fn duration(&mut self, value: Duration) -> Result<(), Error> {
+        self.nat64(value.as_millis())
+    }
+    pub fn date(&mut self, value: Date) -> Result<(), Error> {
+        self.int32(value.as_days_since_epoch())
     }
     pub fn account(&mut self, value: Account) -> Result<(), Error> {
         self.principal(&value.owner)?;
@@ -361,6 +377,12 @@ impl<'a> Decoder<'a> {
             FieldType::Subaccount => self.ordered(count, Self::subaccount, read_value, |_, ()| {}),
             FieldType::Account => self.ordered(count, Self::account, read_value, |_, ()| {}),
             FieldType::Ulid => self.ordered(count, Self::ulid, read_value, |_, ()| {}),
+            FieldType::Timestamp => self.ordered(count, Self::timestamp, read_value, |_, ()| {}),
+            FieldType::Decimal { scale } => {
+                self.ordered(count, |r| r.decimal(scale), read_value, |_, ()| {})
+            }
+            FieldType::Duration => self.ordered(count, Self::duration, read_value, |_, ()| {}),
+            FieldType::Date => self.ordered(count, Self::date, read_value, |_, ()| {}),
             FieldType::U256 => self.ordered(count, Self::u256, read_value, |_, ()| {}),
             FieldType::Int8 => self.ordered(count, Self::int8, read_value, |_, ()| {}),
             FieldType::Int16 => self.ordered(count, Self::int16, read_value, |_, ()| {}),
@@ -416,6 +438,23 @@ impl<'a> Decoder<'a> {
     }
     pub fn ulid(&mut self) -> Result<Ulid, Error> {
         Ok(Ulid::from_bytes(self.fixed()?))
+    }
+    pub fn timestamp(&mut self) -> Result<Timestamp, Error> {
+        Ok(Timestamp::from_millis(self.int64()?))
+    }
+    pub fn decimal(&mut self, scale: u32) -> Result<Decimal, Error> {
+        let coefficient = i128::from_be_bytes(self.fixed()?);
+        let stored_scale = u32::from(self.nat8()?);
+        if scale > Decimal::MAX_SCALE || stored_scale != scale {
+            return Err(Error::Corrupt);
+        }
+        Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)
+    }
+    pub fn duration(&mut self) -> Result<Duration, Error> {
+        Ok(Duration::from_millis(self.nat64()?))
+    }
+    pub fn date(&mut self) -> Result<Date, Error> {
+        Date::try_from_days_since_epoch(self.int32()?).ok_or(Error::Corrupt)
     }
     pub fn account(&mut self) -> Result<Account, Error> {
         let owner = self.principal()?;
@@ -524,6 +563,18 @@ impl<'a> Decoder<'a> {
             }
             FieldType::Ulid => {
                 self.ulid()?;
+            }
+            FieldType::Timestamp => {
+                self.timestamp()?;
+            }
+            FieldType::Decimal { scale } => {
+                self.decimal(scale)?;
+            }
+            FieldType::Duration => {
+                self.duration()?;
+            }
+            FieldType::Date => {
+                self.date()?;
             }
             FieldType::Account => {
                 self.account()?;

@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 //! One-entity host matching the frozen IcyDB scalar workload, without fault controls.
 
+#[path = "../../transport.rs"]
+mod transport;
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
 use ic_platform_runtime::cdk;
 use ic_storage::{
@@ -62,7 +65,11 @@ fn initialize() {
     .unwrap();
 }
 
-#[ic_wire_endpoint::update(id = 1)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn advance_startup() -> (bool, u64) {
     measure(|| {
         let _ = database();
@@ -70,7 +77,11 @@ fn advance_startup() -> (bool, u64) {
     })
 }
 
-#[ic_wire_endpoint::update(id = 2)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn insert((id, category, amount): Row) -> (bool, u64) {
     measure(|| {
         let mut database = database();
@@ -90,12 +101,20 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-#[ic_wire_endpoint::query(id = 3)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<3>",
+    decode_with = "crate::transport::decode::<_, 3>",
+    encode_with = "crate::transport::encode::<_, 3>"
+)]
 fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| database().get::<Entry>(id).unwrap().as_ref().map(row))
 }
 
-#[ic_wire_endpoint::update(id = 4)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<4>",
+    decode_with = "crate::transport::decode::<_, 4>",
+    encode_with = "crate::transport::encode::<_, 4>"
+)]
 fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     measure(|| {
         let mut database = database();
@@ -109,7 +128,11 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_wire_endpoint::query(id = 5)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<5>",
+    decode_with = "crate::transport::decode::<_, 5>",
+    encode_with = "crate::transport::encode::<_, 5>"
+)]
 fn listing(category: u64) -> (Vec<Row>, u64) {
     // The index yields complete ID order within one category. This measures the
     // delivered direct read, not a fluent planner that IC DB has yet to implement.

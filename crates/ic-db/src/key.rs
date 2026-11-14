@@ -1,7 +1,8 @@
 //! Exact typed index operands and ordered component bytes; no query execution.
 
 use crate::{
-    Account, Error, FieldType, Float32, Float64, Principal, Subaccount, U256, Ulid, codec::Decoder,
+    Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
+    Timestamp, U256, Ulid, codec::Decoder,
 };
 
 /// One exact leading index component. Operand types must match declared fields;
@@ -25,6 +26,14 @@ pub enum IndexValue<'a> {
     U256(U256),
     /// Exact ULID identity, without integer or text coercion.
     Ulid(Ulid),
+    /// Exact bounded calendar date; no integer or text coercion.
+    Date(Date),
+    /// Exact millisecond duration; no integer coercion.
+    Duration(Duration),
+    /// Exact decimal; the declared field scale must represent it without rounding.
+    Decimal(Decimal),
+    /// Exact millisecond timestamp; no integer coercion.
+    Timestamp(Timestamp),
     /// Exact account identity; no coercion from another key type.
     Account(Account),
     /// Exact subaccount identity; no coercion from another key type.
@@ -71,12 +80,19 @@ impl<'a> IndexValue<'a> {
             | (Self::Subaccount(_), FieldType::Subaccount)
             | (Self::U256(_), FieldType::U256)
             | (Self::Ulid(_), FieldType::Ulid)
+            | (Self::Date(_), FieldType::Date)
+            | (Self::Duration(_), FieldType::Duration)
+            | (Self::Timestamp(_), FieldType::Timestamp)
             | (Self::Int8(_), FieldType::Int8)
             | (Self::Int16(_), FieldType::Int16)
             | (Self::Int32(_), FieldType::Int32)
             | (Self::Int64(_), FieldType::Int64)
             | (Self::Int128(_), FieldType::Int128)
             | (Self::Bool(_), FieldType::Bool) => Ok(()),
+            (Self::Decimal(value), FieldType::Decimal { scale }) => value
+                .coefficient_at_scale(scale)
+                .map(|_| ())
+                .ok_or(Error::InvalidOperand),
             (Self::Account(value), FieldType::Account) => {
                 Self::Principal(value.owner).admit(FieldType::Principal, false)
             }
@@ -116,6 +132,10 @@ impl<'a> IndexValue<'a> {
             }
             Self::U256(value) => out.extend(value.to_be_bytes()),
             Self::Ulid(value) => out.extend(value.to_bytes()),
+            Self::Timestamp(value) => Self::Int64(value.as_millis()).append_to(out),
+            Self::Decimal(value) => value.append_ordered(out),
+            Self::Duration(value) => Self::Nat64(value.as_millis()).append_to(out),
+            Self::Date(value) => Self::Int32(value.as_days_since_epoch()).append_to(out),
             Self::Int8(value) => {
                 let mut bytes = value.to_be_bytes();
                 bytes[0] ^= 0x80;
@@ -181,6 +201,10 @@ impl<'a> IndexValue<'a> {
             FieldType::Account => Self::Account(reader.account()?),
             FieldType::U256 => Self::U256(reader.u256()?),
             FieldType::Ulid => Self::Ulid(reader.ulid()?),
+            FieldType::Date => Self::Date(reader.date()?),
+            FieldType::Decimal { scale } => Self::Decimal(reader.decimal(scale)?),
+            FieldType::Duration => Self::Duration(reader.duration()?),
+            FieldType::Timestamp => Self::Timestamp(reader.timestamp()?),
             FieldType::Int8 => Self::Int8(reader.int8()?),
             FieldType::Int16 => Self::Int16(reader.int16()?),
             FieldType::Int32 => Self::Int32(reader.int32()?),
@@ -276,6 +300,30 @@ impl From<Ulid> for IndexValue<'_> {
     }
 }
 
+impl From<Timestamp> for IndexValue<'_> {
+    fn from(value: Timestamp) -> Self {
+        Self::Timestamp(value)
+    }
+}
+
+impl From<Decimal> for IndexValue<'_> {
+    fn from(value: Decimal) -> Self {
+        Self::Decimal(value)
+    }
+}
+
+impl From<Duration> for IndexValue<'_> {
+    fn from(value: Duration) -> Self {
+        Self::Duration(value)
+    }
+}
+
+impl From<Date> for IndexValue<'_> {
+    fn from(value: Date) -> Self {
+        Self::Date(value)
+    }
+}
+
 impl From<Float32> for IndexValue<'_> {
     fn from(value: Float32) -> Self {
         Self::Float32(value)
@@ -305,8 +353,12 @@ fn fixed_width(field: FieldType) -> Option<usize> {
     match field {
         FieldType::Nat8 | FieldType::Int8 | FieldType::Bool => Some(1),
         FieldType::Nat16 | FieldType::Int16 => Some(2),
-        FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 => Some(4),
-        FieldType::Nat64 | FieldType::Int64 | FieldType::Float64 => Some(8),
+        FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 | FieldType::Date => Some(4),
+        FieldType::Nat64
+        | FieldType::Int64
+        | FieldType::Float64
+        | FieldType::Timestamp
+        | FieldType::Duration => Some(8),
         FieldType::Nat128 | FieldType::Int128 | FieldType::Ulid => Some(16),
         FieldType::U256 | FieldType::Subaccount => Some(32),
         _ => None,
@@ -317,12 +369,21 @@ pub(crate) fn supports(field: FieldType) -> bool {
     fixed_width(field).is_some()
         || matches!(
             field,
-            FieldType::Principal | FieldType::Account | FieldType::Text { .. }
+            FieldType::Principal
+                | FieldType::Account
+                | FieldType::Text { .. }
+                | FieldType::Decimal { .. }
         )
 }
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
 pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> {
+    if let FieldType::Decimal { scale } = field {
+        let (value, width) = Decimal::read_ordered(bytes).ok_or(Error::Corrupt)?;
+        value.coefficient_at_scale(scale).ok_or(Error::Corrupt)?;
+        *bytes = &bytes[width..];
+        return Ok(());
+    }
     if let FieldType::Text { max_bytes } = field {
         let mut decoded = 0;
         loop {
@@ -358,6 +419,11 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
     };
     let component = bytes.get(..width).ok_or(Error::Corrupt)?;
     match field {
+        FieldType::Date => {
+            let mut encoded: [u8; 4] = component.try_into().map_err(|_| Error::Corrupt)?;
+            encoded[0] ^= 0x80;
+            Date::try_from_days_since_epoch(i32::from_be_bytes(encoded)).ok_or(Error::Corrupt)?;
+        }
         FieldType::Float32 => {
             Float32::from_ordered_bytes(component.try_into().map_err(|_| Error::Corrupt)?)
                 .ok_or(Error::Corrupt)?;

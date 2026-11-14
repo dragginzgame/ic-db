@@ -1,7 +1,7 @@
 //! One compiled contract, canonical fingerprint and inspection projection.
 
 use crate::types::{TypeGraph, TypeLink};
-use crate::{__private::RowInfo, Error, IndexValue, codec::Decoder, key};
+use crate::{__private::RowInfo, Error, IndexValue, codec::Decoder, key, primary::RowKey};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -58,6 +58,17 @@ pub enum FieldType {
     U256,
     /// Exact 16-byte ULID, ordered by timestamp prefix then remaining bits.
     Ulid,
+    /// Gregorian epoch days, bounded to years 0000 through 9999.
+    Date,
+    /// Signed Unix milliseconds; full i64 domain.
+    Timestamp,
+    /// Nonnegative milliseconds; full u64 domain.
+    Duration,
+    /// Exact decimal, stored at the declared fractional scale without rounding.
+    Decimal {
+        /// Number of fractional places, 0 through 28.
+        scale: u32,
+    },
     /// Finite IEEE-754 single precision, canonical positive zero.
     Float32,
     /// Finite IEEE-754 double precision, canonical positive zero.
@@ -133,13 +144,20 @@ pub struct EntitySchema {
     pub name: &'static str,
     /// Fields in canonical name order.
     pub fields: &'static [FieldSchema],
-    /// Externally supplied Nat64 primary-key field.
+    /// Supplied fixed-width integer, U256 or Ulid primary-key field.
     pub primary_key: &'static str,
     /// Indexes ordered by logical name.
     pub indexes: &'static [IndexSchema],
 }
 
 impl EntitySchema {
+    pub(crate) fn key_type(&self) -> Result<FieldType, Error> {
+        self.fields
+            .iter()
+            .find(|f| f.name == self.primary_key && !f.optional)
+            .map(|f| f.value)
+            .ok_or(Error::Corrupt)
+    }
     // Called only for an admitted schema. Validate every stored field but retain
     // only selected key values; no entity or owned text/blob materialization.
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
@@ -191,9 +209,7 @@ impl EntitySchema {
                 ))
             })
             .collect::<Result<_, Error>>()?;
-        let IndexValue::Nat64(key) = key(self.primary_key)? else {
-            return Err(Error::Corrupt);
-        };
+        let key = RowKey::from_index(key(self.primary_key)?)?;
         Ok(RowInfo { key, indexes })
     }
 }
@@ -231,7 +247,7 @@ impl Schema {
                 || entity.fields.is_empty()
                 || entity.fields.len() > MAX_FIELDS
                 || entity.indexes.len() > 8
-                || !required_nat64(entity, entity.primary_key)
+                || entity.key_type().and_then(RowKey::width).is_err()
                 || entity
                     .fields
                     .windows(2)
@@ -251,9 +267,11 @@ impl Schema {
                 )?;
                 types.include(field.value)?;
                 if let Some(reference) = field.reference {
-                    if field.value != FieldType::Nat64
+                    if RowKey::width(field.value).is_err()
                         || !entities.iter().any(|target| {
-                            target.id == reference.entity && target.name == reference.entity_name
+                            target.id == reference.entity
+                                && target.name == reference.entity_name
+                                && target.key_type().ok() == Some(field.value)
                         })
                         || !entity.indexes.iter().any(|index| {
                             index.id == reference.index
@@ -376,13 +394,6 @@ impl Schema {
     }
 }
 
-fn required_nat64(entity: &EntitySchema, name: &str) -> bool {
-    entity
-        .fields
-        .iter()
-        .any(|field| field.name == name && field.value == FieldType::Nat64 && !field.optional)
-}
-
 pub(crate) fn name(bytes: &mut Vec<u8>, value: &str) -> Result<(), Error> {
     if value.is_empty() || value.len() > 64 {
         return Err(Error::InvalidSchema);
@@ -421,9 +432,19 @@ pub(crate) fn encode_type(
         FieldType::Subaccount => 20,
         FieldType::Account => 21,
         FieldType::Ulid => 22,
+        FieldType::Date => 23,
+        FieldType::Timestamp => 24,
+        FieldType::Duration => 25,
+        FieldType::Decimal { .. } => 26,
     };
     bytes.push(tag | if optional { 0x80 } else { 0 } | if reference { 0x40 } else { 0 });
     match value {
+        FieldType::Decimal { scale } => {
+            if scale > crate::Decimal::MAX_SCALE {
+                return Err(Error::InvalidSchema);
+            }
+            bytes.extend(scale.to_le_bytes());
+        }
         FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } => {
             if max_bytes > 4096 {
                 return Err(Error::InvalidSchema);

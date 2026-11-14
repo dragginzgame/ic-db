@@ -29,7 +29,7 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
         quote!(pk(field="id"), index(field="optional",unique), fields(#field, field(name="optional", value(opt,item(prim="Nat64"))))),
         quote!(
             pk(field = "id"),
-            fields(field(name = "id", value(item(prim = "Int64"))))
+            fields(field(name = "id", value(item(prim = "Float64"))))
         ),
         quote!(pk(field="id"), fields(#field, field(name="delta",value(item(prim="Int64",max_bytes=8))))),
         quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob"))))),
@@ -143,21 +143,13 @@ fn references_require_a_bounded_reverse_access_path() {
 #[test]
 fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
     for prim in [
-        "Nat8",
-        "Nat16",
-        "Nat32",
-        "Int8",
-        "Int16",
-        "Int32",
-        "Int64",
-        "Nat128",
-        "U256",
-        "Ulid",
+        "Date",
+        "Timestamp",
+        "Duration",
         "Account",
         "Subaccount",
         "Float32",
         "Float64",
-        "Int128",
         "Principal",
     ] {
         let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
@@ -592,5 +584,88 @@ fn maps_require_scalar_keys_bounded_counts_and_an_explicit_value() {
         ),
     ] {
         assert!(super::map::expand(args, declaration.clone()).is_err());
+    }
+}
+
+#[test]
+fn decimal_requires_only_its_bounded_declared_scale() {
+    for item in [
+        quote!(prim = "Decimal"),
+        quote!(prim = "Decimal", scale = 29),
+        quote!(prim = "Decimal", scale = 2, scale = 2),
+        quote!(prim = "Decimal", scale = 2, max_bytes = 17),
+        quote!(prim = "Int128", scale = 2),
+        quote!(is = "Nested", scale = 2),
+    ] {
+        assert!(expand(quote!(pk(field="id"),fields(field(name="id",value(item(prim="Nat64"))),field(name="value",value(item(#item))))),quote!(struct Row {})).is_err());
+    }
+    for scale in [0_u32, 2, 28] {
+        assert!(expand(quote!(pk(field="id"),index(field="value"),fields(field(name="id",value(item(prim="Nat64"))),field(name="value",value(item(prim="Decimal",scale=#scale))))),quote!(struct Row {})).is_ok());
+    }
+}
+
+#[test]
+fn ulid_keys_are_supplied_nonoptional_scalars() {
+    let id = quote!(field(name = "id", value(item(prim = "Ulid"))));
+    assert!(expand(quote!(pk(field="id"),index(field="next"),fields(#id,field(name="next",value(opt,item(prim="Ulid")),references(entity="Self")))),quote!(struct Row {})).is_ok());
+    for args in [
+        quote!(
+            pk(field = "id"),
+            fields(field(name = "id", value(opt, item(prim = "Ulid"))))
+        ),
+        quote!(
+            pk(field = "id"),
+            fields(field(
+                name = "id",
+                value(many, max_items = 2, item(prim = "Ulid"))
+            ))
+        ),
+        quote!(pk(field="id",source="generated"),fields(#id)),
+        quote!(pk(field="id"),fields(#id,field(name="next",value(item(prim="Ulid",max_bytes=16))))),
+    ] {
+        assert!(
+            expand(
+                args,
+                quote!(
+                    struct Row {}
+                )
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn integer_keys_require_nonoptional_scalar_fields() {
+    for prim in [
+        "Nat8", "Nat16", "Nat32", "Nat64", "Nat128", "Int8", "Int16", "Int32", "Int64", "Int128",
+        "U256",
+    ] {
+        let id = quote!(field(name="id",value(item(prim=#prim))));
+        assert!(
+            expand(
+                quote!(pk(field="id"),fields(#id)),
+                quote!(
+                    struct Row {}
+                )
+            )
+            .is_ok()
+        );
+        for args in [
+            quote!(pk(field="id"),fields(field(name="id",value(opt,item(prim=#prim))))),
+            quote!(pk(field="id"),fields(field(name="id",value(many,max_items=2,item(prim=#prim))))),
+            quote!(pk(field="id"),fields(field(name="id",value(item(prim=#prim,max_bytes=32))))),
+            quote!(pk(field="id",source="generated"),fields(#id)),
+        ] {
+            assert!(
+                expand(
+                    args,
+                    quote!(
+                        struct Row {}
+                    )
+                )
+                .is_err()
+            );
+        }
     }
 }

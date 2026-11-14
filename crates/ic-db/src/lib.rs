@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
-//! This M1 slice supports 8/16/32/64/128-bit integers, U256, Ulid, finite Float32/Float64, Bool, Principal, Account/Subaccount and bounded Text/Blob, with optional
+//! This M1 slice supports 8/16/32/64/128-bit integers, U256, Ulid, Date, Timestamp, Duration, Decimal,
+//! finite Float32/Float64, Bool, Principal, Account/Subaccount and bounded Text/Blob, with optional
 //! values. Named records and unit/payload enums support bounded recursion via explicit
 //! indirection and ordered lists; traversals share byte, depth, structured-value
 //! and total collection-item limits. Named sets/maps use strict scalar key order.
-//! Secondary indexes admit integers, Ulid, finite floats, Account/Subaccount, Principal, Bool and Text, including optional values; primary keys
-//! require non-optional Nat64 fields. References admit required or optional Nat64;
+//! Secondary indexes admit integers, Ulid, Date, Timestamp, Duration, Decimal, finite floats,
+//! Account/Subaccount, Principal, Bool and Text, including optional values; primary keys
+//! require non-optional fixed-width integer, U256 or Ulid fields. References use
+//! the target’s exact key type;
 //! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
@@ -15,10 +18,14 @@
 
 #[doc(hidden)]
 mod codec;
+mod date;
+mod decimal;
 mod float;
 mod key;
+mod primary;
 mod schema;
 mod store;
+mod time;
 mod types;
 mod ulid;
 
@@ -40,12 +47,16 @@ macro_rules! __register_schema {
     ($($item:item)*) => {};
 }
 
+pub use date::Date;
+pub use decimal::{Decimal, ParseDecimalError};
 /// Exact unsigned 256-bit integer. IC DB owns its durable and index encodings.
 pub use ethnum::U256;
 pub use float::{Float32, Float64};
 pub use ic_db_macros::{entity, enum_, map, record, set};
 pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
+pub use primary::PrimaryKey;
+pub use time::{Duration, TimeParseError, Timestamp};
 pub use ulid::{Ulid, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
@@ -106,7 +117,23 @@ pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchem
 ///     field(name="target",value(item(prim="Nat64")),references(entity="Missing"))))]
 /// struct Example {}
 /// ```
+/// Lookups require the declared key type; integers cannot stand in for ULIDs:
+/// ```compile_fail
+/// use ic_db::{entity, Database};
+/// #[entity(pk(field="id"), fields(field(name="id",value(item(prim="Ulid")))))]
+/// struct Asset {}
+/// fn wrong_key(db: &Database) { let _ = db.get::<Asset>(7_u64); }
+/// ```
+/// Integer key widths are exact, without implicit widening:
+/// ```compile_fail
+/// use ic_db::{entity, Database};
+/// #[entity(pk(field="id"), fields(field(name="id",value(item(prim="Nat8")))))]
+/// struct Small {}
+/// fn wrong_width(db: &Database) { let _ = db.get::<Small>(7_u64); }
+/// ```
 pub trait Entity: Sized {
+    /// Exact supplied primary-key type, selected by the declared field.
+    type Key: PrimaryKey;
     /// Generated handle, also usable in cyclic typed references; not authored.
     #[doc(hidden)]
     const ID: u32;
@@ -117,7 +144,7 @@ pub trait Entity: Sized {
     /// This executable's compiled entity contract.
     const SCHEMA: &'static EntitySchema;
     /// Read the application's primary key without encoding or inspecting indexes.
-    fn key(&self) -> u64;
+    fn key(&self) -> Self::Key;
     /// Extract keys from an already typed value for the shared mutation/index paths.
     #[doc(hidden)]
     fn __row_info(&self) -> __private::RowInfo;
@@ -140,10 +167,11 @@ pub trait Entity: Sized {
 pub mod __private {
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     pub use crate::key::encode_index;
+    pub use crate::primary::RowKey;
     pub use crate::schema::handle;
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
-        pub key: u64,
+        pub key: RowKey,
         /// None means the row is outside an explicitly present-only unique index.
         pub indexes: Vec<Option<Vec<u8>>>,
     }

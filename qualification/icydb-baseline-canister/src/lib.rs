@@ -3,6 +3,9 @@
 //! Frozen IcyDB measurement host. These Wire exports are private test controls.
 //! Startup is advanced explicitly by the harness; no Canic lifecycle is measured.
 
+#[path = "../../transport.rs"]
+mod transport;
+
 use ic_db_icydb_baseline_schema::{Entry, EntryInsert, EntryReplace};
 use ic_platform_runtime::cdk;
 use icydb::{db::WriteCell, types::Id};
@@ -45,7 +48,11 @@ fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
     (result, cdk::api::instruction_counter() - start)
 }
 
-#[ic_wire_endpoint::update(id = 1)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn advance_startup() -> (bool, u64) {
     let start = cdk::api::instruction_counter();
     // Deliberately fixed test entropy, never a production identity source.
@@ -58,7 +65,11 @@ fn advance_startup() -> (bool, u64) {
     (ready, cdk::api::instruction_counter() - start)
 }
 
-#[ic_wire_endpoint::update(id = 2)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn insert((id, category, amount): Row) -> (bool, u64) {
     measure(|| {
         let database = db().unwrap();
@@ -74,7 +85,11 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-#[ic_wire_endpoint::query(id = 3)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<3>",
+    decode_with = "crate::transport::decode::<_, 3>",
+    encode_with = "crate::transport::encode::<_, 3>"
+)]
 fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| {
         db().unwrap()
@@ -85,7 +100,11 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_wire_endpoint::update(id = 4)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<4>",
+    decode_with = "crate::transport::decode::<_, 4>",
+    encode_with = "crate::transport::encode::<_, 4>"
+)]
 fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     measure(|| {
         let database = db().unwrap();
@@ -105,7 +124,11 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_wire_endpoint::query(id = 5)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<5>",
+    decode_with = "crate::transport::decode::<_, 5>",
+    encode_with = "crate::transport::encode::<_, 5>"
+)]
 fn listing(category: u64) -> (Vec<Row>, u64) {
     measure(|| {
         db().unwrap()

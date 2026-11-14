@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.5.0] - 2026-11-14 (development checkpoint)
+
+### ▶️ Try it
+
+Inspect `SignedKey` / `WideKey` for Int128/U256 primary keys and mutual references,
+and `KeyRow` for ULID keys, alongside
+`DecimalRow`, `DateRow` and `TimeRow`, with `db schema`. Decimal fields
+show their declared scale in **Info**; time fields show their millisecond units. This remains a fresh local fixture;
+`query` reads Entry rows.
+
+```sh
+make db
+db schema
+db query --limit 2
+```
+
+### 🛠️ Changes
+
+- Move all six qualification hosts from Wire Endpoint to Platform's generic
+  guard/decode/encode hooks. Preserve method names, Wire identities, directional
+  limits and trap behavior. Standalone hosts remain usable without Canic;
+  `make m0-endpoints` checks malformed requests and reply-failure rollback across
+  message/callback boundaries. No product schema, stored bytes or query change.
+  [#1 — Migrate qualification canisters off retiring Wire Endpoint](https://github.com/dragginzgame/ic-db/issues/1).
+
+- Extend typed primary keys and exact references to signed/unsigned 8–128-bit
+  integers and U256. Preserve numeric order, full-width owners and typed cursors.
+  Primary and secondary keys share ordered encoding; no implicit widening,
+  signedness conversion, new dependency or persistent metadata.
+
+- Admit supplied ULID primary keys with typed lookup, delete and page cursors.
+  References use the target’s exact Nat64/Ulid key type, including final-state
+  cycles and restricted deletion across both types. Preserve Nat64 bytes and
+  schema identities. Reuse the existing ULID codec and shared commit path; no
+  new authoring attributes, ID generator, clock, RNG or durable metadata.
+
+- Add `prim = "Decimal", scale = N` (0–28) for exact decimal fields, optional
+  values, collections and secondary indexes. Adapt IcyDB’s owned coefficient/scale
+  codec and numeric ordering. Equivalent values share equality, hashing and keys;
+  excess precision or coefficient overflow refuses without rounding. Persisted
+  scales must match the schema. No dependency or aggregate arithmetic is added.
+
+- Add signed Unix-millisecond `Timestamp` and unsigned-millisecond `Duration`
+  values, optional fields, collections and exact secondary indexes. Adapt
+  IcyDB's owned eight-byte codecs, pre-epoch flooring, text parsing and saturating
+  value arithmetic, including full-width duration operations. No clock, timer,
+  managed-field state or dependency is added. Aggregate arithmetic remains separate.
+
+- Add bounded Gregorian `Date` values, optional fields, collections and secondary
+  indexes. Adapt IcyDB's epoch-day codec and calendar algorithm; reject invalid
+  dates and out-of-range stored/index bytes. No calendar dependency, clock read
+  or managed timestamp policy is introduced.
+
 ## [0.4.0] - 2026-11-14 (development checkpoint)
 
 ### ▶️ Try it

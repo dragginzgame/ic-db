@@ -3,6 +3,9 @@
 //! One fixed, bounded grouped sum to probe revision invalidation and durable progress.
 //! This fixture is not a query API, schema admission implementation or job framework.
 
+#[path = "../../transport.rs"]
+mod transport;
+
 use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
@@ -100,7 +103,11 @@ fn response(state: &Map) -> Response {
 
 // Commands: start, advance(job, sequence), put(id, value), cancel(job), delete(id).
 // Errors: input bound, wrong job, future sequence, not running, capacity, contract.
-#[ic_wire_endpoint::update(id = 1)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u8> {
     let host = runtime();
     let mut rows = open(&host, NAMES[0]);
@@ -223,7 +230,11 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
     Ok(response(&state))
 }
 
-#[ic_wire_endpoint::query(id = 2)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn inspect() -> Response {
     let host = runtime();
     response(&open(&host, NAMES[1]))

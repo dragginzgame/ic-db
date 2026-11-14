@@ -15,16 +15,16 @@ mod record;
 mod set;
 use field::Field;
 
-/// Author a scalar record with named fields, an external Nat64 key and indexes.
+/// Author a typed record with named fields, a supplied integer/Ulid key and indexes.
 ///
-/// Supports Nat/Int8/16/32/64/128, Bool, Principal and bounded Text/Blob, optionally wrapped by `opt`.
-/// Primary keys require Nat64; secondary indexes admit integers, Principal,
-/// Bool and bounded Text, including optional forms. Optional unique indexes require
+/// Field types follow the implemented `ic_db::FieldType` contract, with explicit
+/// bounds for variable-size values. Secondary indexes admit supported ordered
+/// scalar fields, including optional forms. Optional unique indexes require
 /// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Entity names default to the type name; `name = "StableName"` overrides it.
 /// Index names default to comma-separated ordered fields; `name` overrides them.
-/// Required or optional Nat64 fields may declare `references(entity = "path::Target")`;
+/// Required or optional supported key fields may declare `references(entity = "path::Target")`;
 /// select the sole unfiltered index leading with this field, or use `index = "name"`.
 /// `None` has no target; every `Some(id)` requires that target in the final batch state.
 /// `entity = "path::Target"` lets Rust resolve an entity type (including imports
@@ -245,12 +245,13 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .map(|field| syn::parse_str(&field.name))
         .collect::<syn::Result<_>>()?;
-    if !authored
+    let key_type = authored
         .iter()
-        .any(|field| field.name == primary && field.required_nat64())
-    {
-        return Err(fail("primary key currently requires non-optional Nat64"));
-    }
+        .find(|field| field.name == primary && field.required_key())
+        .ok_or_else(|| {
+            fail("primary key currently requires a non-optional fixed-width integer, U256 or Ulid")
+        })?
+        .rust_type();
     let key_id: syn::Ident = syn::parse_str(&primary)?;
     indexes.sort_by(|left, right| left.name.cmp(&right.name));
     if indexes.len() > 8
@@ -380,6 +381,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
         impl ::ic_db::Entity for #name {
+            type Key = #key_type;
             const ID: u32 = ::ic_db::__private::handle(#logical_name);
             const NAME: &'static str = #logical_name;
             const PATH: &'static str = concat!(module_path!(), "::", stringify!(#name));
@@ -387,11 +389,11 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 id: Self::ID, name: Self::NAME, fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
             };
-            fn key(&self) -> u64 { self.#key_id }
+            fn key(&self) -> Self::Key { self.#key_id }
             fn __row_info(&self) -> ::ic_db::__private::RowInfo {
                 let row = self;
                 ::ic_db::__private::RowInfo {
-                    key: <Self as ::ic_db::Entity>::key(row),
+                    key: ::ic_db::PrimaryKey::into_row_key(<Self as ::ic_db::Entity>::key(row)),
                     indexes: ::std::vec![#(#encoded_indexes),*]
                 }
             }

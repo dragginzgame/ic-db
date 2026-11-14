@@ -1,7 +1,10 @@
 //! Shared commit and traversal over one supplier-owned collection.
 //! Typed codecs stay at the boundary; no executor is generated per entity.
 
-use crate::{__private::RowInfo, Entity, EntitySchema, Error, IndexValue, Schema, key};
+use crate::{
+    __private::RowInfo, Entity, EntitySchema, Error, IndexValue, PrimaryKey, Schema, key,
+    primary::RowKey,
+};
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,7 +21,7 @@ pub struct Batch {
 }
 struct Mutation {
     entity: &'static EntitySchema,
-    key: u64,
+    key: RowKey,
     kind: Kind,
 }
 enum Kind {
@@ -48,11 +51,11 @@ impl Batch {
     /// Delete an existing primary key; no recursive cascades are implied.
     /// # Errors
     /// Refuses batch capacity before persistent mutation.
-    pub fn delete<E: Entity>(&mut self, key: u64) -> Result<(), Error> {
+    pub fn delete<E: Entity>(&mut self, key: E::Key) -> Result<(), Error> {
         self.push(
             Mutation {
                 entity: E::SCHEMA,
-                key,
+                key: key.into_row_key(),
                 kind: Kind::Delete,
             },
             0,
@@ -91,11 +94,11 @@ impl Batch {
 }
 
 /// A page with explicit progress; a full page may require an empty final call.
-pub struct Page<E> {
+pub struct Page<E: Entity> {
     /// Typed records from this bounded primary-key traversal.
     pub rows: Vec<E>,
     /// Last processed key, when further traversal may remain.
-    pub next_after: Option<u64>,
+    pub next_after: Option<E::Key>,
 }
 
 /// Admitted database owning the supplier's exclusive collection lease.
@@ -188,10 +191,10 @@ impl<M: Memory> Database<M> {
     /// Read a typed primary key without planning a scan.
     /// # Errors
     /// Refuses unadmitted types or malformed rows.
-    pub fn get<E: Entity>(&self, key: u64) -> Result<Option<E>, Error> {
+    pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
         self.schema.admits(E::SCHEMA)?;
         self.map
-            .get(&row_key(E::SCHEMA.id, key))
+            .get(&row_key(E::SCHEMA.id, key.into_row_key()))
             .map(|bytes| {
                 let row = E::decode(&bytes)?;
                 if row.key() != key {
@@ -204,13 +207,16 @@ impl<M: Memory> Database<M> {
     /// Read at most 32 rows in primary-key order; continuation is live, not a snapshot.
     /// # Errors
     /// Refuses zero/oversized limits, unadmitted types or corrupt rows.
-    pub fn page<E: Entity>(&self, after: Option<u64>, limit: usize) -> Result<Page<E>, Error> {
+    pub fn page<E: Entity>(&self, after: Option<E::Key>, limit: usize) -> Result<Page<E>, Error> {
         self.schema.admits(E::SCHEMA)?;
         if !(1..=32).contains(&limit) {
             return Err(Error::Limit);
         }
         let prefix = prefix(2, E::SCHEMA.id);
-        let start = after.map_or_else(|| prefix.clone(), |key| row_key(E::SCHEMA.id, key));
+        let start = after.map_or_else(
+            || prefix.clone(),
+            |key| row_key(E::SCHEMA.id, key.into_row_key()),
+        );
         let lower = if after.is_some() {
             std::ops::Bound::Excluded(start)
         } else {
@@ -225,10 +231,7 @@ impl<M: Memory> Database<M> {
         let mut last = None;
         for entry in entries {
             let key = entry.key();
-            if key.len() != 13 {
-                return Err(Error::Corrupt);
-            }
-            let id = u64::from_be_bytes(key[5..].try_into().map_err(|_| Error::Corrupt)?);
+            let id = E::Key::from_row_key(RowKey::decode(&key[5..], E::SCHEMA.key_type()?)?)?;
             let bytes = entry.value();
             let row = E::decode(&bytes)?;
             if row.key() != id {
@@ -284,13 +287,7 @@ impl<M: Memory> Database<M> {
             .take_while(|entry| entry.key().starts_with(&prefix))
             .take(limit)
         {
-            let id = u64::from_be_bytes(
-                entry
-                    .value()
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| Error::Corrupt)?,
-            );
+            let id = RowKey::decode(&entry.value(), E::SCHEMA.key_type()?)?;
             let bytes = self
                 .map
                 .get(&row_key(E::SCHEMA.id, id))
@@ -340,7 +337,7 @@ impl<M: Memory> Database<M> {
                     return Err(Error::Corrupt);
                 }
                 for (key, _) in index_entries(mutation.entity, &info)? {
-                    if self.map.get(&key) != Some(info.key.to_be_bytes().to_vec()) {
+                    if self.map.get(&key) != Some(info.key.encode()) {
                         return Err(Error::Corrupt);
                     }
                     removes.insert(key);
@@ -358,7 +355,7 @@ impl<M: Memory> Database<M> {
                         if is_unique && !unique.insert(key.clone()) {
                             return Err(Error::UniqueViolation);
                         }
-                        writes.insert(key, info.key.to_be_bytes().to_vec());
+                        writes.insert(key, info.key.encode());
                     }
                     for field in mutation.entity.fields {
                         if let Some(reference) = field.reference {
@@ -383,13 +380,11 @@ impl<M: Memory> Database<M> {
                                     _ => return Err(Error::Corrupt),
                                 }
                             }
-                            let target = u64::from_be_bytes(
-                                bytes
-                                    .get(..8)
-                                    .ok_or(Error::Corrupt)?
-                                    .try_into()
-                                    .map_err(|_| Error::Corrupt)?,
-                            );
+                            let width = RowKey::width(field.value)?;
+                            let target = RowKey::decode(
+                                bytes.get(..width).ok_or(Error::Corrupt)?,
+                                field.value,
+                            )?;
                             required.insert((reference.entity, target));
                         }
                     }
@@ -424,8 +419,8 @@ impl<M: Memory> Database<M> {
     // relationship catalog or second mutation executor is involved.
     fn validate_references(
         &self,
-        required: &BTreeSet<(u32, u64)>,
-        deleted: &[(u32, u64)],
+        required: &BTreeSet<(u32, RowKey)>,
+        deleted: &[(u32, RowKey)],
         removes: &BTreeSet<Vec<u8>>,
         writes: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<(), Error> {
@@ -456,7 +451,8 @@ impl<M: Memory> Database<M> {
                         continue;
                     };
                     let mut prefix = index_prefix(entity.id, reference.index);
-                    IndexValue::Nat64(id).append_component(field.optional, &mut prefix);
+                    id.index_value()
+                        .append_component(field.optional, &mut prefix);
                     // Each skipped entry belongs to a distinct changed row in
                     // this range. At most MAX_BATCH skips plus one survivor.
                     for (position, entry) in self
@@ -472,13 +468,7 @@ impl<M: Memory> Database<M> {
                             }
                             continue;
                         }
-                        let owner = u64::from_be_bytes(
-                            entry
-                                .value()
-                                .as_slice()
-                                .try_into()
-                                .map_err(|_| Error::Corrupt)?,
-                        );
+                        let owner = RowKey::decode(&entry.value(), entity.key_type()?)?;
                         let bytes = self
                             .map
                             .get(&row_key(entity.id, owner))
@@ -502,9 +492,9 @@ fn prefix(tag: u8, entity: u32) -> Vec<u8> {
 fn revision_key(entity: u32) -> Vec<u8> {
     prefix(1, entity)
 }
-fn row_key(entity: u32, id: u64) -> Vec<u8> {
+fn row_key(entity: u32, id: RowKey) -> Vec<u8> {
     let mut key = prefix(2, entity);
-    key.extend(id.to_be_bytes());
+    id.append_to(&mut key);
     key
 }
 fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
@@ -548,7 +538,7 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
         let mut key = index_prefix(entity.id, index.id);
         key.extend(values);
         if !index.unique {
-            key.extend(info.key.to_be_bytes());
+            info.key.append_to(&mut key);
         }
         entries.push((key, index.unique));
     }
@@ -560,7 +550,7 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
 fn validate_index_entry(
     entity: &EntitySchema,
     info: &RowInfo,
-    owner: u64,
+    owner: RowKey,
     key: &[u8],
 ) -> Result<(), Error> {
     if info.key != owner

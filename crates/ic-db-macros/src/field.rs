@@ -21,6 +21,10 @@ pub(super) enum Kind {
     Account,
     U256,
     Ulid,
+    Date,
+    Duration,
+    Decimal(u32),
+    Timestamp,
     Int128,
     Bool,
     Principal,
@@ -80,10 +84,10 @@ impl Field {
         let name = name.ok_or_else(|| syn::Error::new_spanned(meta, "field requires name"))?;
         let (kind, optional, many) =
             value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
-        if reference.is_some() && (many.is_some() || !matches!(kind, Kind::Nat64)) {
+        if reference.is_some() && (many.is_some() || !kind.primary_key()) {
             return Err(syn::Error::new_spanned(
                 meta,
-                "references currently require Nat64",
+                "references currently require a fixed-width integer, U256 or Ulid",
             ));
         }
         Ok(Self {
@@ -94,8 +98,8 @@ impl Field {
             reference,
         })
     }
-    pub fn required_nat64(&self) -> bool {
-        matches!(self.kind, Kind::Nat64) && !self.optional && self.many.is_none()
+    pub fn required_key(&self) -> bool {
+        self.kind.primary_key() && !self.optional && self.many.is_none()
     }
     pub fn indexable(&self) -> bool {
         self.many.is_none()
@@ -112,6 +116,10 @@ impl Field {
                     | Kind::Account
                     | Kind::U256
                     | Kind::Ulid
+                    | Kind::Date
+                    | Kind::Decimal(_)
+                    | Kind::Duration
+                    | Kind::Timestamp
                     | Kind::Int8
                     | Kind::Int16
                     | Kind::Int32
@@ -159,6 +167,10 @@ impl Field {
             Kind::Account => quote!(::ic_db::Account),
             Kind::U256 => quote!(::ic_db::U256),
             Kind::Ulid => quote!(::ic_db::Ulid),
+            Kind::Date => quote!(::ic_db::Date),
+            Kind::Decimal(_) => quote!(::ic_db::Decimal),
+            Kind::Duration => quote!(::ic_db::Duration),
+            Kind::Timestamp => quote!(::ic_db::Timestamp),
             Kind::Int128 => quote!(i128),
             Kind::Bool => quote!(bool),
             Kind::Principal => quote!(::ic_db::Principal),
@@ -213,6 +225,10 @@ impl Field {
             Kind::Account => quote!(::ic_db::FieldType::Account),
             Kind::U256 => quote!(::ic_db::FieldType::U256),
             Kind::Ulid => quote!(::ic_db::FieldType::Ulid),
+            Kind::Date => quote!(::ic_db::FieldType::Date),
+            Kind::Decimal(scale) => quote!(::ic_db::FieldType::Decimal { scale: #scale }),
+            Kind::Duration => quote!(::ic_db::FieldType::Duration),
+            Kind::Timestamp => quote!(::ic_db::FieldType::Timestamp),
             Kind::Int128 => quote!(::ic_db::FieldType::Int128),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
             Kind::Principal => quote!(::ic_db::FieldType::Principal),
@@ -228,6 +244,14 @@ impl Field {
     pub fn validation(&self, ident: &syn::Ident) -> TokenStream {
         if self.many.is_some() {
             return quote!();
+        }
+        if let Kind::Decimal(scale) = self.kind {
+            let invalid = if self.optional {
+                quote!(self.#ident.is_some_and(|v| v.coefficient_at_scale(#scale).is_none()))
+            } else {
+                quote!(self.#ident.coefficient_at_scale(#scale).is_none())
+            };
+            return quote!(if #invalid { return Err(::ic_db::Error::InvalidOperand); });
         }
         let (Kind::Text(max) | Kind::Blob(max)) = self.kind else {
             return quote!();
@@ -265,6 +289,10 @@ impl Field {
             Kind::Account => quote!(writer.account(*value)?),
             Kind::U256 => quote!(writer.u256(*value)?),
             Kind::Ulid => quote!(writer.ulid(*value)?),
+            Kind::Date => quote!(writer.date(*value)?),
+            Kind::Decimal(scale) => quote!(writer.decimal(*value, #scale)?),
+            Kind::Duration => quote!(writer.duration(*value)?),
+            Kind::Timestamp => quote!(writer.timestamp(*value)?),
             Kind::Int64 => quote!(writer.int64(*value)?),
             Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
@@ -317,6 +345,10 @@ impl Field {
             Kind::Account => quote!(reader.account()),
             Kind::U256 => quote!(reader.u256()),
             Kind::Ulid => quote!(reader.ulid()),
+            Kind::Date => quote!(reader.date()),
+            Kind::Decimal(scale) => quote!(reader.decimal(#scale)),
+            Kind::Duration => quote!(reader.duration()),
+            Kind::Timestamp => quote!(reader.timestamp()),
             Kind::Int64 => quote!(reader.int64()),
             Kind::Int128 => quote!(reader.int128()),
             Kind::Bool => quote!(reader.boolean()),
@@ -391,6 +423,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     let mut named = None;
     let mut indirect = false;
     let mut max = None;
+    let mut scale = None;
     for part in list(meta)? {
         if matches!(&part, Meta::Path(path) if path.is_ident("indirect")) && !indirect {
             indirect = true;
@@ -402,6 +435,15 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
             )?;
         } else if part.path().is_ident("prim") {
             once(&mut prim, text(&part)?, &part)?;
+        } else if part.path().is_ident("scale") {
+            let Lit::Int(value) = literal(&part)? else {
+                return Err(syn::Error::new_spanned(part, "expected decimal scale"));
+            };
+            let value: u32 = value.base10_parse()?;
+            if value > 28 {
+                return Err(syn::Error::new_spanned(part, "scale must be 0 through 28"));
+            }
+            once(&mut scale, value, &part)?;
         } else if part.path().is_ident("max_bytes") {
             let Lit::Int(value) = literal(&part)? else {
                 return Err(syn::Error::new_spanned(part, "expected byte limit"));
@@ -422,10 +464,10 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         }
     }
     if let Some(path) = named {
-        if prim.is_some() || max.is_some() {
+        if prim.is_some() || max.is_some() || scale.is_some() {
             return Err(syn::Error::new_spanned(
                 meta,
-                "named types cannot also declare prim or max_bytes",
+                "named types cannot also declare prim, max_bytes or scale",
             ));
         }
         return Ok(Kind::Named(path, indirect));
@@ -434,6 +476,17 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         return Err(syn::Error::new_spanned(
             meta,
             "indirect currently requires a named type",
+        ));
+    }
+    if prim.as_deref() == Some("Decimal") && max.is_none() {
+        return scale
+            .map(Kind::Decimal)
+            .ok_or_else(|| syn::Error::new_spanned(meta, "Decimal requires scale"));
+    }
+    if scale.is_some() {
+        return Err(syn::Error::new_spanned(
+            meta,
+            "scale is only supported for Decimal without max_bytes",
         ));
     }
     match (prim.as_deref(), max) {
@@ -452,6 +505,9 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Account"), None) => Ok(Kind::Account),
         (Some("U256"), None) => Ok(Kind::U256),
         (Some("Ulid"), None) => Ok(Kind::Ulid),
+        (Some("Date"), None) => Ok(Kind::Date),
+        (Some("Duration"), None) => Ok(Kind::Duration),
+        (Some("Timestamp"), None) => Ok(Kind::Timestamp),
         (Some("Int128"), None) => Ok(Kind::Int128),
         (Some("Bool"), None) => Ok(Kind::Bool),
         (Some("Principal"), None) => Ok(Kind::Principal),
@@ -461,7 +517,27 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Blob"), None) => Err(syn::Error::new_spanned(meta, "Blob requires max_bytes")),
         _ => Err(syn::Error::new_spanned(
             meta,
-            "supported here: Nat/Int8/16/32/64/128, U256, Ulid, Float32/Float64, Bool, Principal, Subaccount, Account, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
+            "supported here: Nat/Int8/16/32/64/128, U256, Ulid, Date, Timestamp, Duration, Decimal(scale), Float32/Float64, Bool, Principal, Subaccount, Account, Text(max_bytes), Blob(max_bytes); other types remain unimplemented",
         )),
+    }
+}
+
+impl Kind {
+    fn primary_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Nat8
+                | Self::Nat16
+                | Self::Nat32
+                | Self::Nat64
+                | Self::Nat128
+                | Self::Int8
+                | Self::Int16
+                | Self::Int32
+                | Self::Int64
+                | Self::Int128
+                | Self::U256
+                | Self::Ulid
+        )
     }
 }

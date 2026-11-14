@@ -21,7 +21,11 @@ fn fail_at(selected: u8, boundary: u8) {
 // Kinds: insert user, delete user, put mapping, delete mapping.
 // Errors: bounds=1, duplicate target=2, existence=3, uniqueness=4, reference=5.
 // Success reports examined reverse-index candidates, independently of row count.
-#[ic_wire_endpoint::update(id = 3)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<3>",
+    decode_with = "crate::transport::decode::<_, 3>",
+    encode_with = "crate::transport::encode::<_, 3>"
+)]
 fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
     if commands.is_empty() || commands.len() > MAX_COMMANDS || failure > 5 {
         return Err(1);

@@ -46,7 +46,11 @@ fn optional(score: u64) -> Option<u64> {
     (score != 0).then_some(score)
 }
 
-#[ic_wire_endpoint::update(id = 4)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<4>",
+    decode_with = "crate::transport::decode::<_, 4>",
+    encode_with = "crate::transport::encode::<_, 4>"
+)]
 fn seed_reads() -> u64 {
     let host = runtime();
     let mut rows = open(&host, NAMES[0]);
@@ -83,7 +87,11 @@ fn seed_reads() -> u64 {
     incarnation
 }
 
-#[ic_wire_endpoint::update(id = 5)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<5>",
+    decode_with = "crate::transport::decode::<_, 5>",
+    encode_with = "crate::transport::encode::<_, 5>"
+)]
 fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u8> {
     if !(1..=8).contains(&id)
         || replacement.is_some_and(|(score, price)| score > 100 || price > MAX_PRICE)
@@ -104,7 +112,11 @@ fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u
 }
 
 // Errors: bounds=1, cursor mismatch=2, oversized row=3, unsupported order/path=4.
-#[ic_wire_endpoint::query(id = 6)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<6>",
+    decode_with = "crate::transport::decode::<_, 6>",
+    encode_with = "crate::transport::encode::<_, 6>"
+)]
 fn bounded_page(
     (order, access, maximum_price, token, work, limit, bytes): (
         u64,
@@ -200,7 +212,11 @@ fn bounded_page(
 }
 
 // Only the unfiltered ordered-key DISTINCT witness is admitted here.
-#[ic_wire_endpoint::query(id = 7)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<7>",
+    decode_with = "crate::transport::decode::<_, 7>",
+    encode_with = "crate::transport::encode::<_, 7>"
+)]
 fn distinct_page(
     (token, work, limit): (Option<Cursor>, u64, u64),
 ) -> Result<Page<Option<u64>>, u8> {

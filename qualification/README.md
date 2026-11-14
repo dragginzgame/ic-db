@@ -11,6 +11,32 @@ as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
+## Standalone endpoint hooks
+
+All six canister hosts use Platform's generic `guard`, `decode_with` and
+`encode_with` hooks with the [fixed fixture codecs](transport.rs). No Canic or
+Wire Endpoint dependency is needed. The [standalone example](rollback-canister/src/entrypoints.rs)
+is executable qualification, not a new product API or endpoint framework.
+Platform owns execution/reply; Wire owns native frames. Existing method names,
+IDs, payloads and directional limits remain unchanged: each direction allows
+65,536 encoded bytes, 8 MiB allocation, 65,536 nodes and depth 32. Admission checks
+size and the fixed header before Platform copies the complete request. Typed
+decoding still validates the full payload, including framed unit requests.
+
+```sh
+make m0-endpoints
+```
+
+The installed probe checks guard refusal, malformed/truncated/trailing frames,
+wrong identities/directions and oversized ingress before writes. A reply-encoding
+trap reverts synchronous rows, indexes and allocator changes. After an outgoing
+call, it reverts callback writes while preserving the first execution's writes.
+Valid calls return one correctly framed result. These controls remain separate
+from the two matched benchmark hosts. Both benchmark hosts use the same hooks;
+transport-cost changes are harness changes, not database improvements.
+This implements [IC DB issue #1](https://github.com/dragginzgame/ic-db/issues/1)
+locally; the frozen IcyDB engine and Canic sources are unchanged.
+
 ## M1 persistent records
 
 ```sh
@@ -39,6 +65,31 @@ runtime; ctor is absent from the Wasm dependency graph even with `ic-db/build` e
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
+`SignedKey` and `WideKey` qualify Int128/U256 primary keys and mutual references
+in Wasm: signed minima, the U256 high half, paging through MAX, index owners,
+uniqueness exchanges, no-ops, rollback and unchanged upgrade. Native cases cover
+every integer width with independent physical-key vectors and malformed owners;
+reference type mismatches refuse during schema admission.
+`KeyRow` and `Numbered` qualify supplied ULID/Nat64 primary keys, typed paging,
+full-width index owners, final-state mixed-key reference cycles and restricted
+deletion. Native corruption checks use literal physical row/index keys; Wasm
+checks include no-ops, refusals, unique exchanges, rollback and unchanged upgrade.
+`DecimalRow` qualifies declared scale 2, exact 17-byte rows, numeric key ordering,
+equivalent-value uniqueness/no-ops, coefficient limits, malformed stored scales,
+rollback and upgrade. Native checks additionally compare cross-scale ordering
+against independent I256 arithmetic and exercise scalar collection corruption.
+`TimeRow` qualifies signed Unix-millisecond timestamps and unsigned durations,
+with optional unique ownership and ordered secondary indexes. Retained IcyDB
+regressions cover pre-epoch flooring, RFC3339 offsets/fractions, text overflow
+and arithmetic across the full unsigned duration domain. Independent native/Wasm
+bytes cover minima/maxima, absence, collection keys, corrupt framing, no-ops,
+unique exchanges, rollback and unchanged upgrades. Both time types share the
+ordinary codec and commit path; no clock or managed timestamp is involved.
+`DateRow` qualifies bounded Gregorian dates as signed epoch days, including
+pre-epoch order, optional uniqueness exchanges and invalid-domain refusal.
+An independent native month-by-month counter checks every day in years 0000–9999
+against the adapted calendar algorithm. Native/Wasm witnesses also cover exact
+bytes, malformed rows/indexes, collections, rollback and unchanged upgrade.
 `UlidRow` qualifies exact 16-byte ULID values across the 80-bit suffix boundary,
 the top bit and the full maximum. Native checks cover independent row/schema
 bytes, canonical uppercase text, collection keys and the 4 KiB row limit. Wasm
@@ -210,15 +261,16 @@ Fault controls are compiled only for the dedicated probe and excluded from the
 ordinary CLI host. The product library has no injection feature or durable fault
 state; the instrumented host must not be used for comparative performance claims.
 The M0 maintenance fixture remains available only through its dedicated probe.
-Product scope still includes richer types, broader reference constraints and broad fluent
-queries. Primary keys/references still require Nat64; secondary indexes admit
-integers, Principal, Bool and bounded Text, including optional values.
+Remaining scope includes other identity/composite primary keys, nested references
+and broad fluent queries. Supplied integer/ULID primary keys and exact reference
+types use the shared paths qualified above. Secondary-index capabilities follow
+the current product type contract.
 Ordinary indexes retain absent values; optional unique indexes require explicit
 `present_only` membership for every optional component. Native checks cover
 compound guards, reverse-reference admission, omitted-entry row validation and
 corrupt presence; Wasm checks absent/present order, unique swaps, transfer,
 late-message rollback and unchanged upgrade. `db schema` projects membership
-alongside all six entity descriptions, including the
+alongside the compiled entity descriptions, including the
 Document-to-Entry reference, its `(entry_id, score)` reverse index and IdentityRow's
 unique owner and present-only optional identity indexes, plus Document's
 `(published, title)` and optional priority indexes;
@@ -226,8 +278,8 @@ the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 
 The current M1 selection uses Storage 0.74.1, Runtime/macros/guard 0.22.4 and
-Types 0.20.4. Testkit's transitive Platform remains 0.33.2; the announced 0.33.3
-was unavailable from crates.io at the update check.
+Types 0.20.4. Testkit's transitive Platform now resolves to published 0.33.3;
+the earlier dependency-update check preceded its publication.
 Prior recorded M0/baseline results used the versions stated with that evidence;
 the updated lockfile does not retroactively requalify those results.
 

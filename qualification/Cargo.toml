@@ -26,7 +26,6 @@ ic-platform-runtime = { version = "0.22.4", default-features = false }
 ic-storage = "0.74.1"
 ic-testkit = "0.105.0"
 ic-wire = "0.22.1"
-ic-wire-endpoint = "0.13.1"
 icydb = { git = "https://github.com/dragginzgame/icydb", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
 serde = "1.0.229"
 sha2 = { version = "0.11.1", default-features = false }

@@ -25,7 +25,7 @@ ic-db.workspace = true
 ic-platform-runtime = { workspace = true, features = ["cdk"] }
 ic-storage.workspace = true
 ic-wire.workspace = true
-ic-wire-endpoint.workspace = true
+serde.workspace = true
 
 [build-dependencies]
 ic-db = { workspace = true, features = ["build"] }

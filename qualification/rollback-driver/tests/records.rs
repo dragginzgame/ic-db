@@ -72,6 +72,15 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("FloatRow"));
     assert!(stdout.contains("AccountRow"));
     assert!(stdout.contains("UlidRow"));
+    assert!(stdout.contains("DateRow"));
+    assert!(stdout.contains("TimeRow"));
+    assert!(stdout.contains("DecimalRow"));
+    assert!(stdout.contains("KeyRow"));
+    assert!(stdout.contains("SignedKey"));
+    assert!(stdout.contains("WideKey.id (via peer,id)"));
+    assert!(stdout.contains("KeyRow.id (via target,id)"));
+    assert!(stdout.contains("17 bytes; scale 2; exact"));
+    assert!(stdout.contains("Unix milliseconds"));
     assert!(stdout.contains("Subaccount"));
     assert!(stdout.contains("Float32"));
     assert!(stdout.contains("Float64"));
@@ -286,7 +295,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
         // Independently assembled with Node byte framing and SHA-256.
-        "ff5b0c4f9dbe07493a902147d339e1a4695474a52f1ea27a7e9f25d10f16e6a8"
+        "a03af61b8e549975322a8724a656f18289cb3dae48f17885fe42e19892744a02"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -307,7 +316,7 @@ async fn product_records_and_message_boundary() {
         native::decode_response(2, &reply, LIMITS).unwrap();
     assert_eq!(admitted, original);
     let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
-    assert_eq!(entities.len(), 17);
+    assert_eq!(entities.len(), 24);
     assert_eq!(types.len(), 8);
     assert!(entity("UlidRow").3.contains(&(
         "value".into(),
@@ -2541,5 +2550,842 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (expected(&swapped), 2));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn dates_preserve_domain_order_and_message_rollback() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Row = (u64, Option<i32>, i32);
+    let write = async |rows: Vec<Row>, trap: bool| {
+        pic.update_call(
+            canister,
+            canister,
+            "date_batch",
+            native::encode_request(58, &(rows, trap), LIMITS).unwrap(),
+        )
+        .await
+    };
+    let result =
+        |reply: &[u8]| native::decode_response::<Result<(), u8>>(58, reply, LIMITS).unwrap();
+    let read = async || {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "date_rows",
+                native::encode_request(59, &(), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<(u64, Vec<u8>)>, u64)>(59, &reply, LIMITS).unwrap()
+    };
+    let zero = -719528_i32;
+    let one = -365_i32;
+    let low = -1_i32;
+    let high = 0_i32;
+    let top = 1_i32;
+    let maximum = 2932896_i32;
+    let mut rows: Vec<Row> = [zero, one, low, high, top, maximum]
+        .into_iter()
+        .enumerate()
+        .map(|(n, v)| (n as u64 + 1, Some(v), v))
+        .collect();
+    rows.push((7, None, high));
+    let expected = |rows: &[Row]| {
+        let mut rows = rows.to_vec();
+        rows.sort_by_key(|(id, _, value)| (*value, *id));
+        rows.into_iter()
+            .map(|(id, maybe, value)| {
+                let mut bytes = id.to_le_bytes().to_vec();
+                bytes.push(u8::from(maybe.is_some()));
+                if let Some(maybe) = maybe {
+                    bytes.extend(maybe.to_le_bytes());
+                }
+                bytes.extend(value.to_le_bytes());
+                bytes.push(1);
+                (id, bytes)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
+    assert_eq!(read().await, (expected(&rows), 1));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(&write(vec![(1, Some(maximum), zero)], false).await.unwrap()),
+        Err(2)
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(&write(vec![(1, Some(zero), 2932897)], false).await.unwrap()),
+        Err(1)
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let mut swapped = rows.clone();
+    swapped[0].1 = Some(maximum);
+    swapped[5].1 = Some(zero);
+    assert!(write(vec![swapped[0], swapped[5]], true).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (expected(&rows), 1));
+    assert_eq!(
+        result(&write(vec![swapped[0], swapped[5]], false).await.unwrap()),
+        Ok(())
+    );
+    assert_eq!(read().await, (expected(&swapped), 2));
+    let reply = pic
+        .query_call(
+            canister,
+            canister,
+            "date_lookup",
+            native::encode_request(60, &high, LIMITS).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        native::decode_response::<Result<Vec<u64>, u8>>(60, &reply, LIMITS).unwrap(),
+        Ok(vec![4, 7])
+    );
+    let golden = expected(&rows)
+        .into_iter()
+        .find(|(id, _)| *id == 7)
+        .unwrap()
+        .1;
+    let mut truncated = golden.clone();
+    truncated.remove(9);
+    let mut surplus = golden.clone();
+    surplus.insert(9, 0);
+    let mut invalid = golden.clone();
+    invalid[8] = 2;
+    let mut out_of_range = golden.clone();
+    out_of_range[9..13].copy_from_slice(&i32::MAX.to_le_bytes());
+    for (bytes, valid) in [
+        (golden, true),
+        (out_of_range, false),
+        (truncated, false),
+        (surplus, false),
+        (invalid, false),
+    ] {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "date_decodes",
+                native::encode_request(61, &bytes, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<bool>(61, &reply, LIMITS).unwrap(),
+            valid
+        );
+    }
+    let before = pic.get_stable_memory(canister).await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (expected(&swapped), 2));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn time_values_preserve_units_order_and_message_rollback() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Row = (u64, Option<u64>, u64, Option<i64>, i64);
+    let write = async |rows: Vec<Row>, trap: bool| {
+        pic.update_call(
+            canister,
+            canister,
+            "time_batch",
+            native::encode_request(62, &(rows, trap), LIMITS).unwrap(),
+        )
+        .await
+    };
+    let result =
+        |reply: &[u8]| native::decode_response::<Result<(), u8>>(62, reply, LIMITS).unwrap();
+    let read = async |duration: bool| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "time_rows",
+                native::encode_request(63, &duration, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<(u64, Vec<u8>)>, u64)>(63, &reply, LIMITS).unwrap()
+    };
+    let mut rows: Vec<Row> = [
+        (0, i64::MIN),
+        (1, -1),
+        (i64::MAX as u64, 0),
+        (1_u64 << 63, 1),
+        (u64::MAX, i64::MAX),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, (d, t))| (n as u64 + 1, Some(d), d, Some(t), t))
+    .collect();
+    rows.push((6, None, 0, None, 0));
+    let expected = |rows: &[Row], duration: bool| {
+        let mut rows = rows.to_vec();
+        if duration {
+            rows.sort_by_key(|r| (r.2, r.0));
+        } else {
+            rows.sort_by_key(|r| (r.4, r.0));
+        }
+        rows.into_iter()
+            .map(|(id, delay, duration, maybe, timestamp)| {
+                let mut bytes = vec![u8::from(delay.is_some())];
+                if let Some(d) = delay {
+                    bytes.extend(d.to_le_bytes());
+                }
+                bytes.extend(duration.to_le_bytes());
+                bytes.extend(id.to_le_bytes());
+                bytes.push(u8::from(maybe.is_some()));
+                if let Some(t) = maybe {
+                    bytes.extend(t.to_le_bytes());
+                }
+                bytes.extend(timestamp.to_le_bytes());
+                bytes.push(1);
+                (id, bytes)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    assert_eq!(result(&write(reversed, false).await.unwrap()), Ok(()));
+    for duration in [false, true] {
+        assert_eq!(read(duration).await, (expected(&rows, duration), 1));
+    }
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    for duplicate in [
+        (1, Some(u64::MAX), 0, Some(i64::MIN), i64::MIN),
+        (1, Some(0), 0, Some(i64::MAX), i64::MIN),
+    ] {
+        assert_eq!(
+            result(&write(vec![duplicate], false).await.unwrap()),
+            Err(2)
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    let mut swapped = rows.clone();
+    swapped[0].1 = Some(u64::MAX);
+    swapped[0].3 = Some(i64::MAX);
+    swapped[4].1 = Some(0);
+    swapped[4].3 = Some(i64::MIN);
+    assert!(write(vec![swapped[0], swapped[4]], true).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read(false).await, (expected(&rows, false), 1));
+    assert_eq!(
+        result(&write(vec![swapped[0], swapped[4]], false).await.unwrap()),
+        Ok(())
+    );
+    for duration in [false, true] {
+        assert_eq!(read(duration).await, (expected(&swapped, duration), 2));
+    }
+    let golden = expected(&rows, false)
+        .into_iter()
+        .find(|r| r.0 == 6)
+        .unwrap()
+        .1;
+    let mut truncated = golden.clone();
+    truncated.pop();
+    let mut excess = golden.clone();
+    excess.push(0);
+    let mut bad = golden.clone();
+    bad[0] = 2;
+    for (bytes, valid) in [
+        (golden, true),
+        (truncated, false),
+        (excess, false),
+        (bad, false),
+    ] {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "time_decodes",
+                native::encode_request(64, &bytes, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<bool>(64, &reply, LIMITS).unwrap(),
+            valid
+        );
+    }
+    for (d, t, expected) in [
+        ("2s", "1969-12-31T23:59:59.999999999Z", Ok((2000, -1))),
+        (
+            "18446744073709551615ms",
+            "-9223372036854775808",
+            Ok((u64::MAX, i64::MIN)),
+        ),
+        ("18446744073709552s", "0", Err(1)),
+        ("1ms", "1900-02-29T00:00:00Z", Err(2)),
+    ] {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "time_text",
+                native::encode_request(65, &(d.to_string(), t.to_string()), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<Result<(u64, i64), u8>>(65, &reply, LIMITS).unwrap(),
+            expected
+        );
+    }
+    let reply = pic
+        .query_call(
+            canister,
+            canister,
+            "time_math",
+            native::encode_request(66, &(-1001_i64, -1_i64, u64::MAX), LIMITS).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        native::decode_response::<(i64, i64, i64, i64)>(66, &reply, LIMITS).unwrap(),
+        (-2, -1, i64::MAX, i64::MIN)
+    );
+    let before = pic.get_stable_memory(canister).await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    for duration in [false, true] {
+        assert_eq!(read(duration).await, (expected(&swapped, duration), 2));
+    }
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Row = (u64, Option<String>, String);
+    let write = async |rows: Vec<Row>, trap: bool| {
+        pic.update_call(
+            canister,
+            canister,
+            "decimal_batch",
+            native::encode_request(67, &(rows, trap), LIMITS).unwrap(),
+        )
+        .await
+    };
+    let result =
+        |reply: &[u8]| native::decode_response::<Result<(), u8>>(67, reply, LIMITS).unwrap();
+    let read = async || {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "decimal_rows",
+                native::encode_request(68, &(), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<(u64, Vec<u8>)>, u64)>(68, &reply, LIMITS).unwrap()
+    };
+    // Independent literal fixed-scale coefficients: no database Decimal parser
+    // or encoder in the oracle, including both extreme signed coefficients.
+    let entries = [
+        ("-1701411834604692317316873037158841057.28", i128::MIN),
+        ("-1.00", -100),
+        ("-0.01", -1),
+        ("0", 0),
+        ("0.01", 1),
+        ("1.0", 100),
+        ("1701411834604692317316873037158841057.27", i128::MAX),
+    ];
+    let rows: Vec<Row> = entries
+        .iter()
+        .enumerate()
+        .map(|(n, (s, _))| (n as u64 + 1, Some((*s).into()), (*s).into()))
+        .collect();
+    let expected = |swap: bool| {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(n, (_, coefficient))| {
+                let id = n as u64 + 1;
+                let mut b = id.to_le_bytes().to_vec();
+                b.push(1);
+                let maybe = if swap && n == 0 {
+                    i128::MAX
+                } else if swap && n == 6 {
+                    i128::MIN
+                } else {
+                    *coefficient
+                };
+                b.extend(maybe.to_be_bytes());
+                b.push(2);
+                b.extend(coefficient.to_be_bytes());
+                b.extend([2, 1]);
+                (id, b)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        result(
+            &write(rows.iter().rev().cloned().collect(), false)
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(read().await, (expected(false), 1));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        result(
+            &write(vec![(6, Some("1.000".into()), "1.00".into())], false)
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    for (value, error) in [
+        ("1.000", 2),
+        ("0.001", 1),
+        ("170141183460469231731687303715884105727", 1),
+    ] {
+        assert_eq!(
+            result(
+                &write(vec![(1, Some(value.into()), rows[0].2.clone())], false)
+                    .await
+                    .unwrap()
+            ),
+            Err(error)
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    let swapped = vec![
+        (1, rows[6].1.clone(), rows[0].2.clone()),
+        (7, rows[0].1.clone(), rows[6].2.clone()),
+    ];
+    assert!(write(swapped.clone(), true).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (expected(false), 1));
+    assert_eq!(result(&write(swapped, false).await.unwrap()), Ok(()));
+    assert_eq!(read().await, (expected(true), 2));
+    let golden = expected(false)[5].1.clone();
+    let mut equivalent = golden.clone();
+    equivalent[9..25].copy_from_slice(&10_i128.to_be_bytes());
+    equivalent[25] = 1;
+    let mut bad = golden.clone();
+    bad[25] = 29;
+    let mut short = golden.clone();
+    short.pop();
+    for (bytes, valid) in [
+        (golden, true),
+        (equivalent, false),
+        (bad, false),
+        (short, false),
+    ] {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "decimal_decodes",
+                native::encode_request(69, &bytes, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<bool>(69, &reply, LIMITS).unwrap(),
+            valid
+        );
+    }
+    let before = pic.get_stable_memory(canister).await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(read().await, (expected(true), 2));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Row = ([u8; 16], Option<u64>, u64);
+    type Request = (
+        Vec<Row>,
+        Vec<(u64, Option<[u8; 16]>)>,
+        Vec<[u8; 16]>,
+        Vec<u64>,
+        bool,
+    );
+    let write = async |request: Request| {
+        pic.update_call(
+            canister,
+            canister,
+            "key_batch",
+            native::encode_request(70, &request, LIMITS).unwrap(),
+        )
+        .await
+    };
+    let result =
+        |reply: &[u8]| native::decode_response::<Result<(), u8>>(70, reply, LIMITS).unwrap();
+    let page = async |after: Option<[u8; 16]>, limit: u8| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "key_page",
+                native::encode_request(71, &(after, limit), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<Row>, Option<[u8; 16]>, u64)>(71, &reply, LIMITS).unwrap()
+    };
+    let lookup = async |id: [u8; 16], value: u64| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "key_lookup",
+                native::encode_request(72, &(id, value), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Option<Row>, Vec<Row>)>(72, &reply, LIMITS).unwrap()
+    };
+    let mut rows: Vec<Row> = [
+        0,
+        u64::MAX as u128,
+        1_u128 << 64,
+        (1_u128 << 80) - 1,
+        1_u128 << 80,
+        u128::MAX,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, id)| (id.to_be_bytes(), (n == 0).then_some(1), n as u64 + 1))
+    .collect();
+    assert_eq!(
+        result(
+            &write((
+                rows.iter().rev().copied().collect(),
+                vec![(1, Some([0; 16])), (2, None)],
+                vec![],
+                vec![],
+                false
+            ))
+            .await
+            .unwrap()
+        ),
+        Ok(())
+    );
+    let first = page(None, 3).await;
+    assert_eq!(first, (rows[..3].to_vec(), Some(rows[2].0), 1));
+    let last = page(first.1, 3).await;
+    assert_eq!(last, (rows[3..].to_vec(), Some([255; 16]), 1));
+    assert_eq!(page(last.1, 3).await, (vec![], None, 1));
+    assert_eq!(lookup([255; 16], 6).await, (Some(rows[5]), vec![rows[5]]));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        result(
+            &write((vec![rows[0]], vec![], vec![], vec![], false))
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    for request in [
+        (vec![], vec![], vec![[0; 16]], vec![], false),
+        (vec![], vec![], vec![], vec![1], false),
+        (
+            vec![],
+            vec![(3, Some(7_u128.to_be_bytes()))],
+            vec![],
+            vec![],
+            false,
+        ),
+        (vec![([0; 16], Some(1), 6)], vec![], vec![], vec![], false),
+        (vec![rows[0]], vec![], vec![[0; 16]], vec![], false),
+    ] {
+        assert_eq!(result(&write(request).await.unwrap()), Err(2));
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    rows[0].2 = 6;
+    rows[5].2 = 1;
+    assert!(
+        write((vec![rows[0], rows[5]], vec![], vec![], vec![], true))
+            .await
+            .is_err()
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(
+            &write((vec![rows[0], rows[5]], vec![], vec![], vec![], false))
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(lookup([255; 16], 1).await, (Some(rows[5]), vec![rows[5]]));
+    let before = pic.get_stable_memory(canister).await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(page(None, 32).await, (rows.clone(), None, 2));
+    assert!(
+        write((vec![], vec![], vec![[0; 16]], vec![1], true))
+            .await
+            .is_err()
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(
+            &write((vec![], vec![], vec![[0; 16]], vec![1], false))
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(page(None, 32).await, (rows[1..].to_vec(), None, 3));
+    assert_eq!(lookup([0; 16], 6).await, (None, vec![]));
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Signed = (i128, Option<[u8; 32]>, u64);
+    type Wide = ([u8; 32], Option<i128>, u64);
+    type Request = (Vec<Signed>, Vec<Wide>, Vec<i128>, Vec<[u8; 32]>, bool);
+    let write = async |request: Request| {
+        pic.update_call(
+            canister,
+            canister,
+            "integer_key_batch",
+            native::encode_request(73, &request, LIMITS).unwrap(),
+        )
+        .await
+    };
+    let result =
+        |bytes: &[u8]| native::decode_response::<Result<(), u8>>(73, bytes, LIMITS).unwrap();
+    let signed_page = async |after: Option<i128>, limit: u8| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "signed_key_page",
+                native::encode_request(74, &(after, limit), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<Signed>, Option<i128>, u64)>(74, &reply, LIMITS).unwrap()
+    };
+    let wide_page = async |after: Option<[u8; 32]>, limit: u8| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "wide_key_page",
+                native::encode_request(75, &(after, limit), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<Wide>, Option<[u8; 32]>, u64)>(75, &reply, LIMITS).unwrap()
+    };
+    let lookup = async |rank: u64| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "integer_key_lookup",
+                native::encode_request(76, &rank, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<(Vec<Signed>, Vec<Wide>)>(76, &reply, LIMITS).unwrap()
+    };
+    let signed_ids = [i128::MIN, -1, 0, 1, i128::MAX];
+    let mut one = [0; 32];
+    one[31] = 1;
+    let mut high = [0; 32];
+    high[15] = 1;
+    let mut penultimate = [255; 32];
+    penultimate[31] = 254;
+    let wide_ids = [[0; 32], one, high, penultimate, [255; 32]];
+    let mut signed: Vec<Signed> = signed_ids
+        .iter()
+        .enumerate()
+        .map(|(n, &id)| (id, Some(wide_ids[n]), n as u64))
+        .collect();
+    let mut wide: Vec<Wide> = wide_ids
+        .iter()
+        .enumerate()
+        .map(|(n, &id)| (id, Some(signed_ids[n]), n as u64))
+        .collect();
+    let empty = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        result(
+            &write((vec![signed[0]], vec![], vec![], vec![], false))
+                .await
+                .unwrap()
+        ),
+        Err(2)
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, empty);
+    assert_eq!(
+        result(
+            &write((
+                signed.iter().rev().copied().collect(),
+                wide.iter().rev().copied().collect(),
+                vec![],
+                vec![],
+                false
+            ))
+            .await
+            .unwrap()
+        ),
+        Ok(())
+    );
+    let first = signed_page(None, 2).await;
+    assert_eq!(first, (signed[..2].to_vec(), Some(-1), 1));
+    assert_eq!(
+        signed_page(first.1, 32).await,
+        (signed[2..].to_vec(), None, 1)
+    );
+    assert_eq!(signed_page(Some(i128::MAX), 2).await, (vec![], None, 1));
+    let first = wide_page(None, 3).await;
+    assert_eq!(first, (wide[..3].to_vec(), Some(high), 1));
+    assert_eq!(
+        wide_page(first.1, 2).await,
+        (wide[3..].to_vec(), Some([255; 32]), 1)
+    );
+    assert_eq!(wide_page(Some([255; 32]), 2).await, (vec![], None, 1));
+    assert_eq!(lookup(4).await, (vec![signed[4]], vec![wide[4]]));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        result(
+            &write((vec![signed[0]], vec![wide[0]], vec![], vec![], false))
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    for request in [
+        (vec![], vec![], vec![i128::MIN], vec![], false),
+        (vec![], vec![], vec![], vec![[0; 32]], false),
+        (
+            vec![(i128::MIN, Some([0; 32]), 4)],
+            vec![],
+            vec![],
+            vec![],
+            false,
+        ),
+    ] {
+        assert_eq!(result(&write(request).await.unwrap()), Err(2));
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    signed[0].2 = 4;
+    signed[4].2 = 0;
+    wide[0].2 = 4;
+    wide[4].2 = 0;
+    assert!(
+        write((
+            vec![signed[0], signed[4]],
+            vec![wide[0], wide[4]],
+            vec![],
+            vec![],
+            true
+        ))
+        .await
+        .is_err()
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(
+            &write((
+                vec![signed[0], signed[4]],
+                vec![wide[0], wide[4]],
+                vec![],
+                vec![],
+                false
+            ))
+            .await
+            .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(lookup(0).await, (vec![signed[4]], vec![wide[4]]));
+    let before = pic.get_stable_memory(canister).await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(signed_page(None, 32).await, (signed.clone(), None, 2));
+    assert_eq!(wide_page(None, 32).await, (wide.clone(), None, 2));
+    assert!(
+        write((vec![], vec![], vec![i128::MIN], vec![[0; 32]], true))
+            .await
+            .is_err()
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(
+        result(
+            &write((vec![], vec![], vec![i128::MIN], vec![[0; 32]], false))
+                .await
+                .unwrap()
+        ),
+        Ok(())
+    );
+    assert_eq!(signed_page(None, 32).await, (signed[1..].to_vec(), None, 3));
+    assert_eq!(wide_page(None, 32).await, (wide[1..].to_vec(), None, 3));
     owned.close().await;
 }

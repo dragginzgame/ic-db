@@ -20,7 +20,8 @@ crate-type = ["cdylib"]
 [dependencies]
 ic-platform-runtime = { workspace = true, features = ["cdk"] }
 ic-storage.workspace = true
-ic-wire-endpoint.workspace = true
+ic-wire.workspace = true
+serde.workspace = true
 
 [lints]
 workspace = true

@@ -2,8 +2,14 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
+#[path = "../../transport.rs"]
+mod transport;
+
 use ic_db::{Batch, Database, Entity, FieldType, Principal};
 use ic_platform_runtime::cdk;
+
+// Treat framed unit as one reply value for the generic encoder hook.
+type EmptyReply = ();
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
@@ -124,7 +130,11 @@ fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
         host.diagnostics().unwrap().physical_pages,
     )
 }
-#[ic_wire_endpoint::query(id = 1)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn inspect() -> Status {
     let host = runtime();
     let db = open(&host);
@@ -135,7 +145,11 @@ type FieldView = (String, String, bool, String, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
-#[ic_wire_endpoint::query(id = 2)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
     let db = open(&host);
@@ -261,7 +275,11 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
         .collect();
     (status(&db, &host), entities, types)
 }
-#[ic_wire_endpoint::query(id = 3)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<3>",
+    decode_with = "crate::transport::decode::<_, 3>",
+    encode_with = "crate::transport::encode::<_, 3>"
+)]
 fn query((after, limit, minimum): (u64, u64, u64)) -> Result<QueryPage, u8> {
     if !(1..=3).contains(&limit) {
         return Err(1);
@@ -284,7 +302,11 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<QueryPage, u8> {
         scanned,
     ))
 }
-#[ic_wire_endpoint::update(id = 4)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<4>",
+    decode_with = "crate::transport::decode::<_, 4>",
+    encode_with = "crate::transport::encode::<_, 4>"
+)]
 fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     if mode > 3 {
         return Err(1);
@@ -311,7 +333,11 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 5)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<5>",
+    decode_with = "crate::transport::decode::<_, 5>",
+    encode_with = "crate::transport::encode::<_, 5>"
+)]
 fn category(category: u64) -> Vec<(u64, u64)> {
     let host = runtime();
     let db = open(&host);
@@ -323,7 +349,11 @@ fn category(category: u64) -> Vec<(u64, u64)> {
 }
 
 type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
-#[ic_wire_endpoint::query(id = 7)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<7>",
+    decode_with = "crate::transport::decode::<_, 7>",
+    encode_with = "crate::transport::encode::<_, 7>"
+)]
 fn document() -> (DocumentValue, u64) {
     let host = runtime();
     let db = open(&host);
@@ -340,7 +370,11 @@ fn document() -> (DocumentValue, u64) {
         db.revision::<Document>().unwrap(),
     )
 }
-#[ic_wire_endpoint::update(id = 8)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<8>",
+    decode_with = "crate::transport::decode::<_, 8>",
+    encode_with = "crate::transport::encode::<_, 8>"
+)]
 fn replace_document(
     (title, note, published, priority, score, previous_score): DocumentValue,
 ) -> Result<(), u8> {
@@ -362,7 +396,11 @@ fn replace_document(
     db.commit(batch).map_err(|_| 2)
 }
 
-#[ic_wire_endpoint::query(id = 9)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<9>",
+    decode_with = "crate::transport::decode::<_, 9>",
+    encode_with = "crate::transport::encode::<_, 9>"
+)]
 fn document_reference(id: u64) -> Option<u64> {
     let host = runtime();
     open(&host)
@@ -371,7 +409,11 @@ fn document_reference(id: u64) -> Option<u64> {
         .map(|row| row.entry_id)
 }
 
-#[ic_wire_endpoint::update(id = 10)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<10>",
+    decode_with = "crate::transport::decode::<_, 10>",
+    encode_with = "crate::transport::encode::<_, 10>"
+)]
 fn reference_batch(mode: u8) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
@@ -430,7 +472,11 @@ fn reference_batch(mode: u8) -> Result<(), u8> {
 }
 
 type WideValue = (i128, u128, Option<i128>, Option<u128>);
-#[ic_wire_endpoint::query(id = 11)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<11>",
+    decode_with = "crate::transport::decode::<_, 11>",
+    encode_with = "crate::transport::encode::<_, 11>"
+)]
 fn wide_numbers() -> (WideValue, u64) {
     let host = runtime();
     let db = open(&host);
@@ -445,10 +491,14 @@ fn wide_numbers() -> (WideValue, u64) {
         db.revision::<WideNumbers>().unwrap(),
     )
 }
-#[ic_wire_endpoint::update(id = 12)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<12>",
+    decode_with = "crate::transport::decode::<_, 12>",
+    encode_with = "crate::transport::encode::<_, 12>"
+)]
 fn replace_wide_numbers(
     ((signed, unsigned, optional_signed, optional_unsigned), trap): (WideValue, bool),
-) {
+) -> EmptyReply {
     let host = runtime();
     let mut db = open(&host);
     let mut batch = Batch::new();
@@ -479,7 +529,11 @@ type NarrowOptional = (
 );
 type NarrowValue = (NarrowRequired, NarrowOptional);
 
-#[ic_wire_endpoint::query(id = 16)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<16>",
+    decode_with = "crate::transport::decode::<_, 16>",
+    encode_with = "crate::transport::encode::<_, 16>"
+)]
 fn narrow_numbers() -> (NarrowValue, u64) {
     let host = runtime();
     let db = open(&host);
@@ -507,8 +561,12 @@ fn narrow_numbers() -> (NarrowValue, u64) {
     )
 }
 
-#[ic_wire_endpoint::update(id = 17)]
-fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) {
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<17>",
+    decode_with = "crate::transport::decode::<_, 17>",
+    encode_with = "crate::transport::encode::<_, 17>"
+)]
+fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
     let (
         (signed8, signed16, signed32, unsigned8, unsigned16, unsigned32),
         (
@@ -547,7 +605,11 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) {
 }
 
 // Private decoder probe: transport carries opaque bytes, never decodes a row.
-#[ic_wire_endpoint::query(id = 15)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<15>",
+    decode_with = "crate::transport::decode::<_, 15>",
+    encode_with = "crate::transport::encode::<_, 15>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "endpoint decoding owns the request; the database decoder borrows its bytes"
@@ -556,7 +618,11 @@ fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
     BinaryObject::decode(bytes.as_ref()).is_ok()
 }
 
-#[ic_wire_endpoint::query(id = 13)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<13>",
+    decode_with = "crate::transport::decode::<_, 13>",
+    encode_with = "crate::transport::encode::<_, 13>"
+)]
 fn binary_object() -> (BinaryValue, u64) {
     let host = runtime();
     let db = open(&host);
@@ -566,7 +632,11 @@ fn binary_object() -> (BinaryValue, u64) {
         db.revision::<BinaryObject>().unwrap(),
     )
 }
-#[ic_wire_endpoint::update(id = 14)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<14>",
+    decode_with = "crate::transport::decode::<_, 14>",
+    encode_with = "crate::transport::encode::<_, 14>"
+)]
 fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
@@ -588,7 +658,11 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
 // Bytes cross the test transport; Principal admission and persistence belong to
 // their respective owners, never Wire's representation of an identity.
 type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
-#[ic_wire_endpoint::query(id = 18)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<18>",
+    decode_with = "crate::transport::decode::<_, 18>",
+    encode_with = "crate::transport::encode::<_, 18>"
+)]
 fn principal_record() -> (PrincipalValue, u64) {
     let host = runtime();
     let db = open(&host);
@@ -601,7 +675,11 @@ fn principal_record() -> (PrincipalValue, u64) {
         db.revision::<IdentityRow>().unwrap(),
     )
 }
-#[ic_wire_endpoint::update(id = 19)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<19>",
+    decode_with = "crate::transport::decode::<_, 19>",
+    encode_with = "crate::transport::encode::<_, 19>"
+)]
 fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -> Result<(), u8> {
     let row = IdentityRow {
         id: 1,
@@ -622,7 +700,11 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 20)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<20>",
+    decode_with = "crate::transport::decode::<_, 20>",
+    encode_with = "crate::transport::encode::<_, 20>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "endpoint owns transport input; database decoder borrows it"
@@ -633,7 +715,11 @@ fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
 
 // Private qualification controls; product endpoints remain adapter-owned.
 type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
-#[ic_wire_endpoint::update(id = 21)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<21>",
+    decode_with = "crate::transport::decode::<_, 21>",
+    encode_with = "crate::transport::encode::<_, 21>"
+)]
 fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
@@ -669,7 +755,11 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
 }
 
 type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
-#[ic_wire_endpoint::query(id = 22)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<22>",
+    decode_with = "crate::transport::decode::<_, 22>",
+    encode_with = "crate::transport::encode::<_, 22>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "endpoint owns transport input"
@@ -692,7 +782,11 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     ))
 }
 
-#[ic_wire_endpoint::update(id = 23)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<23>",
+    decode_with = "crate::transport::decode::<_, 23>",
+    encode_with = "crate::transport::encode::<_, 23>"
+)]
 fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
@@ -718,7 +812,11 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
     Ok(())
 }
 
-#[ic_wire_endpoint::query(id = 24)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<24>",
+    decode_with = "crate::transport::decode::<_, 24>",
+    encode_with = "crate::transport::encode::<_, 24>"
+)]
 fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String, u64)>, u8> {
     let host = runtime();
     let db = open(&host);
@@ -733,7 +831,11 @@ fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String,
 
 type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
 type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
-#[ic_wire_endpoint::update(id = 25)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<25>",
+    decode_with = "crate::transport::decode::<_, 25>",
+    encode_with = "crate::transport::encode::<_, 25>"
+)]
 fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
@@ -775,7 +877,11 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     Ok(())
 }
 
-#[ic_wire_endpoint::query(id = 26)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<26>",
+    decode_with = "crate::transport::decode::<_, 26>",
+    encode_with = "crate::transport::encode::<_, 26>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "endpoint owns transport input"
@@ -803,7 +909,11 @@ fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
 
 // Optional relationships share the product batch; these are private probe controls.
 type OptionalLinks = Vec<(u64, Option<u64>)>;
-#[ic_wire_endpoint::update(id = 27)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<27>",
+    decode_with = "crate::transport::decode::<_, 27>",
+    encode_with = "crate::transport::encode::<_, 27>"
+)]
 fn optional_reference_batch(
     (rows, deletes, trap): (OptionalLinks, Vec<u64>, bool),
 ) -> Result<(), u8> {
@@ -829,7 +939,11 @@ fn optional_reference_batch(
     Ok(())
 }
 
-#[ic_wire_endpoint::query(id = 28)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<28>",
+    decode_with = "crate::transport::decode::<_, 28>",
+    encode_with = "crate::transport::encode::<_, 28>"
+)]
 fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
     let host = runtime();
     let db = open(&host);
@@ -857,7 +971,11 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
 
 // Private enum qualification controls. Transport uses ordinals solely to exercise
 // the typed database boundary; it does not define the persisted enum codec.
-#[ic_wire_endpoint::update(id = 29)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<29>",
+    decode_with = "crate::transport::decode::<_, 29>",
+    encode_with = "crate::transport::encode::<_, 29>"
+)]
 fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>, u64), u8> {
     fn lifecycle(ordinal: u8) -> Result<schema::Lifecycle, ic_db::Error> {
         let bytes = [ordinal];
@@ -893,7 +1011,11 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
         db.revision::<EnumRow>().unwrap(),
     ))
 }
-#[ic_wire_endpoint::query(id = 30)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<30>",
+    decode_with = "crate::transport::decode::<_, 30>",
+    encode_with = "crate::transport::encode::<_, 30>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport endpoint requires an owned request"
@@ -922,6 +1044,15 @@ fn type_view(value: FieldType) -> (String, String) {
         FieldType::Blob { max_bytes } => ("Blob".into(), format!("max {max_bytes} bytes")),
         FieldType::Principal => ("Principal".into(), "max 29 bytes".into()),
         FieldType::Subaccount => ("Subaccount".into(), "32 bytes".into()),
+        FieldType::Date => ("Date".into(), "4 bytes; days; 0000–9999".into()),
+        FieldType::Timestamp => ("Timestamp".into(), "8 bytes; Unix milliseconds".into()),
+        FieldType::Decimal { scale } => {
+            ("Decimal".into(), format!("17 bytes; scale {scale}; exact"))
+        }
+        FieldType::Duration => (
+            "Duration".into(),
+            "8 bytes; nonnegative milliseconds".into(),
+        ),
         FieldType::Ulid => ("Ulid".into(), "16 bytes".into()),
         FieldType::Account => (
             "Account".into(),
@@ -938,7 +1069,11 @@ fn joined_info(bound: String, nested: &str) -> String {
     }
 }
 
-#[ic_wire_endpoint::update(id = 31)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<31>",
+    decode_with = "crate::transport::decode::<_, 31>",
+    encode_with = "crate::transport::encode::<_, 31>"
+)]
 fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{Branch, Details, NestedPayload, NestedRow};
     fn tree(depth: u8) -> NestedPayload {
@@ -993,7 +1128,11 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
         db.revision::<NestedRow>().unwrap(),
     ))
 }
-#[ic_wire_endpoint::query(id = 32)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<32>",
+    decode_with = "crate::transport::decode::<_, 32>",
+    encode_with = "crate::transport::encode::<_, 32>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1002,7 +1141,11 @@ fn nested_decodes(bytes: Vec<u8>) -> bool {
     schema::NestedRow::decode(&bytes).is_ok()
 }
 
-#[ic_wire_endpoint::update(id = 33)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<33>",
+    decode_with = "crate::transport::decode::<_, 33>",
+    encode_with = "crate::transport::encode::<_, 33>"
+)]
 fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{ListNode, ListRow};
     fn tree(depth: u8) -> ListNode {
@@ -1060,7 +1203,11 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<ListRow>().unwrap(),
     ))
 }
-#[ic_wire_endpoint::query(id = 34)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<34>",
+    decode_with = "crate::transport::decode::<_, 34>",
+    encode_with = "crate::transport::encode::<_, 34>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1069,7 +1216,11 @@ fn list_decodes(bytes: Vec<u8>) -> bool {
     schema::ListRow::decode(&bytes).is_ok()
 }
 
-#[ic_wire_endpoint::update(id = 35)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<35>",
+    decode_with = "crate::transport::decode::<_, 35>",
+    encode_with = "crate::transport::encode::<_, 35>"
+)]
 fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{Scores, SetRow};
     let host = runtime();
@@ -1103,7 +1254,11 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
         db.revision::<SetRow>().unwrap(),
     ))
 }
-#[ic_wire_endpoint::query(id = 36)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<36>",
+    decode_with = "crate::transport::decode::<_, 36>",
+    encode_with = "crate::transport::encode::<_, 36>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1112,7 +1267,11 @@ fn set_decodes(bytes: Vec<u8>) -> bool {
     schema::SetRow::decode(&bytes).is_ok()
 }
 
-#[ic_wire_endpoint::update(id = 37)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<37>",
+    decode_with = "crate::transport::decode::<_, 37>",
+    encode_with = "crate::transport::encode::<_, 37>"
+)]
 fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{MapRow, Rates};
     let host = runtime();
@@ -1155,7 +1314,11 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<MapRow>().unwrap(),
     ))
 }
-#[ic_wire_endpoint::query(id = 38)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<38>",
+    decode_with = "crate::transport::decode::<_, 38>",
+    encode_with = "crate::transport::encode::<_, 38>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1164,7 +1327,11 @@ fn map_decodes(bytes: Vec<u8>) -> bool {
     schema::MapRow::decode(&bytes).is_ok()
 }
 
-#[ic_wire_endpoint::query(id = 39)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<39>",
+    decode_with = "crate::transport::decode::<_, 39>",
+    encode_with = "crate::transport::encode::<_, 39>"
+)]
 fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     use schema::{MapTree, MapTreeRow};
     if (star && size > 256) || (!star && size > 32) {
@@ -1177,7 +1344,11 @@ fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     };
     MapTreeRow { id: 1, tree }.encode().map_err(|_| 1)
 }
-#[ic_wire_endpoint::query(id = 40)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<40>",
+    decode_with = "crate::transport::decode::<_, 40>",
+    encode_with = "crate::transport::encode::<_, 40>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1187,7 +1358,11 @@ fn map_tree_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
-#[ic_wire_endpoint::update(id = 41)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<41>",
+    decode_with = "crate::transport::decode::<_, 41>",
+    encode_with = "crate::transport::encode::<_, 41>"
+)]
 fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     use schema::BigNumbers;
     let host = runtime();
@@ -1213,7 +1388,11 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 42)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<42>",
+    decode_with = "crate::transport::decode::<_, 42>",
+    encode_with = "crate::transport::encode::<_, 42>"
+)]
 fn u256_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::BigNumbers;
     let host = runtime();
@@ -1227,7 +1406,11 @@ fn u256_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<BigNumbers>().unwrap(),
     )
 }
-#[ic_wire_endpoint::query(id = 43)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<43>",
+    decode_with = "crate::transport::decode::<_, 43>",
+    encode_with = "crate::transport::encode::<_, 43>"
+)]
 fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
     let host = runtime();
     open(&host)
@@ -1241,7 +1424,11 @@ fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
-#[ic_wire_endpoint::query(id = 44)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<44>",
+    decode_with = "crate::transport::decode::<_, 44>",
+    encode_with = "crate::transport::encode::<_, 44>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1251,7 +1438,11 @@ fn u256_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type FloatInput = (u64, Option<u64>, u32, u64);
-#[ic_wire_endpoint::update(id = 45)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<45>",
+    decode_with = "crate::transport::decode::<_, 45>",
+    encode_with = "crate::transport::encode::<_, 45>"
+)]
 fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     use ic_db::{Float32, Float64};
     use schema::FloatRow;
@@ -1282,7 +1473,11 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 46)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<46>",
+    decode_with = "crate::transport::decode::<_, 46>",
+    encode_with = "crate::transport::encode::<_, 46>"
+)]
 fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::FloatRow;
     let host = runtime();
@@ -1301,7 +1496,11 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<FloatRow>().unwrap(),
     )
 }
-#[ic_wire_endpoint::query(id = 47)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<47>",
+    decode_with = "crate::transport::decode::<_, 47>",
+    encode_with = "crate::transport::encode::<_, 47>"
+)]
 fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
     let value = ic_db::Float64::try_new(f64::from_bits(bits)).ok_or(1_u8)?;
     let host = runtime();
@@ -1312,7 +1511,11 @@ fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
-#[ic_wire_endpoint::query(id = 48)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<48>",
+    decode_with = "crate::transport::decode::<_, 48>",
+    encode_with = "crate::transport::encode::<_, 48>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1329,7 +1532,11 @@ fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account,
         subaccount,
     })
 }
-#[ic_wire_endpoint::update(id = 49)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<49>",
+    decode_with = "crate::transport::decode::<_, 49>",
+    encode_with = "crate::transport::encode::<_, 49>"
+)]
 fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     use schema::AccountRow;
     let host = runtime();
@@ -1356,7 +1563,11 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 50)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<50>",
+    decode_with = "crate::transport::decode::<_, 50>",
+    encode_with = "crate::transport::encode::<_, 50>"
+)]
 fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::AccountRow;
     let host = runtime();
@@ -1371,7 +1582,11 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<AccountRow>().unwrap(),
     )
 }
-#[ic_wire_endpoint::query(id = 51)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<51>",
+    decode_with = "crate::transport::decode::<_, 51>",
+    encode_with = "crate::transport::encode::<_, 51>"
+)]
 fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
     let value = admitted_account(value)?;
     let host = runtime();
@@ -1382,7 +1597,11 @@ fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
-#[ic_wire_endpoint::query(id = 52)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<52>",
+    decode_with = "crate::transport::decode::<_, 52>",
+    encode_with = "crate::transport::encode::<_, 52>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1392,7 +1611,11 @@ fn account_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
-#[ic_wire_endpoint::update(id = 53)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<53>",
+    decode_with = "crate::transport::decode::<_, 53>",
+    encode_with = "crate::transport::encode::<_, 53>"
+)]
 fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     use schema::UlidRow;
     let host = runtime();
@@ -1418,7 +1641,11 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
-#[ic_wire_endpoint::query(id = 54)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<54>",
+    decode_with = "crate::transport::decode::<_, 54>",
+    encode_with = "crate::transport::encode::<_, 54>"
+)]
 fn ulid_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::UlidRow;
     let host = runtime();
@@ -1432,7 +1659,11 @@ fn ulid_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<UlidRow>().unwrap(),
     )
 }
-#[ic_wire_endpoint::query(id = 55)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<55>",
+    decode_with = "crate::transport::decode::<_, 55>",
+    encode_with = "crate::transport::encode::<_, 55>"
+)]
 fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
     let host = runtime();
     open(&host)
@@ -1446,7 +1677,11 @@ fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
-#[ic_wire_endpoint::query(id = 56)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<56>",
+    decode_with = "crate::transport::decode::<_, 56>",
+    encode_with = "crate::transport::encode::<_, 56>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1455,7 +1690,11 @@ fn ulid_decodes(bytes: Vec<u8>) -> bool {
     schema::UlidRow::decode(&bytes).is_ok()
 }
 
-#[ic_wire_endpoint::query(id = 57)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<57>",
+    decode_with = "crate::transport::decode::<_, 57>",
+    encode_with = "crate::transport::encode::<_, 57>"
+)]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "transport requires an owned request"
@@ -1463,4 +1702,481 @@ fn ulid_decodes(bytes: Vec<u8>) -> bool {
 fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
     let value = text.parse::<ic_db::Ulid>().map_err(|_| 1_u8)?;
     Ok((value.to_string(), value.to_bytes()))
+}
+
+type DateInput = (u64, Option<i32>, i32);
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<58>",
+    decode_with = "crate::transport::decode::<_, 58>",
+    encode_with = "crate::transport::encode::<_, 58>"
+)]
+fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
+    use schema::DateRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, value) in rows {
+        let row = DateRow {
+            id,
+            maybe: match maybe {
+                Some(days) => Some(ic_db::Date::try_from_days_since_epoch(days).ok_or(1_u8)?),
+                None => None,
+            },
+            value: ic_db::Date::try_from_days_since_epoch(value).ok_or(1_u8)?,
+            zone: true,
+        };
+        if db.get::<DateRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after Date batch");
+    }
+    Ok(())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<59>",
+    decode_with = "crate::transport::decode::<_, 59>",
+    encode_with = "crate::transport::encode::<_, 59>"
+)]
+fn date_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::DateRow;
+    let host = runtime();
+    let db = open(&host);
+    (
+        db.index_prefix::<DateRow>("zone,value,id", &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.id, row.encode().unwrap()))
+            .collect(),
+        db.revision::<DateRow>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<60>",
+    decode_with = "crate::transport::decode::<_, 60>",
+    encode_with = "crate::transport::encode::<_, 60>"
+)]
+fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
+    let host = runtime();
+    Ok(open(&host)
+        .index_prefix::<schema::DateRow>(
+            "zone,value,id",
+            &[
+                true.into(),
+                ic_db::Date::try_from_days_since_epoch(value)
+                    .ok_or(1_u8)?
+                    .into(),
+            ],
+            32,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<61>",
+    decode_with = "crate::transport::decode::<_, 61>",
+    encode_with = "crate::transport::encode::<_, 61>"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn date_decodes(bytes: Vec<u8>) -> bool {
+    schema::DateRow::decode(&bytes).is_ok()
+}
+
+type TimeInput = (u64, Option<u64>, u64, Option<i64>, i64);
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<62>",
+    decode_with = "crate::transport::decode::<_, 62>",
+    encode_with = "crate::transport::encode::<_, 62>"
+)]
+fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
+    use schema::TimeRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, delay, duration, maybe, timestamp) in rows {
+        let row = TimeRow {
+            zone: true,
+            id,
+            delay: delay.map(ic_db::Duration::from_millis),
+            duration: ic_db::Duration::from_millis(duration),
+            maybe: maybe.map(ic_db::Timestamp::from_millis),
+            timestamp: ic_db::Timestamp::from_millis(timestamp),
+        };
+        if db.get::<TimeRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after time batch");
+    }
+    Ok(())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<63>",
+    decode_with = "crate::transport::decode::<_, 63>",
+    encode_with = "crate::transport::encode::<_, 63>"
+)]
+fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::TimeRow;
+    let host = runtime();
+    let db = open(&host);
+    let index = if duration {
+        "zone,duration,id"
+    } else {
+        "zone,timestamp,id"
+    };
+    (
+        db.index_prefix::<TimeRow>(index, &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.encode().unwrap()))
+            .collect(),
+        db.revision::<TimeRow>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<64>",
+    decode_with = "crate::transport::decode::<_, 64>",
+    encode_with = "crate::transport::encode::<_, 64>"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires owned request"
+)]
+fn time_decodes(bytes: Vec<u8>) -> bool {
+    schema::TimeRow::decode(&bytes).is_ok()
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<65>",
+    decode_with = "crate::transport::decode::<_, 65>",
+    encode_with = "crate::transport::encode::<_, 65>"
+)]
+fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> {
+    Ok((
+        ic_db::Duration::parse_flexible(&duration)
+            .map_err(|_| 1_u8)?
+            .as_millis(),
+        ic_db::Timestamp::parse_flexible(&timestamp)
+            .map_err(|_| 2_u8)?
+            .as_millis(),
+    ))
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<66>",
+    decode_with = "crate::transport::decode::<_, 66>",
+    encode_with = "crate::transport::encode::<_, 66>"
+)]
+fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64) {
+    let duration = ic_db::Duration::from_millis(duration);
+    (
+        ic_db::Timestamp::from_micros(micros).as_millis(),
+        ic_db::Timestamp::from_nanos(nanos).as_millis(),
+        (ic_db::Timestamp::MIN + duration).as_millis(),
+        (ic_db::Timestamp::MAX - duration).as_millis(),
+    )
+}
+
+// Strings are private transport inputs; the database receives exact Decimal values.
+type DecimalInput = (u64, Option<String>, String);
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<67>",
+    decode_with = "crate::transport::decode::<_, 67>",
+    encode_with = "crate::transport::encode::<_, 67>"
+)]
+fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
+    use schema::DecimalRow;
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, maybe, value) in rows {
+        let row = DecimalRow {
+            id,
+            maybe: maybe.map(|v| v.parse()).transpose().map_err(|_| 1_u8)?,
+            value: value.parse().map_err(|_| 1_u8)?,
+            zone: true,
+        };
+        if db.get::<DecimalRow>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after decimal batch");
+    }
+    Ok(())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<68>",
+    decode_with = "crate::transport::decode::<_, 68>",
+    encode_with = "crate::transport::encode::<_, 68>"
+)]
+fn decimal_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+    use schema::DecimalRow;
+    let host = runtime();
+    let db = open(&host);
+    (
+        db.index_prefix::<DecimalRow>("zone,value,id", &[true.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.encode().unwrap()))
+            .collect(),
+        db.revision::<DecimalRow>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<69>",
+    decode_with = "crate::transport::decode::<_, 69>",
+    encode_with = "crate::transport::encode::<_, 69>"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires owned request"
+)]
+fn decimal_decodes(bytes: Vec<u8>) -> bool {
+    schema::DecimalRow::decode(&bytes).is_ok()
+}
+
+type KeyInput = ([u8; 16], Option<u64>, u64);
+type NumberedInput = (u64, Option<[u8; 16]>);
+type KeyBatchInput = (
+    Vec<KeyInput>,
+    Vec<NumberedInput>,
+    Vec<[u8; 16]>,
+    Vec<u64>,
+    bool,
+);
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<70>",
+    decode_with = "crate::transport::decode::<_, 70>",
+    encode_with = "crate::transport::encode::<_, 70>"
+)]
+fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> Result<(), u8> {
+    use schema::{KeyRow, Numbered};
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, owner, value) in rows {
+        let row = KeyRow {
+            id: ic_db::Ulid::from_bytes(id),
+            owner,
+            value,
+        };
+        if db.get::<KeyRow>(row.id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    for (id, target) in links {
+        let row = Numbered {
+            id,
+            target: target.map(ic_db::Ulid::from_bytes),
+        };
+        if db.get::<Numbered>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    for id in deletes {
+        batch
+            .delete::<KeyRow>(ic_db::Ulid::from_bytes(id))
+            .map_err(|_| 1_u8)?;
+    }
+    for id in numbered_deletes {
+        batch.delete::<Numbered>(id).map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after ULID primary-key batch");
+    }
+    Ok(())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<71>",
+    decode_with = "crate::transport::decode::<_, 71>",
+    encode_with = "crate::transport::encode::<_, 71>"
+)]
+fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u8; 16]>, u64) {
+    use schema::KeyRow;
+    let host = runtime();
+    let db = open(&host);
+    let page = db
+        .page::<KeyRow>(after.map(ic_db::Ulid::from_bytes), usize::from(limit))
+        .unwrap();
+    (
+        page.rows
+            .into_iter()
+            .map(|r| (r.id.to_bytes(), r.owner, r.value))
+            .collect(),
+        page.next_after.map(ic_db::Ulid::to_bytes),
+        db.revision::<KeyRow>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<72>",
+    decode_with = "crate::transport::decode::<_, 72>",
+    encode_with = "crate::transport::encode::<_, 72>"
+)]
+fn key_lookup((id, value): ([u8; 16], u64)) -> (Option<KeyInput>, Vec<KeyInput>) {
+    use schema::KeyRow;
+    let host = runtime();
+    let db = open(&host);
+    let view = |r: KeyRow| (r.id.to_bytes(), r.owner, r.value);
+    (
+        db.get::<KeyRow>(ic_db::Ulid::from_bytes(id))
+            .unwrap()
+            .map(view),
+        db.index_prefix::<KeyRow>("value", &[value.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(view)
+            .collect(),
+    )
+}
+
+type SignedInput = (i128, Option<[u8; 32]>, u64);
+type WideInput = ([u8; 32], Option<i128>, u64);
+type IntegerKeyBatch = (
+    Vec<SignedInput>,
+    Vec<WideInput>,
+    Vec<i128>,
+    Vec<[u8; 32]>,
+    bool,
+);
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<73>",
+    decode_with = "crate::transport::decode::<_, 73>",
+    encode_with = "crate::transport::encode::<_, 73>"
+)]
+fn integer_key_batch(
+    (signed, wide, delete_signed, delete_wide, trap): IntegerKeyBatch,
+) -> Result<(), u8> {
+    use schema::{SignedKey, WideKey};
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for (id, peer, rank) in signed {
+        let row = SignedKey {
+            id,
+            peer: peer.map(ic_db::U256::from_be_bytes),
+            rank,
+        };
+        if db.get::<SignedKey>(id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    for (id, peer, rank) in wide {
+        let row = WideKey {
+            id: ic_db::U256::from_be_bytes(id),
+            peer,
+            rank,
+        };
+        if db.get::<WideKey>(row.id).map_err(|_| 1_u8)?.is_some() {
+            batch.replace(&row)
+        } else {
+            batch.insert(&row)
+        }
+        .map_err(|_| 1_u8)?;
+    }
+    for id in delete_signed {
+        batch.delete::<SignedKey>(id).map_err(|_| 1_u8)?;
+    }
+    for id in delete_wide {
+        batch
+            .delete::<WideKey>(ic_db::U256::from_be_bytes(id))
+            .map_err(|_| 1_u8)?;
+    }
+    db.commit(batch).map_err(|_| 2_u8)?;
+    if trap {
+        cdk::api::trap("after integer-key batch");
+    }
+    Ok(())
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<74>",
+    decode_with = "crate::transport::decode::<_, 74>",
+    encode_with = "crate::transport::encode::<_, 74>"
+)]
+fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Option<i128>, u64) {
+    use schema::SignedKey;
+    let host = runtime();
+    let db = open(&host);
+    let page = db.page::<SignedKey>(after, usize::from(limit)).unwrap();
+    (
+        page.rows
+            .into_iter()
+            .map(|r| (r.id, r.peer.map(ic_db::U256::to_be_bytes), r.rank))
+            .collect(),
+        page.next_after,
+        db.revision::<SignedKey>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<75>",
+    decode_with = "crate::transport::decode::<_, 75>",
+    encode_with = "crate::transport::encode::<_, 75>"
+)]
+fn wide_key_page(
+    (after, limit): (Option<[u8; 32]>, u8),
+) -> (Vec<WideInput>, Option<[u8; 32]>, u64) {
+    use schema::WideKey;
+    let host = runtime();
+    let db = open(&host);
+    let page = db
+        .page::<WideKey>(after.map(ic_db::U256::from_be_bytes), usize::from(limit))
+        .unwrap();
+    (
+        page.rows
+            .into_iter()
+            .map(|r| (r.id.to_be_bytes(), r.peer, r.rank))
+            .collect(),
+        page.next_after.map(ic_db::U256::to_be_bytes),
+        db.revision::<WideKey>().unwrap(),
+    )
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<76>",
+    decode_with = "crate::transport::decode::<_, 76>",
+    encode_with = "crate::transport::encode::<_, 76>"
+)]
+fn integer_key_lookup(rank: u64) -> (Vec<SignedInput>, Vec<WideInput>) {
+    use schema::{SignedKey, WideKey};
+    let host = runtime();
+    let db = open(&host);
+    (
+        db.index_prefix::<SignedKey>("rank", &[rank.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.peer.map(ic_db::U256::to_be_bytes), r.rank))
+            .collect(),
+        db.index_prefix::<WideKey>("rank", &[rank.into()], 32)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id.to_be_bytes(), r.peer, r.rank))
+            .collect(),
+    )
 }

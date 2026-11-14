@@ -5,6 +5,9 @@
 
 mod capacity;
 
+#[path = "../../transport.rs"]
+mod transport;
+
 use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
@@ -164,12 +167,20 @@ fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
     ]
 }
 
-#[ic_wire_endpoint::query(id = 1)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn inspect() -> Status {
     status(&runtime())
 }
 
-#[ic_wire_endpoint::query(id = 2)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn schema() -> (Status, String) {
     let description = if SCHEMA == 1 {
         "M0 SourceRow v1: id:u64 primary key; value:u64; IDs 1..6. No secondary indexes."
@@ -180,7 +191,11 @@ fn schema() -> (Status, String) {
 }
 
 // Three candidates maximum per page, including residual nonmatches; IDs are bounded.
-#[ic_wire_endpoint::query(id = 3)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<3>",
+    decode_with = "crate::transport::decode::<_, 3>",
+    encode_with = "crate::transport::encode::<_, 3>"
+)]
 fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
     if after > 6 || !(1..=3).contains(&limit) {
         return Err(5);
@@ -220,7 +235,11 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
 // start, copy, publish, cleanup, cancel, cancel-cleanup, source-write, damage-manifest.
 // Errors: missing manifest=1, incompatible schema=2, closed phase=3,
 // unsupported transformation=4, invalid bounds=5, unique/validation refusal=6.
-#[ic_wire_endpoint::update(id = 4)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<4>",
+    decode_with = "crate::transport::decode::<_, 4>",
+    encode_with = "crate::transport::encode::<_, 4>"
+)]
 fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Status, u8> {
     let host = runtime();
     let mut control = map(&host, 0);

@@ -59,6 +59,12 @@ identity issuance, business transactions, tenant routing and cross-canister
 coordination. The Canic adapter owns all product endpoint exports, guards,
 transport and lifecycle composition. IC DB supplies no endpoint generation or
 registration; its Rust library remains usable directly without mounting endpoints.
+Standalone applications can expose their own endpoints through Platform's generic
+guard/decode/encode hooks without Canic. The six qualification hosts demonstrate
+this with bounded Wire frames and no Wire Endpoint dependency. This does not add
+endpoint generation to database macros. `make m0-endpoints` qualifies raw admission
+refusals and reply-encoding traps, including persistence across an outgoing call
+and rollback of the later callback's writes.
 
 The target is a useful bounded embedded database, not PostgreSQL completeness,
 a distributed database, a general workflow engine or a memory-backend framework.
@@ -724,7 +730,7 @@ counting a selected field must separately define absent-value treatment.
 | Type family | Equality | Ordering / index keys | Grouping / DISTINCT | Aggregate inputs beyond count |
 | --- | --- | --- | --- | --- |
 | Signed/unsigned integers, including 128-bit and U256 | Exact within admitted numeric rules | Exact order; no conversion through float | Same equality as predicates/uniqueness | Sum, average, min/max; explicit accumulator/result range and overflow |
-| Decimal | Numeric equality; proposed `1.0 = 1.00` | Comparator and canonical key agree across equivalent scales | Same scale-insensitive equality | Sum, average, min/max; precision/rounding policy must be explicit |
+| Decimal | Numeric equality; `1.0 = 1.00` | Comparator and canonical key agree across equivalent scales | Same scale-insensitive equality | Sum, average, min/max; precision/rounding policy must be explicit |
 | Finite Float32/Float64 | Declared normalization, including signed zero | Versioned total order over the admitted finite domain | Same normalized equality | Sum, average, min/max; deterministic accumulation/rounding contract |
 | Bool, text, bytes | Exact base equality; text transforms are explicit | Declared comparator and bounded key bytes | Same equality and bounded retained key bytes | Min/max where ordered; no implicit numeric conversion |
 | ULID, principal, subaccount, account | Canonical identity equality | Explicit identity comparator/key contract | Same identity equality | Min/max where ordered |
@@ -1346,7 +1352,7 @@ chosen implementation in IC DB. IcyDB remains a separate working product until
 an explicit replacement decision; leaving it intact is not an excuse to support
 two engines behind a permanent adapter in the new product.
 
-### Next delivery: close M0, then typed schemas in M1
+### Persistent-record delivery and M1 gates
 
 Before implementing each subsystem, inspect IcyDB's relevant implementation,
 regression tests and explanatory history. Its accumulated work supplies solved
@@ -1469,6 +1475,10 @@ or a performance improvement until matched workloads qualify them here.
 | Finite Float32/Float64 | Exact finite IEEE values; both zero signs normalize to positive zero |
 | U256 | Exact unsigned 256-bit domain; 32-byte big-endian row/index payload |
 | Ulid | Exact 16-byte identity; canonical uppercase text; timestamp-prefix byte order |
+| Date | Proleptic Gregorian years 0000–9999; signed epoch days, including pre-1970 dates |
+| Timestamp | Full signed i64 Unix-millisecond domain; sub-millisecond conversion floors |
+| Duration | Full unsigned u64 millisecond domain; sub-millisecond conversion explicitly truncates |
+| Decimal | Exact i128 coefficient at a declared scale 0–28; no implicit rounding |
 | Nat/Int8/16/32/64/128 | Exact Rust integer domains; no narrowing or floating-point coercion |
 | Bool | Exact true/false values |
 | Principal | Canonical Platform Types identity; zero to 29 significant raw bytes |
@@ -1479,12 +1489,93 @@ or a performance improvement until matched workloads qualify them here.
 | Optional forms of these types | Absence remains distinct from empty, zero and false |
 
 Field validation runs before encoding and after decoding; whole-row bounds apply
-independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Ulid, finite Float32/Float64, Account/Subaccount, Principal,
+independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Ulid, Date,
+Timestamp, Duration, Decimal, finite Float32/Float64, Account/Subaccount, Principal,
 Bool and bounded Text components, including optional values; primary keys require
-non-optional Nat64, while references admit required or optional Nat64.
+non-optional signed/unsigned 8–128-bit integers, U256 or Ulid. Required/optional
+references match the target key type exactly.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, managed policies and fluent queries remain work;
 no retained capability or product attribute has been retired.
+
+Date fields use `value(item(prim="Date"))`, including optional/list forms and
+scalar set/map keys. `ic_db::Date` adapts frozen IcyDB `6d421e3`'s
+`icydb-schema/src/date/mod.rs` bounded March-cycle Gregorian conversion, strict
+`YYYY-MM-DD` parser, formatting and checked day arithmetic. Its valid epoch days
+are -719,528 through 2,932,896 (0000-01-01 through 9999-12-31). The owned scalar
+codec stores four little-endian signed bytes; keys use sign-biased big-endian
+bytes. Both row and key readers reject out-of-domain values, including unindexed
+fields examined during writes. Optional absence differs from epoch day zero.
+Tag 23 binds the type, without changing schemas that omit it. There is no calendar
+dependency, clock read, timezone conversion or transport codec. IcyDB's numeric
+conversion and Serde/Wire layers are omitted; its leap-century, strict parsing,
+range and overflow failure cases carry over. A separate month/day counter checks
+the complete supported calendar without repeating the March-cycle algorithm.
+Native/Wasm checks cover independent bytes/fingerprints, ordered indexes, collection
+duplicates, unique swaps/refusals, rollback and unchanged upgrade.
+
+Timestamp/Duration use `value(item(prim="Timestamp"))` and `prim="Duration"`,
+with optional values, lists and scalar collection keys. The public wrappers adapt
+IcyDB `6d421e3`'s `icydb-schema/src/time_atoms` and its database-owned scalar codec:
+signed i64 Unix milliseconds and unsigned u64 duration milliseconds occupy eight
+little-endian row bytes. Ordered keys use sign-biased big-endian timestamp bytes
+and ordinary big-endian duration bytes. Every bit pattern is valid in its own
+type; neither integer coercion nor Timestamp/Duration interchange is admitted.
+Tags 24/25 bind these meanings without changing schemas that omit them.
+
+Retain IcyDB's negative-time correction: sub-millisecond timestamps and whole
+timestamp seconds use Euclidean division, so -1 microsecond becomes -1 millisecond,
+not zero. Duration's sub-millisecond constructors explicitly truncate. Larger-unit
+constructors and Rust arithmetic operators preserve IcyDB's saturation contract;
+timestamp/duration arithmetic computes in i128 before clamping. Thus MIN timestamp
+plus MAX duration reaches MAX timestamp exactly. Timestamp subtraction returns a
+nonnegative duration, clamping earlier-minus-later to zero. These value operations
+do not define aggregate overflow/rounding, which remains separately specified.
+
+Preserve duration integer/suffix parsing with checked scaling and timestamp integer
+or strict RFC3339 parsing, including offsets and fractional flooring. Timestamp
+calendar parsing shares `Date::parse` rather than duplicating calendar admission.
+The timestamp numeric domain is wider than the parser's four-digit calendar;
+display uses integer milliseconds. Omit Serde/Wire, runtime clock access, timers
+and managed write policies. No dependency or durable state is added. Native/Wasm
+witnesses carry the relevant IcyDB flooring, offset, invalid-calendar, overflow and
+full-range arithmetic cases, and independently check bytes, schema identity,
+collection ordering, unique swaps/refusals, rollback and upgrade preservation.
+Automatic created/updated timestamps remain a later write-policy increment.
+
+Decimal fields use `value(item(prim="Decimal", scale=2))`; declared scale 0–28
+is required, including for list elements and scalar set/map keys. The maintainer
+explicitly retained this IcyDB constraint. `ic_db::Decimal` adapts frozen IcyDB
+`6d421e3`'s `icydb-schema/src/decimal` exact comparison and text parsing. Public
+values normalize fractional trailing zeros and zero at construction, making
+Eq/Ord/Hash agree without a runtime numeric conversion layer. Values retain the
+full i128 coefficient domain; comparison never passes through floating point.
+
+Adapt the database-owned `structural_field/typed.rs` codec: signed big-endian
+coefficient (16 bytes), followed by one scale byte. Encoding rescales exactly to
+the declared scale and refuses excess precision or coefficient overflow. Decode
+checks the stored scale against the declaration before normalization; numerically
+equivalent bytes with another scale are corruption, including unindexed fields
+examined during deletion. Tag 26 plus a little-endian u32 scale binds this rule
+into schema identity. Schemas without Decimal keep their identity.
+
+Retain IcyDB's `index/key/ordered/normalize.rs` bounded sign/exponent/digits
+algorithm (at most 45 bytes). It gives canonical, scale-independent numeric keys
+for `1.0 = 1.00` without changing the exact-operand boundary or specializing the
+executor by field scale. A smaller fixed-coefficient key would need the declared
+scale at every key construction boundary; this increment favors the established
+algorithm over that extra plumbing. Key integrity rejects redundant encodings,
+invalid exponents/digits and values outside the field's fixed-scale domain.
+
+Optional absence remains distinct from zero. Lists preserve repetition; sets/maps
+use canonical numeric equality and reject duplicate stored members before
+materialization. Native witnesses use independent I256 alignment, literal row/key
+bytes and a separately authored schema fingerprint. Wasm witnesses cover full
+coefficient bounds, precision refusal, equivalent-value no-ops/unique refusal,
+unique exchanges, whole-message rollback and unchanged upgrade. No dependency,
+durable metadata or job state is added. IcyDB's Serde/Wire, generalized numeric
+conversions and saturating/divide-by-zero arithmetic are not imported; Decimal
+aggregate precision, rounding and overflow remain a separate accepted contract.
 
 ULID fields use `value(item(prim="Ulid"))`, including optional/list forms and
 scalar set/map keys. `ic_db::Ulid` adapts IcyDB's schema-owned 16-byte atom and
@@ -1493,8 +1584,7 @@ this preserves IcyDB's rejection of lowercase/alias text and does not expose an
 automatic generator. Both row and ordered-key codecs store the exact 16 bytes,
 with the six-byte timestamp prefix first. All 128-bit patterns are valid; truncated
 or surplus payloads refuse. There is no coercion from Nat128 or Text. Tag 22 binds
-the new type; schemas without ULID retain their identities. Primary keys and
-references remain Nat64 for this increment.
+the new type; schemas without ULID retain their identities. Supplied ULID primary keys and references are now admitted as described below.
 
 The inspected frozen IcyDB `6d421e3` sources are `icydb-schema/src/atom/mod.rs`,
 the database-owned `persisted_row/codec/scalar` implementation, and
@@ -1587,7 +1677,7 @@ applying native-width integers' little-endian row convention. Ordered keys use
 the same fixed-width bytes; index operands must be U256, without implicit Nat128
 coercion. Lists, scalar sets and map keys/values preserve the full domain through
 the existing shared codec. Tag 17 binds this type into the compiled contract;
-contracts without U256 keep their identities. Primary keys/references remain Nat64.
+contracts without U256 keep their identities. Supplied U256 primary keys and exact references are now admitted.
 
 This adapts frozen IcyDB `6d421e3`'s
 `icydb-core/src/db/data/persisted_row/codec/scalar/{mod,tests}.rs` payload and
@@ -1687,8 +1777,8 @@ Narrow integers use their actual Rust types (`u8/u16/u32`, `i8/i16/i32`) and exa
 width/extrema regression cases. Unlike IcyDB's widened runtime value path, typed
 construction here already enforces representability; the database never truncates
 an i64/u64 into a smaller field. Optional values keep their separate presence tag.
-The new type tags preserve existing codec-v3 contracts. Narrow secondary indexes
-are now admitted; broader primary keys and query arithmetic remain separate work.
+The new type tags preserve existing codec-v3 contracts. Narrow secondary and primary keys
+are now admitted with exact references; query arithmetic remains separate work.
 
 Blob fields use `value(item(prim="Blob", max_bytes=1024))`, optionally with
 `opt`. They expose `ic_db::Blob`, an alias for `Vec<u8>` encoded directly by the
@@ -1701,8 +1791,7 @@ The frozen IcyDB
 informed empty/zero-bound/over-limit cases; its
 [blob framing regression](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/value/hash/tests.rs)
 also motivates explicit boundaries. These cases are requalified here with native
-and Wasm codecs; no IcyDB value engine is copied. Blob indexes, predicates and
-nested containers remain separate work.
+and Wasm codecs; no IcyDB value engine is copied. Blob indexes and predicates remain separate work.
 
 Typed reads decode once, then verify the physical key/index against that value.
 Batch construction encodes once and extracts keys directly from the admitted typed
@@ -1731,15 +1820,44 @@ contract. The CLI uses
 compiled metadata and `ic-host-text` tables, with storage identities in `db status`;
 terminal rendering and test endpoints stay outside the product crates.
 
-Required or optional Nat64 fields accept `references(entity = "Entry")` alongside
-their `value(...)` declaration. The target must be in the admitted schema; the
+Supplied primary keys use `Entity::Key` (signed/unsigned 8–128-bit integers, U256
+or Ulid); `get`, `delete` and entity-page continuation retain that exact Rust type.
+The sealed typed boundary converts to a small concrete key enum for shared
+batch/reference execution. A local macro emits only identical typed conversions; it
+adds neither a per-entity executor nor a general runtime value representation.
+The compiled primary field selects exact-width row keys, index owner values and
+nonunique index suffixes. Primary and secondary key encoding share the existing
+ordered scalar encoder: signed integers bias the sign bit, unsigned integers use
+big-endian bytes, and ULIDs retain their exact atom bytes. Payload widths are
+1/2/4/8/16/32 bytes. Nat64/ULID bytes and admitted schema identities are unchanged;
+new primary-key types were previously refused and cannot reopen another key type’s
+data. No width or signedness conversion is implicit in arguments or references.
+
+This retains IcyDB `6d421e3`'s entity-aware key validation and the corruption
+regressions in `db/data/key/tests.rs` and `db/commit/prepare/tests/mod.rs`:
+truncated/trailing keys, wrong row identity and inconsistent index ownership refuse
+before mutation. Its broader structural/composite key taxonomy and raw-key caches
+are not imported for these bounded fixed-width types. IcyDB’s structural primary-key
+integer decoders enforce declared ranges before returning Int64/Nat64 components;
+IC DB retains each exact field width instead of adding that normalization layer.
+Native vectors cover every integer width, signed extrema and U256’s high half,
+with exact row/index owner framing and malformed-owner refusal. Native/Wasm
+witnesses cover ULID’s 64/80-bit boundaries, signed/unsigned zero and MAX, typed
+pages ending at MAX, unique swaps, mixed-key cycles and unchanged upgrade/rollback.
+No schema attribute is removed or added. Other identity/composite primary keys,
+nested references and generated identities remain work.
+
+Required or optional supported integer/Ulid fields accept `references(entity = "Entry")` alongside
+their `value(...)` declaration. The target must be in the admitted schema and its
+primary-key type must match exactly; the
 selected ordinary index belongs to the dependent entity and must lead with this
 field. Target existence and restricted deletion are validated against prepared
 final rows and index changes. Parents and dependents may be inserted together in
 either order; explicit dependent deletion/repointing may accompany parent deletion.
 Cycles and self references are valid when their final targets exist. No recursive
 cascade or implicit requirement that a parent have children is introduced.
-Optional absence has no target; `Some(0)` still references the ordinary key zero.
+Optional absence has no target; present zero still references the ordinary typed
+integer zero or all-zero ULID.
 An optional reference must use an unfiltered reverse index, just like a required
 reference. Its presence byte is part of the existing component encoding; reverse
 checks use the present-target prefix and never interpret absent entries as edges.
@@ -1797,7 +1915,8 @@ before row decoding, including those already using row codec 3. No implicit
 migration or historical fallback decoder is provided; data is not recreated.
 Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`, Blob=`7`;
 Nat8/16/32=`8/9/10`, Int8/16/32=`11/12/13`, Principal=`14`, U256=`17`,
-Float32/Float64=`18/19`, Subaccount/Account=`20/21`, and Ulid=`22`.
+Float32/Float64=`18/19`, Subaccount/Account=`20/21`, Ulid=`22`, Date=`23`,
+Timestamp=`24`, Duration=`25`, and Decimal=`26` (followed by its u32 scale).
 Lists use tag `16`, followed by four little-endian u32 bounds (declared maximum
 items, row depth 32, structured values 256, total collection items 256), then the item
 type tag and payload. The item is required and has no reference flag. Including
@@ -1841,7 +1960,8 @@ this contract deliberately, rather than silently changing derived names.
 
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
 Revision/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
-the big-endian Nat64 primary key. Index keys add the generated index handle and declared components.
+the exact ordered primary-key bytes (declared-width integer or 16-byte ULID). Index keys
+add the generated index handle and declared components.
 Integers occupy their exact width in big-endian order, with signed values' leading
 sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
 Bool occupies one strict 0/1 byte; Text escapes zero as `00 FF` and ends with
@@ -1851,7 +1971,7 @@ terminator bytes per index, excluding namespace/primary-key bytes. A lookup
 with four maximum-bound optional Text operands encodes at most 32,780 component bytes;
 individual field bounds are checked before each operand is encoded. These
 structural caps are not a claim that every maximal index fan-out fits one IC
-message; that qualification remains part of M1. Nonunique indexes append the primary key. Index values are the big-endian primary
+message; that qualification remains part of M1. Nonunique indexes append the primary key. Index values are the exact encoded primary
 key; revisions are little-endian `u64`. Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
@@ -2120,32 +2240,39 @@ The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
 With named records, payload enums, lists, sets, maps, U256, finite floats,
-Account/Subaccount and ULID, the current scalar host is 197,467 Wasm bytes and
-177,290 code-section bytes. Hit/miss cost 487,429/492,905 instructions; listing
-costs 777,601. Complete read/modify/replace costs 839,355 instructions and
-7,853,352 cycles. Relative to the preceding Account run this is +713/+702 bytes,
-+551/+587 lookup instructions (about 0.12%), -5,401 listing instructions and
--38 read/modify/replace instructions with +2 cycles. The graph also advances
-Runtime/macros/guard 0.22.3 to 0.22.4 and Testkit 0.104.1 to 0.105.0, so these
-deltas are combined-change evidence, not isolated ULID implementation costs.
+Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID
+primary keys, the current scalar host is 208,996 Wasm bytes and 188,913 code-section
+bytes. Hit/miss cost 488,157/493,646 instructions; listing costs 784,141. Complete
+read/modify/replace costs 842,942 instructions and 7,856,726 cycles.
+
+Both hosts now use direct Platform guard/decode/encode hooks with the same bounded
+Wire transport. Relative to the preceding Wire Endpoint run, IC DB loses
+1,115 total/728 code bytes; hit/miss and read/modify/replace each lose 51 measured
+instructions, while listing adds 28. Frozen IcyDB loses 1,179 total/770 code bytes;
+its hit/miss add 68 instructions each, listing adds 823 and complete
+read/modify/replace adds 1,865. These small code-generation and transport effects
+are harness migration costs, not database optimizations. Both runs use
+Runtime/macros/guard 0.22.4, Types 0.20.4 and Testkit 0.105.0; the native Testkit
+edge selects Platform 0.33.3. No supplier version was refreshed by this migration.
 Common-path performance acceptance remains an explicit M1 decision.
 
-Both hosts were rebuilt with the current qualification lockfile. Frozen IcyDB
-now measures 3,085,457 Wasm bytes and 2,976,850 code-section bytes, hit/miss
-1,098,690/1,072,853 instructions, and listing 3,082,943. Its complete
-read/modify/replace includes 2,932,293 operation plus 4,089,425 settling
-instructions (7,021,718 total), and 10,026,753 plus 11,169,285 cycles
-(21,196,038 total). Every measured IC DB scalar operation remains below the
-matched ceiling. This measures shared-code overhead on the existing scalar
-workload, not ULID-heavy queries, nested/collection workloads or full fluent
-parity. The normal product graph has no constructor or Wire dependency; ethnum
-and ulid have no enabled features. ULID adds the value/text dependency and its
-declared Wasm web-time graph, without reachable browser imports or RNG. Evidence records
-source diffs, features and exact results under records-comparison; the preceding
-run is retained locally under records-comparison-before-ulids. Earlier
-increment details remain in Git history. Current artifact SHA-256 values:
-IC DB `37d6e2652c783d382e74cdc42d8abeb104f7aa6b581661e0d83ef240aceeed2b`;
-IcyDB `41a59e02e5ee4698700ee9fed8cfe001a370cf0eb5c9920073d0ff776396c7dc`.
+Frozen IcyDB now measures 3,084,278 Wasm bytes and 2,976,080 code-section bytes,
+hit/miss 1,098,758/1,072,921 instructions, and listing 3,083,766. Its complete
+read/modify/replace includes 2,933,391 operation plus 4,090,192 settling
+instructions (7,023,583 total), and 10,027,739 plus 11,169,983 cycles
+(21,197,722 total). Every measured IC DB scalar operation remains below the
+matched ceiling. Physical allocation is unchanged for both hosts. This measures
+shared-code overhead on the existing scalar workload, not wider-integer/ULID-primary
+workloads, Decimal-heavy queries, time parsing/arithmetic, nested/collection
+workloads or full fluent parity. The normal product graph has no constructor or
+Wire dependency; ethnum and ulid have no enabled features. ULID adds the value/text
+dependency and its declared Wasm web-time graph, without reachable browser imports
+or RNG. Evidence records source diffs, features and exact results under
+records-comparison; the preceding run is retained locally under
+records-comparison-before-endpoint-hooks. Earlier increment details remain with
+their evidence. Current artifact SHA-256 values:
+IC DB `34a7c7148c6f7d39acebcf49c53e6af19bc8e1f6ad7de0f5b38617b987ed043a`;
+IcyDB `8955e6302c3ae181303fe7818949223516f7d5e9fe4bcbb429988d071b4d4201`.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,
@@ -2285,12 +2412,13 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The product scaffold selects only published Toko Tooling 0.43.0. Qualification
-selects published IC Storage 0.74.0, Testkit 0.104.0 (PocketIC 16.1.0), Platform
-Runtime 0.22.2, Wire 0.22.1 and Wire Endpoint 0.13.1, with exact resolution in its
-own lockfile. Versions were checked at selection; these are probe inputs, not a
-product compatibility promise. No first-party implementation has been copied
-from IcyDB or Canic.
+The current tooling baseline is Toko Tooling 0.43.1. Qualification selects
+IC Storage 0.74.1, Testkit 0.105.0 (PocketIC 16.1.0), Platform Runtime 0.22.4
+and Wire 0.22.1, with exact resolution in its own lockfile. Wire Endpoint and its
+macro package have been removed in favor of Platform's generic hooks. Versions
+are probe inputs, not a product compatibility promise. Earlier M0 runs used the
+versions recorded with their evidence; product codec carryover from IcyDB is
+identified in the corresponding implementation sections above.
 
 ### M0 evidence so far (updated 2026-11-14)
 

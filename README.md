@@ -23,20 +23,22 @@ delivery require an explicit decision to resume. Existing work and data are reta
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
 `crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
 exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers,
-U256, Ulid, finite floats, Bool, Principal, Account/Subaccount and bounded Text/Blob with optional
+U256, Ulid, Date, Timestamp, Duration, Decimal, finite floats, Bool, Principal,
+Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
-batches with required/optional Nat64 references and indexed restricted deletion. This is
+batches with required/optional integer or Ulid references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.
 Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Secondary indexes now
-support Nat/Int8/16/32/64/128, U256, Ulid, finite Float32/Float64, Account/Subaccount,
+support Nat/Int8/16/32/64/128, U256, Ulid, Date, Timestamp, Duration, Decimal,
+finite Float32/Float64, Account/Subaccount,
 Principal, Bool and bounded Text fields, including
 optional values, compound keys and uniqueness. Optional unique indexes explicitly
-require `present_only`; ordinary indexes retain absent values. Primary keys and
-references still require Nat64.
+require `present_only`; ordinary indexes retain absent values. Primary keys support supplied signed/unsigned 8–128-bit integers, U256 and Ulid;
+references must match the target’s exact key type.
 An optional reference's `None` has no target; `Some(id)` requires a surviving
 target. Unlinking the last dependant and deleting its target can share one batch.
 Schemas no longer require numeric entity or index IDs. Entity names default to
@@ -75,7 +77,7 @@ collection budget, and their nested contents consume the same budget. Inspect
 `value(item(prim = "U256"))` uses `ic_db::U256` (ethnum), with exact 32-byte
 big-endian storage and secondary-index keys. Optional values and collection
 elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`;
-aggregate arithmetic and wider primary keys remain separate work.
+aggregate arithmetic remains separate work.
 `prim = "Float32"` / `prim = "Float64"` use finite `ic_db::Float32` /
 `ic_db::Float64` wrappers. Construct with `try_new(value)`; NaN/infinities refuse,
 while either signed zero becomes positive zero. Row bytes, ordering, uniqueness
@@ -90,8 +92,33 @@ Inspect `AccountRow` with `db schema`; the Info column shows byte widths.
 `prim = "Ulid"` uses `ic_db::Ulid`, with exact 16-byte storage and ordered keys.
 Construct supplied values with `Ulid::from_bytes`, `Ulid::from_u128`, or parse
 canonical uppercase 26-character text. `db schema` shows `UlidRow`. Automatic
-generation and ULID primary keys remain separate work; this value does not read
+generation remains separate work; this value does not read
 a clock or acquire entropy. The `ulid` dependency's default RNG feature is disabled.
+Declare `pk(field = "id")` with `id` of `prim = "Ulid"` to use ULID primary keys.
+`get`, `delete` and `page` then accept ULIDs, including typed continuation keys.
+Inspect `KeyRow` and its mixed-key references with `db schema`.
+Integer primary keys use the same `pk(field = "id")` declaration. Lookups, deletes
+and page cursors use the exact Rust field type; references do not implicitly
+widen or change signedness. `SignedKey` and `WideKey` demonstrate Int128/U256
+primary keys and mutual references. Composite primary keys remain separate work.
+`prim = "Date"` uses `ic_db::Date`, a Gregorian day from `0000-01-01` through
+`9999-12-31`. Use `Date::try_new(year, month, day)`, `Date::parse("2024-02-29")`
+or checked epoch-day construction. Four-byte storage and signed ordered keys
+preserve dates before 1970. Inspect `DateRow` with `db schema`.
+`prim = "Timestamp"` and `prim = "Duration"` use `ic_db::Timestamp` and
+`ic_db::Duration`. Both store exact eight-byte millisecond values: signed Unix
+milliseconds for timestamps, nonnegative milliseconds for durations. Use
+`from_millis` for exact values or their explicit unit/text constructors.
+Timestamp sub-millisecond conversion floors before 1970; duration sub-millisecond
+conversion explicitly truncates. Value arithmetic saturates at the type boundary;
+text parsing refuses overflow. Inspect `TimeRow` with `db schema`. Managed time
+policies and aggregate arithmetic remain separate work.
+`value(item(prim = "Decimal", scale = 2))` stores exact decimal values at the
+declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
+`Decimal::try_new(mantissa, scale)`. Equivalent values such as 1.0 and 1.00 have
+the same equality, hash and index key. Writes refuse excess precision or
+coefficient overflow; they never round. Inspect `DecimalRow` with `db schema`.
+Decimal aggregate arithmetic remains separate work.
 Enum/nested/collection indexes, nested references and non-scalar keys/set elements remain work.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity

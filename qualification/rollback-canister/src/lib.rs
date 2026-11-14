@@ -4,7 +4,11 @@
 //! Wire exports are test controls, not product endpoints or a Canic replacement.
 
 mod batch;
+mod entrypoints;
 mod reads;
+
+#[path = "../../transport.rs"]
+mod transport;
 
 use ic_platform_runtime::cdk;
 use ic_storage::{
@@ -54,7 +58,11 @@ fn fail_at(selected: u8, boundary: u8) {
 
 // Mode 6 intentionally violates the candidate contract: it returns Err after a row write.
 // This negative control proves that an application error is not a rollback instruction.
-#[ic_wire_endpoint::update(id = 1)]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<1>",
+    decode_with = "crate::transport::decode::<_, 1>",
+    encode_with = "crate::transport::encode::<_, 1>"
+)]
 fn mutate((mode, id, principal): (u8, u64, u64)) -> Result<(), u8> {
     let host = runtime();
     let rows = open(&host, NAMES[0]);
@@ -87,7 +95,11 @@ fn mutate((mode, id, principal): (u8, u64, u64)) -> Result<(), u8> {
     Ok(())
 }
 
-#[ic_wire_endpoint::query(id = 2)]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<2>",
+    decode_with = "crate::transport::decode::<_, 2>",
+    encode_with = "crate::transport::encode::<_, 2>"
+)]
 fn inspect() -> Snapshot {
     let host = runtime();
     let entries = |name| {
