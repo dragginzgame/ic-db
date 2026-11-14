@@ -9,6 +9,12 @@ use std::collections::BTreeSet;
 pub enum FieldType {
     /// Exact unsigned 64-bit integer.
     Nat64,
+    /// Exact signed 64-bit integer, without unsigned or floating-point coercion.
+    Int64,
+    /// Exact unsigned 128-bit integer, without narrowing or floating-point coercion.
+    Nat128,
+    /// Exact signed 128-bit integer, without narrowing or floating-point coercion.
+    Int128,
     /// Boolean, without numeric coercion.
     Bool,
     /// Exact UTF-8 text, bounded in bytes without implicit normalization.
@@ -27,6 +33,17 @@ pub struct FieldSchema {
     pub value: FieldType,
     /// Whether absence is a stored value, distinct from empty/zero/false.
     pub optional: bool,
+    /// Required target existence and restricted deletion through a declared index.
+    pub reference: Option<ReferenceSchema>,
+}
+
+/// A required Nat64 reference using an ordinary reverse-lookup index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReferenceSchema {
+    /// Target entity identity; its primary key must be a required Nat64.
+    pub entity: u32,
+    /// Index on this entity whose first component is the referencing field.
+    pub index: u32,
 }
 
 /// A compiled index over ordered Nat64 field components.
@@ -102,6 +119,9 @@ impl Schema {
                 name(&mut bytes, field.name)?;
                 let tag = match field.value {
                     FieldType::Nat64 => 1,
+                    FieldType::Int64 => 4,
+                    FieldType::Nat128 => 5,
+                    FieldType::Int128 => 6,
                     FieldType::Bool => 2,
                     FieldType::Text { max_bytes } => {
                         if !(1..=4096).contains(&max_bytes) {
@@ -110,9 +130,25 @@ impl Schema {
                         3
                     }
                 };
-                bytes.push(tag | if field.optional { 0x80 } else { 0 });
+                bytes.push(
+                    tag | if field.optional { 0x80 } else { 0 }
+                        | if field.reference.is_some() { 0x40 } else { 0 },
+                );
                 if let FieldType::Text { max_bytes } = field.value {
                     bytes.extend(max_bytes.to_le_bytes());
+                }
+                if let Some(reference) = field.reference {
+                    if field.optional
+                        || field.value != FieldType::Nat64
+                        || !entities.iter().any(|target| target.id == reference.entity)
+                        || !entity.indexes.iter().any(|index| {
+                            index.id == reference.index && index.fields.first() == Some(&field.name)
+                        })
+                    {
+                        return Err(Error::InvalidSchema);
+                    }
+                    bytes.extend(reference.entity.to_le_bytes());
+                    bytes.extend(reference.index.to_le_bytes());
                 }
             }
             name(&mut bytes, entity.primary_key)?;

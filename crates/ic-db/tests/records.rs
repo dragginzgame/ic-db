@@ -56,6 +56,55 @@ struct Document {}
 )]
 struct WideText {}
 
+#[entity(
+    id = 20,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "delta", value(item(prim = "Int64"))),
+        field(name = "previous", value(opt, item(prim = "Int64")))
+    )
+)]
+struct SignedRow {}
+
+#[entity(
+    id = 21,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "signed", value(item(prim = "Int128"))),
+        field(name = "unsigned", value(item(prim = "Nat128"))),
+        field(name = "optional_signed", value(opt, item(prim = "Int128"))),
+        field(name = "optional_unsigned", value(opt, item(prim = "Nat128")))
+    )
+)]
+struct WideRow {}
+
+#[entity(
+    id = 10,
+    pk(field = "id"),
+    fields(field(name = "id", value(item(prim = "Nat64"))))
+)]
+struct Parent {}
+#[entity(id=11, pk(field="id"), index(id=1,fields=["parent_id","id"]), fields(
+    field(name="id",value(item(prim="Nat64"))),
+    field(name="parent_id",value(item(prim="Nat64")),references(entity=10,index=1))))]
+struct Child {}
+#[entity(
+    id = 12,
+    pk(field = "id"),
+    index(id = 1, field = "next"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "next",
+            value(item(prim = "Nat64")),
+            references(entity = 12, index = 1)
+        )
+    )
+)]
+struct Node {}
+
 fn schema() -> Schema {
     Schema::new(&[TokenRow::SCHEMA, Entry::SCHEMA]).unwrap()
 }
@@ -106,6 +155,231 @@ fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
         ["amount", "category", "id"]
     );
     assert_eq!(Entry::SCHEMA.indexes[0].fields, ["category", "id"]);
+}
+
+#[test]
+fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
+    let row = SignedRow {
+        id: 7,
+        delta: -1,
+        previous: Some(0),
+    };
+    // Independent Wire vectors: canonical delta/id/previous tuple, zigzag i64
+    // followed by unsigned LEB128; optional presence is a separate 0/1 byte.
+    assert_eq!(row.encode().unwrap(), [1, 7, 1, 0]);
+    let mut minimum = vec![0xff; 9];
+    minimum.extend([1, 7, 0]);
+    let min_row = SignedRow {
+        id: 7,
+        delta: i64::MIN,
+        previous: None,
+    };
+    assert_eq!(min_row.encode().unwrap(), minimum);
+    assert_eq!(SignedRow::decode(&minimum).unwrap(), min_row);
+    let mut maximum = vec![0xfe];
+    maximum.extend([0xff; 8]);
+    maximum.extend([1, 7, 0]);
+    let max_row = SignedRow {
+        id: 7,
+        delta: i64::MAX,
+        previous: None,
+    };
+    assert_eq!(max_row.encode().unwrap(), maximum);
+    assert_eq!(SignedRow::decode(&maximum).unwrap(), max_row);
+    minimum[9] = 2; // payload exceeds 64 bits
+    assert!(matches!(SignedRow::decode(&minimum), Err(Error::Corrupt)));
+    assert!(matches!(SignedRow::decode(&[1, 7, 2]), Err(Error::Corrupt)));
+    assert!(matches!(SignedRow::decode(&[0x80]), Err(Error::Corrupt)));
+
+    let contract = || Schema::new(&[SignedRow::SCHEMA]).unwrap();
+    // Independent Perl pack(V/C) and OpenSSL schema vector.
+    assert_eq!(
+        contract()
+            .fingerprint()
+            .map(|b| format!("{b:02x}"))
+            .concat(),
+        "d9710d2d315461b90416054bd54e3dae42a7380a9fac53b23a0556d270bbbb78"
+    );
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [5; 16]).unwrap();
+    let values = [i64::MIN, -65, -64, -1, 0, 1, 63, 64, i64::MAX];
+    let rows: Vec<_> = values
+        .into_iter()
+        .enumerate()
+        .map(|(id, delta)| SignedRow {
+            id: id as u64,
+            delta,
+            previous: if id % 2 == 0 { Some(delta) } else { None },
+        })
+        .collect();
+    let mut batch = Batch::new();
+    for row in &rows {
+        batch.insert(row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(db.page::<SignedRow>(None, 32).unwrap().rows, rows);
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.replace(&rows[0]).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(*backing.borrow(), before);
+    drop(db);
+    drop(runtime);
+    let runtime = host(backing.clone());
+    let mut fields = SignedRow::SCHEMA.fields.to_vec();
+    fields[0].value = ic_db::FieldType::Nat64;
+    // Metadata-only incompatible executable; opening must refuse before decoding.
+    let unsigned = Box::leak(Box::new(ic_db::EntitySchema {
+        fields: Box::leak(fields.into_boxed_slice()),
+        ..*SignedRow::SCHEMA
+    }));
+    assert!(matches!(
+        Database::open(
+            runtime.open_memory(&key).unwrap(),
+            Schema::new(&[unsigned]).unwrap()
+        ),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(db.page::<SignedRow>(None, 32).unwrap().rows, rows);
+    let changed = SignedRow {
+        id: 0,
+        delta: i64::MAX,
+        previous: Some(i64::MIN),
+    };
+    let mut batch = Batch::new();
+    batch.replace(&changed).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.get::<SignedRow>(0).unwrap(), Some(changed));
+    assert_eq!(db.revision(20).unwrap(), 2);
+}
+
+#[test]
+fn wide_integers_preserve_all_bits_and_reject_overflowing_encodings() {
+    let minimum = WideRow {
+        id: 7,
+        signed: i128::MIN,
+        unsigned: u128::MAX,
+        optional_signed: None,
+        optional_unsigned: None,
+    };
+    // Independent literal unsigned LEB128 (19 bytes at 128 bits), with signed
+    // zigzag mapping: i128::MIN maps to u128::MAX. Canonical field-name order.
+    let mut bytes = vec![7, 0, 0];
+    bytes.extend([0xff; 18]);
+    bytes.push(3);
+    bytes.extend([0xff; 18]);
+    bytes.push(3);
+    assert_eq!(minimum.encode().unwrap(), bytes);
+    assert_eq!(WideRow::decode(&bytes).unwrap(), minimum);
+    let mut maximum = minimum;
+    maximum.signed = i128::MAX;
+    bytes[3] = 0xfe;
+    assert_eq!(maximum.encode().unwrap(), bytes);
+    assert_eq!(WideRow::decode(&bytes).unwrap(), maximum);
+    for position in [21, 40] {
+        let mut malformed = bytes.clone();
+        malformed[position] = 4; // would require 129 bits
+        assert!(matches!(WideRow::decode(&malformed), Err(Error::Corrupt)));
+    }
+    assert!(matches!(WideRow::decode(&bytes[..40]), Err(Error::Corrupt)));
+    let zero = WideRow {
+        id: 7,
+        signed: 0,
+        unsigned: 0,
+        optional_signed: Some(0),
+        optional_unsigned: Some(0),
+    };
+    assert_eq!(zero.encode().unwrap(), [7, 1, 0, 1, 0, 0, 0]);
+    let absent = WideRow {
+        optional_signed: None,
+        optional_unsigned: None,
+        ..zero
+    };
+    assert_eq!(absent.encode().unwrap(), [7, 0, 0, 0, 0]);
+    assert_ne!(zero, absent);
+
+    let contract = || Schema::new(&[WideRow::SCHEMA]).unwrap();
+    // Independent Perl pack(V/C) + OpenSSL contract vector.
+    assert_eq!(
+        contract()
+            .fingerprint()
+            .map(|b| format!("{b:02x}"))
+            .concat(),
+        "4295cb7f6bdd45ea72700f93d6b31f40683af7ac0c9064e2916dd607f9a479a5"
+    );
+    let values = [
+        (i128::MIN, u128::MAX),
+        (i128::MAX, 1_u128 << 127),
+        (-(1_i128 << 100) - 1, (1_u128 << 100) + 1),
+        (i128::from(i64::MIN) - 1, u128::from(u64::MAX) + 1),
+        (i128::from(i64::MAX) + 1, u128::from(u64::MAX)),
+        (-1, 1),
+        (0, 0),
+        (1, 127),
+    ];
+    let rows: Vec<_> = values
+        .into_iter()
+        .enumerate()
+        .map(|(id, (signed, unsigned))| WideRow {
+            id: id as u64,
+            signed,
+            unsigned,
+            optional_signed: Some(signed),
+            optional_unsigned: Some(unsigned),
+        })
+        .collect();
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [6; 16]).unwrap();
+    let mut batch = Batch::new();
+    for row in &rows {
+        batch.insert(row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(db.page::<WideRow>(None, 32).unwrap().rows, rows);
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.replace(&rows[0]).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(*backing.borrow(), before);
+    drop(db);
+    drop(runtime);
+    let runtime = host(backing.clone());
+    for replacement in [ic_db::FieldType::Int64, ic_db::FieldType::Nat128] {
+        let mut fields = WideRow::SCHEMA.fields.to_vec();
+        fields[3].value = replacement;
+        let altered = Box::leak(Box::new(ic_db::EntitySchema {
+            fields: Box::leak(fields.into_boxed_slice()),
+            ..*WideRow::SCHEMA
+        }));
+        assert!(matches!(
+            Database::open(
+                runtime.open_memory(&key).unwrap(),
+                Schema::new(&[altered]).unwrap()
+            ),
+            Err(Error::IncompatibleSchema)
+        ));
+        assert_eq!(*backing.borrow(), before);
+    }
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(db.page::<WideRow>(None, 32).unwrap().rows, rows);
+    let changed = WideRow {
+        id: 0,
+        signed: i128::MAX,
+        unsigned: 1_u128 << 100,
+        optional_signed: None,
+        optional_unsigned: None,
+    };
+    let mut batch = Batch::new();
+    batch.replace(&changed).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.get::<WideRow>(0).unwrap(), Some(changed));
+    assert_eq!(db.revision(21).unwrap(), 2);
 }
 
 #[test]
@@ -382,4 +656,151 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         Err(Error::Corrupt)
     ));
     assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn references_use_final_batch_state_and_restricted_indexed_deletion() {
+    use ic_db::EntitySchema;
+    // Independent Perl pack(V/C) + OpenSSL vector, including the reference tag,
+    // target identity and reverse-index identity. Existing scalar vectors stay fixed.
+    assert_eq!(
+        Schema::new(&[Parent::SCHEMA, Child::SCHEMA])
+            .unwrap()
+            .fingerprint()
+            .map(|b| format!("{b:02x}"))
+            .concat(),
+        "e7d4d90bdd9875157123c064930a6af8012d9a3b8e8fdcd4e08e0a75dd41a2ef"
+    );
+    assert!(matches!(
+        Schema::new(&[Child::SCHEMA]),
+        Err(Error::InvalidSchema)
+    ));
+    let contract = || Schema::new(&[Parent::SCHEMA, Child::SCHEMA, Node::SCHEMA]).unwrap();
+    for target in [None, Some(12)] {
+        let mut fields = Child::SCHEMA.fields.to_vec();
+        fields[1].reference = target.map(|entity| ic_db::ReferenceSchema { entity, index: 1 });
+        // Metadata-only sensitivity control; never persist through a mismatched codec.
+        let altered = Box::leak(Box::new(EntitySchema {
+            fields: Box::leak(fields.into_boxed_slice()),
+            ..*Child::SCHEMA
+        }));
+        assert_ne!(
+            Schema::new(&[Parent::SCHEMA, altered, Node::SCHEMA])
+                .unwrap()
+                .fingerprint(),
+            contract().fingerprint()
+        );
+    }
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [4; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Child {
+            id: 1,
+            parent_id: 1,
+        })
+        .unwrap(); // dependent before parent
+    batch.insert(&Parent { id: 1 }).unwrap();
+    batch.insert(&Parent { id: 2 }).unwrap();
+    batch
+        .insert(&Child {
+            id: 2,
+            parent_id: 1,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Child {
+            id: 3,
+            parent_id: 99,
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    // Removing just one dependent still leaves a survivor; no partial delete.
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(1).unwrap();
+    batch.delete::<Child>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(1).unwrap();
+    batch
+        .replace(&Child {
+            id: 1,
+            parent_id: 2,
+        })
+        .unwrap();
+    batch.delete::<Child>(2).unwrap();
+    db.commit(batch).unwrap();
+    assert!(db.get::<Parent>(1).unwrap().is_none());
+    assert!(db.index_prefix::<Child>(1, &[1], 32).unwrap().is_empty());
+    assert_eq!(
+        db.index_prefix::<Child>(1, &[2], 32).unwrap(),
+        vec![Child {
+            id: 1,
+            parent_id: 2
+        }]
+    );
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(2).unwrap();
+    batch
+        .insert(&Child {
+            id: 3,
+            parent_id: 2,
+        })
+        .unwrap();
+    batch.delete::<Child>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(*backing.borrow(), before);
+    // Final-state cycles and self references require no topological executor.
+    let mut batch = Batch::new();
+    batch.insert(&Node { id: 1, next: 2 }).unwrap();
+    batch.insert(&Node { id: 2, next: 1 }).unwrap();
+    batch.insert(&Node { id: 3, next: 3 }).unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.delete::<Node>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    for id in 1..=3 {
+        batch.delete::<Node>(id).unwrap();
+    }
+    db.commit(batch).unwrap();
+    // The longest valid dependent removal batch: 31 skips and the parent delete.
+    let mut batch = Batch::new();
+    batch.insert(&Parent { id: 3 }).unwrap();
+    for id in 100..131 {
+        batch.insert(&Child { id, parent_id: 3 }).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(3).unwrap();
+    for id in 100..131 {
+        batch.delete::<Child>(id).unwrap();
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    drop(runtime);
+    let runtime = host(backing.clone());
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(2).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch.delete::<Parent>(2).unwrap();
+    batch.delete::<Child>(1).unwrap();
+    db.commit(batch).unwrap();
+    assert!(db.page::<Child>(None, 32).unwrap().rows.is_empty());
 }

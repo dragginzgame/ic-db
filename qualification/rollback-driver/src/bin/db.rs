@@ -11,7 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows and one Document; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows, one Document and one WideNumbers record; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -45,12 +45,16 @@ fn help() {
     println!();
 }
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type FieldView = (String, String, bool, Option<u32>);
+type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
 type IndexView = (u32, Vec<String>, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
 fn print_schema(entities: Vec<EntityView>) {
     println!("\nSchema: {} entities\n", entities.len());
+    let targets: std::collections::BTreeMap<_, _> = entities
+        .iter()
+        .map(|(name, id, primary, _, _)| (*id, format!("{name}.{primary}")))
+        .collect();
     for (name, id, primary, mut fields, indexes) in entities {
         println!("{} (entity {id})", terminal_text(&name));
         println!(
@@ -58,23 +62,32 @@ fn print_schema(entities: Vec<EntityView>) {
             terminal_text(&primary)
         );
         fields.sort_by_key(|field| field.0 != primary); // primary first, otherwise canonical order
+        let references = fields.iter().any(|field| field.4.is_some());
         let rows: Vec<Vec<String>> = fields
             .into_iter()
-            .map(|(name, kind, optional, max)| {
+            .map(|(name, kind, optional, max, reference)| {
                 let key = if name == primary { "Primary" } else { "-" };
-                vec![
+                let mut row = vec![
                     name,
                     kind,
                     if optional { "Yes" } else { "No" }.into(),
                     key.into(),
                     max.map_or_else(|| "-".into(), |bytes| format!("{bytes} bytes")),
-                ]
+                ];
+                if references {
+                    row.push(reference.map_or_else(
+                        || "-".into(),
+                        |(entity, index)| format!("{} (index {index})", targets[&entity]),
+                    ));
+                }
+                row
             })
             .collect();
-        println!(
-            "{}",
-            render_bordered(&["Field", "Type", "Optional", "Key", "Limit"], &rows)
-        );
+        let mut columns = vec!["Field", "Type", "Optional", "Key", "Limit"];
+        if references {
+            columns.push("References");
+        }
+        println!("{}", render_bordered(&columns, &rows));
         if indexes.is_empty() {
             println!("Indexes: none\n");
         } else {
@@ -95,6 +108,9 @@ fn print_schema(entities: Vec<EntityView>) {
         }
     }
     println!("Optional fields can be absent. Text limits count UTF-8 bytes.");
+    println!(
+        "References require an existing target and restrict its deletion; indexes belong to the dependent."
+    );
     println!("Stored schema matches this executable. Use db status for storage details.");
 }
 
@@ -143,7 +159,7 @@ async fn main() -> Result<(), String> {
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
     println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
-    println!("Enter help for commands. Schema covers Entry and Document; query reads Entry.");
+    println!("Enter help for commands. Use schema to inspect all entities; query reads Entry.");
     let interactive = io::stdin().is_terminal() && cli.command.is_none();
     let execute = async |command: Command| -> Result<(), String> {
         match command {

@@ -276,7 +276,8 @@ stored identity and admission/maintenance state. Display labels come from the
 executable, not a separately editable durable catalog. On mismatch, label the
 compiled description as unadmitted; do not claim it describes unknown stored
 bytes or reconstruct a missing manifest. Inspection must remain bounded and use
-the host's authorization policy. The current M0 console still returns fixture prose.
+the host's authorization policy. The current M1 console renders structured compiled
+metadata from its local host; full deployed inspection remains implementation work.
 
 M1 acceptance includes compile failures for duplicate field names/other identities, unknown index
 fields, unsupported key types and contradictory declarations; round trips of
@@ -750,8 +751,11 @@ ordering, work/byte limits and continuation semantics as application callers.
 No separate CLI planner or executor is permitted. Canic owns remote endpoints,
 authentication and authorization; the database owns semantics. Surface partial
 pages and refusal reasons explicitly and return nonzero status for failed scripts.
-The current M0 console reads only a labelled local synthetic fixture; connecting
-to real deployments and exposing broad fluent operations remain implementation work.
+The current M1 console reads only a labelled local synthetic fixture. Its `query`
+command targets Entry implicitly because that is its sole queryable entity.
+When multiple entities become queryable, require explicit entity selection;
+do not infer a default from schema order. Connecting to real deployments and
+exposing broad fluent operations remain implementation work.
 
 For the first query subset, support primary-key lookup, required index equality
 or range lookup, composable bounded filters, projection, deterministic order,
@@ -1182,12 +1186,24 @@ semantics carry over; its catalog lifecycle, public dynamic frontend and generat
 endpoint machinery do not.
 
 **First M1 slice delivered locally.** `ic-db` owns shared commit/traversal and
-`ic-db-macros` emits typed Nat64/Bool/bounded Text records, optional values,
+`ic-db-macros` emits typed Nat64/Int64/Nat128/Int128/Bool/bounded Text records, optional values,
 canonical codecs and compiled metadata. Text limits apply to UTF-8 bytes, without
 normalization; None is distinct from empty, zero and false. Generated validation
 runs before encode and after decode. Whole-row limits remain independent of field
 limits. Primary/index fields currently require non-optional Nat64; rejecting other
 index shapes here does not retire their retained product capabilities.
+Int64 stores the complete `i64` domain exactly through Wire's zigzag/unsigned
+varint codec, with no unsigned or floating-point coercion. Optional absence is
+distinct from zero. Signed keys, arithmetic and predicates are not enabled by
+storage support alone. Literal extrema vectors, malformed-value refusals and
+native/Wasm persistence checks qualify this increment; commit and traversal need
+no new specialization or value-conversion layer.
+Nat128/Int128 extend this to exact Rust `u128`/`i128` values and optional forms.
+Wire encodes unsigned values as varints and signed values through zigzag mapping;
+the largest payload takes 19 bytes. Native/Wasm tests cover extrema, values beyond
+64 bits, malformed encodings, incompatible width/signedness, no-op writes and
+message rollback. No new durable namespace, duplicate value representation or arithmetic engine is added;
+wide keys/indexes and numeric operations remain separate implementation work.
 The executable journey in `crates/ic-db/tests/records.rs` covers create/reopen,
 cross-entity batches, unique exchanges and indexed reads. `db schema` uses that
 metadata through the local qualification host. No engine code is copied from
@@ -1195,10 +1211,30 @@ IcyDB; familiar authoring and integrity behavior are retained independently.
 The CLI reuses `ic-host-text` bordered tables, as IcyDB's describe renderer does
 at the frozen comparison revision. Structured fixture descriptions carry fields
 and indexes; terminal layout stays in the native CLI. Schema output emphasizes
-types, optionality, keys and limits; full storage identities are available through
+types, optionality, keys, references and limits; full storage identities are available through
 `db status`. No SQL report machinery or terminal dependency enters the product.
-Richer types, references, defaults/managed policies and broad fluent queries
+Richer types, broader references, defaults/managed policies and broad fluent queries
 remain required work. No product attributes have been retired by this increment.
+
+Required Nat64 fields now accept `references(entity = 1, index = 1)` alongside
+their `value(...)` declaration. The target must be in the admitted schema; the
+selected ordinary index belongs to the dependent entity and must lead with this
+field. Target existence and restricted deletion are validated against prepared
+final rows and index changes. Parents and dependents may be inserted together in
+either order; explicit dependent deletion/repointing may accompany parent deletion.
+Cycles and self references are valid when their final targets exist. No recursive
+cascade or implicit requirement that a parent have children is introduced.
+Optional/nested references and other key types remain unimplemented here.
+
+Each reverse lookup skips only old index entries removed by explicit batch
+commands, then refuses on the first surviving dependent. At most 33 candidates
+are examined per reverse range under the 32-command bound; malformed accessed
+entries refuse. New references to deleted targets fail the target-existence check.
+These checks add preparation work and compiled metadata, but no durable namespace,
+second row representation, allocator or relationship executor. They reuse the
+ordinary indexes and message rollback boundary. Native witnesses include cycles
+and a 31-dependent deletion batch; Wasm witnesses cover refusals, paired changes,
+reopen and backing-write traps while a dependent changes target.
 
 The initial format uses one host-granted Storage B-tree allocation with logical
 manifest, revision, row and index namespaces. This keeps concrete byte-oriented
@@ -1217,15 +1253,27 @@ index count, then indexes ordered by ID (ID, unique byte, ordered field names).
 Counts/name lengths are `u32` little-endian. SHA-256 uses domain
 `ic-db:schema:v1\0`; presentation entity names are excluded. All five versions
 start at 1, with supplier contract 1 qualified here against Storage 0.74.1.
-Field tags are Nat64=`1`, Bool=`2`, Text=`3`; optional fields set bit `0x80`.
+Field tags are Nat64=`1`, Bool=`2`, Text=`3`, Int64=`4`, Nat128=`5`, Int128=`6`;
+optional fields set bit `0x80`.
 Text appends its `u32` little-endian maximum UTF-8 byte length. These new tags
 extend the grammar without changing existing Nat64 encodings or fingerprints.
+References set tag bit `0x40` and append target entity ID and reverse index ID as
+little-endian `u32`s after the type payload. Existing non-reference schemas retain
+their fingerprints. The independent Parent/Child reference golden vector is
+`e7d4d90bdd9875157123c064930a6af8012d9a3b8e8fdcd4e08e0a75dd41a2ef`.
 Changing codec semantics requires changing the corresponding declared version.
 The independent scalar golden fingerprint is
 `cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa`.
-The two-entity CLI fixture adds Document (bounded title/note, optional priority,
-published flag) and has fingerprint
-`80625391c9330ef8b4379a91b5e93663acd40384608a1a74197813267f2b2b3a`.
+The required/optional Int64 schema vector is
+`d9710d2d315461b90416054bd54e3dae42a7380a9fac53b23a0556d270bbbb78`.
+The required/optional 128-bit schema vector is
+`4295cb7f6bdd45ea72700f93d6b31f40683af7ac0c9064e2916dd607f9a479a5`.
+The three-entity CLI fixture adds Document (bounded title/note, optional priority,
+published flag, signed score/optional previous score and required `entry_id`
+reference) and WideNumbers (required/optional signed and unsigned 128-bit values).
+Its fingerprint is
+`75edf28841acea2e80a386f6655120ea9bcb2aa628c9950e5670514c82b78ee1`.
+The pre-reference mixed-type vector remains independently tested in native code.
 It is fresh fixture data, not a migration of an existing deployment.
 
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
@@ -1247,7 +1295,7 @@ Index-prefix reads return only a bounded first result collection; general index
 continuation and fluent semantics remain M2 work. Native tests and the Wasm host
 prove final-state refusals, index maintenance, unchanged reopen and late-message
 rollback. The separate `make m1-commit-failures` host now traps after every observed
-backing write in a two-row replacement and refuses an actual growth request
+backing write in a three-row replacement with dependent repointing and refuses an actual growth request
 during a 32-row insert batch. Complete backing, indexes and revisions roll back;
 retry and unchanged-upgrade reopen succeed. The feature lives only in qualification,
 with no product hooks, durable fault state or new allocator. Counts and reproduction

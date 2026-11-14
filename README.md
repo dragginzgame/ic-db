@@ -22,11 +22,11 @@ delivery require an explicit decision to resume. Existing work and data are reta
 
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
 `crates/ic-db-macros` (attribute authoring and typed codecs). It creates and reopens
-exactly admitted schemas, persists Nat64, Bool and bounded Text fields with optional
-values, maintains
-indexes and entity revisions, and applies bounded final-state batches. This is
+exactly admitted schemas, persists Nat64/Int64, Nat128/Int128, Bool and bounded Text with optional
+values, maintains indexes and entity revisions, and applies bounded final-state
+batches with required Nat64 references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise, measured improvement
-or deployment. Rich types, references and the broad fluent builder remain required
+or deployment. Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Primary and index keys
 currently require non-optional Nat64 fields.
 The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
@@ -77,7 +77,7 @@ Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six
-`Entry` rows and one mixed-type `Document` record
+`Entry` rows, one mixed-type `Document` and one `WideNumbers` record
 running in local PocketIC. Each session starts fresh and is discarded on exit.
 `db schema` presents generated fields and indexes in bordered tables, with the
 primary key first and separate type, optionality and byte-limit columns. The CLI
@@ -88,7 +88,8 @@ bounded primary-key page, so an empty page can still have a continuation.
 The output supplies a next-page command, retaining the limit and filter, or an
 explicit completion message. Terminal layout belongs to the CLI, not the runtime.
 It has no SQL, remote-canister connection or production credentials. Broader
-query support remains required in the eventual product CLI;
+query support remains required in the eventual product CLI, with explicit entity
+selection once more than Entry can be queried;
 Canic will own its endpoint integration. See [probe details](qualification/README.md).
 The installed fixture lives under the prefix's `share/ic-db/m1`; PocketIC still
 uses this checkout's explicitly prepared `.tools/m0-pocketic` server.

@@ -290,7 +290,8 @@ impl<M: Memory> Database<M> {
     /// A normal refusal occurs before persistent writes. Success is not a separate
     /// durability point from the surrounding IC message. Empty/no-op batches preserve revisions.
     /// # Errors
-    /// Refuses missing/existing rows, duplicate targets, uniqueness, corruption or limits.
+    /// Refuses missing/existing rows, duplicate targets, uniqueness/reference violations,
+    /// corruption or limits. References use the intended final batch state.
     /// # Panics
     /// Supplier failures after the first mutation trap; never catch and continue an IC commit.
     pub fn commit(&mut self, batch: Batch) -> Result<(), Error> {
@@ -299,6 +300,8 @@ impl<M: Memory> Database<M> {
         let mut writes = BTreeMap::new();
         let mut unique = BTreeSet::new();
         let mut changed = BTreeSet::new();
+        let mut required = BTreeSet::new();
+        let mut deleted = Vec::new();
         for mutation in batch.mutations {
             self.schema.admits(mutation.entity)?;
             let key = row_key(mutation.entity.id, mutation.key);
@@ -331,6 +334,7 @@ impl<M: Memory> Database<M> {
             changed.insert(mutation.entity.id);
             match mutation.kind {
                 Kind::Delete => {
+                    deleted.push((mutation.entity.id, mutation.key));
                     removes.insert(key);
                 }
                 Kind::Insert(bytes, info) | Kind::Replace(bytes, info) => {
@@ -341,6 +345,24 @@ impl<M: Memory> Database<M> {
                         }
                         writes.insert(key, info.key.to_be_bytes().to_vec());
                     }
+                    for field in mutation.entity.fields {
+                        if let Some(reference) = field.reference {
+                            let position = mutation
+                                .entity
+                                .indexes
+                                .iter()
+                                .position(|index| index.id == reference.index)
+                                .ok_or(Error::Corrupt)?;
+                            let bytes = info
+                                .indexes
+                                .get(position)
+                                .and_then(|bytes| bytes.get(..8))
+                                .ok_or(Error::Corrupt)?;
+                            let target =
+                                u64::from_be_bytes(bytes.try_into().map_err(|_| Error::Corrupt)?);
+                            required.insert((reference.entity, target));
+                        }
+                    }
                 }
             }
         }
@@ -350,6 +372,7 @@ impl<M: Memory> Database<M> {
                 return Err(Error::UniqueViolation);
             }
         }
+        self.validate_references(&required, &deleted, &removes, &writes)?;
         for entity in changed {
             let next = self.revision(entity)?.checked_add(1).ok_or(Error::Limit)?;
             writes.insert(revision_key(entity), next.to_le_bytes().to_vec());
@@ -360,6 +383,85 @@ impl<M: Memory> Database<M> {
         }
         for (key, value) in writes {
             self.map.insert(key, value);
+        }
+        Ok(())
+    }
+
+    // Reuse the prepared final rows and ordinary index changes. No durable
+    // relationship catalog or second mutation executor is involved.
+    fn validate_references(
+        &self,
+        required: &BTreeSet<(u32, u64)>,
+        deleted: &[(u32, u64)],
+        removes: &BTreeSet<Vec<u8>>,
+        writes: &BTreeMap<Vec<u8>, Vec<u8>>,
+    ) -> Result<(), Error> {
+        for &(entity, id) in required {
+            let key = row_key(entity, id);
+            if writes.contains_key(&key) {
+                continue;
+            } // prepared, validated final target
+            if removes.contains(&key) {
+                return Err(Error::ReferenceViolation);
+            }
+            let bytes = self.map.get(&key).ok_or(Error::ReferenceViolation)?;
+            let schema = self
+                .schema
+                .entities
+                .iter()
+                .find(|value| value.id == entity)
+                .ok_or(Error::Corrupt)?;
+            if (schema.inspect_row)(&bytes)?.key != id {
+                return Err(Error::Corrupt);
+            }
+        }
+        for &(target, id) in deleted {
+            for entity in &self.schema.entities {
+                for field in entity.fields {
+                    let Some(reference) = field.reference.filter(|value| value.entity == target)
+                    else {
+                        continue;
+                    };
+                    let mut prefix = index_prefix(entity.id, reference.index);
+                    prefix.extend(id.to_be_bytes());
+                    // Each skipped entry belongs to a distinct changed row in
+                    // this range. At most MAX_BATCH skips plus one survivor.
+                    for (position, entry) in self
+                        .map
+                        .range(prefix.clone()..)
+                        .take_while(|entry| entry.key().starts_with(&prefix))
+                        .take(MAX_BATCH + 1)
+                        .enumerate()
+                    {
+                        if removes.contains(entry.key()) {
+                            if position == MAX_BATCH {
+                                return Err(Error::Corrupt);
+                            }
+                            continue;
+                        }
+                        let owner = u64::from_be_bytes(
+                            entry
+                                .value()
+                                .as_slice()
+                                .try_into()
+                                .map_err(|_| Error::Corrupt)?,
+                        );
+                        let bytes = self
+                            .map
+                            .get(&row_key(entity.id, owner))
+                            .ok_or(Error::Corrupt)?;
+                        let info = (entity.inspect_row)(&bytes)?;
+                        if info.key != owner
+                            || !index_entries(entity, &info)?
+                                .iter()
+                                .any(|(key, _)| key == entry.key())
+                        {
+                            return Err(Error::Corrupt);
+                        }
+                        return Err(Error::ReferenceViolation);
+                    }
+                }
+            }
         }
         Ok(())
     }

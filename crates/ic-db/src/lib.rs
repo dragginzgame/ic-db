@@ -1,6 +1,6 @@
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
-//! This M1 slice supports Nat64, Bool and bounded Text fields, with optional
+//! This M1 slice supports Nat64/Int64, Nat128/Int128, Bool and bounded Text, with optional
 //! values. Primary and index keys currently require non-optional Nat64 fields.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
@@ -11,7 +11,7 @@ mod schema;
 mod store;
 
 pub use ic_db_macros::entity;
-pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, Schema};
+pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{Batch, Database, Page};
 
 /// Failure before commit begins, or a refusal to admit stored data.
@@ -33,6 +33,8 @@ pub enum Error {
     DuplicateTarget,
     /// The intended final state violates a unique index.
     UniqueViolation,
+    /// A reference target is absent, or a deleted target still has a dependent.
+    ReferenceViolation,
     /// A declared resource bound or revision range is exceeded.
     Limit,
     /// The supplier refused collection creation or opening.

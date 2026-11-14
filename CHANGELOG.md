@@ -5,8 +5,9 @@
 ### ▶️ Try it
 
 Install the console using the real first M1 record library, then inspect its
-generated schema and two bounded pages. Each session has six Entry rows and one
-mixed-type Document; this does not connect to a deployed database. Restart an existing console.
+generated schema and two bounded pages. Each session has six Entry rows, one
+mixed-type Document referencing Entry 1 and one WideNumbers record; this does not connect to a deployed
+database. `db schema` shows the target and reverse index. Restart an existing console.
 
 ```sh
 make m0-setup
@@ -20,12 +21,34 @@ db query --after 3 --limit 3 --min 40
 The first filtered page is empty but prints a next-page command with `--after 3`. The next returns
 IDs 4–6. A full page can require one final empty request to establish completion.
 The displayed value column is now named `amount`, matching the authored schema.
-`db schema` also shows Document's bounded Text, Bool and optional fields. The
+`db schema` also shows Document's bounded Text, Bool, signed Int64 scores and optional fields. The
 current `query` command still reads Entry; Document writes/reopen are covered by
 `make m1-records` through private qualification controls.
 
 ### 🛠️ Product slice
 
+- Add required/optional `Nat128` and `Int128` fields with exact Rust `u128`/`i128`
+  values. Native/Wasm checks cover extrema, values beyond 64 bits, malformed
+  encodings, absence, no-op writes, schema incompatibility, message rollback and
+  reopen. Earlier schema tags/fingerprints are unchanged. No executor, numeric
+  conversion layer or dependency is added; wide keys/indexes and arithmetic are
+  still unimplemented. `db schema` now includes a separate WideNumbers fixture
+  entity; `db query` remains Entry-only.
+- Add required/optional `Int64` stored fields using the full Rust `i64` range.
+  Preserve negative values and absence versus zero without numeric coercion.
+  The new schema tag leaves earlier contracts unchanged; native/Wasm checks cover
+  extrema, malformed encodings, schema mismatch and persistence. No commit-engine
+  specialization, dependency or crate is added. Signed indexes and arithmetic
+  remain later work. `db schema` shows `score` and `previous_score`; `db query`
+  continues to read Entry only. Multiple-entity querying will require an explicit
+  entity selector, rather than choosing a default from schema order.
+- Add required Nat64 references with `references(entity = ..., index = ...)`.
+  The named ordinary index must lead with that field. Prepare target-existence
+  and restricted-deletion checks against the complete batch: paired insertion,
+  repointing, cycles and explicit dependent deletion work without cascades.
+  Reference contracts participate in schema identity; no new durable catalog,
+  journal or runtime crate is added. Optional/nested references remain future work.
+  `db schema` shows the reference target and the dependent's reverse index.
 - Restore IcyDB-style bordered schema/query tables using `ic-host-text` 0.75.0
   in the native CLI. Show primary keys first and separate field type, optionality
   and byte limits; keep full storage identities in `db status`. Print usable
@@ -44,7 +67,7 @@ current `query` command still reads Entry; Document writes/reopen are covered by
   create/reopen, primary-key pages, bounded index-prefix reads and cross-entity
   batches with final-state uniqueness and atomic entity revisions. Field names
   are identities; numeric field IDs are not introduced. No IcyDB executor or
-  journal code is copied. Richer types, references and fluent queries remain
+  journal code is copied. Richer types, broader references and fluent queries remain
   required follow-on implementation; this does not complete M1.
 - `db schema` now inspects generated metadata from this library, rather than
   the M0 maintenance fixture. Clap owns console/argv command validation and help;
@@ -58,7 +81,7 @@ current `query` command still reads Entry; Document writes/reopen are covered by
 ### 🧪 Qualification
 
 - Add `make m1-commit-failures`: trap after every observed backing write in a
-  real two-row replacement and refuse a physical growth request during a 32-row
+  real three-row replacement (including a dependent repoint) and refuse a physical growth request during a 32-row
   insert. Full stable-memory rollback, indexes, revisions, successful retry and
   unchanged-upgrade reopen pass. Fault injection is restricted to a dedicated
   qualification feature; the runtime, stored format and installed CLI commands

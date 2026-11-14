@@ -26,22 +26,39 @@ struct Entry {}
 #[entity(
     id = 2,
     pk(field = "id"),
+    index(id = 1, fields = ["entry_id", "id"]),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "entry_id", value(item(prim = "Nat64")), references(entity = 1, index = 1)),
         field(name = "title", value(item(prim = "Text", max_bytes = 32))),
         field(name = "note", value(opt, item(prim = "Text", max_bytes = 64))),
         field(name = "published", value(item(prim = "Bool"))),
+        field(name = "score", value(item(prim = "Int64"))),
+        field(name = "previous_score", value(opt, item(prim = "Int64"))),
         field(name = "priority", value(opt, item(prim = "Nat64")))
     )
 )]
 struct Document {}
+
+#[entity(
+    id = 3,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "signed", value(item(prim = "Int128"))),
+        field(name = "unsigned", value(item(prim = "Nat128"))),
+        field(name = "optional_signed", value(opt, item(prim = "Int128"))),
+        field(name = "optional_unsigned", value(opt, item(prim = "Nat128")))
+    )
+)]
+struct WideNumbers {}
 
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
 
 fn compiled() -> Schema {
-    Schema::new(&[Entry::SCHEMA, Document::SCHEMA]).unwrap()
+    Schema::new(&[Entry::SCHEMA, Document::SCHEMA, WideNumbers::SCHEMA]).unwrap()
 }
 fn runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
@@ -82,10 +99,22 @@ fn initialize() {
     batch
         .insert(&Document {
             id: 1,
+            entry_id: 1,
             title: "First document".into(),
             note: None,
             published: false,
+            score: -10,
+            previous_score: None,
             priority: Some(0),
+        })
+        .unwrap();
+    batch
+        .insert(&WideNumbers {
+            id: 1,
+            signed: i128::MIN,
+            unsigned: u128::MAX,
+            optional_signed: None,
+            optional_unsigned: Some(0),
         })
         .unwrap();
     db.commit(batch).unwrap();
@@ -105,7 +134,7 @@ fn inspect() -> Status {
     status(&db, &host)
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, Option<u32>);
+type FieldView = (String, String, bool, Option<u32>, Option<(u32, u32)>);
 type IndexView = (u32, Vec<String>, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 #[ic_wire_endpoint::query(id = 2)]
@@ -123,10 +152,21 @@ fn schema() -> (Status, Vec<EntityView>) {
                 .map(|field| {
                     let (kind, limit) = match field.value {
                         FieldType::Nat64 => ("Nat64", None),
+                        FieldType::Int64 => ("Int64", None),
+                        FieldType::Nat128 => ("Nat128", None),
+                        FieldType::Int128 => ("Int128", None),
                         FieldType::Bool => ("Bool", None),
                         FieldType::Text { max_bytes } => ("Text", Some(max_bytes)),
                     };
-                    (field.name.into(), kind.into(), field.optional, limit)
+                    (
+                        field.name.into(),
+                        kind.into(),
+                        field.optional,
+                        limit,
+                        field
+                            .reference
+                            .map(|reference| (reference.entity, reference.index)),
+                    )
                 })
                 .collect();
             let indexes = entity
@@ -212,30 +252,147 @@ fn category(category: u64) -> Vec<(u64, u64)> {
         .collect()
 }
 
-type DocumentValue = (String, Option<String>, bool, Option<u64>);
+type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
 #[ic_wire_endpoint::query(id = 7)]
 fn document() -> (DocumentValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<Document>(1).unwrap().unwrap();
     (
-        (row.title, row.note, row.published, row.priority),
+        (
+            row.title,
+            row.note,
+            row.published,
+            row.priority,
+            row.score,
+            row.previous_score,
+        ),
         db.revision(2).unwrap(),
     )
 }
 #[ic_wire_endpoint::update(id = 8)]
-fn replace_document((title, note, published, priority): DocumentValue) -> Result<(), u8> {
+fn replace_document(
+    (title, note, published, priority, score, previous_score): DocumentValue,
+) -> Result<(), u8> {
     let host = runtime();
     let mut db = open(&host);
     let mut batch = Batch::new();
     batch
         .replace(&Document {
             id: 1,
+            entry_id: 1,
             title,
             note,
             published,
+            score,
+            previous_score,
             priority,
         })
         .map_err(|_| 1)?;
     db.commit(batch).map_err(|_| 2)
+}
+
+#[ic_wire_endpoint::query(id = 9)]
+fn document_reference(id: u64) -> Option<u64> {
+    let host = runtime();
+    open(&host)
+        .get::<Document>(id)
+        .unwrap()
+        .map(|row| row.entry_id)
+}
+
+#[ic_wire_endpoint::update(id = 10)]
+fn reference_batch(mode: u8) -> Result<(), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    match mode {
+        0 | 3 => {
+            let mut row = db.get::<Document>(1).unwrap().unwrap();
+            row.entry_id = if mode == 0 { 99 } else { 2 };
+            batch.replace(&row).unwrap();
+            if mode == 3 {
+                batch.delete::<Entry>(1).unwrap();
+            }
+        }
+        1 | 2 => {
+            batch.delete::<Entry>(1).unwrap();
+            if mode == 2 {
+                batch.delete::<Document>(1).unwrap();
+            }
+        }
+        4 => {
+            batch
+                .insert(&Document {
+                    id: 2,
+                    entry_id: 7,
+                    title: "Dependent first".into(),
+                    note: None,
+                    published: false,
+                    score: 0,
+                    previous_score: Some(-1),
+                    priority: None,
+                })
+                .unwrap();
+            batch
+                .insert(&Entry {
+                    id: 7,
+                    category: 0,
+                    amount: 70,
+                })
+                .unwrap();
+        }
+        5 | 6 => {
+            batch.delete::<Entry>(7).unwrap();
+            if mode == 6 {
+                batch.delete::<Document>(2).unwrap();
+            }
+        }
+        _ => return Err(2),
+    }
+    db.commit(batch).map_err(|error| {
+        if matches!(error, ic_db::Error::ReferenceViolation) {
+            1
+        } else {
+            2
+        }
+    })
+}
+
+type WideValue = (i128, u128, Option<i128>, Option<u128>);
+#[ic_wire_endpoint::query(id = 11)]
+fn wide_numbers() -> (WideValue, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let row = db.get::<WideNumbers>(1).unwrap().unwrap();
+    (
+        (
+            row.signed,
+            row.unsigned,
+            row.optional_signed,
+            row.optional_unsigned,
+        ),
+        db.revision(3).unwrap(),
+    )
+}
+#[ic_wire_endpoint::update(id = 12)]
+fn replace_wide_numbers(
+    ((signed, unsigned, optional_signed, optional_unsigned), trap): (WideValue, bool),
+) {
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    batch
+        .replace(&WideNumbers {
+            id: 1,
+            signed,
+            unsigned,
+            optional_signed,
+            optional_unsigned,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    if trap {
+        cdk::api::trap("M1 wide-number application trap");
+    }
 }

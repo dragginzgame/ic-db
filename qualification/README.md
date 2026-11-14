@@ -26,21 +26,38 @@ The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
 Native checks cover canonical codecs/schema identity, cross-entity batches,
 final-state uniqueness (including swaps), unchanged refusals, indexes and reopen.
 Literal keys and payload bytes supply independent representation checks.
-Stored fields now include Bool, bounded UTF-8 Text and optional Nat64/Bool/Text.
+Stored fields now include Nat64/Int64, Nat128/Int128, Bool, bounded UTF-8 Text and
+their optional forms.
+Signed tests cover the complete i64 endpoints, negative/zero values, absence,
+literal zigzag-varint vectors, malformed/overflowing encodings, no-op revision
+preservation and incompatible signed/unsigned schema refusal. Native and Wasm
+reopen checks preserve the exact values. Signed keys/indexes remain unimplemented.
+The separate WideNumbers fixture checks required/optional 128-bit integers,
+including signed extrema, unsigned maximum and values just beyond 64 bits.
+Independent 19-byte varint vectors and schema hashes qualify encoding; malformed
+overflow/truncation and incompatible width/signedness refuse. Native and Wasm
+checks preserve all bits across writes, no-ops, traps and reopen. Wide keys/indexes
+and arithmetic are not enabled by storage support.
 Checks distinguish absence from empty/zero/false, count text bytes rather than
 characters, reject oversized writes and stored payloads, retain the whole-row byte
 envelope, and preserve values and per-entity revisions across reopen. Independent
-SHA-256 vectors cover the original Nat64 contract and the expanded CLI fixture.
+SHA-256 vectors cover the original Nat64 contract, mixed types and references.
+Required Nat64 references use a declared ordinary index beginning with the
+reference field. Native checks cover missing targets, final-state insertion,
+repointing/deletion, cycles, self references and a 31-dependent removal batch.
+Wasm checks verify the same core refusal/composition boundary and reopen. No
+recursive cascade or optional/nested reference support is implied.
 The Wasm host checks generated inspection, sparse page progress, indexes,
 normal errors versus late application traps, atomic revisions and unchanged
 upgrade/reopen. Full raw stable-memory comparisons include supplier metadata.
 `make m1-commit-failures` separately builds the host's `fault-injection` feature.
 It delegates backing identity and IO to the real supplier, traps after each
-observed backing write in a two-row replacement, and rejects a real `grow()`
+observed backing write in a three-row replacement including a dependent repoint,
+and rejects a real `grow()`
 request with `-1` during a maximum-cardinality insert batch. Raw backing/extent,
 indexes and revisions must revert; the identical operation must succeed on retry.
-The current two-entity fixture with Storage 0.74.1 covers 48 replacement writes and reaches growth
-with the insert batch starting at ID 1700: successful retry performs 1,322 backing
+The current three-entity fixture with Storage 0.74.1 covers 75 replacement writes and reaches growth
+with the insert batch starting at ID 1700: successful retry performs 1,316 backing
 writes, one growth request and expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after
@@ -48,15 +65,17 @@ unchanged upgrade also passes. Instruction exhaustion, corruption failure modes
 and other workload shapes remain M1 qualification work.
 
 Private Wire exports are test controls, not a production adapter. `make db`
-installs six Entry rows and one Document using this host; every CLI session is fresh. Clap
+installs six Entry rows, one Document and one WideNumbers record using this host;
+every CLI session is fresh. Clap
 owns argv and console command admission; empty console lines remain silent.
 Fault controls are compiled only for the dedicated probe and excluded from the
 ordinary CLI host. The product library has no injection feature or durable fault
 state; the instrumented host must not be used for comparative performance claims.
 The M0 maintenance fixture remains available only through its dedicated probe.
-Product scope still includes richer types, reference constraints and broad fluent
+Product scope still includes richer types, broader reference constraints and broad fluent
 queries. Keys/indexes still require non-optional Nat64; text and optional indexing
-remain required follow-on work. `db schema` inspects both entity descriptions;
+remain required follow-on work. `db schema` inspects all three entity descriptions,
+including the Document-to-Entry reference and its reverse index;
 the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 

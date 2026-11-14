@@ -51,6 +51,18 @@ async fn backing_writes_and_growth_failures_roll_back() {
     };
 
     let original = status().await;
+    let reference = async || {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "document_reference",
+                native::encode_request(9, &1_u64, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Option<u64>>(9, &reply, LIMITS).unwrap()
+    };
     let before = pic.get_stable_memory(canister).await;
     let mut completed = false;
     // Discover the actual number of backing writes; never bind a test to the
@@ -69,6 +81,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                     "backing, extent or allocator metadata changed after write {stop_after}"
                 );
                 assert_eq!(status().await, original);
+                assert_eq!(reference().await, Some(1));
                 assert_eq!(category(1).await, vec![(1, 11), (3, 31), (5, 51)]);
                 assert_eq!(category(0).await, vec![(2, 20), (4, 40), (6, 60)]);
                 assert!(category(9).await.is_empty());
@@ -79,6 +92,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 assert_eq!(writes + 1, stop_after);
                 assert!(writes > 1);
                 assert_eq!(status().await.2, original.2 + 1);
+                assert_eq!(reference().await, Some(2));
                 assert_eq!(category(9).await, vec![(1, 901), (2, 902)]);
                 assert_eq!(category(1).await, vec![(3, 31), (5, 51)]);
                 assert_eq!(category(0).await, vec![(4, 40), (6, 60)]);
@@ -172,6 +186,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
         .unwrap();
     assert!(pic.get_stable_memory(canister).await == before);
     assert_eq!(status().await, prior);
+    assert_eq!(reference().await, Some(2));
     assert_eq!(&category(9).await[..2], &[(1, 901), (2, 902)]);
     owned.close().await;
 }

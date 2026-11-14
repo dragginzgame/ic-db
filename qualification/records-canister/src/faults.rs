@@ -1,7 +1,7 @@
 //! Feature-selected backing faults around the unmodified product commit path.
 //! No persistent fault state, allocator replacement or product testing API.
 
-use super::{Batch, DefaultMemoryImpl, Entry, cdk, open, runtime};
+use super::{Batch, DefaultMemoryImpl, Document, Entry, cdk, open, runtime};
 use ic_storage::{BackingIdentity, Memory, MemoryBacking};
 use std::cell::Cell;
 
@@ -57,7 +57,7 @@ impl Memory for FaultMemory {
     }
 }
 
-// first=0 changes two existing rows and their index membership. Otherwise insert
+// first=0 changes two entries and repoints their dependent. Otherwise insert
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
 #[ic_wire_endpoint::update(id = 6)]
@@ -67,6 +67,9 @@ fn fault_batch((first, stop_after, deny_growth): (u64, u64, bool)) -> (u64, u64)
     let mut db = open(&host);
     let mut batch = Batch::new();
     if first == 0 {
+        let mut document = db.get::<Document>(1).unwrap().unwrap();
+        document.entry_id = 2;
+        batch.replace(&document).unwrap();
         for id in 1..=2 {
             batch
                 .replace(&Entry {

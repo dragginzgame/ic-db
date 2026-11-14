@@ -12,9 +12,11 @@ use field::Field;
 
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
 ///
-/// Supports Nat64, Bool and Text with max_bytes, optionally wrapped by `opt`.
+/// Supports Nat64/Int64, Nat128/Int128, Bool and bounded Text, optionally wrapped by `opt`.
 /// Primary/index fields currently require non-optional Nat64. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
+/// Required Nat64 fields may declare `references(entity = 1, index = 1)`;
+/// the selected index must belong to this entity and lead with this field.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
@@ -212,6 +214,17 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     }
     let mut descriptions = Vec::new();
     let mut encoded_indexes = Vec::new();
+    for field in &authored {
+        if let Some((_, id)) = field.reference
+            && !indexes
+                .iter()
+                .any(|index| index.id == id && index.fields.first() == Some(&field.name))
+        {
+            return Err(fail(
+                "reference requires a declared index beginning with its field",
+            ));
+        }
+    }
     for index in indexes {
         let unique_fields: BTreeSet<_> = index.fields.iter().collect();
         if index.fields.is_empty()
