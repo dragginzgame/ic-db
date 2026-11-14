@@ -45,9 +45,21 @@ selection is ambiguous. Rust resolves imports and module paths; full logical nam
 define durable identity. The fixture now uses
 IcyDB's two-stage approach: host-only `ctor` registration, followed by validated
 schema assembly generated for the target. This is implemented for scalar entities;
-named nested schema types remain work. See the
+named records and payload enums participate through typed fields. See the
 [shared schema](qualification/records-canister/src/schema.rs) and its
 [build script](qualification/records-canister/build.rs).
+Records use `#[record(fields(...))]` and enums use
+`#[enum_(variant(name = "Ready"), variant(name = "Data", value(item(is = "Details"))))]`.
+Both retain the empty-struct authoring style. Fields use `value(item(is = "Type"))`;
+optional values add `opt`. Recursive values can use `item(indirect, is = "Self")`
+and need a finite base case. Encoding, decoding and stored-row inspection share
+32-level, 256-structured-value and 4 KiB row bounds. Lists use
+`value(many, max_items = 3, item(prim = "Nat16"))`, or a named item type;
+adding `opt` gives `Option<Vec<T>>`. Order and duplicates are preserved, with
+at most 256 items across the entire row and an explicit per-list maximum.
+`db schema` shows `ListRow`, recursive `ListNode`, and each reachable
+record/enum definition once, including payload types and recursive links.
+Enum/nested/list indexes, nested references, sets and maps remain work.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a

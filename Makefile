@@ -119,7 +119,7 @@ m1-records-artifact:
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
 m1-records:
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test schema_build --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test nested --test lists --test schema_build --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact

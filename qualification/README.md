@@ -117,6 +117,25 @@ unlinking/deletion, unchanged refused writes, no-op revisions, late-trap rollbac
 and unchanged upgrade. Native cases additionally cover independent references,
 31-dependant unlinking, literal absent/present reverse keys, incompatible optionality
 and malformed rows/index owners. The console includes its empty schema for inspection.
+Named types add EnumRow and NestedRow fixtures. The latter combines bounded Text,
+Nat16, optional records, unit/payload variants and boxed recursion. The host/target
+schema pipeline discovers each reachable definition once. Independent byte/hash
+oracles qualify canonical order and the named-type suffix. Native checks cover
+transitive type changes, reordered fields, required cycles without a finite base,
+corrupt unindexed payloads on delete/replace, exact depth and 256-node boundaries
+(including sibling fields), and the complete 4 KiB row envelope. Wasm checks cover
+malformed payloads, oversized values, depth/node refusals, no-op revisions, late
+traps and upgrade/reopen. Earlier unit-only manifests refuse without mutation.
+Inspection shows bounded named-definition tables without recursively expanding
+links. ListRow adds optional text lists, ordered Nat16 lists and recursive
+ListNode children. Independent count framing and schema hashes cover list bounds.
+Native checks distinguish absence/empty, preserve order/duplicates, reject bad
+UTF-8/counts/truncation, and enforce sibling item totals, empty-record node counts,
+depth and the full 4 KiB row envelope. Wasm checks include malformed input,
+preparation refusals, no-op writes, late traps and exact upgrade preservation.
+Counts are admitted before allocation or traversal; all lists in a row share a
+256-item budget alongside the 32-depth/256-structured-value bounds. List indexes,
+nested references/indexes, sets and maps remain unimplemented.
 The Wasm host checks generated inspection, sparse page progress, indexes,
 normal errors versus late application traps, atomic revisions and unchanged
 upgrade/reopen. Full raw stable-memory comparisons include supplier metadata.
@@ -135,7 +154,7 @@ successful replacement proves the instruction fault does not leave the host arme
 or poison retry. This carries over IcyDB's instruction-refusal preservation
 invariant using IC DB's message rollback boundary, without its budget machinery.
 The current six-entity fixture with optional indexes, codec v3 and Storage 0.74.1 covers 121 replacement writes and reaches growth
-with the insert batch starting at ID 1700: successful retry performs 1,384 backing
+with the insert batch starting at ID 1700. The named-schema rerun performs 1,336 backing
 writes, one growth request and expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after

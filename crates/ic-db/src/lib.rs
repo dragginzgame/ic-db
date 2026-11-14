@@ -2,7 +2,10 @@
 //! Experimental IC database: compiled schemas and synchronous bounded records.
 //!
 //! This M1 slice supports 8/16/32/64/128-bit integers, Bool, Principal and bounded Text/Blob, with optional
-//! values. Secondary indexes admit integers, Principal, Bool and Text, including optional values; primary keys
+//! values. Named records and unit/payload enums support bounded recursion via explicit
+//! indirection and ordered lists; traversals share byte, depth, structured-value
+//! and total list-item limits.
+//! Secondary indexes admit integers, Principal, Bool and Text, including optional values; primary keys
 //! require non-optional Nat64 fields. References admit required or optional Nat64;
 //! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
@@ -15,6 +18,7 @@ mod codec;
 mod key;
 mod schema;
 mod store;
+mod types;
 
 #[cfg(all(feature = "build", not(target_arch = "wasm32")))]
 pub mod build;
@@ -34,7 +38,7 @@ macro_rules! __register_schema {
     ($($item:item)*) => {};
 }
 
-pub use ic_db_macros::entity;
+pub use ic_db_macros::{entity, enum_, record};
 pub use ic_platform_types::Principal;
 pub use key::IndexValue;
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
@@ -84,6 +88,8 @@ impl std::error::Error for Error {
         }
     }
 }
+
+pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
 
 /// Codec boundary emitted by `#[entity]`; hand-written implementations are unsupported.
 /// Typed references use Rust resolution; an unresolved name fails compilation:

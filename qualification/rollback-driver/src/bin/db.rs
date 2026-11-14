@@ -49,7 +49,9 @@ type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
-fn print_schema(entities: Vec<EntityView>) {
+type TypeView = (String, bool, Vec<(String, String, bool)>);
+
+fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
     println!("\nSchema: {} entities\n", entities.len());
     let targets: std::collections::BTreeMap<_, _> = entities
         .iter()
@@ -115,6 +117,34 @@ fn print_schema(entities: Vec<EntityView>) {
                 )
             );
         }
+    }
+    for (name, record, members) in types {
+        println!(
+            "{}: {}",
+            if record { "Record" } else { "Enum" },
+            terminal_text(&name)
+        );
+        let rows: Vec<Vec<String>> = members
+            .into_iter()
+            .map(|(name, ty, optional)| {
+                vec![
+                    terminal_text(&name).into_owned(),
+                    terminal_text(&ty).into_owned(),
+                    if optional { "Yes" } else { "No" }.into(),
+                ]
+            })
+            .collect();
+        println!(
+            "{}\n",
+            render_bordered(
+                &[
+                    if record { "Field" } else { "Variant" },
+                    if record { "Type" } else { "Payload" },
+                    "Optional"
+                ],
+                &rows
+            )
+        );
     }
     println!(
         "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes."
@@ -193,9 +223,9 @@ async fn main() -> Result<(), String> {
                     .await
                     .map_err(|e| format!("{e:?}"))?;
                 if id == 2 {
-                    let (_, entities): (Status, Vec<EntityView>) =
+                    let (_, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
                         native::decode_response(id, &reply, LIMITS).map_err(|e| e.to_string())?;
-                    print_schema(entities);
+                    print_schema(entities, types);
                 } else {
                     print_status(
                         native::decode_response(id, &reply, LIMITS).map_err(|e| e.to_string())?,

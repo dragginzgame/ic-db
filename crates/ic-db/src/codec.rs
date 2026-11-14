@@ -6,7 +6,10 @@
 //! db/data/persisted_row/codec/scalar at 6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac.
 //! Extend that scalar approach to 128 bits; omit its slot envelope/value layer.
 
-use crate::{Error, FieldType, Principal};
+use crate::{
+    Error, FieldType, Principal, TypeBody, TypeLink, Value,
+    types::{MAX_DEPTH, MAX_LIST_ITEMS, MAX_NODES},
+};
 
 pub const ROW_CODEC_VERSION: u32 = 3;
 pub const MAX_ROW_BYTES: usize = 4096;
@@ -16,12 +19,13 @@ pub(crate) const MAX_PRINCIPAL_BYTES: usize = 29;
 #[derive(Default)]
 pub struct Encoder {
     bytes: Vec<u8>,
+    budget: Budget,
 }
 
 impl Encoder {
     #[must_use]
     pub fn new() -> Self {
-        Self { bytes: Vec::new() }
+        Self::default()
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), Error> {
@@ -32,6 +36,31 @@ impl Encoder {
         Ok(())
     }
 
+    pub fn named<T: Value>(&mut self, value: &T) -> Result<(), Error> {
+        self.budget.enter().map_err(|_| Error::Limit)?;
+        let result = value.encode_into(self);
+        self.budget.depth -= 1;
+        result
+    }
+    pub fn list<T>(
+        &mut self,
+        values: &[T],
+        max: u32,
+        write: fn(&mut Self, &T) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.budget
+            .list(values.len(), max)
+            .map_err(|_| Error::Limit)?;
+        let result = (|| {
+            self.nat32(values.len() as u32)?;
+            for value in values {
+                write(self, value)?;
+            }
+            Ok(())
+        })();
+        self.budget.depth -= 1;
+        result
+    }
     pub fn nat64(&mut self, value: u64) -> Result<(), Error> {
         self.append(&value.to_le_bytes())
     }
@@ -104,6 +133,7 @@ impl Encoder {
 pub struct Decoder<'a> {
     bytes: &'a [u8],
     position: usize,
+    budget: Budget,
 }
 
 impl<'a> Decoder<'a> {
@@ -111,9 +141,67 @@ impl<'a> Decoder<'a> {
         if bytes.len() > MAX_ROW_BYTES {
             return Err(Error::Corrupt);
         }
-        Ok(Self { bytes, position: 0 })
+        Ok(Self {
+            bytes,
+            position: 0,
+            budget: Budget::default(),
+        })
     }
 
+    pub fn named<T: Value>(&mut self) -> Result<T, Error> {
+        self.budget.enter()?;
+        let result = T::decode_from(self);
+        self.budget.depth -= 1;
+        result
+    }
+    fn list_count(&mut self, max: u32) -> Result<usize, Error> {
+        let count = usize::try_from(self.nat32()?).map_err(|_| Error::Corrupt)?;
+        self.budget.list(count, max)?;
+        Ok(count)
+    }
+    pub fn list<T>(
+        &mut self,
+        max: u32,
+        read: fn(&mut Self) -> Result<T, Error>,
+    ) -> Result<Vec<T>, Error> {
+        let count = self.list_count(max)?;
+        let result = (|| {
+            let mut values = Vec::new();
+            for _ in 0..count {
+                values.push(read(self)?);
+            }
+            Ok(values)
+        })();
+        self.budget.depth -= 1;
+        result
+    }
+    fn skip_named(&mut self, link: TypeLink) -> Result<(), Error> {
+        self.budget.enter()?;
+        let result = (|| {
+            match &(link.definition)().body {
+                TypeBody::Record(fields) => {
+                    for field in *fields {
+                        if !field.optional || self.boolean()? {
+                            self.skip(field.value)?;
+                        }
+                    }
+                }
+                TypeBody::Enum(variants) => {
+                    let variant = variants
+                        .get(usize::from(self.nat8()?))
+                        .ok_or(Error::Corrupt)?;
+                    if let Some(payload) = variant.payload
+                        && (!payload.optional || self.boolean()?)
+                    {
+                        self.skip(payload.value)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.budget.depth -= 1;
+        result
+    }
     fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
         let end = self.position.checked_add(len).ok_or(Error::Corrupt)?;
         let bytes = self.bytes.get(self.position..end).ok_or(Error::Corrupt)?;
@@ -195,6 +283,18 @@ impl<'a> Decoder<'a> {
     // so an unselected invalid tag, UTF-8 payload or length cannot be hidden.
     pub(crate) fn skip(&mut self, value: FieldType) -> Result<(), Error> {
         match value {
+            FieldType::List { item, max_items } => {
+                let count = self.list_count(max_items)?;
+                let result = (|| {
+                    for _ in 0..count {
+                        self.skip(*item)?;
+                    }
+                    Ok(())
+                })();
+                self.budget.depth -= 1;
+                result?;
+            }
+            FieldType::Named(link) => self.skip_named(link)?,
             FieldType::Nat8 => {
                 self.nat8()?;
             }
@@ -244,6 +344,35 @@ impl<'a> Decoder<'a> {
         if self.position != self.bytes.len() {
             return Err(Error::Corrupt);
         }
+        Ok(())
+    }
+}
+
+// Shared by typed encoding, typed decoding and borrowed stored-row inspection.
+#[derive(Default)]
+struct Budget {
+    depth: usize,
+    nodes: usize,
+    list_items: usize,
+}
+impl Budget {
+    fn list(&mut self, count: usize, max: u32) -> Result<(), Error> {
+        if max > MAX_LIST_ITEMS as u32
+            || count > max as usize
+            || count > MAX_LIST_ITEMS - self.list_items
+        {
+            return Err(Error::Corrupt);
+        }
+        self.enter()?;
+        self.list_items += count;
+        Ok(())
+    }
+    fn enter(&mut self) -> Result<(), Error> {
+        if self.depth >= MAX_DEPTH || self.nodes >= MAX_NODES {
+            return Err(Error::Corrupt);
+        }
+        self.depth += 1;
+        self.nodes += 1;
         Ok(())
     }
 }

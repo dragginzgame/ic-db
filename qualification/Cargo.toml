@@ -31,7 +31,7 @@ icydb = { git = "https://github.com/dragginzgame/icydb", rev = "6d421e3601a3d71e
 serde = "1.0.229"
 sha2 = { version = "0.11.1", default-features = false }
 tokio = "1.54.1"
-toko-tooling = "=0.43.0"
+toko-tooling = "=0.43.1"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

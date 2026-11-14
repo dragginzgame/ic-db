@@ -5,6 +5,7 @@ use quote::quote;
 use syn::{Lit, Meta};
 
 pub(super) enum Kind {
+    Named(syn::Path, bool),
     Nat8,
     Nat16,
     Nat32,
@@ -24,6 +25,7 @@ pub(super) struct Field {
     pub name: String,
     pub kind: Kind,
     pub optional: bool,
+    pub many: Option<u32>,
     pub reference: Option<(syn::Path, Option<String>)>,
 }
 impl Field {
@@ -70,9 +72,9 @@ impl Field {
             }
         }
         let name = name.ok_or_else(|| syn::Error::new_spanned(meta, "field requires name"))?;
-        let (kind, optional) =
+        let (kind, optional, many) =
             value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
-        if reference.is_some() && !matches!(kind, Kind::Nat64) {
+        if reference.is_some() && (many.is_some() || !matches!(kind, Kind::Nat64)) {
             return Err(syn::Error::new_spanned(
                 meta,
                 "references currently require Nat64",
@@ -82,29 +84,31 @@ impl Field {
             name,
             kind,
             optional,
+            many,
             reference,
         })
     }
     pub fn required_nat64(&self) -> bool {
-        matches!(self.kind, Kind::Nat64) && !self.optional
+        matches!(self.kind, Kind::Nat64) && !self.optional && self.many.is_none()
     }
     pub fn indexable(&self) -> bool {
-        matches!(
-            self.kind,
-            Kind::Nat8
-                | Kind::Nat16
-                | Kind::Nat32
-                | Kind::Nat64
-                | Kind::Nat128
-                | Kind::Int8
-                | Kind::Int16
-                | Kind::Int32
-                | Kind::Int64
-                | Kind::Int128
-                | Kind::Principal
-                | Kind::Bool
-                | Kind::Text(_)
-        )
+        self.many.is_none()
+            && matches!(
+                self.kind,
+                Kind::Nat8
+                    | Kind::Nat16
+                    | Kind::Nat32
+                    | Kind::Nat64
+                    | Kind::Nat128
+                    | Kind::Int8
+                    | Kind::Int16
+                    | Kind::Int32
+                    | Kind::Int64
+                    | Kind::Int128
+                    | Kind::Principal
+                    | Kind::Bool
+                    | Kind::Text(_)
+            )
     }
     pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
         if self.optional {
@@ -120,7 +124,14 @@ impl Field {
         }
     }
     pub fn rust_type(&self) -> TokenStream {
-        let base = match self.kind {
+        let base = match &self.kind {
+            Kind::Named(path, indirect) => {
+                if *indirect {
+                    quote!(::std::boxed::Box<#path>)
+                } else {
+                    quote!(#path)
+                }
+            }
             Kind::Nat8 => quote!(u8),
             Kind::Nat16 => quote!(u16),
             Kind::Nat32 => quote!(u32),
@@ -136,6 +147,11 @@ impl Field {
             Kind::Text(_) => quote!(::std::string::String),
             Kind::Blob(_) => quote!(::ic_db::Blob),
         };
+        let base = if self.many.is_some() {
+            quote!(::std::vec::Vec<#base>)
+        } else {
+            base
+        };
         if self.optional {
             quote!(::std::option::Option<#base>)
         } else {
@@ -145,7 +161,25 @@ impl Field {
     pub fn description(&self) -> TokenStream {
         let name = &self.name;
         let optional = self.optional;
-        let value = match self.kind {
+        let value = self.type_description();
+        let reference = match &self.reference {
+            None => quote!(None),
+            Some((entity, index)) => {
+                let index = index.as_ref().expect("reverse index was resolved");
+                quote!(Some(::ic_db::ReferenceSchema {
+                    entity: <#entity as ::ic_db::Entity>::ID,
+                    entity_name: <#entity as ::ic_db::Entity>::NAME,
+                    index: ::ic_db::__private::handle(#index)
+                }))
+            }
+        };
+        quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference })
+    }
+    pub fn type_description(&self) -> TokenStream {
+        let item = match &self.kind {
+            Kind::Named(path, _) => {
+                quote!(::ic_db::FieldType::Named(::ic_db::TypeLink { name: <#path as ::ic_db::Value>::NAME, definition: <#path as ::ic_db::Value>::definition }))
+            }
             Kind::Nat8 => quote!(::ic_db::FieldType::Nat8),
             Kind::Nat16 => quote!(::ic_db::FieldType::Nat16),
             Kind::Nat32 => quote!(::ic_db::FieldType::Nat32),
@@ -161,20 +195,16 @@ impl Field {
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
             Kind::Blob(max_bytes) => quote!(::ic_db::FieldType::Blob {max_bytes:#max_bytes}),
         };
-        let reference = match &self.reference {
-            None => quote!(None),
-            Some((entity, index)) => {
-                let index = index.as_ref().expect("reverse index was resolved");
-                quote!(Some(::ic_db::ReferenceSchema {
-                    entity: <#entity as ::ic_db::Entity>::ID,
-                    entity_name: <#entity as ::ic_db::Entity>::NAME,
-                    index: ::ic_db::__private::handle(#index)
-                }))
-            }
-        };
-        quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference })
+        if let Some(max) = self.many {
+            quote!(::ic_db::FieldType::List { item: &#item, max_items: #max })
+        } else {
+            item
+        }
     }
     pub fn validation(&self, ident: &syn::Ident) -> TokenStream {
+        if self.many.is_some() {
+            return quote!();
+        }
         let (Kind::Text(max) | Kind::Blob(max)) = self.kind else {
             return quote!();
         };
@@ -186,7 +216,17 @@ impl Field {
         quote!(if #invalid { return Err(::ic_db::Error::Limit); })
     }
     pub fn encode(&self, ident: &syn::Ident) -> TokenStream {
-        let write = match self.kind {
+        self.encode_with(&quote!(&self.#ident))
+    }
+    pub fn encode_with(&self, value: &TokenStream) -> TokenStream {
+        let write = match &self.kind {
+            Kind::Named(path, indirect) => {
+                if *indirect {
+                    quote!(writer.named::<#path>(value.as_ref())?)
+                } else {
+                    quote!(writer.named::<#path>(value)?)
+                }
+            }
             Kind::Nat8 => quote!(writer.nat8(*value)?),
             Kind::Nat16 => quote!(writer.nat16(*value)?),
             Kind::Nat32 => quote!(writer.nat32(*value)?),
@@ -199,67 +239,125 @@ impl Field {
             Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
             Kind::Principal => quote!(writer.principal(value)?),
-            Kind::Text(_) => quote!(writer.bytes(value.as_bytes())?),
-            Kind::Blob(_) => quote!(writer.bytes(value)?),
+            Kind::Text(max) => {
+                quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value.as_bytes())? })
+            }
+            Kind::Blob(max) => {
+                quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value)? })
+            }
+        };
+        let write = if let Some(max) = self.many {
+            quote!(writer.list(value, #max, |writer, value| { #write; Ok(()) })?)
+        } else {
+            write
         };
         if self.optional {
-            quote!(match &self.#ident {
+            quote!(match #value {
                 Some(value) => { writer.boolean(true)?; #write; }
                 None => writer.boolean(false)?,
             })
         } else {
-            quote!({ let value = &self.#ident; #write; })
+            quote!({ let value = #value; #write; })
         }
     }
     pub fn decode(&self, ident: &syn::Ident) -> TokenStream {
-        let read = match self.kind {
-            Kind::Nat8 => quote!(reader.nat8()?),
-            Kind::Nat16 => quote!(reader.nat16()?),
-            Kind::Nat32 => quote!(reader.nat32()?),
-            Kind::Int8 => quote!(reader.int8()?),
-            Kind::Int16 => quote!(reader.int16()?),
-            Kind::Int32 => quote!(reader.int32()?),
-            Kind::Nat64 => quote!(reader.nat64()?),
-            Kind::Nat128 => quote!(reader.nat128()?),
-            Kind::Int64 => quote!(reader.int64()?),
-            Kind::Int128 => quote!(reader.int128()?),
-            Kind::Bool => quote!(reader.boolean()?),
-            Kind::Principal => quote!(reader.principal()?),
-            Kind::Text(max) => quote!(reader.text(#max as usize)?),
-            Kind::Blob(max) => quote!(reader.blob(#max as usize)?),
+        let value = self.read_value();
+        quote!(#ident: #value,)
+    }
+    pub fn read_value(&self) -> TokenStream {
+        let read = match &self.kind {
+            Kind::Named(path, indirect) => {
+                if *indirect {
+                    quote!(reader.named::<#path>().map(::std::boxed::Box::new))
+                } else {
+                    quote!(reader.named::<#path>())
+                }
+            }
+            Kind::Nat8 => quote!(reader.nat8()),
+            Kind::Nat16 => quote!(reader.nat16()),
+            Kind::Nat32 => quote!(reader.nat32()),
+            Kind::Int8 => quote!(reader.int8()),
+            Kind::Int16 => quote!(reader.int16()),
+            Kind::Int32 => quote!(reader.int32()),
+            Kind::Nat64 => quote!(reader.nat64()),
+            Kind::Nat128 => quote!(reader.nat128()),
+            Kind::Int64 => quote!(reader.int64()),
+            Kind::Int128 => quote!(reader.int128()),
+            Kind::Bool => quote!(reader.boolean()),
+            Kind::Principal => quote!(reader.principal()),
+            Kind::Text(max) => quote!(reader.text(#max as usize)),
+            Kind::Blob(max) => quote!(reader.blob(#max as usize)),
+        };
+        let read = if let Some(max) = self.many {
+            quote!(reader.list(#max, |reader| #read)?)
+        } else {
+            quote!(#read?)
         };
         if self.optional {
-            quote!(#ident: if reader.boolean()? { Some(#read) } else { None },)
+            quote!(if reader.boolean()? { Some(#read) } else { None })
         } else {
-            quote!(#ident: #read,)
+            quote!(#read)
         }
     }
 }
-fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool)> {
+pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)> {
     let mut item = None;
     let mut optional = false;
+    let mut many = false;
+    let mut max_items = None;
     for part in list(meta)? {
         if matches!(&part, Meta::Path(path) if path.is_ident("opt")) && !optional {
             optional = true;
+        } else if matches!(&part, Meta::Path(path) if path.is_ident("many")) && !many {
+            many = true;
+        } else if part.path().is_ident("max_items") {
+            let Lit::Int(value) = literal(&part)? else {
+                return Err(syn::Error::new_spanned(part, "expected item count"));
+            };
+            let max: u32 = value.base10_parse()?;
+            if max > 256 {
+                return Err(syn::Error::new_spanned(
+                    part,
+                    "max_items must not exceed 256",
+                ));
+            }
+            once(&mut max_items, max, &part)?;
         } else if part.path().is_ident("item") {
             once(&mut item, parse_item(&part)?, &part)?;
         } else {
             return Err(syn::Error::new_spanned(
                 part,
-                "expected one item(...) and optional opt",
+                "expected item(...), optional opt, or many with max_items",
             ));
         }
+    }
+    if many != max_items.is_some() {
+        return Err(syn::Error::new_spanned(
+            meta,
+            "many requires max_items; max_items requires many",
+        ));
     }
     Ok((
         item.ok_or_else(|| syn::Error::new_spanned(meta, "value requires item(...)"))?,
         optional,
+        max_items,
     ))
 }
 fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     let mut prim = None;
+    let mut named = None;
+    let mut indirect = false;
     let mut max = None;
     for part in list(meta)? {
-        if part.path().is_ident("prim") {
+        if matches!(&part, Meta::Path(path) if path.is_ident("indirect")) && !indirect {
+            indirect = true;
+        } else if part.path().is_ident("is") {
+            once(
+                &mut named,
+                syn::parse_str::<syn::Path>(&text(&part)?)?,
+                &part,
+            )?;
+        } else if part.path().is_ident("prim") {
             once(&mut prim, text(&part)?, &part)?;
         } else if part.path().is_ident("max_bytes") {
             let Lit::Int(value) = literal(&part)? else {
@@ -279,6 +377,21 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
                 "unsupported primitive option",
             ));
         }
+    }
+    if let Some(path) = named {
+        if prim.is_some() || max.is_some() {
+            return Err(syn::Error::new_spanned(
+                meta,
+                "named types cannot also declare prim or max_bytes",
+            ));
+        }
+        return Ok(Kind::Named(path, indirect));
+    }
+    if indirect {
+        return Err(syn::Error::new_spanned(
+            meta,
+            "indirect currently requires a named type",
+        ));
     }
     match (prim.as_deref(), max) {
         (Some("Nat8"), None) => Ok(Kind::Nat8),

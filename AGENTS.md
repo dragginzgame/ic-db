@@ -81,7 +81,14 @@ installer. Do not edit vendor files or copy upstream reference documents.
   host-only `ctor` registration collects declarations, then a second stage
   validates/seals the graph and emits target artifacts. Keep collection and ctor
   out of deployed Wasm. The scalar entity pipeline is implemented through the
-  optional `ic-db/build` feature; named/nested schema types remain work. Build-time
+  optional `ic-db/build` feature. Named records and unit/payload enums resolve through entity field
+  type paths and enter one finite compiled graph. Recursive values use explicit
+  `item(indirect, is = "...")` boxing and need a finite constructor. All nested
+  encoding, decoding and stored inspection share row byte/depth/node bounds.
+  Ordered lists use `value(many, max_items = N, item(...))`, optionally `opt`.
+  Count admission precedes allocation/traversal; per-row limits also cover total
+  list items and structured values. Recursive list edges provide an empty base
+  without Box. Nested indexes/references, list indexes, maps and sets remain work. Build-time
   Rust paths do not silently replace declared durable names.
 - IC DB owns its durable row codec. Keep `ic-wire` and transport serialization
   out of product dependencies and persisted encoding. Transport adapters may
@@ -94,10 +101,9 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Feature deferrals in the design are proposals. They do not authorize removing
   capabilities from IcyDB or claiming full Toko adoption.
 - Keep one current system design and executable examples as implementation grows.
-  When a release changes or adds CLI behavior, include a concise `▶️ Try it`
-  section in its changelog with copyable fenced `sh` blocks using real `db`
-  commands, following Canic's presentation. State setup and fixture/deployment
-  scope; do not imply proposed commands or product capabilities are implemented.
+  For the baseline's changelog quick starts, use real `db` commands and Canic's
+  presentation. State fixture/deployment scope; do not imply proposed commands
+  or product capabilities are implemented.
   Use GitHub issues for actionable follow-ups once a remote exists; do not invent
   a parallel local issue queue. The design's open decisions are design questions.
 - Product packages live under `crates/`. Add an independent `qualification/`

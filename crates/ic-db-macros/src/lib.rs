@@ -8,7 +8,9 @@ use quote::quote;
 use std::collections::BTreeSet;
 use syn::{Expr, ItemStruct, Lit, Meta, Token, parse::Parser, punctuated::Punctuated};
 
+mod enumeration;
 mod field;
+mod record;
 use field::Field;
 
 /// Author a scalar record with named fields, an external Nat64 key and indexes.
@@ -30,6 +32,25 @@ use field::Field;
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a named enum using an empty struct and `variant(name = "...")` attributes.
+/// Supports 1–64 unit or typed payload variants. Canonical name order determines
+/// stored ordinals; source declaration order does not. Use item(indirect, is = "Self")
+/// for boxed recursion, with a finite base alternative.
+#[proc_macro_attribute]
+pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
+    enumeration::expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a named stored record using attribute-owned fields and an empty struct.
+#[proc_macro_attribute]
+pub fn record(args: TokenStream, item: TokenStream) -> TokenStream {
+    record::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -304,6 +325,17 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .map(|field| syn::parse_str(&field.name))
         .collect::<syn::Result<_>>()?;
+    let nested_writes: Vec<_> = ordered
+        .iter()
+        .zip(&ordered_ids)
+        .filter(|(f, _)| f.many.is_some() || matches!(f.kind, field::Kind::Named(..)))
+        .map(|(f, id)| f.encode(id))
+        .collect();
+    let nested_validation = if nested_writes.is_empty() {
+        quote!()
+    } else {
+        quote! { let mut writer = ::ic_db::__private::Encoder::new(); #(#nested_writes)* }
+    };
     let writes: Vec<_> = ordered
         .iter()
         .zip(&ordered_ids)
@@ -343,10 +375,10 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             }
             fn validate(&self) -> Result<(), ::ic_db::Error> {
                 #(#validations)*
+                #nested_validation
                 Ok(())
             }
             fn encode(&self) -> Result<::std::vec::Vec<u8>, ::ic_db::Error> {
-                <Self as ::ic_db::Entity>::validate(self)?;
                 let mut writer = ::ic_db::__private::Encoder::new();
                 #(#writes)*
                 Ok(writer.finish())
@@ -355,7 +387,6 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 let mut reader = ::ic_db::__private::Decoder::new(bytes)?;
                 let row = Self { #(#reads)* };
                 reader.finish()?;
-                <Self as ::ic_db::Entity>::validate(&row).map_err(|_| ::ic_db::Error::Corrupt)?;
                 Ok(row)
             }
         }

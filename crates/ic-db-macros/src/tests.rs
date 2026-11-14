@@ -329,3 +329,192 @@ fn names_and_reverse_selection_are_unambiguous() {
         .is_err()
     );
 }
+
+#[test]
+fn enum_authoring_is_bounded_and_does_not_imply_index_support() {
+    for args in [
+        quote!(),
+        quote!(variant(name = "A"), variant(name = "A")),
+        quote!(variant(name = "")),
+        quote!(variant(name = "A", references(entity = "Target"))),
+        quote!(id = 1, variant(name = "A")),
+    ] {
+        assert!(
+            super::enumeration::expand(
+                args,
+                quote!(
+                    struct State {}
+                )
+            )
+            .is_err()
+        );
+    }
+    let variants: Vec<_> = (0..65)
+        .map(|i| {
+            let name = format!("V{i}");
+            quote!(variant(name=#name))
+        })
+        .collect();
+    assert!(
+        super::enumeration::expand(
+            quote!(#(#variants),*),
+            quote!(
+                struct State {}
+            )
+        )
+        .is_err()
+    );
+    let fields = quote!(fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "state", value(item(is = "State")))
+    ));
+    assert!(
+        expand(
+            quote!(pk(field="id"),#fields),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_ok()
+    );
+    assert!(
+        expand(
+            quote!(pk(field="id"),index(field="state"),#fields),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        expand(
+            quote!(pk(field="state"),#fields),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        expand(
+            quote!(
+                pk(field = "id"),
+                fields(
+                    field(name = "id", value(item(prim = "Nat64"))),
+                    field(name = "state", value(item(is = "State", prim = "Nat8")))
+                )
+            ),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn nested_authoring_preserves_one_field_rule_owner() {
+    for args in [
+        quote!(fields(
+            field(name = "x", value(item(prim = "Nat64"))),
+            field(name = "x", value(item(prim = "Nat64")))
+        )),
+        quote!(fields(field(
+            name = "x",
+            value(item(prim = "Nat64")),
+            references(entity = "Target")
+        ))),
+        quote!(pk(field = "x"), fields()),
+        quote!(fields(field(
+            name = "x",
+            value(item(indirect, prim = "Nat64"))
+        ))),
+    ] {
+        assert!(
+            super::record::expand(
+                args,
+                quote!(
+                    struct Nested {}
+                )
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        super::record::expand(
+            quote!(fields(field(
+                name = "next",
+                value(opt, item(indirect, is = "Self"))
+            ))),
+            quote!(
+                struct Node {}
+            )
+        )
+        .is_ok()
+    );
+    assert!(
+        super::enumeration::expand(
+            quote!(
+                variant(name = "End"),
+                variant(name = "Next", value(item(indirect, is = "Self")))
+            ),
+            quote!(
+                struct Node {}
+            )
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn list_authoring_requires_explicit_bounds_and_refuses_unsupported_key_shapes() {
+    let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
+    for value in [
+        quote!(value(many, item(prim = "Nat8"))),
+        quote!(value(max_items = 1, item(prim = "Nat8"))),
+        quote!(value(many, max_items = 257, item(prim = "Nat8"))),
+        quote!(value(many, many, max_items = 1, item(prim = "Nat8"))),
+    ] {
+        assert!(
+            expand(
+                quote!(pk(field="id"),fields(#id,field(name="items",#value))),
+                quote!(
+                    struct Row {}
+                )
+            )
+            .is_err()
+        );
+    }
+    let items = quote!(field(
+        name = "items",
+        value(many, max_items = 4, item(prim = "Nat64"))
+    ));
+    assert!(
+        expand(
+            quote!(pk(field="id"),fields(#id,#items)),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_ok()
+    );
+    assert!(
+        expand(
+            quote!(pk(field="items"),fields(#id,#items)),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
+    assert!(
+        expand(
+            quote!(pk(field="id"),index(field="items"),fields(#id,#items)),
+            quote!(
+                struct Row {}
+            )
+        )
+        .is_err()
+    );
+    assert!(expand(quote!(pk(field="id"),index(field="items"),fields(#id,field(name="items",value(many,max_items=4,item(prim="Nat64")),references(entity="Target")))),quote!(struct Row{})).is_err());
+}

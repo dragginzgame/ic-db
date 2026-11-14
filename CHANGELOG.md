@@ -4,6 +4,11 @@
 
 ### ▶️ Try it
 
+`db schema` now shows `ListRow` with bounded ordered lists and recursive `ListNode`,
+alongside `NestedRow`, its `Details` record, and unit/payload/recursive
+`NestedPayload` variants. Named definitions appear once, with fields, payloads
+and optionality. No numeric field or variant IDs are authored.
+
 Reinstall the local fixture console, then inspect `IdentityRow`'s required and
 optional `Principal` fields and unique owner index. Document's reverse index now
 orders signed scores within each entry, and its new `(published, title)` index
@@ -26,6 +31,38 @@ db status
 
 ### 🛠️ Changes
 
+- Adopt Toko Tooling 0.43.1 in both workspaces and refresh the authenticated vendor
+  snapshot. Frozen release tooling now retains phase timings across failures and
+  resumes; database dependencies and behavior are unchanged by this refresh.
+
+- Add ordered lists to entity/record fields and enum payloads using
+  `value(many, max_items = N, item(...))`. Retain IcyDB's `many` spelling with an
+  explicit count bound; preserve order, duplicates and absence versus empty.
+  One codec budget checks counts before allocation/traversal: at most 256 list
+  items and 256 structured values per row, depth 32 and 4 KiB encoded bytes.
+  Empty lists give recursive types a finite constructor. Shared stored inspection
+  validates every element without constructing a list. Native/Wasm checks cover
+  independent bytes/fingerprints, malformed counts/elements, sibling and recursive
+  limits, no-op writes, refusals, late traps and upgrade/reopen. New list metadata
+  binds these limits; contracts without lists remain unchanged. No new dependency,
+  durable state or generic value tree. List indexes/references, optional elements,
+  sets and maps remain future increments; no existing attribute is removed.
+
+- Support named records and unit/payload enums through the familiar attribute-owned
+  `record`, `enum_`, `variant(value(...))` and `item(is = "...")` spelling.
+  `item(indirect, is = "...")` gives explicit Box indirection. Recursive graphs
+  require a finite constructor; required cycles without one refuse admission.
+  One finite compiled graph replaces the unit-only descriptor. The generated
+  codec boundary is now `Value` for both records and enums; the provisional
+  `Enum` trait/`EnumSchema` are removed. All typed reads/writes and shared stored
+  inspection enforce the same 32-level/256-structured-value/4 KiB row envelope.
+  Scalar-only contracts remain unchanged. Named metadata now uses `ICDBTY02`;
+  earlier unit-enum manifests refuse intact. No persisted catalog, Wire codec,
+  materialized generic value tree, additional product crate or journal is added.
+  Native/Wasm checks cover exact bytes, transitive schema changes, reorderings,
+  malformed payloads, boundary limits, no-op writes, late traps and upgrade/reopen.
+  Nested indexes/references, sets and maps remain implementation work.
+
 - Remove mandatory numeric entity/index IDs from scalar authoring. Entity names
   default to the Rust type name; index names default to ordered comma-separated
   fields. Optional `name` overrides preserve explicit identity. References select
@@ -46,7 +83,7 @@ db status
   Qualify duplicate/late registration, order independence, missing/unresolved
   targets and unchanged Wasm persistence/rollback/reopen. No persisted catalog,
   endpoint generation, new product crate or Wasm constructor dependency is added.
-  Named nested types remain work. Runtime and macro source retain unsafe-code
+  Named types use the same pipeline. Runtime and macro source retain unsafe-code
   prohibition; native declaration builds permit ctor's generated registration.
 - Support optional Nat64 references through existing ordinary reverse indexes.
   Absence has no target; present zero is a real key. Validate existence and

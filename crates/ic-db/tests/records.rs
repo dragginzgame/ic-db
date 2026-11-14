@@ -2835,3 +2835,252 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ));
     assert_eq!(*backing.borrow(), before);
 }
+
+mod enum_values {
+    use ic_db::enum_;
+    #[enum_(
+        variant(name = "Ready"),
+        variant(name = "Archived"),
+        variant(name = "Draft")
+    )]
+    pub struct Lifecycle {}
+    #[enum_(
+        name = "Lifecycle",
+        variant(name = "Draft"),
+        variant(name = "Ready"),
+        variant(name = "Archived")
+    )]
+    pub struct Reordered {}
+    #[enum_(
+        name = "Lifecycle",
+        variant(name = "Ready"),
+        variant(name = "Archived"),
+        variant(name = "Editing")
+    )]
+    pub struct Changed {}
+}
+use enum_values::Lifecycle as State;
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "state", value(item(is = "State"))),
+        field(name = "previous", value(opt, item(is = "enum_values::Lifecycle")))
+    )
+)]
+struct EnumRow {}
+#[entity(
+    name = "EnumRow",
+    pk(field = "id"),
+    fields(
+        field(name = "state", value(item(is = "enum_values::Reordered"))),
+        field(name = "previous", value(opt, item(is = "enum_values::Reordered"))),
+        field(name = "id", value(item(prim = "Nat64")))
+    )
+)]
+struct EnumReordered {}
+#[entity(
+    name = "EnumRow",
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "state", value(item(is = "enum_values::Changed"))),
+        field(name = "previous", value(opt, item(is = "enum_values::Changed")))
+    )
+)]
+struct EnumChanged {}
+
+#[test]
+fn named_enums_use_canonical_ordinals_and_exact_admission() {
+    use ic_db::Value;
+    let ic_db::TypeBody::Enum(variants) = &State::definition().body else {
+        panic!("enum");
+    };
+    assert_eq!(
+        variants.iter().map(|v| v.name).collect::<Vec<_>>(),
+        ["Archived", "Draft", "Ready"]
+    );
+    let row = EnumRow {
+        id: 7,
+        previous: Some(State::Draft),
+        state: State::Ready,
+    };
+    // Independent bytes: id, optional presence, Draft ordinal 1, Ready ordinal 2.
+    let golden = [7, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2];
+    assert_eq!(row.encode().unwrap(), golden);
+    assert_eq!(EnumRow::decode(&golden).unwrap(), row);
+    let reordered = EnumReordered::decode(&golden).unwrap();
+    assert_eq!(reordered.state, enum_values::Reordered::Ready);
+    assert_eq!(reordered.encode().unwrap(), golden);
+    let absent = EnumRow {
+        id: 7,
+        previous: None,
+        state: State::Archived,
+    };
+    assert_eq!(absent.encode().unwrap(), [7, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    for end in 0..golden.len() {
+        assert!(matches!(
+            EnumRow::decode(&golden[..end]),
+            Err(Error::Corrupt)
+        ));
+    }
+    let mut trailing = golden.to_vec();
+    trailing.push(0);
+    assert!(matches!(EnumRow::decode(&trailing), Err(Error::Corrupt)));
+    for (position, bad) in [(8, 2), (9, 3), (10, 3), (10, 255)] {
+        let mut bytes = golden;
+        bytes[position] = bad;
+        assert!(matches!(EnumRow::decode(&bytes), Err(Error::Corrupt)));
+    }
+    let contract = || Schema::new(&[EnumRow::SCHEMA]).unwrap();
+    // Independent literal framing and Node SHA-256; shared enum definition occurs once.
+    assert_eq!(
+        contract()
+            .fingerprint()
+            .map(|byte| format!("{byte:02x}"))
+            .concat(),
+        "405a6edf6b205539bddbd4a632bf985479e08e6aafee966d24afa717d28edf9f"
+    );
+    assert_eq!(
+        contract().fingerprint(),
+        Schema::new(&[EnumReordered::SCHEMA]).unwrap().fingerprint()
+    );
+    assert_ne!(
+        contract().fingerprint(),
+        Schema::new(&[EnumChanged::SCHEMA]).unwrap().fingerprint()
+    );
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [9; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.get::<EnumReordered>(7).unwrap(), Some(reordered));
+    assert!(matches!(
+        db.get::<EnumChanged>(7),
+        Err(Error::UnknownEntity)
+    ));
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(*backing.borrow(), before);
+    drop(db);
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    assert_eq!(db.get::<EnumRow>(7).unwrap(), Some(row));
+    let mut batch = Batch::new();
+    batch.replace(&absent).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        Database::open(
+            runtime.open_memory(&key).unwrap(),
+            Schema::new(&[EnumChanged::SCHEMA]).unwrap()
+        ),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    // Corrupt an unindexed enum; shared preparation must inspect it before deletion.
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut row_key = vec![2];
+    row_key.extend(EnumRow::ID.to_be_bytes());
+    row_key.extend(7_u64.to_be_bytes());
+    let mut bytes = absent.encode().unwrap();
+    *bytes.last_mut().unwrap() = 255;
+    raw.insert(row_key, bytes);
+    drop(raw);
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.delete::<EnumRow>(7).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn enum_definitions_and_unsupported_operations_fail_closed() {
+    use ic_db::{EntitySchema, FieldType, TypeBody, TypeLink, TypeSchema, VariantSchema};
+    fn invalid() -> &'static TypeSchema {
+        &TypeSchema {
+            name: "Lifecycle",
+            body: TypeBody::Enum(&[
+                VariantSchema {
+                    name: "Ready",
+                    payload: None,
+                },
+                VariantSchema {
+                    name: "Draft",
+                    payload: None,
+                },
+            ]),
+        }
+    }
+    let mut fields = EnumRow::SCHEMA.fields.to_vec();
+    for field in &mut fields {
+        if matches!(field.value, FieldType::Named(_)) {
+            field.value = FieldType::Named(TypeLink {
+                name: "Lifecycle",
+                definition: invalid,
+            });
+        }
+    }
+    let altered = Box::leak(Box::new(EntitySchema {
+        fields: Box::leak(fields.into_boxed_slice()),
+        ..*EnumRow::SCHEMA
+    }));
+    assert!(matches!(Schema::new(&[altered]), Err(Error::InvalidSchema)));
+    // One logical type name cannot carry two conflicting definitions, even across fields.
+    let mut fields = EnumRow::SCHEMA.fields.to_vec();
+    fields
+        .iter_mut()
+        .find(|field| field.name == "state")
+        .unwrap()
+        .value = EnumChanged::SCHEMA
+        .fields
+        .iter()
+        .find(|field| field.name == "state")
+        .unwrap()
+        .value;
+    let altered = Box::leak(Box::new(EntitySchema {
+        fields: Box::leak(fields.into_boxed_slice()),
+        ..*EnumRow::SCHEMA
+    }));
+    assert!(matches!(Schema::new(&[altered]), Err(Error::InvalidSchema)));
+}
+
+#[test]
+fn earlier_unit_enum_contract_is_refused_without_touching_its_bytes() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let contract = || Schema::new(&[EnumRow::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [9; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&EnumRow {
+            id: 7,
+            previous: Some(State::Draft),
+            state: State::Ready,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let mut raw =
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut manifest = raw.get(&vec![0]).unwrap();
+    let old = "3fc6bb4b60668c7a04518cbad5659ce829b313eb2e35cda7d30a38ec3d73a715";
+    for i in 0..32 {
+        manifest[8 + i] = u8::from_str_radix(&old[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    raw.insert(vec![0], manifest);
+    drop(raw);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        Database::open(runtime.open_memory(&key).unwrap(), contract()),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}

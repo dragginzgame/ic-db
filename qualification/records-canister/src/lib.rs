@@ -134,8 +134,9 @@ fn inspect() -> Status {
 type FieldView = (String, String, bool, Option<u32>, Option<(u32, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
+type TypeView = (String, bool, Vec<(String, String, bool)>);
 #[ic_wire_endpoint::query(id = 2)]
-fn schema() -> (Status, Vec<EntityView>) {
+fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
     let db = open(&host);
     let entities = db
@@ -148,6 +149,8 @@ fn schema() -> (Status, Vec<EntityView>) {
                 .iter()
                 .map(|field| {
                     let (kind, limit) = match field.value {
+                        FieldType::List { .. } => ("List", None),
+                        FieldType::Named(link) => (link.name, None),
                         FieldType::Nat8 => ("Nat8", None),
                         FieldType::Nat16 => ("Nat16", None),
                         FieldType::Nat32 => ("Nat32", None),
@@ -165,7 +168,11 @@ fn schema() -> (Status, Vec<EntityView>) {
                     };
                     (
                         field.name.into(),
-                        kind.into(),
+                        if matches!(field.value, FieldType::List { .. }) {
+                            type_label(field.value)
+                        } else {
+                            kind.into()
+                        },
                         field.optional,
                         limit,
                         field.reference.map(|reference| {
@@ -204,7 +211,37 @@ fn schema() -> (Status, Vec<EntityView>) {
             )
         })
         .collect();
-    (status(&db, &host), entities)
+    let types = db
+        .schema()
+        .types()
+        .map(|definition| {
+            let (record, members) = match &definition.body {
+                ic_db::TypeBody::Record(fields) => (
+                    true,
+                    fields
+                        .iter()
+                        .map(|f| (f.name.into(), type_label(f.value), f.optional))
+                        .collect(),
+                ),
+                ic_db::TypeBody::Enum(variants) => (
+                    false,
+                    variants
+                        .iter()
+                        .map(|v| {
+                            (
+                                v.name.into(),
+                                v.payload
+                                    .map_or_else(|| "-".into(), |p| type_label(p.value)),
+                                v.payload.is_some_and(|p| p.optional),
+                            )
+                        })
+                        .collect(),
+                ),
+            };
+            (definition.name.into(), record, members)
+        })
+        .collect();
+    (status(&db, &host), entities, types)
 }
 #[ic_wire_endpoint::query(id = 3)]
 fn query((after, limit, minimum): (u64, u64, u64)) -> Result<QueryPage, u8> {
@@ -798,4 +835,194 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
         .map(|row| row.id)
         .collect();
     (rows, dependants, db.revision::<OptionalLink>().unwrap())
+}
+
+// Private enum qualification controls. Transport uses ordinals solely to exercise
+// the typed database boundary; it does not define the persisted enum codec.
+#[ic_wire_endpoint::update(id = 29)]
+fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>, u64), u8> {
+    fn lifecycle(ordinal: u8) -> Result<schema::Lifecycle, ic_db::Error> {
+        let bytes = [ordinal];
+        let mut reader = ic_db::__private::Decoder::new(&bytes)?;
+        reader.named()
+    }
+    use schema::EnumRow;
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        let row = EnumRow {
+            id: 1,
+            state: lifecycle(state).map_err(|_| 1_u8)?,
+            previous: previous.map(lifecycle).transpose().map_err(|_| 1_u8)?,
+        };
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 2_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            cdk::api::trap("after enum replacement");
+        }
+    }
+    Ok((
+        db.get::<EnumRow>(1)
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<EnumRow>().unwrap(),
+    ))
+}
+#[ic_wire_endpoint::query(id = 30)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport endpoint requires an owned request"
+)]
+fn enum_decode(bytes: Vec<u8>) -> bool {
+    schema::EnumRow::decode(&bytes).is_ok()
+}
+
+fn type_label(value: FieldType) -> String {
+    match value {
+        FieldType::List { item, max_items } => {
+            format!("List<{}> (max {max_items} items)", type_label(*item))
+        }
+        FieldType::Named(link) => link.name.into(),
+        FieldType::Text { max_bytes } => format!("Text (max {max_bytes} bytes)"),
+        FieldType::Blob { max_bytes } => format!("Blob (max {max_bytes} bytes)"),
+        scalar => format!("{scalar:?}"),
+    }
+}
+
+#[ic_wire_endpoint::update(id = 31)]
+fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
+    use schema::{Branch, Details, NestedPayload, NestedRow};
+    fn tree(depth: u8) -> NestedPayload {
+        if depth == 0 {
+            NestedPayload::Idle
+        } else {
+            NestedPayload::Pair(Branch {
+                left: Box::new(tree(depth - 1)),
+                right: Box::new(tree(depth - 1)),
+            })
+        }
+    }
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        if size > 33 || (shape == 2 && size > 7) {
+            return Err(1);
+        }
+        let payload = match shape {
+            0 => NestedPayload::Data(Details {
+                label: "x".repeat(size.into()),
+                x: 0x1234,
+            }),
+            1 => (0..size).fold(NestedPayload::Idle, |value, _| {
+                NestedPayload::Loop(Box::new(value))
+            }),
+            2 => tree(size),
+            _ => return Err(1),
+        };
+        let row = NestedRow {
+            id: 1,
+            meta: None,
+            payload,
+        };
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 1_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            cdk::api::trap("after nested replacement");
+        }
+    }
+    Ok((
+        db.get::<NestedRow>(1)
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<NestedRow>().unwrap(),
+    ))
+}
+#[ic_wire_endpoint::query(id = 32)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn nested_decodes(bytes: Vec<u8>) -> bool {
+    schema::NestedRow::decode(&bytes).is_ok()
+}
+
+#[ic_wire_endpoint::update(id = 33)]
+fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
+    use schema::{ListNode, ListRow};
+    fn tree(depth: u8) -> ListNode {
+        ListNode {
+            children: if depth == 0 {
+                vec![]
+            } else {
+                vec![tree(depth - 1), tree(depth - 1)]
+            },
+        }
+    }
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        if size > 33 || (shape == 3 && size > 7) {
+            return Err(1);
+        }
+        let mut row = ListRow {
+            id: 1,
+            labels: None,
+            numbers: vec![],
+            trees: vec![],
+        };
+        match shape {
+            0 => row.numbers = vec![258; usize::from(size)],
+            1 => {
+                row.trees =
+                    vec![
+                        (0..size).fold(ListNode { children: vec![] }, |child, _| ListNode {
+                            children: vec![child],
+                        }),
+                    ]
+            }
+            2 => row.labels = Some(vec!["x".repeat(size.into())]),
+            3 => row.trees = vec![tree(size)],
+            _ => return Err(1),
+        }
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 1_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            cdk::api::trap("after list replacement");
+        }
+    }
+    Ok((
+        db.get::<ListRow>(1)
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<ListRow>().unwrap(),
+    ))
+}
+#[ic_wire_endpoint::query(id = 34)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport requires an owned request"
+)]
+fn list_decodes(bytes: Vec<u8>) -> bool {
+    schema::ListRow::decode(&bytes).is_ok()
 }

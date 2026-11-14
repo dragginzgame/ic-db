@@ -89,3 +89,63 @@ pub(crate) struct IdentityRow {}
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="next", value(opt, item(prim="Nat64")), references(entity="Self",index="next,id"))))]
 pub(crate) struct OptionalLink {}
+
+#[ic_db::enum_(
+    variant(name = "Ready"),
+    variant(name = "Archived"),
+    variant(name = "Draft")
+)]
+pub(crate) struct Lifecycle {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "state", value(item(is = "Lifecycle"))),
+        field(name = "previous", value(opt, item(is = "Lifecycle")))
+    )
+)]
+pub(crate) struct EnumRow {}
+
+#[ic_db::record(fields(
+    field(name = "label", value(item(prim = "Text", max_bytes = 8))),
+    field(name = "x", value(item(prim = "Nat16")))
+))]
+pub(crate) struct Details {}
+#[ic_db::record(fields(
+    field(name = "left", value(item(indirect, is = "NestedPayload"))),
+    field(name = "right", value(item(indirect, is = "NestedPayload")))
+))]
+pub(crate) struct Branch {}
+#[ic_db::enum_(
+    variant(name = "Data", value(item(is = "Details"))),
+    variant(name = "Idle"),
+    variant(name = "Loop", value(item(indirect, is = "Self"))),
+    variant(name = "Maybe", value(opt, item(prim = "Nat64"))),
+    variant(name = "Pair", value(item(is = "Branch")))
+)]
+pub(crate) struct NestedPayload {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "meta", value(opt, item(is = "Details"))),
+        field(name = "payload", value(item(is = "NestedPayload")))
+    )
+)]
+pub(crate) struct NestedRow {}
+
+#[ic_db::record(fields(field(name = "children", value(many, max_items = 4, item(is = "Self")))))]
+pub(crate) struct ListNode {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "labels",
+            value(opt, many, max_items = 3, item(prim = "Text", max_bytes = 4))
+        ),
+        field(name = "numbers", value(many, max_items = 3, item(prim = "Nat16"))),
+        field(name = "trees", value(many, max_items = 4, item(is = "ListNode")))
+    )
+)]
+pub(crate) struct ListRow {}

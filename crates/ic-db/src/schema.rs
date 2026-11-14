@@ -1,10 +1,11 @@
-//! One compiled scalar contract, canonical fingerprint and inspection projection.
+//! One compiled contract, canonical fingerprint and inspection projection.
 
+use crate::types::{TypeGraph, TypeLink};
 use crate::{__private::RowInfo, Error, IndexValue, codec::Decoder, key};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-const MAX_FIELDS: usize = 16;
+pub(crate) const MAX_FIELDS: usize = 16;
 
 // FNV-1a is only a compact physical handle, never schema authority. Admission
 // rejects collisions; full names and semantics enter the SHA-256 contract.
@@ -21,9 +22,18 @@ pub const fn handle(name: &str) -> u32 {
     value
 }
 
-/// Stored primitive semantics supported by this increment.
+/// Stored value semantics supported by this increment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldType {
+    /// An ordered bounded list of scalars or named values.
+    List {
+        /// Exact element type; optional elements and inline lists are not admitted yet.
+        item: &'static FieldType,
+        /// Maximum number of elements, from zero through 256.
+        max_items: u32,
+    },
+    /// A named record or enum; not yet admitted as a key or reference.
+    Named(TypeLink),
     /// Exact unsigned 8-bit integer.
     Nat8,
     /// Exact unsigned 16-bit integer.
@@ -180,6 +190,7 @@ impl EntitySchema {
 pub struct Schema {
     pub(crate) entities: Vec<&'static EntitySchema>,
     pub(crate) fingerprint: [u8; 32],
+    types: TypeGraph,
 }
 
 impl Schema {
@@ -201,6 +212,7 @@ impl Schema {
         }
         bytes.extend((entities.len() as u32).to_le_bytes());
         let mut ids = BTreeSet::new();
+        let mut types = TypeGraph::default();
         for entity in &entities {
             if entity.id != handle(entity.name)
                 || !ids.insert(entity.id)
@@ -219,39 +231,13 @@ impl Schema {
             bytes.extend((entity.fields.len() as u32).to_le_bytes());
             for field in entity.fields {
                 name(&mut bytes, field.name)?;
-                let tag = match field.value {
-                    FieldType::Nat8 => 8,
-                    FieldType::Nat16 => 9,
-                    FieldType::Nat32 => 10,
-                    FieldType::Int8 => 11,
-                    FieldType::Int16 => 12,
-                    FieldType::Int32 => 13,
-                    FieldType::Nat64 => 1,
-                    FieldType::Int64 => 4,
-                    FieldType::Nat128 => 5,
-                    FieldType::Int128 => 6,
-                    FieldType::Bool => 2,
-                    FieldType::Principal => 14,
-                    FieldType::Text { max_bytes } => {
-                        if max_bytes > 4096 {
-                            return Err(Error::InvalidSchema);
-                        }
-                        3
-                    }
-                    FieldType::Blob { max_bytes } => {
-                        if max_bytes > 4096 {
-                            return Err(Error::InvalidSchema);
-                        }
-                        7
-                    }
-                };
-                bytes.push(
-                    tag | if field.optional { 0x80 } else { 0 }
-                        | if field.reference.is_some() { 0x40 } else { 0 },
-                );
-                if let FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } = field.value {
-                    bytes.extend(max_bytes.to_le_bytes());
-                }
+                encode_type(
+                    &mut bytes,
+                    field.value,
+                    field.optional,
+                    field.reference.is_some(),
+                )?;
+                types.include(field.value)?;
                 if let Some(reference) = field.reference {
                     if field.value != FieldType::Nat64
                         || !entities.iter().any(|target| {
@@ -324,11 +310,13 @@ impl Schema {
                 return Err(Error::InvalidSchema);
             }
         }
+        types.encode(&mut bytes)?;
         let mut hash = Sha256::new();
         hash.update(b"ic-db:schema:v1\0");
         hash.update(bytes);
         Ok(Self {
             entities,
+            types,
             fingerprint: hash.finalize().into(),
         })
     }
@@ -345,6 +333,11 @@ impl Schema {
         &self.entities
     }
 
+    /// Reachable named definitions in logical-name order, without expanding cycles.
+    pub fn types(&self) -> impl Iterator<Item = &'static crate::TypeSchema> + '_ {
+        self.types.definitions()
+    }
+
     pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<(), Error> {
         let current = self
             .entities
@@ -358,6 +351,15 @@ impl Schema {
         {
             return Err(Error::UnknownEntity);
         }
+        let mut proposed_types = TypeGraph::default();
+        for field in proposed.fields {
+            proposed_types
+                .include(field.value)
+                .map_err(|_| Error::UnknownEntity)?;
+        }
+        if !self.types.contains(&proposed_types) {
+            return Err(Error::UnknownEntity);
+        }
         Ok(())
     }
 }
@@ -369,11 +371,65 @@ fn required_nat64(entity: &EntitySchema, name: &str) -> bool {
         .any(|field| field.name == name && field.value == FieldType::Nat64 && !field.optional)
 }
 
-fn name(bytes: &mut Vec<u8>, value: &str) -> Result<(), Error> {
+pub(crate) fn name(bytes: &mut Vec<u8>, value: &str) -> Result<(), Error> {
     if value.is_empty() || value.len() > 64 {
         return Err(Error::InvalidSchema);
     }
     bytes.extend((value.len() as u32).to_le_bytes());
     bytes.extend(value.as_bytes());
+    Ok(())
+}
+
+pub(crate) fn encode_type(
+    bytes: &mut Vec<u8>,
+    value: FieldType,
+    optional: bool,
+    reference: bool,
+) -> Result<(), Error> {
+    let tag = match value {
+        FieldType::Nat64 => 1,
+        FieldType::Bool => 2,
+        FieldType::Text { .. } => 3,
+        FieldType::Int64 => 4,
+        FieldType::Nat128 => 5,
+        FieldType::Int128 => 6,
+        FieldType::Blob { .. } => 7,
+        FieldType::Nat8 => 8,
+        FieldType::Nat16 => 9,
+        FieldType::Nat32 => 10,
+        FieldType::Int8 => 11,
+        FieldType::Int16 => 12,
+        FieldType::Int32 => 13,
+        FieldType::Principal => 14,
+        FieldType::Named(_) => 15,
+        FieldType::List { .. } => 16,
+    };
+    bytes.push(tag | if optional { 0x80 } else { 0 } | if reference { 0x40 } else { 0 });
+    match value {
+        FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } => {
+            if max_bytes > 4096 {
+                return Err(Error::InvalidSchema);
+            }
+            bytes.extend(max_bytes.to_le_bytes());
+        }
+        FieldType::Named(link) => name(bytes, link.name)?,
+        FieldType::List { item, max_items } => {
+            if max_items > crate::types::MAX_LIST_ITEMS as u32
+                || matches!(item, FieldType::List { .. })
+            {
+                return Err(Error::InvalidSchema);
+            }
+            for bound in [
+                max_items,
+                crate::types::MAX_DEPTH as u32,
+                crate::types::MAX_NODES as u32,
+                crate::types::MAX_LIST_ITEMS as u32,
+            ] {
+                bytes.extend(bound.to_le_bytes());
+            }
+            encode_type(bytes, *item, false, false)?;
+        }
+        _ => {}
+    }
     Ok(())
 }
