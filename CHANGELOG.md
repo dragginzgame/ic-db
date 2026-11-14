@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] - Unreleased
+## [0.4.0] - Unreleased
 
 ### ▶️ Try it
 
