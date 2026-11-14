@@ -184,6 +184,9 @@ async fn main() -> Result<(), String> {
             if count > 4096 {
                 break Err("command exceeds 4096 bytes".into());
             }
+            if line.trim().is_empty() {
+                continue;
+            }
             match parse(&line) {
                 Ok(Command::Quit) => break Ok(()),
                 Ok(command) => {

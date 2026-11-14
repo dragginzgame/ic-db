@@ -57,6 +57,7 @@ async fn final_state_batches() {
         );
         let mut unique: Vec<_> = mappings
             .iter()
+            .filter(|(_, _, principal)| *principal != 0)
             .map(|&(id, _, principal)| (principal, id))
             .collect();
         let mut reverse: Vec<_> = mappings
@@ -126,6 +127,45 @@ async fn final_state_batches() {
     assert_eq!(call(vec![(1, 1, 0, 0), (3, 2, 0, 0)]).await, Ok(1));
     check(&[], &[]).await;
 
+    // Explicit present-only uniqueness: absence is not a shared unique value,
+    // and does not exempt the mapping from its separate reference constraint.
+    refuse(vec![(2, 1, 1, 0)], 5).await;
+    call(vec![(0, 1, 0, 0), (2, 1, 1, 0), (2, 2, 1, 0)])
+        .await
+        .unwrap();
+    check(&[1], &[(1, 1, 0), (2, 1, 0)]).await;
+    refuse(vec![(2, 1, 1, 101)], 1).await;
+    refuse(vec![(2, 1, 1, 33), (2, 2, 1, 33)], 4).await;
+    call(vec![(2, 1, 1, 33)]).await.unwrap();
+    check(&[1], &[(1, 1, 33), (2, 1, 0)]).await;
+    refuse(vec![(2, 2, 1, 33)], 4).await;
+    let transfer = vec![(2, 1, 1, 0), (2, 2, 1, 33)];
+    for boundary in 1..=5_u8 {
+        let before = pic.get_stable_memory(canister).await;
+        assert!(
+            pic.update_call(
+                canister,
+                canister,
+                "batch",
+                native::encode_request(3, &(transfer.clone(), boundary), LIMITS).unwrap(),
+            )
+            .await
+            .is_err()
+        );
+        assert!(before == pic.get_stable_memory(canister).await);
+        check(&[1], &[(1, 1, 33), (2, 1, 0)]).await;
+    }
+    call(transfer).await.unwrap();
+    check(&[1], &[(1, 1, 0), (2, 1, 33)]).await;
+    call(vec![(2, 2, 1, 0)]).await.unwrap();
+    check(&[1], &[(1, 1, 0), (2, 1, 0)]).await;
+    refuse(vec![(1, 1, 0, 0)], 5).await;
+    assert_eq!(
+        call(vec![(1, 1, 0, 0), (3, 1, 0, 0), (3, 2, 0, 0)]).await,
+        Ok(2)
+    );
+    check(&[], &[]).await;
+
     // Existence of a mapping's user does not imply a mandatory mapping for every user.
     assert_eq!(call(vec![(0, 1, 0, 0), (0, 2, 0, 0)]).await, Ok(0));
     let first: Vec<_> = (1..=8).map(|id| (2, id, 1, id)).collect();
@@ -136,14 +176,16 @@ async fn final_state_batches() {
     refuse(deletion, 5).await; // An untouched reference beyond the changed prefix survives.
     // An unrelated user's deletion examines no reverse entries, despite nine mappings.
     assert_eq!(call(vec![(1, 2, 0, 0)]).await, Ok(0));
-    let mappings: Vec<_> = (1..=9).map(|id| (id, 1, id)).collect();
+    call(vec![(2, 10, 1, 0)]).await.unwrap();
+    let mut mappings: Vec<_> = (1..=9).map(|id| (id, 1, id)).collect();
+    mappings.push((10, 1, 0));
     check(&[1], &mappings).await;
     pic.upgrade_canister(canister, wasm, vec![], None)
         .await
         .unwrap();
     check(&[1], &mappings).await;
     println!(
-        "batch constraints: unique exchange/release, final-state references, indexed restricted deletion, pre-write refusals and five commit trap boundaries passed"
+        "batch constraints: unique exchange/release, present-only optional uniqueness, final-state references, indexed restricted deletion, pre-write refusals and five commit trap boundaries passed"
     );
     owned.close().await;
 }

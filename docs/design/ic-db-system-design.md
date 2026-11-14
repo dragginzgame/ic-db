@@ -1,8 +1,10 @@
 # IC DB system design
 
-Status: proposed, design only. Repository setup, investigation and private source
-releases to `dragginzgame/ic-db` are authorized; product implementation, live
-deployment and replacement of IcyDB are not. Written 2026-11-13.
+Status: design and M0 qualification. The maintainer authorized M1 implementation
+on 2026-11-14 after the remaining M0 gates. The authoring experiment is complete;
+the maintainer selected the current attribute-owned declarations.
+Private source releases to `dragginzgame/ic-db` are authorized when requested;
+live deployment and replacement of IcyDB are not. Written 2026-11-13.
 
 Maintainer decision (2026-11-13): freeze IcyDB's local checkout and GitHub
 repository pending the IC DB experiment. Preserve existing committed/uncommitted
@@ -198,12 +200,92 @@ Wasm/instruction value, not another speculative optimization framework.
 
 ## 4. Schema and identity: challenge the persisted catalog
 
-Preserve the familiar attribute-based authoring style (`#[entity]` and related
-record, field and index declarations). Macros generate the compiled contract,
+Keep the current attribute-owned entity/record declarations with empty struct
+bodies. After reviewing the annotated-struct experiment, the maintainer selected
+the existing style for readability. Alternative forms are optional future work.
+Blanket source compatibility is not required. Macros generate the compiled contract,
 typed field references and necessary codecs/accessors. They do not generate a
 second schema authority or host endpoints. Review individual attributes against
 their retained responsibility; this is not blanket source compatibility with
 IcyDB's existing options or generated artifacts.
+
+### Authoring and inspection contract for M1
+
+Keep field definitions inside the entity attribute. Do not require numeric field
+IDs. Illustrative spelling follows; product macros remain unimplemented:
+
+```rust
+#[entity(
+    id = 100,
+    pk(field = "id", source = "external"),
+    index(id = 1, fields = ["category", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Ulid"))),
+        field(name = "category", value(item(prim = "Text", max_bytes = 64))),
+        field(name = "amount", value(item(prim = "Nat64"))),
+        field(name = "note", value(opt, item(prim = "Text", max_bytes = 512)))
+    )
+)]
+pub struct Entry {}
+```
+
+`Entry` is synthetic application code, not an engine-owned entity. Its fields,
+types, limits and index are example choices. Exact attribute spelling is provisional.
+Field names are the field identities within their owning entity or nested record;
+duplicate names refuse. Authors supply no numeric field IDs. Canonical contracts
+include the exact names, never declaration positions, inferred numeric identities
+or a hidden assignment registry. Renaming a field changes the contract and requires
+an explicit supported transition; do not silently infer a rename from similar
+types or names. Reordering declarations is compatible only if the selected codec
+preserves the stored layout. Entity/index IDs retain their separate current policy.
+References resolve to the target identity and complete key contract.
+Codec, comparator and supplier versions remain part of the canonical contract;
+an entity ID alone never authorizes reading changed bytes.
+
+The disposable comparison compiled both styles with matching inspection and typed
+keys; it did not establish codec correctness, constraint enforcement or Wasm savings.
+It is retired following the maintainer's readability decision. Retain one authoring
+path, without a mandatory second DTO or compatibility frontend. Attribute removal
+is permitted when justified: tell the maintainer which attribute is removed, why,
+and which behavior changes or moves elsewhere. Keeping the familiar declaration
+style does not require importing IcyDB's generated runtime or endpoint machinery.
+Generated Rust values still require write admission, including managed-field checks.
+
+| Generated or shared surface | Initial responsibility |
+| --- | --- |
+| Concrete entity and key types | Typed values; composite keys preserve declared component order; optional absence remains explicit |
+| Typed field/index references | Construct admitted fluent operations; no specialization of the complete executor for each chain |
+| One compiled descriptor | Stable identities, display names, types, bounds, keys, references, write ownership and semantic versions |
+| Row/key codecs | Exact bounded encoding under that descriptor's contract; no lossy numeric coercion |
+| Shared inspection | Project the compiled descriptor and separately report durable manifest admission/maintenance status |
+
+Prefer one macro emission contract through the `ic-db` facade. Do not reproduce
+separate schema-only/runtime import modes or generate insert/patch/replace helper
+families before their distinct input contracts require them. This is a generated
+surface choice, not removal of insert/update/delete or managed values. Defaults,
+generated keys and timestamps must retain explicit ownership in write admission.
+Canic endpoint definitions, guards and transport bindings stay outside these macros.
+
+`db schema` must eventually show each entity's name and stable ID; field names,
+types, optionality and bounds with units; ordered primary/index components,
+uniqueness and supported predicates; reference targets; and declared default or
+managed-field policies. The same response reports executable contract identity,
+stored identity and admission/maintenance state. Display labels come from the
+executable, not a separately editable durable catalog. On mismatch, label the
+compiled description as unadmitted; do not claim it describes unknown stored
+bytes or reconstruct a missing manifest. Inspection must remain bounded and use
+the host's authorization policy. The current M0 console still returns fixture prose.
+
+M1 acceptance includes compile failures for duplicate field names/other identities, unknown index
+fields, unsupported key types and contradictory declarations; round trips of
+typed optional/nested values; identical descriptor meaning in typed access and
+inspection; and refusal of field renames without an admitted transition. Other
+same-ID source renames reopen only when encoding/semantics remain compatible.
+The existing native identity probe supports the candidate sensitivity
+rules, not these macro/runtime integration claims. Implement and qualify them in
+the product once M1 begins rather than adding another disposable macro framework.
+
+### Compiled authority and durable admission
 
 The deployment-defined starting contract creates an opportunity to avoid the
 full persisted dynamic catalog, not merely to rewrite its reconciliation code.
@@ -225,6 +307,43 @@ accept new declarations. Fresh initialization requires a proven fresh backing.
 Typed accessors reference the admitted compiled contract; there is no recurring
 proposal/reconciliation/candidate-publication pass on ordinary startup.
 
+For M1, select SHA-256 with the domain prefix `ic-db:schema:v1\0` over the bounded
+canonical contract bytes. Retain the full 32-byte fingerprint in the minimal
+manifest, without a second competing schema hash. The compiled schema producer
+computes it; reopening compares the admitted identity before row decoding.
+This identifies a contract, not an authorized caller or a checksum of every row.
+Follow the shared hashing policy's approved SHA-256 default; do not use a Rust
+type name, `DefaultHasher`, inferred field number or truncated digest as authority.
+
+The canonical contract includes field names and type/size rules, ordered primary
+and secondary key components, constraints, semantic versions and supplier-format
+identity. Sort entity/index identities and field names canonically while preserving
+key component order. Explicitly encode lengths and tags; reject duplicates and
+dangling references before hashing. The native witness now covers primary-key
+changes and an independent SHA-256 vector. Its small grammar is not the complete
+product contract: nested type/constraint/default encodings must be fixed before
+M1 first persists them.
+
+Use the existing bounded Wire native codec as the initial row-payload candidate,
+under an IC DB-owned versioned frame and admitted collection contract. Generate
+storage traversal in canonical field-name order so names need not be repeated in
+each row; keep primary/index key encoding separate because payload byte order
+does not establish index ordering. A field rename still changes schema identity.
+Database admission enforces field-specific bounds and semantics in addition to
+Wire's byte/traversal allowances. Ordinary transport Serde choices must not silently
+change stored traversal or normalization. Select named codec/semantic versions
+and qualify generated traversal before treating declaration reordering as compatible.
+
+The fixed three-field probe checks literal bytes, absent/empty distinction,
+integer extremes, UTF-8 byte bounds, schema-before-payload admission, truncation,
+unknown framing, trailing bytes and four Wire work limits. It is native evidence
+using Wire 0.22.1, not a production frame, generated codec, rich-type proof or Wasm
+budget. Wire can accept noncanonical primitive encodings; never decode/re-encode
+an external byte sequence to establish its original identity. These checks do
+not detect every valid-value bit change or establish a row checksum policy.
+IC DB still owns persisted meaning and admission; Wire owns bounded serialization,
+and IC Storage owns backing collections. No new serialization framework is needed.
+
 A schema-changing executable must explicitly carry the supported source decoding
 contract and the transformation to its target, or use a separately approved
 export/import path. Old decoders are scoped to that maintenance operation, not
@@ -239,8 +358,8 @@ not require an editable runtime catalog. If this arrangement fails, identify the
 missing invariant and reconsider its mechanism explicitly, without silently
 restoring runtime DDL or implementing two permanent schema-authority modes.
 
-Persist stable entity/field/index identities independently of source spelling.
-Renaming must be explicit; never infer identity from similar names. Permit
+Persist explicit entity/index identities and field names in the canonical contract.
+Field renames are contract changes; never infer identity from similar names. Permit
 unambiguous ergonomic index names with explicit overrides rather than requiring
 users to invent every name. Exact identity encoding and allocation are M0/M1
 choices, not reasons to copy the current tag/lineage pipeline wholesale.
@@ -262,11 +381,39 @@ grouping, composite-key encoding versus comparison, set/map construction order,
 enum rename/reorder identity and timestamp preservation during maintenance.
 Supported operations must agree; this does not require a universal value engine.
 
-Optional uniqueness is a generic constraint decision: specify whether absent
-values participate, and share present-value equality with comparisons and indexes.
-Typed conditions may express supported partial-index predicates without SQL text.
+The initial optional-unique candidate requires explicit present-only index
+membership. Multiple absent values are allowed and have no entry in that unique
+index; present values use the same equality as comparisons and other indexes.
+For composite unique keys every optional component needs that guard. An ambiguous
+unguarded declaration refuses rather than silently choosing a null policy. Typed
+conditions express this without SQL text; ordinary non-unique indexes and
+grouping/DISTINCT still retain absence under their own declared semantics.
+The fixed batch probe qualifies one optional scalar, including release/acquire
+and rollback; composite/nested membership and macro diagnostics remain unqualified.
 Application-specific naming, normalization and length policies are not built into
 the engine; its declared type/comparison semantics remain shared and exact.
+
+Authoring/write policies must be settled before choosing generated input types.
+The following candidates retain useful IcyDB write guarantees without requiring
+its public structural mutation lane or SQL `DEFAULT` syntax:
+
+| Input or operation | Initial contract candidate |
+| --- | --- |
+| Explicit optional `None` | Store absence; never reinterpret it as omission or request a default |
+| Insert omission | Resolve a declared default, otherwise optional absence; refuse a missing required value |
+| Partial update omission | Preserve the current value; no implicit default reapplication |
+| Whole-row update/replacement | Supply all authorable fields and preserve the selected primary key; missing-row behavior must be explicit, not an implicit generated-key insert |
+| Database-generated identity | Allocate during bounded preparation, validate the final key before mutation, publish any persistent allocator change with the batch; return the assigned key/row; no gap-free or secret-ID promise |
+| Managed timestamps | Capture one time per batch; insert sets creation/update time; a semantic change preserves creation and sets update time; a semantic no-op preserves both; reject time regression before mutation |
+| Reopen and maintenance | Do not rerun defaults, key generation or timestamp assignment on decode; transformations preserve values unless their recorded identity explicitly authorizes a change |
+
+Database-owned inputs must be structurally unauthorable or explicitly refused;
+they cannot silently override managed policy. Default/generator outputs still
+pass ordinary type, size, uniqueness and reference admission before mutation.
+Version semantic changes to these policies in the compiled contract. These are
+design requirements, not new probe coverage: generation across upgrades/refusals,
+timestamp no-op/regression and exact replacement/default behavior need focused
+M1 acceptance cases. No generated helper family is justified solely by this table.
 
 The initial operation matrix below is a proposed product contract, not delivered
 coverage. `Conditional` means an explicit component/comparator and encoded-size
@@ -292,6 +439,11 @@ Do not infer arbitrary member queries from storage or grouping support. IcyDB's
 inspected contract already refuses map predicates/indexes and restricts nested
 paths; retaining these values does not promise previously unavailable traversal.
 Any additional restriction of a retained operation still needs a concrete reason.
+Accepted 2026-11-14: decimal averages use a documented decimal precision and rounding
+mode with explicit overflow errors, rather than a new rational result type or
+refusal of every repeating fraction. The exact precision and mode still need
+selection before arithmetic implementation; continuation must not round each chunk
+in a way that changes the completed answer.
 Defaults and managed timestamps are authoring/write behavior: migrations preserve
 them unless the identified transition deliberately changes them. Exact comparator
 identities, numeric result types, float rounding, null/empty aggregate outcomes and
@@ -308,16 +460,20 @@ cannot detect a change; it does not require several competing hashes.
 
 | Change | Proposed admission requirement |
 | --- | --- |
-| Rust rename preserving explicit identities; documentation/presentation only | Same contract if encoding and stored semantics are unchanged |
+| Entity/index source rename preserving explicit identities; documentation/presentation only | Same contract if encoding and stored semantics are unchanged |
+| Field rename | New contract with an explicit supported transition; update index/reference paths; no automatic name matching |
 | Row encoding | Identify accepted source decoder and admitted transition |
 | Index key encoding or text order | New contract; reconstruct affected indexes |
 | Null order or uniqueness semantics | New contract; validate target ordering/constraints |
 | Supplier collection format | Explicit supplier compatibility identity and supported transition |
 
 The native M0 witness exercises these inputs in one bounded canonical byte
-contract. Explicit-ID declaration order and display names are excluded; index
-column order and versioned stored semantics are included. This does not detect
-an unversioned codec/comparator code change or select a production fingerprint.
+contract. Fields are ordered by their exact names, which are included in identity;
+entity/index display names and declaration order are excluded. Index column order
+and versioned stored semantics are included. This does not detect
+an unversioned codec/comparator code change. The selected SHA-256 fingerprint has
+a fixed domain and independent golden vector; the full product grammar remains
+to be specified for all retained shapes.
 Declaration reordering is compatible only when the actual codec preserves layout.
 
 Direct compatibility names an exact accepted source contract, its proven rule
@@ -334,7 +490,7 @@ and insufficient capacity must refuse safely rather than damage retained source.
 SQL `CREATE`/`ALTER`/`DROP`, independent runtime catalog editing and online
 constraint/index activation are excluded. Internal maintenance still creates
 target collections, transforms rows, rebuilds indexes, validates constraints,
-publishes the target and reclaims retired allocations. These operations belong
+publishes the target and cleans retired collections for supported reuse. These operations belong
 to one admitted transition, not a general public DDL interface.
 
 A supported executable upgrade must reopen its data. A schema change is separately
@@ -356,8 +512,9 @@ The preferred transformation is bounded copy/validation followed by cutover:
    one message; a trap must revert the whole chunk, including progress.
 4. Complete validation over all affected dependencies before publication.
 5. Atomically switch the manifest/root to the target and reopen admitted access.
-6. Reclaim recorded retired source allocations in resumable bounded steps once
-   recovery obligations permit it.
+6. Clean recorded retired source collections in resumable bounded steps once
+   recovery obligations permit it. Reuse requires explicit ownership and format
+   admission; cleanup does not return their backing to a global free pool.
 
 For example, adding an index changes the declaration, deploys an admitted
 transition, builds and validates the index during maintenance, then publishes
@@ -365,6 +522,26 @@ the target. Unaffected collections need not be copied. Retain source until
 cutover is committed and recovery obligations are settled. Prove peak space and
 bounded cleanup; reject this candidate if it exceeds the declared capacity envelope.
 In-place rewriting is not an automatic fallback.
+
+Maintainer direction (2026-11-14): IC Storage is expected to be overhauled when
+Rust OP is available. Do not optimize IC DB around today's supplier internals,
+allocation layout, reclamation limits or performance quirks. Specify the storage
+capabilities the database needs, retain version-specific probe evidence, and
+requalify the revised supplier. Current correctness and capacity limits still
+apply to experiments using the selected version; future capabilities are not
+yet established. Defer supplier-specific optimization until that overhaul.
+
+IC Storage's existing allocation reset is an investigated candidate for alternating reusable
+collection slots: a later target may use a fully retired slot after source
+preservation obligations end. Reset must be authorized by the durable role and
+committed atomically with the slot's new format/progress identity. Never choose a
+slot by emptiness alone or reset the live source. Fixed-slot reuse keeps allocation
+mechanics in the supplier, but introduces database ownership/role checks and
+retains each slot's high-water capacity. The capacity probe below tests the reset
+and copy mechanism only; complete alternating cutovers, cancellation, index-slot
+ownership and obsolete-executable refusal would be required before selecting it.
+Do not advance this into the product architecture merely to accommodate the
+current supplier; retain the probe as evidence pending the planned overhaul.
 
 The durable maintenance record retains source and target contract identities,
 source/target collection identities, immutable transformation identity/version
@@ -445,6 +622,30 @@ Their four-entry finalization bound does not qualify production instruction or
 byte limits. Builder method-order admission remains an implementation obligation:
 row predicates and aggregate predicates must target explicit stages, while an
 output limit must never become an input-prefix limit because of call order.
+
+Optional aggregate inputs have a separate worked contract. For the six projected
+values `[10, None, 30, 10, None, None]`, row count is `6`, present-field count is
+`3`, and distinct present-field count is `2`. Projection DISTINCT produces
+`[None, 10, 30]`: counting those result rows gives `3`, while counting their
+present field values gives `2`. The fluent API must distinguish these operations
+explicitly; SQL removal does not remove either capability.
+
+Sum, average and extrema ignore absent operands. This input has sum `50`, minimum
+`10`, maximum `30` and mathematical average `50/3`. Empty and all-absent inputs
+yield zero field counts and no sum/average/extremum; a present zero yields
+`Some(0)`, not absence. Carry total and present-value count across advances rather
+than averaging chunk averages. The native example varies work budgets 1–6 and
+uses an exact `u128` total for at most six `u64` operands, including totals above
+`u64::MAX`. Its numerator/denominator pair is an oracle for average semantics,
+not a selected public result type. Production numeric widening, decimal rounding,
+overflow and grouped combinations still need type-specific qualification.
+
+Absent group keys form one group; ignoring absent aggregate operands does not
+discard that group or an all-absent group. A five-row witness produces
+`(key=None, sum=40, rows=2, values=2)`, `(A, None, 2, 0)` and `(B, 0, 1, 1)`.
+All three appear in completed output before filtering. An explicit completed
+group predicate requiring a present sum greater than zero retains only the first.
+The witness declares absent keys first; production ordering must remain explicit.
 
 Remove SQL-only syntax, name/alias binding, literal parsing, statement lowering,
 command caching and SQL-facing administration/formatting. Trace shared users
@@ -560,21 +761,19 @@ for other admitted DISTINCT shapes. In particular, residual filters and ordering
 by another field need their own progress/equality proof. Live ordered enumeration
 still does not establish a frozen input for an exact count or aggregate.
 
-Probe source-revision invalidation first; freezing input is a comparison candidate,
-not an accepted query outage. Hours-long schema maintenance does not authorize
-write pauses for ordinary aggregation. Neither consistency mechanism is selected
-yet. Prefer explicit source-changed invalidation over invisible restart loops;
-any automatic retry must be deliberately bounded. Measure completion under a
-representative write rate: exactness on completion does not guarantee useful
-completion. Do not accumulate across live pages that repeat/omit rows or introduce
-snapshot/versioned storage implicitly.
+Accepted 2026-11-14: use explicit source-change invalidation with a conservative
+per-entity revision and bounded server-retained jobs. Even mutations unrelated to
+the selected fields invalidate the job. Exact completed results are promised;
+completion during continuous writes is not. Callers decide when to retry; do not
+restart invisibly. Hours-long schema maintenance does not authorize query write
+freezes. Measure observed completion under varied write rates without introducing
+snapshot/versioned storage or accumulating over live pages that repeat/omit rows.
 
-If revision invalidation is selected, a conservative per-entity revision is a
-candidate. Relevant committed mutations advance it atomically with data/index
+Committed row mutations advance the entity revision atomically with data/index
 changes; refused/trapped mutations leave no revision advance. Restoring old values
 still counts as change, reopen preserves its meaning, and intermediate aggregate
 state writes do not invalidate the input. Prove these properties without adding
-a change log or historical rows; select the actual revision scope in M0.
+a change log or historical rows.
 
 The first fixed grouped-sum probe supports this mechanism's exactness and retry
 safety, but all five synthetic contended attempts invalidated (section 12).
@@ -583,12 +782,15 @@ calculation reading multiple entities needs a coherent boundary for all of them;
 one entity's revision cannot certify the other reads. This does not add database
 joins or authorize an aggregate write freeze.
 
-M0 also selects where intermediate state lives and who can advance/read/cancel
-it. If server-retained, bind it to database/schema/query/algorithm identity and
-the chosen source boundary; advance accumulators and position atomically, and
-prove retries cannot double-count. Define upgrade invalidation/resume, cancellation,
-expiry and bounded reclamation. A client-carried alternative needs bounded size
-and validation of trusted claims. Persist no user closures. This is a focused
+Bind server-retained state to database/schema/query/algorithm identity and the
+source boundary; advance accumulators and position atomically, and prove retries
+cannot double-count. Canic checks caller permissions. Jobs have quotas and explicit
+expiry; expired jobs cannot resume and cleanup is bounded. Resume after an upgrade
+only when the executable explicitly supports the job's schema/algorithm identity;
+otherwise invalidate and reclaim it. Capacity exhaustion returns an explicit
+failure with bounded cleanup, without automatic spill into more stable storage.
+Select actual quotas, expiry durations and cleanup work limits before exposing M2.
+Persist no user closures. This is a focused
 aggregation mechanism, not a general resumable-job framework or ordinary-write WAL.
 Use application-neutral correctness/high-cardinality cases across varied write rates.
 
@@ -658,6 +860,7 @@ Atomicity alone does not define valid batches. Initial candidate semantics:
 | --- | --- |
 | Multiple commands for one entity/primary key | Refuse |
 | Two mappings claim one principal | Refuse |
+| Multiple absent values in an explicitly present-only unique index | Accept; retain separate reference checks and omit only that unique-index entry |
 | Release/acquire or exchange unique values across distinct rows | Accept if complete final-state uniqueness holds |
 | Create user and mapping | Accept if final-state constraints hold; a mandatory mapping per user is a separate declared constraint |
 | Delete user leaving its mapping | Refuse under the selected mapping constraint |
@@ -827,9 +1030,11 @@ not a parallel local issue queue. Small probes are disposable when disproved.
 Keep further architecture changes tied to probe evidence or explicit product
 decisions; M0 is not a disposable implementation of the full database.
 
-The design is not approval to implement these milestones. Do not recreate the old
-module tree under new crate names. Each accepted milestone includes its callers,
-tests, diagnostics, instructions and removal of abandoned prototypes. Keep one
+The maintainer authorized M1 on 2026-11-14 once M0 gates are satisfied. The requested
+authoring experiment is complete. This is not authorization for deployment or IcyDB data
+migration. Do not recreate the old module tree under new crate names.
+Each accepted milestone includes its callers, tests, diagnostics, instructions
+and removal of abandoned prototypes. Keep one
 chosen implementation in IC DB. IcyDB remains a separate working product until
 an explicit replacement decision; leaving it intact is not an excuse to support
 two engines behind a permanent adapter in the new product.
@@ -851,13 +1056,10 @@ examples to expose accidental domain coupling. Fixture names are test vocabulary
 not built-in entities. The retained type-operation matrix defines the scope;
 application-specific fields, defaults and string limits do not enter it.
 
-Keep familiar `#[entity(...)]` authoring and small generated typed boundaries.
-The first delivered schema must provide fields, type/optionality/bound information,
-primary and secondary keys, references, stable identities and codec/semantic
-versions from one compiled contract. `db schema` must inspect that contract and
-its durable admission status instead of a hand-written fixture description.
-The macro crate generates declarations, codecs and typed field/key access; the
-shared runtime admits and executes. Canic alone exports product endpoints.
+Keep the current attribute-owned declarations and small generated typed boundaries.
+Section 4 defines the proposed authoring, generated surfaces, inspection output
+and acceptance cases. Deliver the first typed schema and `db schema` integration
+together, with the runtime and host responsibilities kept at their stated owners.
 
 The M1 API journey is create a fresh database; reopen a compatible one; insert
 related records in one bounded batch; look up by primary and secondary key;
@@ -868,20 +1070,48 @@ must remain different operations. Generated IDs, defaults and timestamps have
 explicit ownership; conversion from a row must not silently replace a supplied ID.
 Exact method and generated-helper names remain open until this journey compiles.
 
-Do not grow M0 into a second implementation of that journey. Consolidate the
-remaining decisions before product work:
+**Current readiness: mechanisms supported by small probes; M0 not closed.**
+Section 12 records the passing evidence and its limits. The remaining work is
+contract details and comparable measurement, not another collection of
+toy engines. The maintainer accepted the grill recommendations on 2026-11-14:
 
-| Remaining M0 decision | Evidence or disposition still required |
+| Contract area | Accepted direction and remaining work |
 | --- | --- |
-| Generic capability contract | Specify supported predicate/order/count combinations, cursor semantics, type bounds and optional-unique equality independently of any application |
-| Aggregate completion | Choose revision invalidation or another proven input boundary, state ownership and acceptable completion behavior under writes |
-| Durable compatibility and capacity | Select the canonical identity/codec contract and a feasible repeated-migration allocation strategy or accepted lifetime growth bound |
-| Comparative acceptance | Capture a fixed SQL-disabled IcyDB baseline and numerical budgets using existing evidence where applicable; do not infer speed or size savings from toy probes |
+| Generic capability contract | Carry sections 4–6's type, absence, final-state batch and query-composition rules into the product. Resolve conditional operations and numeric result/rounding rules before implementing those operations; no implicit capability cut or guessed conversion. |
+| Aggregate completion | Explicit source-change invalidation, conservative per-entity revisions and bounded server-retained state. Exact completed results, no completion guarantee during continuous writes. Expiry, incompatible-upgrade invalidation and capacity refusal are accepted; concrete quotas remain to be selected. |
+| Durable compatibility and capacity | SHA-256 over one versioned canonical contract, including named fields and ordered keys; bounded Wire payloads under database-owned framing are the initial row-codec candidate. Complete the retained-type grammar and qualify generated traversal before M1 persists data. Retain identified copy-and-cutover; requalify capacity after the IC Storage overhaul. |
+| Comparative acceptance | Use the frozen IcyDB revision and matched SQL-disabled workloads from section 10. Reuse applicable prior evidence, but obtain missing comparable measurements before setting numerical budgets or claiming improvement. |
 
-The existing probes support specific candidate mechanisms. They do not close
-these decisions. M1 delivers the real schema and persistent record API; M2 expands
-fluent execution and M3 adds supported transformations. No extra schema-only
-framework or additional disposable database is required between M0 and M1.
+M1's ordinary mutation path owns the atomic entity revision; M2 owns aggregate
+state and advancement. Canic checks
+caller permissions, while the database validates job/query/schema/source identity.
+Concrete job quotas, expiry durations, supported upgrade identities and cleanup
+limits remain M2 implementation contracts. Completed output belongs
+to its captured input boundary. This requires no row history or ordinary-write WAL.
+Requiring eventual completion under continuous writes later would be an explicit
+scope change; the five contended probes do not establish it.
+
+The first M1 increment should connect the entity macro, one compiled descriptor,
+bounded codecs and `db schema` to the persistent-record journey above. Keep runtime
+execution in `ic-db` and put only necessary code generation in the small macro
+crate. Canic owns product transport. Do not ship a standalone descriptor framework
+and then build a separate database around it. Familiar IcyDB authoring and integrity
+semantics carry over; its catalog lifecycle, public dynamic frontend and generated
+endpoint machinery do not.
+
+Qualification follows the mechanism that becomes real:
+
+| Delivery gate | Evidence required before claiming that result |
+| --- | --- |
+| M1 persistent records | Macro diagnostics and codec bounds; absent/default/managed-value behavior; exact admission and incompatible reopen refusal; row/index/allocator/revision atomicity, including instruction exhaustion and relevant supplier failures; first matched Wasm and complete read-modify-write measurements |
+| M2 fluent execution | Delivered type/operation combinations, full-sort and aggregate oracles, bounded continuation/finalization/cleanup, contention outcomes and entity/query-shape growth |
+| M3 supported maintenance | Real codecs and dependency validation, complete repeated migrations, cancellation/reopen, capacity refusal and progress within supported per-message bounds |
+| M4 adoption | Comparable costs across retained capabilities and host integration; explicit scope reductions and relocated responsibilities; comparison with targeted IcyDB simplification |
+
+These gates do not report missing product tests as passed M0 evidence. Nor do they
+require implementing the full type/query/migration engine inside qualification.
+M0 contract acceptance and implementation authority remain separate from these
+later delivery gates.
 
 ## 10. Measurement and qualification
 
@@ -891,6 +1121,20 @@ identity, lockfiles, compiler, features, target, build profile and selected supp
 graph. Comparing the new minimal core with every IcyDB feature enabled is invalid.
 Use an IcyDB build with SQL disabled when attributing fluent-runtime savings;
 removing an optional SQL frontend alone is not proof of a smaller fluent engine.
+
+The comparison candidate is frozen IcyDB revision
+`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (clean checkout verified 2026-11-14).
+Its existing empty, one-entity and ten-entity typed audit actors are workload
+inputs, not automatically matched benchmarks. Check the resolved feature graph
+for SQL exclusion and match reachable operations, schema/index sets, datasets and
+host work before comparing. Preserve that checkout and its history.
+The retained [Wasm footprint report](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/reports/recurring/wasm-footprint.md)
+describes an older SQL-enabled build, omits code-section bytes and explicitly
+distinguishes planner-free typed lookup from dynamic planning. The historical
+[performance matrix](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/reports/recurring/perf-matrix.md)
+also uses an older revision and PocketIC version. Reuse their workload and
+attribution lessons; neither is a numerical baseline for this candidate. No
+matched SQL-disabled measurement has been established here yet.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,
@@ -921,6 +1165,9 @@ not a fresh arbitrary size-versus-speed preference. Reuse relevant existing
 IcyDB investigations when their inputs and semantics match; do not repeat settled
 optimization work. Report Wasm and instruction/cycle tradeoffs separately rather
 than treating one smaller metric as proof that every workload improved.
+Accepted 2026-11-14: common read/write regressions need an explicit tradeoff
+decision; a smaller module alone does not pass the comparison. No arbitrary
+regression percentage is selected before matched measurements exist.
 Set numeric acceptance budgets from that baseline before implementing the
 measured replacement; numbers remain unmeasured here, not zero. Count API
 concepts, authoritative/derived representations, durable fields/phases, runtime
@@ -955,22 +1202,14 @@ migration needs a separate consumer-approved export/import or retirement plan,
 with integrity checks and a recovery/disposition owner. Within a supported IC DB
 contract, interruption recovery and promised upgrade preservation remain required.
 
-Resolve these questions at M0, not through accidental implementation:
-
-- Which schema/query/constraint combinations are admitted, and what independent
-  workloads qualify their semantics, resource bounds and expected refusals?
-- What per-message work and capacity bounds qualify hours-long maintenance?
-  Copy space is accepted; prove safe refusal and recovery when it cannot fit.
-- Which cross-record operations need atomicity, and what does Storage actually
-  guarantee? Does any required operation exceed the synchronous batch contract,
-  requiring explicit maintenance or a separately accepted scope change?
-- Which cursors survive executable/schema changes, and how is their trust
-  established? Live browsing is accepted; select the separate consistency/state
-  contract for resumable exact aggregation, including behavior under ongoing writes.
-- What exact codec, default/timestamp and query semantics qualify the retained
-  type surface? Any proposed cut needs a concrete reason, not application usage.
-- Does measured benefit justify a separate replacement after consumer changes,
-  missing capabilities and supplier responsibilities are included?
+Section 9 owns the outstanding M0 decisions and subsequent delivery gates. Do not
+settle them accidentally through implementation. A required ordinary mutation
+that exceeds the synchronous batch contract needs explicit maintenance or a
+separately accepted scope change. Live cursors do not establish exact aggregate
+input, and accepted migration downtime does not authorize query write freezes.
+Any proposed capability cut needs a concrete reason, not lack of application use.
+At adoption, assess measured benefit after consumer changes, missing capabilities
+and supplier responsibilities are included.
 
 A negative answer can stop the rewrite or change its scope. The goal is a simpler
 useful database, not completing a rewrite because a repository now exists.
@@ -1000,6 +1239,23 @@ Read-only investigation on 2026-11-13:
   omitted-versus-null, explicit identity and host authorization requirements;
   they were not executed here. This later revision supersedes the earlier dirty
   checkout as a source for new research, not as a measured benchmark result.
+  The M1 authoring proposal rechecked `docs/guides/schema-authoring.md` at this
+  same clean revision: empty-body entity attributes, typed keys and field access
+  carry forward as ergonomics; separate emission modes and generated write-input
+  families are not automatically retained. No IcyDB implementation was copied.
+  Optional-unique/write-policy review additionally read
+  `crates/icydb-core/src/db/schema/snapshot/tests.rs` and
+  `docs/contracts/WRITE_ADMISSION.md` at that revision: retain explicit nullable
+  membership, omission/null separation and managed-value ownership; express
+  them through compiled/fluent contracts instead of importing SQL predicate
+  parsing, runtime schema activation or the journal/marker lifecycle. IcyDB tests
+  were inspected, not rerun. The local optional-unique probe is independently written.
+  The optional-aggregate review also inspected
+  `crates/icydb-core/src/db/executor/aggregate/value_reducer/tests.rs` and its
+  reducer at the same frozen revision. Retain absent-operand exclusion and empty
+  aggregate results; do not automatically copy the shared value reducer or its
+  decimal conversion/result representation. The native exact-total witness is
+  independently written and does not establish numeric parity with IcyDB.
 - Canic at HEAD `8ef9529ed65984817c74621c4a9a6b56806cc14c`, with active uncommitted
   rewrite work. Its system design and M0 first-journey record motivated the
   user-journey/disposition/experiment approach. Canic was changing during the
@@ -1018,14 +1274,14 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The product scaffold selects only published Toko Tooling 0.42.5. Qualification
-selects published IC Storage 0.74.0, Testkit 0.102.0 (PocketIC 16.1.0), Platform
+The product scaffold selects only published Toko Tooling 0.43.0. Qualification
+selects published IC Storage 0.74.0, Testkit 0.104.0 (PocketIC 16.1.0), Platform
 Runtime 0.22.2, Wire 0.22.1 and Wire Endpoint 0.13.1, with exact resolution in its
 own lockfile. Versions were checked at selection; these are probe inputs, not a
 product compatibility promise. No first-party implementation has been copied
 from IcyDB or Canic.
 
-### M0 evidence so far (2026-11-13)
+### M0 evidence so far (updated 2026-11-14)
 
 The Wasm probes below pass in local PocketIC with the published supplier versions
 above, Rust 1.100.0 and the qualification Wasm release profile. `m0-contracts`
@@ -1036,11 +1292,12 @@ performance results.
 
 | Probe | Evidence established | Important limit |
 | --- | --- | --- |
-| `make m0-contracts` | Numeric key/comparison agreement, canonical schema sensitivity and projection/DISTINCT/grouping composition pass; work budgets preserve complete answers and state-capacity overflow refuses | Native candidate constructions only; no product builder/codec/hash, full type coverage, arithmetic or Wasm cost proof |
+| `make m0-contracts` | Numeric key/comparison agreement, canonical schema sensitivity and projection/DISTINCT/grouping composition; optional aggregate counts, empty results and exact bounded totals; work budgets preserve complete answers | Native candidates only; no product builder/codec/hash, full type coverage, general arithmetic/rounding or Wasm cost proof |
+| Schema/row checks within `make m0-contracts` | Named-field and ordered-primary-key contract sensitivity, domain-separated SHA-256 golden vector; bounded Wire row framing, malformed/trailing refusal, schema gate and field byte limits | Fixed native layouts; no product contract grammar, generated storage traversal, row checksum guarantee or Wasm budget |
 | `make m0-rollback` | Traps after allocation, row/index writes and surrounding application work restore the complete backing image; normal error returns retain previous writes; same-code reopen works | Supplier-internal failures, instruction exhaustion and cross-message callbacks remain unqualified |
-| `make m0-batch` | Final-state unique exchanges/release-acquire, reference existence and indexed restricted deletion pass; refusals precede mutation; five index/row failure boundaries restore backing | Eight commands with numeric stand-ins; no generic/nested constraints, rich codecs or corruption repair |
+| `make m0-batch` | Final-state unique exchanges/release-acquire, present-only optional uniqueness, reference existence and indexed restricted deletion pass; refusals precede mutation; five index/row failure boundaries restore backing | Eight commands with numeric stand-ins; no generic/composite/nested constraint generation, rich codecs or corruption repair |
 | `make m0-aggregation` | Twelve rows produce exact grouped sums in four advances; replay, progress rollback, cancellation and same-code upgrade pass | One fixed three-group sum; every one of five synthetically contended attempts invalidated |
-| `make m0-maintenance` | Identified copy/index rebuilding, changed-transformation refusal, frozen-source enforcement, cutover, cancellation, missing/unsupported identity refusal and upgrade-hook rollback pass | Six rows and predeclared allocations; no general transformation, repeated-migration reuse or production capacity proof |
+| `make m0-maintenance` | Identified copy/index rebuilding, changed-transformation refusal, frozen-source enforcement, cutover, cancellation, identity refusal and upgrade-hook rollback; retired-slot reset/refill with growth, rollback and reopen | Six rows and predeclared allocations; reuse candidate is never published; no complete second cutover or production capacity proof |
 | `make m0-reads` | Path/order refusal, sparse-page progress, actual reply-byte retry/refusal, ordered DISTINCT, cursor binding and live mutation cases pass | Eight rows and two direct paths; no full sort, filtered/unordered DISTINCT or broad type/predicate execution |
 | `make db`, then `db` | Installation and interactive/script-mode schema/status inspection and bounded queries against the local fixture | Fresh temporary data; no product runtime or remote Canic integration |
 
@@ -1054,15 +1311,18 @@ Batch preparation retains only bounded intended changes in memory. Unique-value
 swaps remove touched old index entries before installing new ones. Reverse
 reference checks account for same-batch deletes/repoints; an unrelated user delete
 examines zero candidates despite nine mappings elsewhere. Mapping existence does
-not imply a mandatory mapping for every user. No durable staging or ordinary-write
-journal was added.
+not imply a mandatory mapping for every user. Multiple absent unique values,
+absence/presence transitions and same-batch ownership transfer preserve complete
+row/index contents; absent unique values still participate in reverse-reference
+checks and survive reopen. No durable staging or ordinary-write journal was added.
 
 Aggregation returns ordered sums `(0,300), (2,260), (1,220)` only after completion.
 Value restoration still invalidates the captured revision; intermediate-state
 writes do not. Completed output retains its captured revision after later writes.
 The contention schedule demonstrates possible starvation, not its frequency under
-representative write-rate distributions. Consistency, ownership/expiry and completion requirements
-remain open.
+representative write-rate distributions. The maintainer subsequently accepted
+revision invalidation, server-retained expiring jobs and no completion guarantee
+under continuous writes; concrete lifecycle limits remain unqualified.
 
 Maintenance B-prime has the same target schema as B but a different transformation
 identity and refuses B's partial output. Distinct source values colliding under
@@ -1071,11 +1331,21 @@ preserves source data, but source-compatible A must restore ordinary service.
 Source A cannot serve after target publication. Logical cleanup leaves physical
 allocation at 50 pages.
 
-Published IC Storage 0.74.0 documents that buckets are never reclaimed or
-reassigned to another allocation. The cleanup observation does not establish
-capacity reuse by a fresh target. Repeated migrations still need a proven reuse
-strategy or explicitly accepted lifetime growth limit; do not conceal this
-supplier constraint behind a database-owned allocator.
+Published IC Storage 0.74.0 `ALLOCATION.md` states that buckets are never reclaimed
+or reassigned to another allocation. Its `src/adapter/map.rs` exposes explicit
+collection reset within the same allocation; these are distinct guarantees.
+The additional capacity witness resets only the fully cleaned original source
+slot, copies six live target rows into larger candidate records in two-row chunks,
+and repeats at equal and smaller sizes. For row widths 8/96/96/8 KiB, physical
+pages were 50/58/58/58 and slot logical pages were 2/13/13/13 (64 KiB per page).
+These are fixture capacity measurements, not production budgets or performance
+comparisons. The candidate is never published. Full
+candidate bytes and the live index are checked independently, live queries stay
+intact, and reset/row/progress traps restore complete backing. Reopen resumes a
+partial copy. This supports same-slot reuse, not transfer of freed capacity to
+a fresh allocation or a completed repeated-migration protocol. Select the role
+and compatibility contract or an explicit lifetime growth limit before product
+adoption; do not hide the supplier constraint behind a database-owned allocator.
 
 The read probe returns `[None, 10, 20, 30, 40]` across one-candidate DISTINCT
 pages, with zero row fetches and no durable query state. It sizes tentative
@@ -1087,7 +1357,7 @@ input. Queries leave stable backing unchanged.
 
 The numeric witness compares 91 decimal values across 8,281 pairs and agrees on
 73 groups, including scale-equivalent values. Its 41-byte key demonstrates exact
-semantics, not an efficient selected index format. The schema witness checks 17
+semantics, not an efficient selected index format. The schema witness checks 19
 identity-affecting changes; declared version discipline remains necessary.
 
 The rollback, batch and read controls use different toy layouts on separate

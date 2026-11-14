@@ -1,5 +1,113 @@
 # Changelog
 
+## [0.1.1]
+
+### ▶️ Try it
+
+From this checkout, prepare the local fixture server once and install the CLI:
+
+```sh
+make m0-setup
+make db
+```
+
+With `~/.local/bin` on `PATH`, inspect the fixture and read its first page:
+
+```sh
+db schema
+db status
+db query --limit 3
+```
+
+Continue after row 3, or filter by the fixture's value field:
+
+```sh
+db query --after 3 --limit 3
+db query --after 3 --min 40 --limit 3
+```
+
+Open the console, press Return to get another quiet prompt, then use `help` or `quit`:
+
+```sh
+db
+```
+
+Each invocation starts a fresh, temporary six-row M0 fixture. These commands do
+not connect to a deployed database; `schema` still describes the fixture.
+
+### 🐛 Fixes
+
+- Ignore blank and whitespace-only console input instead of displaying help.
+
+### 🔧 Tooling
+
+- Adopt IC Testkit 0.104.0 and its required native host helpers 0.77.2 in the
+  qualification workspace. Retain PocketIC 16.1.0 and caller-owned Wire encoding;
+  the extracted typed Wire adapter is not needed by these raw-call probes.
+  Requalify explicit server setup, rollback, batches, reads, aggregation,
+  maintenance/reuse and console behavior; refresh the installed local `db` demo.
+- Adopt published Toko Tooling 0.43.0 in both workspaces and the authenticated
+  installed snapshot. Use the `toko-cloc` PATH launcher for source reporting;
+  include the hook path-resolution fixes. Runtime supplier selections are unchanged.
+- Release review (2026-11-14): defer optional Storage 0.74.1, Platform 0.32.3,
+  Types 0.20.3 and Runtime/macros/guard 0.22.3 refreshes to the next dependency
+  maintenance pass after 0.1.1. Keep this release's tested locked graph. Tooling,
+  Wire/Endpoint, Testkit, Host helpers and the release editor match the reviewed
+  current stable selections.
+
+### 📝 Design
+
+- Select a domain-separated SHA-256 schema fingerprint and qualify bounded Wire
+  payloads as the initial row-codec candidate. Keep named-field identities in the
+  contract and positional row payloads under explicit admission; complete product
+  grammar, generated traversal and Wasm budgets remain unqualified.
+- Record accepted aggregate invalidation, job expiry/upgrade/capacity policies,
+  decimal-average rounding direction, explicit IDs and performance tradeoff gate.
+  Complete the pre-M1 authoring comparison and retain attribute-owned declarations
+  with empty struct bodies by maintainer preference. Alternative forms are future
+  optional work; blanket source compatibility is not required.
+- Remove numeric field IDs from the proposed authoring contract. Field names
+  identify fields; renames require explicit schema transitions. Update the native
+  identity witness and retire the disposable authoring comparison and command.
+  Attribute removals must be explained with their behavior consequences.
+- Consolidate M0 readiness, remaining contract recommendations and M1–M4 delivery
+  gates. Define the first connected typed-schema/inspection/persistence increment;
+  pin the frozen IcyDB comparison candidate and explain why historical measurements
+  do not establish a matched SQL-disabled baseline. M0 remains open.
+- Specify the proposed M1 entity authoring and schema-inspection contract:
+  explicit stable identities, named typed fields, bounds with units and shared
+  compiled descriptors. Record IcyDB ergonomics retained, generated machinery
+  not automatically retained, and macro/runtime acceptance cases. Product schema
+  macros remain unimplemented.
+- Define candidate omission/default, generated-key and managed-timestamp policies;
+  retain explicit present-only optional uniqueness without SQL predicate parsing.
+- Record the planned IC Storage overhaul when Rust OP is available. Defer
+  supplier-specific architectural optimization; preserve current probe evidence
+  and requalify correctness and capacity against the revised supplier.
+
+### 🧪 Qualification
+
+- Include primary-key membership/order in schema identity, with duplicate/dangling
+  refusal and an independent SHA-256 golden vector. Probe compact row framing,
+  optional/empty values, integer extremes, malformed/trailing data, schema-first
+  admission, Wire work limits and database field byte bounds in the existing
+  native driver; add no runtime package or durable state.
+- Extend optional aggregate contracts to absent grouping keys, all-absent groups
+  and present-zero groups through completed-output pagination and group filtering.
+- Add supplier-independent optional aggregate witnesses: row/field/distinct
+  counts, empty versus absent versus zero results, exact totals and weighted
+  average continuation. Retain IcyDB's useful absence semantics without copying
+  its reducer or selecting production numeric result types.
+- Extend the existing Wasm batch probe with absent unique values, membership
+  changes, same-batch ownership transfer and rollback. Verify complete row/index
+  contents, unchanged backing on refusal/trap, independent reference enforcement
+  and same-code reopen. Add no package, dependency or durable state.
+- Probe supplier-owned reset/reuse of a fully retired migration allocation with
+  larger, repeated and smaller candidate rows. Check physical growth/reuse, reset
+  refusal before retirement, chunk rollback, upgrade resume and intact live data.
+  Add three fixture control entries; no allocation, package or dependency. This
+  proves a reuse mechanism, not a second published schema migration.
+
 ## [0.1.0] - 2026-11-13
 
 ### 📝 Summary

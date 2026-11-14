@@ -12,7 +12,9 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 ## Numeric and schema contracts
 
 Run `make m0-contracts` without PocketIC setup. These native witnesses use the
-existing driver package and no new dependencies, durable state or product API.
+existing driver package, with no new package, durable state or product API.
+Schema fingerprint qualification uses the approved SHA-256 implementation through
+the dev-only `sha2` dependency (registry-verified 0.11.1, already resolved transitively).
 
 The decimal candidate takes an i128 coefficient and scale 0–38. Its canonical
 ordered key makes `1.0` and `1.00` equal. An independent fixed-precision decimal
@@ -28,19 +30,48 @@ composite order against component comparison. They do not qualify numeric
 arithmetic, aggregate precision/overflow, mixed-type promotion, Float32, production
 codecs, supplier integration or the complete retained type surface.
 
-The schema witness serializes one bounded canonical contract with explicit IDs
-and versions for row/key codecs, comparison, normalization, absence ordering,
-constraints, defaults/timestamps and supplier format. A literal byte oracle fixes
-the example; 17 changes to stored behavior/layout change its identity. Source
-renames and declaration reordering preserve identity only because this candidate
-defines layout through explicit IDs. Index column order remains semantic. Duplicate
-IDs, dangling index fields and selected invalid bounds/versions refuse.
+The schema witness serializes one bounded canonical contract with field names,
+explicit entity/index/variant IDs and versions for row/key codecs, comparison,
+normalization, absence ordering, constraints, defaults/timestamps and supplier
+format. A literal byte oracle fixes the example; 19 changes to stored behavior/layout
+change its identity, including field renames. Fields are ordered by their exact
+names; declarations can reorder, but field names are not display-only labels.
+Other source labels with explicit IDs remain outside identity. Index column order
+remains semantic. Duplicate/empty/oversized field names, duplicate IDs, dangling
+index fields and selected invalid bounds/versions refuse. Renaming a field without
+updating its referencing index refuses; updating both still changes the contract.
+Primary-key membership and component order are included, with empty, duplicate
+and dangling key components rejected before fingerprinting. SHA-256 covers the
+domain `ic-db:schema:v1\0` followed by the canonical bytes. Its golden vector was
+independently computed with OpenSSL over literal bytes; declaration-order/display
+changes preserve it and semantic changes do not.
 
-This tests candidate identity inputs, not a selected hash, durable manifest format,
+This tests candidate identity inputs and the selected hash, not a durable manifest format,
 runtime admission implementation or automatic detection of changed code. A codec
 or comparator change still requires its author to change the declared version.
 Positional codecs cannot assume declaration reordering is compatible. Existing
 Wasm maintenance probes separately exercise admission and transformation recovery.
+
+## Row codec candidate
+
+`make m0-contracts` also runs `row_codec`, a fixed `(amount, id, note)` tuple in
+canonical field-name order. Wire 0.22.1 owns payload serialization; a small
+database-owned frame and externally admitted schema identity precede decoding.
+The literal example occupies 19 bytes: 12 fixture framing bytes and 7 payload
+bytes, with no repeated field names. This is not a production overhead budget.
+
+Checks cover absent versus empty notes, u64 extremes, UTF-8 byte lengths,
+truncation, unsupported framing, length mismatch, extra payload bytes, invalid
+optional tags and refusal under each byte/allocation/node/depth limit. Database
+field limits also refuse a valid Wire string that exceeds its declared eight-byte
+bound. Fixture limits are 64 payload bytes, 2,048 traversal-allocation allowance,
+32 nodes and depth 8; the allowance is not an observed heap maximum.
+
+This does not qualify generated codecs, arbitrary Serde implementations, nested
+types, index ordering, checksums, persisted supplier integration or Wasm execution.
+Wire primitive decoding can accept noncanonical bytes; original-byte identity
+must not be reconstructed by decoding and re-encoding. The product must bind
+supported normalization and stored traversal to its versioned contract.
 
 ## Query composition contracts
 
@@ -64,9 +95,23 @@ Output offsets apply only to the fixed completed vector and are not live-page
 cursors. Projection, filters and capacities remain fixed by the test caller;
 there is no public resumable handle accepting changed query parameters.
 
+Three additional optional-aggregate examples check row versus present-field
+counts, distinct present-field count versus DISTINCT projection row count, empty
+versus all-absent versus present-zero inputs, and average accumulation across
+unequal chunks. Six inputs `[10, None, 30, 10, None, None]` give counts `6/3/2`,
+sum `50`, extrema `10/30` and mathematical mean `50/3`, regardless of work budget
+1–6. A six-row input cap makes a `u128` sum of `u64` operands exact; a literal
+above-`u64` total checks that no float or narrow intermediate is used. The exact
+average pair is a witness, not the public result representation. No supplier
+allocation behavior participates in these semantics.
+
+A grouped optional-input witness keeps one absent-key group, an all-absent
+aggregate group and a present-zero group distinct. Output pagination includes
+the all-absent group; only a subsequent explicit group predicate removes it.
+
 The examples do not qualify builder method-order admission, persistent DISTINCT
 state, authenticated result cursors, concurrent changes, general expressions,
-aggregate arithmetic or production resource limits. Existing Wasm probes own
+general aggregate arithmetic/rounding or production resource limits. Existing Wasm probes own
 durable job progress/retry and live keyset behavior. The retained product scope
 is unchanged, and no package, dependency or durable representation was added.
 
@@ -83,6 +128,9 @@ Setup explicitly provisions PocketIC through Testkit's authenticated installer
 under `.tools/m0-pocketic`; the probe only checks that prepared selection. Testkit
 owns server and instance lifecycle. Cargo's artifact messages select the compiled
 Wasm; the probe does not infer an internal target-directory filename.
+The selected Testkit is 0.104.0 with PocketIC 16.1.0. Calls use raw client methods
+and this workspace's explicit Wire codec/budgets; no `ic-testkit-wire` adapter is
+required. Testkit's native host helpers resolve to 0.77.2.
 
 The fixture uses published IC Storage collections with one row map and two index
 maps. Wire/Platform exports are private experiment controls, not product endpoints;
@@ -110,7 +158,8 @@ and remaining M0 decisions. Aggregate scaffold CI does not run this probe.
 fresh installation. The single-row and batch controls use different toy layouts;
 do not mix them in one instance. No package or durable staging/journal is added.
 This model uses numeric stand-ins for users, mappings and principals: IDs 1–16,
-principal values 1–100 and at most eight commands per batch. It is not a rich
+present principal values 1–100 (zero stands for absence) and at most eight commands
+per batch. It is not a rich
 codec, generic constraint engine or public database API.
 
 Preparation builds only the bounded intended row changes in memory. It refuses
@@ -120,6 +169,15 @@ unique-value swaps, and releasing/acquiring a principal across different mapping
 Commit removes touched old index entries, applies rows, then adds new index entries.
 Five trap boundaries prove that partial removal/replacement restores the entire
 stable-memory image; expected refusals also leave it unchanged.
+
+The unique index has explicit present-only membership. Several mappings may have
+an absent principal; no zero-key unique entry is stored. Absence-to-presence
+conflicts refuse, while one batch may release a present value by setting absence
+and assign it to another mapping. Returning every principal to absence empties
+the unique index without removing rows or reverse references. Five trap boundaries
+also cover that transfer; complete row/index expectations and same-code reopen
+include absent values. This numeric sentinel is fixture encoding, not a proposed
+optional-value codec or a proof for composite/nested partial indexes.
 
 Restricted deletion uses a reverse `(user, mapping)` index and consults final batch
 values. Deleted/repointed references do not block the user deletion, while an
@@ -229,10 +287,25 @@ target format, copy position and the retired allocation slot. Tests establish:
   preserves both the previous executable and stable memory.
 
 Logical source cleanup leaves physical allocation at 50 pages. All four allocations
-are predeclared for this fixed experiment. It does not prove reclamation into new
-allocations, repeated migrations, capacity exhaustion, general schema hashing or
-production-sized validation/reclamation bounds. The transformation is synthetic;
-full transformation coverage remains part of delivered-engine qualification.
+are predeclared for this fixed experiment. A subsequent capacity-only control
+resets the fully cleaned source slot using IC Storage's `StableBTreeMap::reset`,
+then copies the live target into six candidate rows, two per call. It tries row
+widths 8 KiB, 96 KiB, 96 KiB and 8 KiB: larger rows must force physical growth;
+equal/smaller repeats must reuse the same capacity. Observed physical pages are
+50/58/58/58; slot logical pages are 2/13/13/13, with 64 KiB per page. Physical
+allocation does not shrink when the candidate becomes smaller. Each reset and copy chunk is
+trapped before retry, with byte-for-byte backing comparison. Reset before source
+retirement or during copying refuses; same-code upgrade resumes partial copying.
+The driver checks all candidate bytes in bounded pieces and the complete live
+index, while original target queries remain intact.
+
+This adds three probe control entries (state, position, width) in the existing
+control allocation, no new allocation or dependency. It changes the retired
+slot's codec from scalar to byte-vector records, not the published schema. It
+does not publish any candidate, alternate live roles, prove transfer to a fresh
+allocation, or qualify arbitrary collection types, exhaustion or production
+validation/cleanup bounds. Full repeated-migration lifecycle qualification remains
+open. The transformation is synthetic; full coverage belongs to the delivered engine.
 
 `make db` builds and installs the release binary at `~/.local/bin/db` and source A
 at `~/.local/share/ic-db/m0/maintenance-a.wasm`; it does not start PocketIC or the

@@ -30,16 +30,26 @@ Its synchronous write-rollback probe passes in PocketIC with published IC Storag
 This supports the no-WAL candidate; it does not yet qualify a database or complete M0.
 The resumable grouped-sum probe also passes: it completes on unchanged input and
 explicitly invalidates under intervening writes. Completion under real traffic
-remains an open requirement.
+is not guaranteed under the accepted initial contract.
 The identified maintenance probe now covers interrupted copying, changed-code
 refusal, cutover and cancellation. These remain small fixtures, not a product engine.
 The final-state batch probe covers unique-value exchanges, reference existence
 and indexed restricted deletion without a durable staging layer.
 The bounded-read probe covers order admission, sparse pages, actual reply-byte
 limits, ordered DISTINCT and the accepted live-pagination duplicate/omission behavior.
-`make m0-contracts` checks candidate exact numeric keys, schema identity sensitivity
-and projection/DISTINCT/grouping composition natively. It does not select
-production codecs or measure Wasm cost.
+`make m0-contracts` checks candidate exact numeric keys, schema identity sensitivity,
+SHA-256 fingerprints, bounded row decoding and projection/DISTINCT/grouping
+composition natively. It does not qualify product codecs or measure Wasm cost.
+
+The [M0 readiness review](docs/design/ic-db-system-design.md#next-delivery-close-m0-then-typed-schemas-in-m1)
+separates remaining contract decisions from M1–M3 implementation checks. M0 is not
+closed. The proposed next delivery is typed schema authoring, shared inspection
+and useful persistent records; the matched SQL-disabled IcyDB baseline is still
+outstanding.
+
+The authoring comparison is complete. M1 keeps the familiar attribute-owned
+entity/record declarations with empty struct bodies; alternatives may be explored
+later. Product schema macros and persistence remain unimplemented.
 
 ## Database console
 
@@ -65,7 +75,7 @@ uses this checkout's explicitly prepared `.tools/m0-pocketic` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.42.5 are pinned. Read [AGENTS.md](AGENTS.md)
+Rust 1.100.0 and published Toko Tooling 0.43.0 are pinned. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 
@@ -85,6 +95,17 @@ For tooling updates, change the exact Cargo pin, run
 `make deps-update DEPENDENCY_PACKAGE=toko-tooling`, then
 `make toko-tooling-preview` and `make toko-tooling-update`. Check the resulting
 lock and snapshot together. `make install-hooks` enables the stock format hook.
+
+Use `toko-cloc` for source counts, or `toko-cloc --manifest qualification/Cargo.toml`
+for the experiments alone. Toko Tooling 0.43 replaces `make cloc`. Install its
+checkout-selecting launcher once on your user PATH:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 vendor/toko-tooling/scripts/dev/toko-cloc "$HOME/.local/bin/toko-cloc"
+```
+
+Keep `~/.local/bin` on `PATH`; the launcher uses the current checkout's installed reporter.
 
 IcyDB and Canic remain separate; there is no path dependency on either repository.
 

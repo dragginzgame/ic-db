@@ -242,3 +242,214 @@ fn retained_state_bounds_refuse_without_truncating_the_mathematical_answer() {
     assert_eq!(grouped.advance(0, 0, 1), Err("input bound"));
     assert_eq!(distinct.advance(0, false, 1), Err("input bound"));
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct OptionalSummary {
+    rows: usize,
+    values: usize,
+    distinct_values: usize,
+    sum: Option<u128>,
+    minimum: Option<u64>,
+    maximum: Option<u64>,
+    // Exact numerator/denominator witness, not a proposed public average type.
+    average: Option<(u128, usize)>,
+}
+
+struct OptionalAggregate<'a> {
+    input: &'a [Option<u64>],
+    position: usize,
+    values: usize,
+    sum: u128,
+    distinct: BTreeSet<u64>,
+}
+
+impl<'a> OptionalAggregate<'a> {
+    fn new(input: &'a [Option<u64>]) -> Result<Self, &'static str> {
+        if input.len() > 6 {
+            return Err("input bound");
+        }
+        Ok(Self {
+            input,
+            position: 0,
+            values: 0,
+            sum: 0,
+            distinct: BTreeSet::new(),
+        })
+    }
+
+    fn advance(&mut self, work: usize) -> Result<Progress<OptionalSummary>, &'static str> {
+        if !(1..=6).contains(&work) {
+            return Err("work bound");
+        }
+        let end = (self.position + work).min(self.input.len());
+        for value in self.input[self.position..end].iter().flatten() {
+            // At most six u64 inputs: this exact u128 sum cannot overflow.
+            self.sum += u128::from(*value);
+            self.values += 1;
+            self.distinct.insert(*value);
+        }
+        self.position = end;
+        if end != self.input.len() {
+            return Ok(Progress::Incomplete);
+        }
+        Ok(Progress::Complete(OptionalSummary {
+            rows: self.position,
+            values: self.values,
+            distinct_values: self.distinct.len(),
+            sum: (self.values != 0).then_some(self.sum),
+            minimum: self.distinct.first().copied(),
+            maximum: self.distinct.last().copied(),
+            average: (self.values != 0).then_some((self.sum, self.values)),
+        }))
+    }
+}
+
+#[test]
+fn optional_aggregates_distinguish_row_field_and_distinct_counts() {
+    let input = [Some(10), None, Some(30), Some(10), None, None];
+    for work in 1..=6 {
+        let mut run = OptionalAggregate::new(&input).unwrap();
+        let output = loop {
+            match run.advance(work).unwrap() {
+                Progress::Incomplete => assert!(run.position < input.len()),
+                Progress::Complete(output) => break output,
+            }
+        };
+        assert_eq!(
+            output,
+            OptionalSummary {
+                rows: 6,
+                values: 3,
+                distinct_values: 2,
+                sum: Some(50),
+                minimum: Some(10),
+                maximum: Some(30),
+                average: Some((50, 3)),
+            }
+        );
+    }
+    // Projection DISTINCT retains one absence. Counting its rows is different
+    // from counting its present field values, including across output pages.
+    let projection: Vec<_> = input
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    assert_eq!(projection, vec![None, Some(10), Some(30)]);
+    assert_eq!(
+        page(&projection, 0, 1).unwrap(),
+        Page {
+            rows: vec![None],
+            next: Some(1)
+        }
+    );
+    assert_eq!(projection.len(), 3);
+    assert_eq!(projection.iter().flatten().count(), 2);
+    // Two nonempty work chunks have averages 10 and 20. Their unweighted
+    // average (15) is wrong; retain the exact total/count 50/3 instead.
+    assert_ne!(50_u128 * 2, (10 + 20) * 3);
+}
+
+#[test]
+fn empty_all_absent_and_zero_aggregate_inputs_are_distinct() {
+    for input in [&[][..], &[None, None][..]] {
+        let mut run = OptionalAggregate::new(input).unwrap();
+        assert_eq!(
+            run.advance(6),
+            Ok(Progress::Complete(OptionalSummary {
+                rows: input.len(),
+                values: 0,
+                distinct_values: 0,
+                sum: None,
+                minimum: None,
+                maximum: None,
+                average: None,
+            }))
+        );
+    }
+    let mut run = OptionalAggregate::new(&[None, Some(0)]).unwrap();
+    assert_eq!(run.advance(1), Ok(Progress::Incomplete));
+    assert_eq!(
+        run.advance(1),
+        Ok(Progress::Complete(OptionalSummary {
+            rows: 2,
+            values: 1,
+            distinct_values: 1,
+            sum: Some(0),
+            minimum: Some(0),
+            maximum: Some(0),
+            average: Some((0, 1)),
+        }))
+    );
+}
+
+#[test]
+fn bounded_integer_aggregate_keeps_exact_totals_above_u64() {
+    let input = [Some(u64::MAX), None, Some(u64::MAX)];
+    let expected = OptionalSummary {
+        rows: 3,
+        values: 2,
+        distinct_values: 1,
+        sum: Some(36_893_488_147_419_103_230),
+        minimum: Some(u64::MAX),
+        maximum: Some(u64::MAX),
+        average: Some((36_893_488_147_419_103_230, 2)),
+    };
+    let mut run = OptionalAggregate::new(&input).unwrap();
+    assert_eq!(run.advance(0), Err("work bound"));
+    assert_eq!(run.position, 0);
+    assert_eq!(run.advance(2), Ok(Progress::Incomplete));
+    assert_eq!(run.advance(2), Ok(Progress::Complete(expected)));
+    assert!(OptionalAggregate::new(&[None; 7]).is_err());
+}
+
+#[test]
+fn absent_group_keys_and_all_absent_groups_survive_until_group_filtering() {
+    let input = [
+        (None, Some(10)),
+        (Some(b'A'), None),
+        (None, Some(30)),
+        (Some(b'B'), Some(0)),
+        (Some(b'A'), None),
+    ];
+    // Explicit fixture order: absent key first, then present keys ascending.
+    let mut groups = BTreeMap::<Option<u8>, Vec<Option<u64>>>::new();
+    for (key, value) in input {
+        groups.entry(key).or_default().push(value);
+    }
+    for work in 1..=2 {
+        let mut output = Vec::new();
+        for (&key, values) in &groups {
+            let mut aggregate = OptionalAggregate::new(values).unwrap();
+            let summary = loop {
+                match aggregate.advance(work).unwrap() {
+                    Progress::Incomplete => assert!(aggregate.position < values.len()),
+                    Progress::Complete(summary) => break summary,
+                }
+            };
+            output.push((key, summary.sum, summary.rows, summary.values));
+        }
+        assert_eq!(
+            output,
+            vec![
+                (None, Some(40), 2, 2),
+                (Some(b'A'), None, 2, 0),
+                (Some(b'B'), Some(0), 1, 1),
+            ]
+        );
+        assert_eq!(
+            page(&output, 1, 1).unwrap(),
+            Page {
+                rows: vec![(Some(b'A'), None, 2, 0)],
+                next: Some(2),
+            }
+        );
+        // Only the completed group predicate removes A and B. Ignoring absent
+        // aggregate operands must not discard their groups during accumulation.
+        let filtered: Vec<_> = output
+            .into_iter()
+            .filter(|(_, sum, _, _)| sum.is_some_and(|value| value > 0))
+            .collect();
+        assert_eq!(filtered, vec![(None, Some(40), 2, 2)]);
+    }
+}

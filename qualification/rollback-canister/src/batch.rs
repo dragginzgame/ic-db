@@ -1,6 +1,8 @@
 //! Fixed User/Mapping witness using the existing three maps in a fresh fixture.
 //! Rows hold user keys 1..16 and mapping keys 101..116. Mapping values encode
 //! user * 1000 + principal; reverse-index keys encode user * 100 + mapping ID.
+//! Principal zero stands for absence, excluded by this fixture's explicit
+//! present-only unique-index membership. References still include absent values.
 
 use super::{NAMES, open, runtime};
 use ic_platform_runtime::cdk;
@@ -30,7 +32,7 @@ fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
             return Err(1);
         }
         if kind == 2 {
-            if !(1..=16).contains(&user) || !(1..=100).contains(&principal) {
+            if !(1..=16).contains(&user) || principal > 100 {
                 return Err(1);
             }
         } else if user != 0 || principal != 0 {
@@ -74,6 +76,9 @@ fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
             if final_value(user).is_none() {
                 return Err(5);
             }
+            if principal == 0 {
+                continue;
+            }
             if !claimed.insert(principal) {
                 return Err(4);
             }
@@ -110,7 +115,9 @@ fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
         .filter_map(|key| rows.get(key).map(|value| (*key - MAPPING, value)))
         .collect();
     for &(id, value) in &old {
-        unique.remove(&(value % 1000));
+        if value % 1000 != 0 {
+            unique.remove(&(value % 1000));
+        }
         fail_at(failure, 1);
         reverse.remove(&(value / 1000 * 100 + id));
         fail_at(failure, 2);
@@ -132,7 +139,9 @@ fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
         }
         if let Some(value) = value {
             let id = key - MAPPING;
-            unique.insert(value % 1000, id);
+            if value % 1000 != 0 {
+                unique.insert(value % 1000, id);
+            }
             fail_at(failure, 4);
             reverse.insert(value / 1000 * 100 + id, value % 1000);
             fail_at(failure, 5);

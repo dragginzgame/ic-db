@@ -15,7 +15,7 @@ help:
 	  'make check / test / clippy / doc  Check the empty library scaffold' \
 	  'make docs-check                  Check local documentation links' \
 	  'make m0-setup                    Explicitly prepare M0 PocketIC server' \
-	  'make m0-contracts                Check native numeric/schema/query contracts' \
+	  'make m0-contracts                Check native numeric/schema/row/query contracts' \
 	  'make m0-rollback                 Run only the Wasm write-rollback probe' \
 	  'make m0-batch                    Run final-state batch constraint probe' \
 	  'make m0-reads                    Run bounded ordering/page/DISTINCT probe' \
@@ -28,6 +28,7 @@ help:
 	  'make install-tools / tools-check Prepare / admit development tools' \
 	  'make toko-tooling-check          Verify Cargo/snapshot agreement' \
 	  'make install-hooks              Install the stock formatting hook' \
+	  'toko-cloc                       Report source counts (PATH launcher)' \
 	  'make ci                         Aggregate scaffold checks; no database qualification'
 
 check:
@@ -49,7 +50,7 @@ m0-setup:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback prepare_server -- --ignored --nocapture
 
 m0-contracts:
-	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test query_composition -- --nocapture
+	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test query_composition -- --nocapture
 
 m0-rollback:
 	@mkdir -p qualification/target/evidence/m0

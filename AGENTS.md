@@ -15,8 +15,11 @@ installer. Do not edit vendor files or copy upstream reference documents.
   unless the maintainer explicitly lifts the freeze or authorizes an exception.
 - Read [the proposed system design](docs/design/ic-db-system-design.md). The
   maintainer authorized repository setup, design, M0 investigation/probes and
-  the local `make db` inspection/query CLI, not
-  product database implementation, feature retirement or runtime migration.
+  the local `make db` inspection/query CLI. On 2026-11-14 the maintainer also
+  authorized the defined M1 product implementation once the remaining M0 gates
+  are satisfied. The requested authoring comparison is complete; the maintainer
+  selected the current attribute-owned declarations with empty struct bodies.
+  Feature retirement and runtime migration remain excluded.
   Private source releases to `dragginzgame/ic-db` are now authorized when requested;
   crates.io publication and live-canister deployment remain excluded.
 - Build a multipurpose database engine specialized for the IC. Derive mechanisms
@@ -31,6 +34,16 @@ installer. Do not edit vendor files or copy upstream reference documents.
   right to reappear.
   Preserve the underlying required invariants; rederive their implementation.
 - Target broad bounded fluent queries and familiar attribute-based schemas.
+  Keep the current attribute-owned entity/record declarations with empty struct
+  bodies: the maintainer finds them easier to read than annotated actual fields.
+  Alternative authoring styles are future optional work, not an M1 prerequisite
+  or a second supported interface. Blanket source compatibility with IcyDB is
+  still not required; avoid mechanisms added only for hypothetical flexibility.
+  Field declarations must not require numeric IDs. Use field names as their
+  contract identity; renames require an explicit supported schema transition,
+  not inferred matching or a hidden ID registry. Entity/index identity policy
+  is separate. Attribute removals are permitted with a concrete reason: report
+  each removed attribute and the changed behavior or replacement to the maintainer.
   SQL, joins and window functions are excluded. Application usage does not define
   product breadth; distinguish SQL-only machinery from shared fluent behavior.
 - Keep `make db` as the CLI installation command; it must not launch the console.
@@ -41,12 +54,24 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Retain broad schema types, reference checks/restricted deletion and constrained
   resumable aggregation. Ordinary result mapping uses Rust iterators, not engine
   callback hooks. Hours-long maintenance and source-plus-target space are accepted.
+- Accepted 2026-11-14: exact aggregates use conservative per-entity revision
+  invalidation and bounded server-retained jobs; completion during continuous
+  writes is not promised. Jobs may expire and incompatible upgrades invalidate
+  them. Capacity exhaustion refuses with bounded cleanup, without automatic spill.
+  Decimal averages use a documented precision/rounding contract and overflow
+  errors. Explicit entity/index IDs remain accepted; numeric field IDs were
+  rejected in the subsequent authoring review. Common read/write performance
+  regressions require an explicit tradeoff decision even when Wasm is smaller.
 - Use small typed boundaries over shared execution machinery. Measure
   monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
 - Feature deferrals in the design are proposals. They do not authorize removing
   capabilities from IcyDB or claiming full Toko adoption.
 - Keep one current system design and executable examples as implementation grows.
+  When a release changes or adds CLI behavior, include a concise `▶️ Try it`
+  section in its changelog with copyable fenced `sh` blocks using real `db`
+  commands, following Canic's presentation. State setup and fixture/deployment
+  scope; do not imply proposed commands or product capabilities are implemented.
   Use GitHub issues for actionable follow-ups once a remote exists; do not invent
   a parallel local issue queue. The design's open decisions are design questions.
 - Product packages live under `crates/`. Add an independent `qualification/`
@@ -59,7 +84,7 @@ installer. Do not edit vendor files or copy upstream reference documents.
 
 The independent `qualification/` workspace owns its lockfile, M0 canisters and
 native driver. `make m0-setup` explicitly prepares Testkit's server;
-`make m0-contracts` checks native numeric/schema/query semantics without a server.
+`make m0-contracts` checks native numeric/schema/row/query semantics without a server.
 `make m0-rollback`, `make m0-batch`, `make m0-reads`, `make m0-aggregation` and
 `make m0-maintenance` select the focused experiments separately. `make db` installs
 to `~/.local` by default (`DB_INSTALL_PREFIX` overrides it). Run `db` for the console
@@ -80,8 +105,30 @@ or `db schema` / `db query --limit 2` for one noninteractive command.
 - IC Storage owns backing allocation and collection mechanics. IC Testkit owns
   PocketIC lifecycle. The Canic adapter owns endpoints, guards and composition;
   the application owns authorization policy.
+- Maintainer direction (2026-11-14): IC Storage is expected to receive an overhaul
+  when Rust OP is available. Do not optimize IC DB's architecture around the
+  current supplier's allocation layout, reclamation limits or performance quirks.
+  Keep current probes as version-specific evidence; defer supplier-specific
+  optimization and requalify after the overhaul. Preserve required correctness,
+  bounded execution and data safety with whichever supplier version is selected.
 - Never assume a hard cut authorizes deleting retained data. Reject unsupported
   formats intact; same-contract recovery and future supported upgrades need proof.
+
+## Explaining IcyDB carryover and design decisions
+
+- When relevant to the work, explain what is being carried over from IcyDB and
+  why. Distinguish copied/adapted code from retained behavior, API ergonomics,
+  algorithms or lessons reimplemented independently; cite the inspected source
+  or revision when making a concrete comparison.
+- Explain what is not being retained and why, distinguishing excluded features,
+  replaced mechanisms and deferred work. Identify any lost capability, changed
+  guarantee or responsibility moved to an application, adapter or supplier.
+- Connect those choices to accepted design decisions and evidence, including
+  tradeoffs and unresolved assumptions. Do not imply measured savings or parity
+  where only a design hypothesis exists.
+- Include concise comparisons in appropriate progress updates and final reports;
+  do not repeat the full comparison for routine edits. Keep enduring rationale
+  in the current system design rather than a separate comparison ledger.
 
 ## Local HTML links
 
@@ -95,3 +142,4 @@ or `db schema` / `db query --limit 2` for one noninteractive command.
 At this stage these qualify only a scaffold. `make docs-check` checks local links;
 `make toko-tooling-check` verifies tooling selection. Tool preparation is explicit:
 `make install-tools`, then `make tools-check`. Hooks use `make install-hooks`.
+Use `toko-cloc` for source counts; `make cloc` and `CLOC_*` settings are retired.

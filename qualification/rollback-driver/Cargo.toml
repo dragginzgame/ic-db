@@ -19,6 +19,9 @@ ic-testkit.workspace = true
 ic-wire.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
+[dev-dependencies]
+sha2.workspace = true
+
 [[test]]
 name = "rollback"
 path = "tests/rollback.rs"

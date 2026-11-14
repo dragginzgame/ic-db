@@ -1,6 +1,8 @@
 //! Fixed six-row copy/index migration, plus read-only controls for the M0 console.
 //! No production manifest, query engine or general migration executor is implemented.
 
+mod capacity;
+
 use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
