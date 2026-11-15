@@ -66,6 +66,8 @@ enum Command {
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
         /// DecimalRow supports sum:value/sum:maybe and zone,sum:value/zone,sum:maybe.
+        /// avg:amount/category,avg:amount for Entry; avg:value/avg:maybe with optional
+        /// zone, grouping for DecimalRow. Averages use Decimal scale 2, ties to even.
         /// Prefix sums/extrema with category, for Entry or entry_id, for Document
         /// to group results; all-absent groups display an absent value.
         #[arg(long, default_value = "full")]
@@ -74,7 +76,7 @@ enum Command {
         #[arg(long)]
         distinct: bool,
         /// Keep completed aggregate values at least VALUE (nonnegative u64 input).
-        /// Sum fixtures convert VALUE explicitly to their declared integer or Decimal result type.
+        /// Numeric aggregates convert VALUE to their declared integer or Decimal result type.
         #[arg(long)]
         group_min: Option<u64>,
         /// Order completed groups by key or aggregate value; ties use ascending keys.

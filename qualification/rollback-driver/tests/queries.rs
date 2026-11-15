@@ -571,7 +571,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
 }
 
 #[tokio::test]
-async fn decimal_sums_are_exact_across_upgrade_and_refuse_final_overflow() {
+async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
@@ -642,6 +642,20 @@ async fn decimal_sums_are_exact_across_upgrade_and_refuse_final_overflow() {
         let sum = query("sum:value", None).await.unwrap();
         assert_eq!(sum.1, vec![vec!["3".to_owned()]]);
         assert_eq!(sum.5, 17);
+        assert_eq!(
+            query("avg:value", None).await.unwrap().1,
+            vec![vec!["1".to_owned()]]
+        );
+        assert!(query("avg:maybe", None).await.unwrap().1.is_empty());
+        assert_eq!(
+            query("zone,avg:value", Some(1)).await.unwrap().1,
+            vec![vec!["true".to_owned(), "1".to_owned()]]
+        );
+        assert!(query("zone,avg:value", Some(2)).await.unwrap().1.is_empty());
+        assert_eq!(
+            query("zone,avg:maybe", None).await.unwrap().1,
+            vec![vec!["true".to_owned(), "—".to_owned()]]
+        );
         assert!(query("sum:maybe", None).await.unwrap().1.is_empty());
         assert_eq!(
             query("zone,sum:value", Some(3)).await.unwrap().1,
@@ -665,12 +679,32 @@ async fn decimal_sums_are_exact_across_upgrade_and_refuse_final_overflow() {
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(
         query("sum:value", None).await.unwrap_err(),
-        "sum exceeds its declared result range"
+        "aggregate exceeds its declared result range"
     );
     assert_eq!(
         query("zone,sum:value", None).await.unwrap_err(),
-        "sum exceeds its declared result range"
+        "aggregate exceeds its declared result range"
+    );
+    assert_eq!(
+        query("avg:value", None).await.unwrap().1,
+        vec![vec!["567137278201564105772291012386280352.43".to_owned()]]
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    for (values, expected) in [
+        (["1.24", "1.25", "1.24", "1.25"], "1.24"),
+        (["-1.25", "-1.26", "-1.25", "-1.26"], "-1.26"),
+    ] {
+        write(values.into_iter().map(str::to_owned).collect()).await;
+        let before = pic.get_stable_memory(canister).await;
+        assert_eq!(
+            query("avg:value", None).await.unwrap().1,
+            vec![vec![expected.to_owned()]]
+        );
+        assert_eq!(
+            query("zone,avg:value", None).await.unwrap().1,
+            vec![vec!["true".to_owned(), expected.to_owned()]]
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
     owned.close().await;
 }

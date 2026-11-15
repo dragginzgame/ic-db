@@ -1,4 +1,4 @@
-//! Exact integer/decimal sums. Explicit integer widening, fixed decimal scale.
+//! Integer/decimal sums and averages over one exact total, without numeric coercion.
 use super::{Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
@@ -26,9 +26,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn sum<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
         let mut plan = self.aggregate_plan(None, false)?;
-        let sum = ExactSum::admit(E::SCHEMA, R::definition())?;
+        let sum = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Sum)?;
         plan.selected |= 1 << sum.position;
-        self.scalar_value(&plan, Reducer::Sum(sum))
+        self.scalar_value(&plan, Reducer::Numeric(sum))
     }
     /// Sum one integer or Decimal operand per exact grouping record, retaining absent keys
     /// and all-absent groups. R selects the same explicit result widening as sum.
@@ -43,26 +43,72 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn group_sum<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let sum = ExactSum::admit(E::SCHEMA, R::definition())?;
+        let sum = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Sum)?;
         plan.selected |= 1 << sum.position;
-        self.group_values(&plan, Reducer::Sum(sum))
+        self.group_values(&plan, Reducer::Numeric(sum))
+    }
+
+    /// Average an integer or Decimal field into a single-field Decimal record.
+    /// Preserve the field name and optionality; the result declares scale 0–28.
+    /// Ignore absent operands, returning `None` for empty/all-absent input.
+    /// Divide the exact total by the present count once, rounding to nearest with
+    /// ties to even at the result scale. No floating-point conversion or scale fallback.
+    /// # Errors
+    /// Refuses nonnumeric inputs, non-Decimal results, changed optionality, cursors,
+    /// DISTINCT, input ordering and group modifiers. Work exhaustion returns `Limit`;
+    /// an unrepresentable rounded coefficient returns `ArithmeticOverflow`.
+    /// Output-byte bounds match [`Self::sum`]. No partial average is returned.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn avg<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
+        let mut plan = self.aggregate_plan(None, false)?;
+        let state = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Average)?;
+        plan.selected |= 1 << state.position;
+        self.scalar_value(&plan, Reducer::Numeric(state))
+    }
+
+    /// Average per group using [`Self::avg`]'s Decimal scale and rounding contract.
+    /// Finalize all groups before filtering, ordering and output limits; these
+    /// operations compare the rounded Decimal results. Retain all-absent groups.
+    /// # Errors
+    /// Scalar average admission/range errors and grouped work/state/output bounds
+    /// apply. Overflow in an excluded group still refuses the whole query.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn group_avg<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
+        let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
+        let state = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Average)?;
+        plan.selected |= 1 << state.position;
+        self.group_values(&plan, Reducer::Numeric(state))
     }
 }
 
+#[derive(Clone, Copy)]
+enum Operation {
+    Sum,
+    Average,
+}
+
 #[derive(Clone)]
-pub(in crate::store::query) struct ExactSum {
+pub(in crate::store::query) struct NumericAggregate {
     position: usize,
+    source_scale: u32,
     output: ValueSchema,
     total: Total,
-    present: bool,
+    count: u64,
+    operation: Operation,
 }
 #[derive(Clone)]
 enum Total {
     Signed(I256),
     Unsigned(U256),
 }
-impl ExactSum {
-    fn admit(entity: &EntitySchema, output: &TypeSchema) -> Result<Self, Error> {
+impl NumericAggregate {
+    fn admit(
+        entity: &EntitySchema,
+        output: &TypeSchema,
+        operation: Operation,
+    ) -> Result<Self, Error> {
         let TypeBody::Record([result]) = output.body else {
             return Err(Error::InvalidQuery);
         };
@@ -75,23 +121,39 @@ impl ExactSum {
         if source.optional != result.optional {
             return Err(Error::InvalidQuery);
         }
-        let signed = match (source.value, result.value) {
-            (FieldType::Decimal { scale: source }, FieldType::Decimal { scale: result })
-                if source == result =>
-            {
-                true
+        let source_scale = match source.value {
+            FieldType::Decimal { scale } => scale,
+            _ => 0,
+        };
+        let signed = if matches!(operation, Operation::Average) {
+            if !matches!(result.value, FieldType::Decimal { scale: 0..=28 }) {
+                return Err(Error::InvalidQuery);
             }
-            (source, result) => {
-                let (signed, bits) = integer(source).ok_or(Error::InvalidQuery)?;
-                let (result_signed, result_bits) = integer(result).ok_or(Error::InvalidQuery)?;
-                if signed != result_signed || bits > result_bits {
-                    return Err(Error::InvalidQuery);
+            match source.value {
+                FieldType::Decimal { .. } => true,
+                value => integer(value).ok_or(Error::InvalidQuery)?.0,
+            }
+        } else {
+            match (source.value, result.value) {
+                (FieldType::Decimal { scale: source }, FieldType::Decimal { scale: result })
+                    if source == result =>
+                {
+                    true
                 }
-                signed
+                (source, result) => {
+                    let (signed, bits) = integer(source).ok_or(Error::InvalidQuery)?;
+                    let (result_signed, result_bits) =
+                        integer(result).ok_or(Error::InvalidQuery)?;
+                    if signed != result_signed || bits > result_bits {
+                        return Err(Error::InvalidQuery);
+                    }
+                    signed
+                }
             }
         };
         Ok(Self {
             position,
+            source_scale,
             output: ValueSchema {
                 value: result.value,
                 optional: result.optional,
@@ -101,7 +163,8 @@ impl ExactSum {
             } else {
                 Total::Unsigned(U256::ZERO)
             },
-            present: false,
+            count: 0,
+            operation,
         })
     }
 
@@ -118,12 +181,9 @@ impl ExactSum {
                     IndexValue::Int32(n) => i128::from(n),
                     IndexValue::Int64(n) => i128::from(n),
                     IndexValue::Int128(n) => n,
-                    IndexValue::Decimal(n) => {
-                        let FieldType::Decimal { scale } = self.output.value else {
-                            return Err(Error::Corrupt);
-                        };
-                        n.coefficient_at_scale(scale).ok_or(Error::Corrupt)?
-                    }
+                    IndexValue::Decimal(n) => n
+                        .coefficient_at_scale(self.source_scale)
+                        .ok_or(Error::Corrupt)?,
                     _ => return Err(Error::Corrupt),
                 };
                 // At most 512 inputs of at most 128 signed bits fit in I256.
@@ -144,17 +204,44 @@ impl ExactSum {
                 *total = total.checked_add(value).ok_or(Error::ArithmeticOverflow)?;
             }
         }
-        self.present = true;
+        self.count += 1; // The shared scanner admits at most 512 candidates.
         Ok(())
+    }
+
+    pub(super) fn retained_bytes(&self) -> usize {
+        // Total payload plus the average's denominator. Fixed metadata remains
+        // bounded by the group cap, as for count/extrema reducers.
+        32 + if matches!(self.operation, Operation::Average) {
+            8
+        } else {
+            0
+        }
     }
 
     pub(super) fn output(&self) -> ValueSchema {
         self.output
     }
 
-    pub(super) fn finish(self) -> Result<Completed, Error> {
-        if !self.present {
+    pub(super) fn finish(mut self) -> Result<Completed, Error> {
+        if self.count == 0 {
             return Ok(Completed::Value(None));
+        }
+        if matches!(self.operation, Operation::Average) {
+            let FieldType::Decimal { scale } = self.output.value else {
+                return Err(Error::Corrupt);
+            };
+            let numerator = match self.total {
+                Total::Signed(n) => n,
+                // A nonnegative integer total this large cannot produce a Decimal
+                // coefficient fitting i128 after division by at most 512.
+                Total::Unsigned(n) => n.try_into().map_err(|_| Error::ArithmeticOverflow)?,
+            };
+            self.total = Total::Signed(rounded_average(
+                numerator,
+                self.count,
+                self.source_scale,
+                scale,
+            )?);
         }
         let mut output = Encoder::new();
         let mut key = Vec::new();
@@ -195,6 +282,37 @@ impl ExactSum {
         }
         Ok(Completed::Value(Some((key, output.finish()))))
     }
+}
+
+fn rounded_average(
+    total: I256,
+    count: u64,
+    source_scale: u32,
+    result_scale: u32,
+) -> Result<I256, Error> {
+    let factor = I256::from(10_i128.pow(source_scale.abs_diff(result_scale)));
+    let (numerator, denominator) = if result_scale >= source_scale {
+        (
+            total.checked_mul(factor).ok_or(Error::ArithmeticOverflow)?,
+            I256::from(count),
+        )
+    } else {
+        (total, I256::from(count) * factor)
+    };
+    let quotient = numerator / denominator;
+    let twice_remainder = (numerator % denominator).abs() * 2;
+    let round = twice_remainder > denominator
+        || (twice_remainder == denominator && quotient % 2 != I256::ZERO);
+    Ok(if round {
+        quotient
+            + if numerator < I256::ZERO {
+                I256::MINUS_ONE
+            } else {
+                I256::ONE
+            }
+    } else {
+        quotient
+    })
 }
 
 fn integer(value: FieldType) -> Option<(bool, u16)> {

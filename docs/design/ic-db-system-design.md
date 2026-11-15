@@ -848,9 +848,10 @@ paths; retaining these values does not promise previously unavailable traversal.
 Any additional restriction of a retained operation still needs a concrete reason.
 Accepted 2026-11-14: decimal averages use a documented decimal precision and rounding
 mode with explicit overflow errors, rather than a new rational result type or
-refusal of every repeating fraction. The exact precision and mode still need
-selection before arithmetic implementation; continuation must not round each chunk
-in a way that changes the completed answer.
+refusal of every repeating fraction. Accepted 2026-11-15: the result record selects
+Decimal scale 0–28, with one final rounding to nearest, ties to even. Overflow
+refuses without reducing the selected precision. Continuation must not round
+each chunk in a way that changes the completed answer.
 Defaults and managed timestamps are authoring/write behavior: migrations preserve
 them unless the identified transition deliberately changes them. Exact comparator
 identities, numeric result types, float rounding, null/empty aggregate outcomes and
@@ -1680,7 +1681,7 @@ not at the narrower running-result boundary. Native witnesses cover every intege
 width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow,
 absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
-backing during queries. Float arithmetic, averages and resumable execution remain
+backing during queries. Float arithmetic and resumable execution remain
 required implementation work.
 
 Decimal sums now use the same accumulator at the field's declared scale (0–28).
@@ -1701,7 +1702,7 @@ both signed coefficient bounds and excluded-group overflow. Wasm repeats exact
 scalar/grouped results after upgrade and verifies unchanged stable bytes, including
 overflow refusals. The CLI seeds three DecimalRow samples through its private write
 endpoint and constructs the ordinary fluent queries; schema and durable formats
-remain unchanged. Decimal averages still need their separate rounding contract.
+remain unchanged. Averages use the separately selected contract below.
 
 `group_sum::<KeyRecord, ResultRecord>()` now uses that same exact sum reducer inside
 the existing group table. Group predicates admit the result type, not the source
@@ -1727,6 +1728,37 @@ repeats grouped sums and selection across upgrade, verifies widened totals beyon
 u64, and checks unchanged backing during reads. CLI selectors construct the same
 fluent calls. The fixture's nonnegative u64 `--group-min` argument is explicitly
 converted to the selected sum result's Nat128, Int128 or Decimal type at its adapter.
+
+`avg::<ResultRecord>()` and `group_avg::<KeyRecord, ResultRecord>()` now accept
+integer inputs of every width, including U256, and Decimal inputs. The result
+record preserves the source name/optionality and selects Decimal scale 0–28.
+The shared numeric reducer retains an exact I256/U256 total and present count.
+Finalization aligns source/result scale and divides once, using quotient/remainder
+to round to nearest with ties to even. The final fixed-scale coefficient must fit
+i128; there is no precision fallback. Empty/all-absent input yields `None`, while
+rounded zero is present. Finalized rounded values determine group filtering and
+ordering, including ties; all groups must finish before selection.
+
+The synchronous 512-candidate cap bounds signed totals and the scale multipliers.
+Unsigned totals too large for I256, or overflowing U256, cannot yield a fitting
+Decimal average after division by at most 512; they refuse explicitly. Otherwise
+division precedes result conversion, so an oversized individual U256 value or an
+unrepresentable sum need not prevent a fitting average. Retained-state admission
+charges 32 bytes for the total and 8 for the average denominator, with fixed
+metadata still bounded by the group cap. No average-specific scanner, group table,
+result format, schema attributes or durable state is added. The private numeric
+module owns sum/average admission and arithmetic; output admission remains shared.
+
+IcyDB `6d421e3`'s `numeric::average_decimal_terms_checked` and reducer tests supply
+the total/count, absence and typed-overflow lessons. Its Decimal division chooses
+the greatest fitting scale up to 18 and rounds ties away from zero. This design
+instead uses the maintainer-selected result scale and ties-to-even contract;
+neither a general numeric conversion layer nor fitting-scale retries are copied.
+Native witnesses cover every integer width, signed ties, repeating fractions at
+28 places, absence, rounded group comparisons and final overflow. Wasm checks
+rounding, upgrade/reopen, an overflowing sum with a fitting average and unchanged
+stable bytes. The CLI's average selectors choose scale 2. Floating arithmetic and
+resumable execution remain required subsequent work.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed

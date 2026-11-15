@@ -1,5 +1,5 @@
 //! Complete bounded aggregates over the shared scanner, without durable jobs or row history.
-mod sum;
+mod numeric;
 
 use super::{
     Comparison, MAX_TERMS, Plan, Query, QueryPage, admit_projection, copy_projection, execute,
@@ -52,7 +52,7 @@ impl GroupRequest<'_> {
                             let field = &entity.fields[*position];
                             ValueSchema { value: field.value, optional: field.optional }
                         }
-                        Reducer::Sum(sum) => sum.output(),
+                        Reducer::Numeric(state) => state.output(),
                         Reducer::Count { .. } => return Err(Error::Corrupt),
                     };
                     // Even a required input field can have an absent aggregate result.
@@ -84,7 +84,7 @@ struct Selection {
     order: GroupOrder,
 }
 
-/// An exact completed aggregate and its execution costs. No partial result or cursor.
+/// A completed aggregate and its execution costs. No partial result or cursor.
 #[derive(Debug)]
 pub struct Aggregate<T> {
     /// Completed value over all matching input rows.
@@ -512,7 +512,7 @@ impl Accumulator<'_> {
     pub(super) fn needs_spans(&self) -> bool {
         !matches!(
             self,
-            Self::Scalar(Reducer::Sum(_) | Reducer::Count { presence: None, .. })
+            Self::Scalar(Reducer::Numeric(_) | Reducer::Count { presence: None, .. })
         )
     }
 
@@ -532,7 +532,7 @@ impl Accumulator<'_> {
 
 #[derive(Clone)]
 pub(super) enum Reducer {
-    Sum(sum::ExactSum),
+    Numeric(numeric::NumericAggregate),
     Count {
         presence: Option<usize>,
         total: u64,
@@ -561,7 +561,7 @@ impl Reducer {
 
     fn retained_bytes(&self) -> usize {
         match self {
-            Self::Sum(_) => 32,
+            Self::Numeric(state) => state.retained_bytes(),
             Self::Count { .. } => 8,
             Self::Extremum { selected, .. } => selected
                 .as_ref()
@@ -573,7 +573,7 @@ impl Reducer {
         match self {
             Self::Count { total, .. } => Ok(Completed::Count(total)),
             Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
-            Self::Sum(sum) => sum.finish(),
+            Self::Numeric(state) => state.finish(),
         }
     }
 
@@ -586,7 +586,7 @@ impl Reducer {
         allowance: usize,
     ) -> Result<(), Error> {
         match self {
-            Self::Sum(sum) => sum.push(values)?,
+            Self::Numeric(state) => state.push(values)?,
             Self::Count { presence, total } => {
                 *total += u64::from(presence.is_none_or(|i| bytes[usize::from(spans[i].0)] != 0));
             }

@@ -118,7 +118,16 @@ scalar/grouped output across upgrade, then checks cancellation and overflow with
 unchanged stable bytes. CLI setup seeds three local DecimalRow samples through
 that same private endpoint; ordinary canister initialization remains unchanged.
 `sum:value`, `sum:maybe` and their `zone,` grouped forms use fluent queries.
-This does not qualify float sums, averages or resumable jobs.
+This does not qualify float arithmetic or resumable jobs.
+
+Integer/Decimal averages use the declared result scale and round once with ties
+to even. Native witnesses cover every integer width, repeating fractions through
+28 places, signed ties, absent/zero groups, filtering after rounding and overflow
+after division. A U256 input outside i128 still produces a fitting Decimal average
+when divided by its present count. Wasm repeats averages after upgrade, checks
+positive/negative ties and a valid average with an overflowing sum, and compares
+stable bytes around queries. CLI demos use `avg:amount`/`category,avg:amount` for
+Entry and `avg:value`/`avg:maybe` with optional `zone,` grouping for DecimalRow.
 
 The blob witness returns identical IDs with 1,037 encoded bytes for full entities
 versus 8 for projected records. Its measured execution after opening is 74,795

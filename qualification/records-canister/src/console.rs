@@ -23,6 +23,8 @@ struct EntryIdOnly {}
 
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
 struct TotalAmount {}
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+struct AverageAmount {}
 #[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat128")))))]
 struct TotalPriority {}
 #[ic_db::record(fields(field(name = "score", value(item(prim = "Int128")))))]
@@ -243,7 +245,11 @@ fn execute<E: Entity>(
                 query.filter_groups(Comparison::Ge, u128::from(value))
             }
             "entry_id,sum:score" => query.filter_groups(Comparison::Ge, i128::from(value)),
-            "zone,sum:value" | "zone,sum:maybe" => query.filter_groups(
+            "zone,sum:value"
+            | "zone,sum:maybe"
+            | "zone,avg:value"
+            | "zone,avg:maybe"
+            | "category,avg:amount" => query.filter_groups(
                 Comparison::Ge,
                 ic_db::Decimal::try_new(i128::from(value), 0)
                     .ok_or(Error::InvalidOperand)
@@ -256,28 +262,63 @@ fn execute<E: Entity>(
         query = query.order_groups(order);
     }
     match select {
-        "sum:value" => query
-            .sum::<TotalDecimal>()
-            .map(|r| display_value(r, "value", |r| r.value.to_string())),
-        "sum:maybe" => query
-            .sum::<OptionalDecimal>()
-            .map(|r| display_value(r, "maybe", |r| optional(r.maybe))),
-        "zone,sum:value" => query.group_sum::<ZoneOnly, TotalDecimal>().map(|r| {
+        "avg:amount" => query
+            .avg::<AverageAmount>()
+            .map(|r| display_value(r, "amount", |r| r.amount.to_string())),
+        "category,avg:amount" => query.group_avg::<CategoryOnly, AverageAmount>().map(|r| {
             display_group_values(
                 r,
-                &["zone", "value"],
-                |k| k.zone.to_string(),
-                |v| v.value.to_string(),
+                &["category", "amount"],
+                |k| k.category.to_string(),
+                |v| v.amount.to_string(),
             )
         }),
-        "zone,sum:maybe" => query.group_sum::<ZoneOnly, OptionalDecimal>().map(|r| {
-            display_group_values(
-                r,
-                &["zone", "maybe"],
-                |k| k.zone.to_string(),
-                |v| optional(v.maybe),
-            )
-        }),
+        "sum:value" | "avg:value" => {
+            let result = if select == "avg:value" {
+                query.avg::<TotalDecimal>()
+            } else {
+                query.sum::<TotalDecimal>()
+            };
+            result.map(|r| display_value(r, "value", |r| r.value.to_string()))
+        }
+        "sum:maybe" | "avg:maybe" => {
+            let result = if select == "avg:maybe" {
+                query.avg::<OptionalDecimal>()
+            } else {
+                query.sum::<OptionalDecimal>()
+            };
+            result.map(|r| display_value(r, "maybe", |r| optional(r.maybe)))
+        }
+        "zone,sum:value" | "zone,avg:value" => {
+            let result = if select == "zone,avg:value" {
+                query.group_avg::<ZoneOnly, TotalDecimal>()
+            } else {
+                query.group_sum::<ZoneOnly, TotalDecimal>()
+            };
+            result.map(|r| {
+                display_group_values(
+                    r,
+                    &["zone", "value"],
+                    |k| k.zone.to_string(),
+                    |v| v.value.to_string(),
+                )
+            })
+        }
+        "zone,sum:maybe" | "zone,avg:maybe" => {
+            let result = if select == "zone,avg:maybe" {
+                query.group_avg::<ZoneOnly, OptionalDecimal>()
+            } else {
+                query.group_sum::<ZoneOnly, OptionalDecimal>()
+            };
+            result.map(|r| {
+                display_group_values(
+                    r,
+                    &["zone", "maybe"],
+                    |k| k.zone.to_string(),
+                    |v| optional(v.maybe),
+                )
+            })
+        }
         "category,sum:amount" => query.group_sum::<CategoryOnly, TotalAmount>().map(|r| {
             display_group_values(
                 r,
@@ -475,7 +516,7 @@ fn message(error: Error) -> String {
             "unsupported order, projection, DISTINCT or aggregate shape for this entity".into()
         }
         Error::RowTooLarge => "one matching result exceeds --bytes".into(),
-        Error::ArithmeticOverflow => "sum exceeds its declared result range".into(),
+        Error::ArithmeticOverflow => "aggregate exceeds its declared result range".into(),
         Error::Limit => "query exceeds a database limit".into(),
         other => format!("database refused query: {other:?}"),
     }

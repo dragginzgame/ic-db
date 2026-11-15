@@ -133,8 +133,7 @@ before the work cap, so a scan examining exactly the allowed number can still
 return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
-are not yet aggregate compositions. Float arithmetic,
-averages, resumable jobs and
+are not yet aggregate compositions. Float arithmetic, resumable jobs and
 completed-output pagination remain required work.
 
 `.min::<Record>()` and `.max::<Record>()` accept an exact **single-field** record
@@ -222,6 +221,25 @@ Every group must finalize successfully before selection. Overflow in an excluded
 group still refuses the query. Final result encoding counts toward the existing
 state cap, even when an output filter would remove every group. Min, max and sum
 share `GroupValue` (renamed from `GroupExtremum`); no schema attributes change.
+
+`.avg::<Record>()` and `.group_avg::<KeyRecord, Record>()` accept all integer
+widths (including U256) and Decimal inputs. The result record preserves the field
+name and optionality and declares a Decimal scale from 0 to 28:
+
+```rust
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+struct AverageAmount {}
+let average = db.query::<Entry>().avg::<AverageAmount>()?;
+```
+
+Accumulate an exact total and present count, then divide and round once to nearest
+with ties to even: 1.245 becomes 1.24, and 1.255 becomes 1.26 at scale 2, with the
+same rule for negative values. Empty/all-absent input returns `None`; a rounded
+zero is present. The result must fit an i128 coefficient at the declared scale;
+overflow refuses instead of reducing precision. Group filters and ordering use
+the rounded Decimal values, with the usual ascending key tie-breaker. All groups
+must finish successfully before output selection. No floating-point conversion,
+per-row rounding or persisted job state is introduced.
 
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB

@@ -76,8 +76,9 @@ installer. Do not edit vendor files or copy upstream reference documents.
   invalidation and bounded server-retained jobs; completion during continuous
   writes is not promised. Jobs may expire and incompatible upgrades invalidate
   them. Capacity exhaustion refuses with bounded cleanup, without automatic spill.
-  Decimal averages use a documented precision/rounding contract and overflow
-  errors. Earlier acceptance of explicit entity/index IDs is superseded by the
+  Accepted 2026-11-15: integer/Decimal averages use the result record's declared
+  Decimal scale, rounding once to nearest with ties to even, with overflow errors.
+  Earlier acceptance of explicit entity/index IDs is superseded by the
   subsequent name/path-based authoring decision above. Common read/write performance
   regressions require an explicit tradeoff decision even when Wasm is smaller.
 - Use small typed boundaries over shared execution machinery.
@@ -135,7 +136,11 @@ installer. Do not edit vendor files or copy upstream reference documents.
   sum share GroupValue; remove the narrower GroupExtremum name. Reuse the scanner
   and owned codec. Decimal sums use the same I256 accumulator at the exact declared
   scale; reject rescaling/conversion and check the final i128 coefficient, including
-  groups later excluded. Float arithmetic and averages remain separate work.
+  groups later excluded. `avg`/`group_avg` share the exact numeric accumulator,
+  divide by the present count before result conversion, and retain absent groups.
+  Group filters/order compare the rounded result. No precision fallback; U256
+  totals too large for the bounded Decimal average refuse. Count the average's
+  denominator in retained state. Float arithmetic remains separate work.
   No implicit numeric coercion or general reducer framework.
   Output records are not durable schema additions. The local CLI constructs
   fluent queries for Entry/Document/DecimalRow, uses opaque continuation and display-only

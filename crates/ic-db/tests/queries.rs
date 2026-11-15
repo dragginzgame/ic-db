@@ -3410,3 +3410,317 @@ fn decimal_sums_preserve_all_twenty_eight_fractional_places() {
     );
     assert_eq!(total.output_bytes, 17);
 }
+
+#[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 0)))))]
+struct WholePrice {}
+#[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 28)))))]
+struct PrecisePrice {}
+#[ic_db::record(fields(field(name = "number", value(item(prim = "Decimal", scale = 0)))))]
+struct WholeNumberAverage {}
+
+#[test]
+fn averages_round_once_to_declared_scale_with_signed_even_ties() {
+    for (inputs, expected) in [
+        (vec![124, 125], "1.24"),
+        (vec![125, 126], "1.26"),
+        (vec![-124, -125], "-1.24"),
+        (vec![-125, -126], "-1.26"),
+        (vec![1, 1, 0], "0.01"),
+        (vec![-1, -1, 0], "-0.01"),
+        (vec![1, 0, 0], "0"),
+    ] {
+        let db = decimal_sales(&inputs.into_iter().map(|n| (0, Some(n))).collect::<Vec<_>>());
+        let average = db.query::<DecimalSale>().avg::<OptionalPrice>().unwrap();
+        assert_eq!(average.value.unwrap().price.unwrap().to_string(), expected);
+        assert_eq!(average.output_bytes, 18);
+    }
+    for (inputs, expected) in [
+        ([100, 200], "2"),
+        ([200, 300], "2"),
+        ([-100, -200], "-2"),
+        ([-200, -300], "-2"),
+    ] {
+        let db = decimal_sales(&inputs.map(|n| (0, Some(n))));
+        assert_eq!(
+            db.query::<DecimalSale>()
+                .avg::<WholePrice>()
+                .unwrap()
+                .value
+                .unwrap()
+                .price
+                .unwrap()
+                .to_string(),
+            expected
+        );
+    }
+    let db = decimal_sales(&[(0, Some(124)), (0, Some(125)), (0, None)]);
+    assert_eq!(
+        db.query::<DecimalSale>()
+            .avg::<RescaledPrice>()
+            .unwrap()
+            .value
+            .unwrap()
+            .price
+            .unwrap()
+            .to_string(),
+        "1.245"
+    );
+    let db = decimal_sales(&[(0, Some(100)), (0, Some(0)), (0, Some(0))]);
+    assert_eq!(
+        db.query::<DecimalSale>()
+            .avg::<PrecisePrice>()
+            .unwrap()
+            .value
+            .unwrap()
+            .price
+            .unwrap()
+            .to_string(),
+        "0.3333333333333333333333333333"
+    );
+}
+
+#[test]
+fn grouped_averages_filter_rounded_results_and_retain_absence() {
+    let db = decimal_sales(&[
+        (0, Some(124)),
+        (0, Some(125)),
+        (1, Some(124)),
+        (2, None),
+        (3, Some(0)),
+    ]);
+    let groups = db
+        .query::<DecimalSale>()
+        .order_groups(ic_db::GroupOrder::AggregateDescending)
+        .group_avg::<CategoryOnly, OptionalPrice>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .iter()
+            .map(|g| (
+                g.key.category,
+                g.value
+                    .as_ref()
+                    .and_then(|v| v.price)
+                    .map(|v| v.to_string())
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (0, Some("1.24".into())),
+            (1, Some("1.24".into())),
+            (3, Some("0".into())),
+            (2, None)
+        ]
+    );
+    let threshold: ic_db::Decimal = "1.24".parse().unwrap();
+    assert!(
+        db.query::<DecimalSale>()
+            .filter_groups(C::Gt, threshold)
+            .group_avg::<CategoryOnly, OptionalPrice>()
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    let tied = db
+        .query::<DecimalSale>()
+        .filter_groups(C::Eq, threshold)
+        .order_groups(ic_db::GroupOrder::AggregateDescending)
+        .limit(1)
+        .group_avg::<CategoryOnly, OptionalPrice>()
+        .unwrap();
+    assert_eq!(tied.value[0].key.category, 0);
+    assert!(
+        db.query::<DecimalSale>()
+            .filter("category", C::Eq, 2_u8)
+            .avg::<OptionalPrice>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(
+        decimal_sales(&[])
+            .query::<DecimalSale>()
+            .avg::<OptionalPrice>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .work_limit(2)
+            .avg::<OptionalPrice>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .byte_limit(17)
+            .avg::<OptionalPrice>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .filter_groups(C::Ge, 0_u64)
+            .group_avg::<CategoryOnly, OptionalPrice>(),
+        Err(Error::InvalidOperand)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .filter_groups(C::Eq, threshold)
+            .avg::<OptionalPrice>(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn average_overflow_is_checked_after_division_without_reducing_result_scale() {
+    // The unrepresentable sum still has a representable average.
+    for bound in [i128::MIN, i128::MAX] {
+        let db = decimal_sales(&[(0, Some(bound)), (0, Some(bound))]);
+        assert_eq!(
+            db.query::<DecimalSale>()
+                .avg::<OptionalPrice>()
+                .unwrap()
+                .value
+                .unwrap()
+                .price
+                .unwrap()
+                .coefficient_at_scale(2),
+            Some(bound)
+        );
+    }
+    // Even a filtered-out group must fit the selected 28-place result coefficient.
+    let db = decimal_sales(&[(0, Some(i128::MAX)), (1, Some(0))]);
+    assert!(matches!(
+        db.query::<DecimalSale>().avg::<PrecisePrice>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .filter_groups(C::Eq, ic_db::Decimal::ZERO)
+            .limit(1)
+            .group_avg::<CategoryOnly, PrecisePrice>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>().avg::<IntegerPrice>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<DecimalSale>().avg::<PriceKey>(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn every_integer_width_has_an_explicit_decimal_average() {
+    macro_rules! check {
+        ($prim:literal, $left:expr, $right:expr, $expected:literal) => {{
+            #[entity(pk(field="id"),fields(field(name="id",value(item(prim="Nat64"))),field(name="value",value(opt,item(prim=$prim)))))]
+            struct Row {}
+            #[ic_db::record(fields(field(
+                name = "value",
+                value(opt, item(prim = "Decimal", scale = 2))
+            )))]
+            struct Average {}
+            let runtime = host(VectorMemory::default());
+            let mut db = Database::create(
+                runtime
+                    .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                    .unwrap(),
+                Schema::new(&[Row::SCHEMA]).unwrap(),
+                [49; 16],
+            )
+            .unwrap();
+            let mut batch = Batch::new();
+            for (id, value) in [Some($left), Some($right), None].into_iter().enumerate() {
+                batch
+                    .insert(&Row {
+                        id: id as u64,
+                        value,
+                    })
+                    .unwrap();
+            }
+            db.commit(batch).unwrap();
+            assert_eq!(
+                db.query::<Row>()
+                    .avg::<Average>()
+                    .unwrap()
+                    .value
+                    .unwrap()
+                    .value
+                    .unwrap()
+                    .to_string(),
+                $expected
+            );
+        }};
+    }
+    check!("Nat8", 1_u8, 2_u8, "1.5");
+    check!("Nat16", 1_u16, 2_u16, "1.5");
+    check!("Nat32", 1_u32, 2_u32, "1.5");
+    check!("Nat64", 1_u64, 2_u64, "1.5");
+    check!("Nat128", 1_u128, 2_u128, "1.5");
+    check!("U256", ic_db::U256::ONE, ic_db::U256::from(2_u8), "1.5");
+    check!("Int8", -1_i8, -2_i8, "-1.5");
+    check!("Int16", -1_i16, -2_i16, "-1.5");
+    check!("Int32", -1_i32, -2_i32, "-1.5");
+    check!("Int64", -1_i64, -2_i64, "-1.5");
+    check!("Int128", -1_i128, -2_i128, "-1.5");
+}
+
+#[test]
+fn u256_average_divides_before_checked_decimal_conversion() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[HugeSum::SCHEMA]).unwrap(),
+        [50; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, number) in [
+        ic_db::U256::from(i128::MAX as u128) + 1,
+        ic_db::U256::ZERO,
+        ic_db::U256::ZERO,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        batch
+            .insert(&HugeSum {
+                id: id as u64,
+                number,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<HugeSum>()
+            .avg::<WholeNumberAverage>()
+            .unwrap()
+            .value
+            .unwrap()
+            .number
+            .to_string(),
+        "56713727820156410577229101238628035243"
+    );
+    let mut batch = Batch::new();
+    batch
+        .replace(&HugeSum {
+            id: 0,
+            number: ic_db::U256::MAX,
+        })
+        .unwrap();
+    batch
+        .replace(&HugeSum {
+            id: 1,
+            number: ic_db::U256::MAX,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<HugeSum>().avg::<WholeNumberAverage>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+}

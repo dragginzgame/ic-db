@@ -1,11 +1,22 @@
 # Changelog
 
-## [0.9.0] - Unreleased
+## [0.9.0] - 2026-11-15 (development checkpoint)
+
+### 📝 Summary
+
+Add bounded scalar/grouped extrema, sums and averages, with completed-group
+filtering and ordering. Integer and Decimal arithmetic share exact accumulation;
+averages use the declared result scale and ties-to-even rounding. Extend the
+local CLI demos and keep the execution, grouping and codec paths shared.
 
 ### ▶️ Try it
 
 ```sh
 make db
+db query Entry --select avg:amount
+db query Entry --select category,avg:amount --group-order desc
+db query DecimalRow --select avg:value
+db query DecimalRow --select zone,avg:maybe
 db query DecimalRow
 db query DecimalRow --select sum:value
 db query DecimalRow --select zone,sum:value --group-min 3
@@ -29,6 +40,8 @@ db query Entry --select category,count --min 40 --group-min 2 --group-order desc
 ```
 
 The local fixture returns total amount 213, priority sum 0 and score sum -10.
+Average amount is 35.5; category averages are 0 = 40 and 1 = 31. The decimal
+average is 1. Average demos select Decimal scale 2 and round ties to even.
 The CLI's decimal rows are 1.25, 2.50 and -0.75, summing exactly to 3 at declared
 scale 2. Their optional `maybe` values are absent, so the grouped sum displays `—`.
 These sums explicitly select 128-bit results. It returns minimum amount 11 and maximum amount 60. Its absent
@@ -48,6 +61,11 @@ toko-cloc -d 2
 
 ### 🛠️ Changes
 
+- Add `.avg::<Record>()` and `.group_avg::<KeyRecord, Record>()` for integer and
+  Decimal inputs. The result record declares Decimal scale; round the complete
+  total/count once, to nearest with ties to even. Check result overflow after
+  division, preserve absence, and filter/order completed rounded group values.
+  Share the existing numeric accumulator, group table and codecs.
 - Extend scalar/grouped sums to Decimal at the exact declared scale. Reuse I256
   coefficient accumulation and the owned codec, with final i128 overflow checks
   and no rounding or numeric conversion. Qualify cancellation, absent/zero groups,
@@ -65,7 +83,7 @@ toko-cloc -d 2
   implementation. Account for winner growth and release replaced winner storage;
   keep output limits separate from complete input and retained-state bounds.
 - Add `.filter_groups(comparison, operand)` and `.order_groups(GroupOrder)` for
-  completed counts/extrema/sums. Filter, sort, then limit output; aggregate ties retain
+  completed counts/extrema/sums/averages. Filter, sort, then limit output; aggregate ties retain
   ascending group keys. Reject these modifiers on scalar and row terminals.
   The local CLI exposes `--group-min` and `--group-order key|asc|desc`.
 - Add scalar integer `.sum::<Record>()` with explicit same-family result widening,
