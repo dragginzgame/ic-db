@@ -86,12 +86,18 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
-pub use store::{Batch, Database, Page};
+pub use store::{Batch, Comparison, Database, Page, Query, QueryCursor, QueryPage};
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// Unsupported query field/shape or unavailable ordered access path.
+    InvalidQuery,
+    /// Malformed continuation or a different database/schema/query boundary.
+    InvalidCursor,
+    /// One matching encoded row exceeds the whole requested output-byte allowance.
+    RowTooLarge,
     /// Managed insert/replacement requires an explicitly captured batch time.
     MissingOperationTime,
     /// A caller attempted to assign a database-managed field.

@@ -5,12 +5,14 @@
 use ic_db_qualification_transport as transport;
 
 mod account_keys;
+mod console;
 mod defaults;
 mod enum_collections;
 mod envelope;
 mod generation;
 mod managed;
 mod principal_keys;
+mod queries;
 
 use ic_db::{Batch, Database, Entity, FieldType, Principal};
 use ic_platform_runtime::cdk;
@@ -36,7 +38,6 @@ use schema::{
 
 const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
 
 include!(concat!(env!("OUT_DIR"), "/schema.rs"));
 fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
@@ -351,33 +352,6 @@ fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&
         },
         _ => {}
     }
-}
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
-)]
-fn query((after, limit, minimum): (u64, u64, u64)) -> Result<QueryPage, u8> {
-    if !(1..=3).contains(&limit) {
-        return Err(1);
-    }
-    let host = runtime();
-    let db = open(&host);
-    let page = db
-        .page::<Entry>(Some(after), limit as usize)
-        .map_err(|_| 2)?;
-    let scanned = page.rows.len() as u64;
-    // This fixture's residual filter transforms only the obtained bounded page;
-    // the database continuation remains after the last examined row, not last match.
-    Ok((
-        page.rows
-            .into_iter()
-            .filter(|row| row.amount >= minimum)
-            .map(|row| (row.id, row.amount))
-            .collect(),
-        page.next_after,
-        scanned,
-    ))
 }
 #[ic_platform_runtime::cdk::update(
     guard = "crate::transport::admit::<4>",

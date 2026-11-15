@@ -24,6 +24,8 @@ help:
 	  'make m0-maintenance              Run interrupted schema-maintenance probe' \
 	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
+	  'make m2-queries                 Check bounded fluent query pages' \
+	  'make m2-cli                     Check the fluent CLI and migrated query caller' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
 	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
@@ -147,6 +149,16 @@ m1-records-wasm: m1-records-artifact
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys -- --nocapture
 
 .PHONY: m1-commit-failures
+.PHONY: m2-queries
+m2-queries: m1-records-artifact
+	cargo test --locked -p ic-db --test queries
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries -- --nocapture
+
+.PHONY: m2-cli
+m2-cli: m1-records-artifact
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
+
 .PHONY: m1-write-envelope
 m1-write-envelope: m1-records-artifact
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture

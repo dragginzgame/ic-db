@@ -167,21 +167,34 @@ async fn backing_writes_and_growth_failures_roll_back() {
                     .query_call(
                         canister,
                         canister,
-                        "query",
-                        native::encode_request(3, &(first - 1, 3_u64, 0_u64), LIMITS).unwrap(),
+                        "fluent_query",
+                        native::encode_request(
+                            95,
+                            &(
+                                None::<Vec<u8>>,
+                                true,
+                                Some(9_u64),
+                                u64::MAX,
+                                3_u32,
+                                3_u32,
+                                4096_u32,
+                            ),
+                            LIMITS,
+                        )
+                        .unwrap(),
                     )
                     .await
                     .unwrap();
-                type Page = (Vec<(u64, u64)>, Option<u64>, u64);
-                let page = native::decode_response::<Result<Page, u8>>(3, &reply, LIMITS)
+                type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
+                let page = native::decode_response::<Result<Page, u8>>(95, &reply, LIMITS)
                     .unwrap()
                     .unwrap();
                 assert_eq!(
                     page.0,
                     vec![
-                        (first, u64::MAX),
-                        (first + 1, u64::MAX),
-                        (first + 2, u64::MAX)
+                        (first + 31, u64::MAX),
+                        (first + 30, u64::MAX),
+                        (first + 29, u64::MAX)
                     ]
                 );
                 eprintln!(

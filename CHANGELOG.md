@@ -1,13 +1,22 @@
 # Changelog
 
-## [0.7.0] - Unreleased
+## [0.7.0] - 2026-11-15 (development checkpoint)
+
+### ⚠️ Breaking
+
+- Reinstall the CLI with `make db`. `query --after` now accepts the printed
+  hexadecimal cursor, not a numeric row ID. Repeat the same entity, filters,
+  order and projection when continuing.
+- The 512-byte complete-key contract uses semantics version 2. Older stored
+  contracts refuse intact; no automatic transformation or data deletion is provided.
 
 ### ▶️ Try it
 
 Inspect `AccountKey` / `SubaccountKey` for typed primary keys and mutual references.
 `EnvelopeRow` is the synthetic maximum-row/index-fan-out fixture.
 `EnumRow` now shows the `state,id` and sparse unique `previous` indexes over `Lifecycle`.
-The CLI uses a fresh local fixture; `schema` shows all entities and `query` reads `Entry`.
+The CLI uses a fresh local fixture; `schema` shows all entities and `query` supports
+`Entry` (default) and `Document`.
 
 ```sh
 make db
@@ -16,6 +25,11 @@ db schema EnumRow
 db schema EnumCollectionsRow
 db schema Document
 db query --limit 2
+db query Entry --category 1 --order-by id --desc --select id,amount
+db query Entry --min 100 --work 2
+db query Document --entry-id 1 --order-by score
+db query Document --select id
+db query --help
 ```
 
 Measure controlled entity growth separately from the local CLI fixture:
@@ -25,6 +39,37 @@ make m1-entity-growth
 ```
 
 ### 🛠️ Changes
+
+- Start M2 with bounded fluent reads: exact AND comparisons, primary or explicit
+  index-prefix order, reverse traversal, work/row/byte limits and query-bound
+  continuations. Sparse pages advance over rejected candidates; output limits
+  retry rather than skip a matching row. Shared borrowed field inspection avoids
+  constructing rejected entities. `make m2-queries` selects the native/Wasm probe.
+  The local CLI now uses these same admitted operations.
+
+- Connect `db query [Entry|Document]` to fluent reads, with field ordering,
+  descending traversal, typed projections and independent row/work/byte bounds.
+  Replace numeric `--after ID` with an opaque hexadecimal `--after CURSOR`;
+  reuse it with the same query shape. Normal output shows tables, work counts
+  and continuation data; guidance stays in `--help`. Remove the old host-side
+  post-page filter. `make m2-cli` checks the installed-layout console and migrated
+  query caller. This remains a temporary local fixture, not a remote adapter.
+
+- Add `order_by(&[...])` with an implicit primary-key tie-breaker and automatic
+  ordered-path selection. Equality prefixes narrow compatible indexes; incomplete
+  ordering and unsafe sparse paths refuse. Selection is deterministic and bounded
+  by schema metadata, with no sorting, plan cache or statistics. Native full-sort
+  oracles and the `make m2-queries` Wasm probe cover continuation and upgrade.
+
+- Add typed selective projection through `fetch_as::<Record>()`, reusing ordinary
+  `#[record]` declarations and their codecs. Exact field/type admission includes
+  transitive named definitions. Byte limits count projected output; cursors bind
+  its shape, and unselected corruption still refuses. No macro syntax, durable
+  schema or dependency changes. `make m2-queries` also checks projection and its
+  upgrade/byte-retry boundaries; CLI `--select` exposes the fixed fixture shapes.
+
+- Refresh qualification's Wire transport lock to 0.22.3. Product codecs and
+  dependencies remain independent of Wire.
 
 - Keep CLI output focused on results: move schema explanations to
   `db schema --help` and remove the startup command tutorial.

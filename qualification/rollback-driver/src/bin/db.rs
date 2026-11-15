@@ -11,7 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis M1 fixture has six Entry rows, one record each for Document, WideNumbers, BinaryObject, NarrowNumbers and IdentityRow, and an empty OptionalLink entity; it is discarded on exit.\nIt is not a deployed database. query currently reads Entry rows.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query currently supports Entry and Document.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -30,21 +30,59 @@ enum Command {
     },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
-    /// Read bounded Entry candidates in ID order; continue even when no rows match.
+    /// Read one fluent page from a local fixture entity.
+    #[command(
+        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order and projection. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount works for Entry. Filters use the fields' exact declared types."
+    )]
     Query {
-        #[arg(long, default_value_t = 0)]
-        after: u64,
-        #[arg(long, default_value_t=3, value_parser=clap::value_parser!(u64).range(1..=3))]
-        limit: u64,
-        /// Retain candidates with amount at least this value.
-        #[arg(long = "min", default_value_t = 0)]
-        minimum: u64,
+        #[arg(default_value="Entry", value_parser=["Entry", "Document"])]
+        entity: String,
+        /// Opaque hexadecimal continuation from a previous page (not a row ID).
+        #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
+        after: Option<CursorArg>,
+        #[arg(long, default_value_t=3, value_parser=clap::value_parser!(u32).range(1..=32))]
+        limit: u32,
+        /// Entry.amount >= VALUE.
+        #[arg(long = "min")]
+        minimum: Option<u64>,
+        /// Entry.category == VALUE.
+        #[arg(long)]
+        category: Option<u64>,
+        /// Document.entry_id == VALUE.
+        #[arg(long)]
+        entry_id: Option<u64>,
+        /// Comma-separated field names; the primary key breaks ties.
+        #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
+        order_by: Vec<String>,
+        #[arg(long)]
+        desc: bool,
+        #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
+        work: u32,
+        #[arg(long, default_value_t=4096, value_parser=clap::value_parser!(u32).range(1..=131072))]
+        bytes: u32,
+        #[arg(long, default_value="full", value_parser=["full", "id", "id,amount"])]
+        select: String,
     },
     /// Display command help.
     Help,
     /// Leave the console.
     #[command(alias = "exit")]
     Quit,
+}
+#[derive(Clone, Debug)]
+struct CursorArg(Vec<u8>);
+fn parse_cursor(text: &str) -> Result<CursorArg, String> {
+    if !(70..=1092).contains(&text.len())
+        || !text.len().is_multiple_of(2)
+        || !text.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("expected a hexadecimal query cursor (70–1092 digits), not a row ID".into());
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()
+        .map(CursorArg)
 }
 fn help() {
     Cli::command().print_help().unwrap();
@@ -246,43 +284,77 @@ async fn main() -> Result<(), String> {
                 }
             }
             Command::Query {
+                entity,
                 after,
                 limit,
                 minimum,
+                category,
+                entry_id,
+                order_by,
+                desc,
+                work,
+                bytes,
+                select,
             } => {
                 let reply = pic
                     .query_call(
                         canister,
                         canister,
                         "query",
-                        native::encode_request(3, &(after, limit, minimum), LIMITS)
-                            .map_err(|e| e.to_string())?,
+                        native::encode_request(
+                            3,
+                            &(
+                                entity.as_str(),
+                                after.map(|cursor| cursor.0),
+                                limit,
+                                minimum,
+                                category,
+                                entry_id,
+                                order_by,
+                                desc,
+                                work,
+                                bytes,
+                                select,
+                            ),
+                            LIMITS,
+                        )
+                        .map_err(|e| e.to_string())?,
                     )
                     .await
                     .map_err(|e| format!("{e:?}"))?;
-                type Page = (Vec<(u64, u64)>, Option<u64>, u64);
-                let result: Result<Page, u8> =
+                type Page = (
+                    Vec<String>,
+                    Vec<Vec<String>>,
+                    Option<Vec<u8>>,
+                    u32,
+                    u32,
+                    u32,
+                );
+                let result: Result<Page, String> =
                     native::decode_response(3, &reply, LIMITS).map_err(|e| e.to_string())?;
-                let (rows, next, scanned) = result
-                    .map_err(|code| format!("database refused query (fixture code {code})"))?;
+                let (columns, rows, next, examined, fetched, bytes) = result?;
                 let count = rows.len();
                 let rows: Vec<Vec<String>> = rows
                     .into_iter()
-                    .map(|(id, amount)| vec![id.to_string(), amount.to_string()])
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|v| terminal_text(&v).into_owned())
+                            .collect()
+                    })
                     .collect();
-                println!("\n{}", render_bordered(&["id", "amount"], &rows));
-                println!("{count} rows returned; {scanned} candidates examined.");
-                if let Some(after) = next {
-                    let command = if interactive { "query" } else { "db query" };
-                    let filter = if minimum == 0 {
-                        String::new()
-                    } else {
-                        format!(" --min {minimum}")
-                    };
-                    println!("Next page: {command} --after {after} --limit {limit}{filter}");
-                } else {
-                    println!("Complete: no more candidates.");
-                }
+                let columns: Vec<_> = columns.iter().map(String::as_str).collect();
+                println!("\n{entity}\n{}", render_bordered(&columns, &rows));
+                let noun = if count == 1 { "row" } else { "rows" };
+                println!(
+                    "{count} {noun}; {examined} examined; {fetched} fetched; {bytes} encoded bytes."
+                );
+                println!(
+                    "Next cursor: {}",
+                    next.map_or_else(
+                        || "none".into(),
+                        |c| c.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    )
+                );
             }
         }
         Ok(())

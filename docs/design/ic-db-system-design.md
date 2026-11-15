@@ -1430,6 +1430,125 @@ Within M2, implement filtering/projection/ordering/live pages first, then distin
 grouping and aggregate semantics, then resumable exact aggregation and completed
 output pagination. This sequences delivery without reducing the accepted scope.
 
+**2026-11-15 boundary review.** The delivered persistent-record subset has native
+and Wasm evidence for declared schema identity, owned codecs, primary/secondary
+reads, final-state batches, reference restrictions, managed values, rejection,
+upgrade/reopen and message rollback. Key-size, allocation/failure and entity-growth
+probes provide the separately scoped evidence recorded below. This permits M2
+work on that admitted subset; it does not declare the entire retained type-operation
+matrix or all M1 combinations qualified. Nested references/indexes, other named
+collection keys, composite primary keys and additional authoring policies remain
+explicit gaps, not silently removed capabilities. M3 transformation recovery and
+M4 Canic integration/full-workload comparisons remain separate gates.
+
+The first M2 slice now delivers `Database::query::<E>()` with up to eight AND
+comparisons over top-level ordered scalar/unit-enum fields. Runtime field names
+resolve against the admitted entity, and operand widths/types must match exactly.
+Equality includes absence; inequality is its complement. Range predicates require
+a present operand and do not match absent fields. No numeric coercion, callbacks,
+arbitrary expression language or separate public dynamic frontend is added.
+
+Primary-key order is the default. `using_index(name, prefix)` adds exact leading
+component constraints and uses the complete physical index order, including the
+primary-key suffix on nonunique indexes. `descending()` reverses that whole order.
+Sparse indexes require present prefix operands for every optional indexed field;
+an incomplete sparse path refuses rather than silently losing otherwise matching
+rows. Prefix admission and complete-key bounds share the direct-read implementation.
+`order_by(&[...])` accepts 1–4 distinct ordered top-level fields and appends the
+primary key unless explicitly listed last. It selects a complete ordered path;
+`descending` reverses every component together. Unknown/unorderable fields,
+duplicates and a nonfinal primary key refuse. With an explicit index the same
+order proof checks that requested path. Without `order_by`, existing primary or
+explicit-index semantics and cursor bindings remain unchanged.
+
+Selection first admits all predicates, including contradictions. Equality terms
+supply exact leading index operands; all predicates remain residual checks.
+Ordering compares requested and physical field sequences after removing constant
+components, ending at the unique primary key. Sparse indexes retain the same
+conservative present-prefix requirement. Compatible indexes rank by longest
+equality prefix, then fewest fields, then logical name. Prefer direct primary
+traversal when it supplies the order and no compatible index has a restrictive
+prefix. This is deterministic bounded metadata inspection (at most eight indexes
+of four components), without statistics, catalog state, plan caching or sorting.
+No supported path means `InvalidQuery`, never a sorted bounded subset.
+Optimized range seeks, mixed directions, bounded sorting, OR, grouping and DISTINCT
+remain work; this is not a general cost-based planner.
+
+`limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
+(1–512), and `byte_limit` bounds summed encoded output-row bytes (1–131072).
+Default limits are 32 rows, 128 candidates and 131072 bytes. Literal text operands
+are bounded to 4096 bytes before encoding; eight terms and four prefix components
+bound request preparation. Transport framing and its separate limits remain with
+the host. Every fetched row is structurally validated, including unselected fields;
+predicates borrow a bounded 16-slot field view and only returned rows become typed
+entities. This is transient borrowed data, not a persisted slot layout or a new
+universal owned value tree. Mutation inspection uses the same field decoder.
+
+`fetch_as::<R>()` now returns a `QueryPage<R>` using an existing `#[record]`
+declaration as the output shape. It matches 1–16 top-level fields by name and exact
+value shape, including optionality, declared bounds and complete transitive named
+definitions. Entity defaults, managed-time policies and reference enforcement do
+not become output-record policies. No aliasing, coercion, nested path selection
+or computed projection is implied. An output type is not registered in the stored
+schema and changing its Rust name alone does not change query meaning.
+
+The existing row inspector optionally records at most 16 validated byte ranges,
+including optional presence tags. Filtering/index integrity still use borrowed
+values; matching rows copy only selected field bytes into the output record codec.
+The root record adds no extra nesting level to the original entity's budget.
+Full-row validation remains mandatory, including omitted structured values and
+shared depth/node/item bounds. The supplier still fetches the whole row; this is
+selective materialization, not partial storage I/O. Output byte admission occurs
+before copying/decoding and counts projected bytes, so a large omitted blob cannot
+cause `RowTooLarge`. All other page/progress rules remain shared with entity reads.
+
+`QueryPage<T>` reports results, examined/fetched counts, encoded bytes and `next`.
+Reaching a row/work limit may conservatively require a final empty page. An output
+limit retries the first unreturned candidate through an inclusive position;
+`RowTooLarge` refuses an individually oversized match. A cursor carries version,
+query binding and one bounded physical-key position, with a maximum 546-byte frame.
+Binding includes incarnation, schema, entity/access path, exact prefix/predicate
+sequence and direction; explicit ordering additionally binds its field sequence,
+and projected reads bind their field shape.
+Equivalent record names share that shape, while entity/projected-result cursors
+are distinct. Existing entity-result cursor bindings remain unchanged.
+Page resource limits may change. Resume validates all key
+framing and retains no trusted counts or route authority. Callers may select a
+logical boundary; cursors are not authentication tokens or exact-enumeration proofs.
+An unchanged-schema upgrade preserves their meaning; live updates retain the
+documented duplicate/omission behavior.
+
+Frozen IcyDB `6d421e3` supplies the relevant precedents: cursor direction/signature
+mismatch tests, strict token framing, residual-filter admission and borrowed scalar
+projection tests under `db/cursor`, `db/executor/projection/eval` and
+`db/data/persisted_row/reader/structural_slot_reader/tests`. The new path retains
+exact admission, complete residual checks and small borrowed reads, without its
+catalog/layout route pins, authenticated progress counters or historical readers.
+Unlike a lazy false predicate, the chosen initial reader validates the complete
+stored row before deciding membership. Selective output retains IcyDB's direct
+projection lesson (do not construct unused owned values), using existing record
+codecs rather than cached universal values or a slot/catalog envelope. No macro
+expansion, durable state, dependencies or execution specialization were added.
+The ordering increment also retains the uniform-direction/primary-key tie-break
+and equality-prefix lessons in frozen IcyDB's `query/plan/order_contract` and its
+admission tests. One small shared proof owns explicit and automatic paths. Broader
+grouped contracts, construction budgets and expression-label machinery are not
+imported into this structurally bounded field-order slice. Independent full-sort
+oracles check duplicate values, both directions and page/work bounds.
+`make m2-queries` selects native
+and Wasm correctness witnesses. The local `db query [Entry|Document]` adapter now
+constructs the same fluent calls, with explicit field ordering, direction, bounded
+execution and typed `id`/`id,amount` output shapes. `Entry` remains the default.
+The fixture accepts Entry amount/category filters and a Document entry-reference
+filter. This finite host mapping is not a public dynamic engine or general literal
+language. Supporting another entity requires an explicit typed host adapter;
+schema inspection still covers all entities. Production endpoints remain Canic-owned.
+The old post-page filtering endpoint is removed. Numeric `--after ID` is replaced
+by a hexadecimal cursor, and normal output reports results, work and continuation
+without command tutorials. `make m2-cli` checks real installed-layout use; broader
+remote CLI integration remains separate. Source codecs, schema identity and stored
+data are unchanged; only private fixture transport changes.
+
 M0 exits with application-neutral schema/query/write contracts,
 the broad fluent capability inventory and SQL-only exclusion rationale;
 ordinary batch and intra-batch contracts backed by a Wasm rollback probe; schema
@@ -1562,8 +1681,8 @@ neither the absence of slots nor the absence of runtime values is a product goal
 | Piece | Decision and delivery boundary |
 | --- | --- |
 | Owned scalar codecs | Adapted for the current scalar types, with independent bytes and malformed-input checks. Start remaining rich types from their relevant owned IcyDB codecs and domain-validation cases. |
-| Borrowed field access | Implemented first M1 use: shared stored-key inspection in writes and reference checks validates text/blob through borrowed slices, without constructing a complete entity. Field/row validation and physical key/index checks remain. Broader query field access remains M2 work. |
-| Selective query reads | Required direction for M2: predicates, projection and aggregation should materialize only needed values. Compare whole-entity decoding with sequential skipping/borrowed access on wide rows before choosing the query representation. |
+| Borrowed field access | Shared stored-key inspection in writes, references and fluent predicates validates values without constructing a complete entity. Field/row validation and physical key/index checks remain. |
+| Selective query reads | M2 predicates borrow selected scalars; typed record projection copies validated selected field ranges and decodes only output. The 1024-byte blob witness measures full versus ID-only materialization. Aggregation and broader compositions remain work. |
 | Equality, ordering and hashing | Inspect and adapt IcyDB's type-specific rules together before adding predicates, uniqueness, grouping or DISTINCT for each type. Do not let different facilities invent incompatible meanings. |
 | Offset tables | Conditional on measured selected-field workloads. Sequential rows remain the current format; fixed compiled offsets or bounded skipping may suffice. A durable directory needs an explicit format decision. |
 | Decoded-field caches | Conditional on demonstrated repeated field decoding in one operation; no eager general value cache. |
@@ -1934,8 +2053,8 @@ the complete row must be consumed. Text/blob payloads borrow the supplier's row
 buffer rather than allocating owned field values. The supplier still returns an
 owned row buffer, and UTF-8 validation still examines text bytes: this is not a
 zero-copy storage or constant-time field-access claim. Row bytes and fingerprints
-are unchanged. General projections, borrowed query results and selective query
-execution have not been implemented by this increment.
+are unchanged. The subsequent M2 slice reuses this reader for predicates and typed
+record projection; borrowed public query results remain unimplemented.
 Index membership verification is shared by indexed reads and reverse-reference
 checks. No general decoded-value cache or public prepared transaction is
 introduced. Typed read loops remain generic. The controlled entity-growth probe
@@ -2448,9 +2567,11 @@ With named records, payload enums, lists, sets, maps, U256, finite floats,
 Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID/Principal/Account/Subaccount
 primary keys, literal defaults, managed-time admission
 and the 512-byte complete-key cap, operation-specific revision admission and
-unit-enum indexes/collections, the scalar host is 224,030 Wasm bytes and 203,436 code-section
-bytes. Hit/miss cost 471,717/477,238 instructions; listing costs 772,008. Complete
-read/modify/replace costs 828,471 instructions and 7,842,238 cycles.
+unit-enum indexes/collections and shared query field inspection, the scalar host
+is 224,548 Wasm bytes and 203,915 code-section bytes. Hit/miss cost
+471,728/477,249 instructions; direct listing costs 771,661. Complete
+read/modify/replace costs 828,622 instructions and 7,842,397 cycles. Fluent execution
+is unreachable in this scalar host; these numbers measure shared-path overhead.
 
 Unit-enum support adds 1,140 total/1,211 code bytes to the preceding scalar host.
 Hit/miss add 19 instructions each, listing 339 (0.044%) and read/modify/replace
@@ -2465,6 +2586,27 @@ bytes. All sampled scalar query/write instruction counts and execution cycles
 are unchanged. This measures shared-code cost, not an enum-collection workload;
 the focused native/Wasm probes establish that workload's correctness. Previous
 evidence is under `records-comparison-before-enum-collections`.
+
+Sharing prefix admission and borrowed field inspection with fluent queries adds
+504 total/465 code bytes to that host. Hit/miss and inserts add 12 instructions,
+direct indexed listing removes 346, and read/modify/replace adds 126 (about 0.015%).
+The bounded view is filled in place; the first attempt's unnecessary array copy
+was removed after measurement. Retain the shared semantic owner at this small
+incremental cost; all matched workloads remain below the frozen-IcyDB acceptance
+ceilings. This is not a fluent-planner or projection comparison. The preceding
+run is under `records-comparison-before-fluent-queries`.
+
+Adding selective output ranges to that shared inspector adds 14 total/code bytes
+to the scalar host; hit/miss/listing each lose one instruction and read/modify/write
+adds 25 instructions/cycles (about 0.003%). Retain this measured small cost for one
+validation owner. No write representation or durable state changes. The normal
+qualification fixture grows from 673,422/631,149 total/code bytes to 683,293/640,555,
+including two new probe endpoints and output codecs; this is not isolated executor
+or per-query-shape growth. Its same-source 1024-byte blob witness returns ID-only
+output in 8 encoded bytes instead of 1,037, with 74,464 versus 74,795 instructions
+for full materialization. Both executions start after opening the same database;
+storage fetch and whole-row validation remain included. This narrow result does
+not establish projection savings across type families or against IcyDB.
 
 Both hosts now use direct Platform guard/decode/encode hooks with the same bounded
 Wire transport. Relative to the preceding Wire Endpoint run, IC DB loses
@@ -2539,7 +2681,7 @@ is retained under records-comparison-before-account-keys.
 The earlier Wire Endpoint comparison remains under
 records-comparison-before-endpoint-hooks. Earlier increment details remain with
 their evidence. Current artifact SHA-256 values:
-IC DB `c8986fdd28897b4390885e596d3909f9efd1e802d87bc26e3bb62fa3d0886318`;
+IC DB `091b9f0f02c298036443c8b383b8e64fe83342de2bf719187296fb48506c4c54`;
 IcyDB `94425d3624bca6dadba67084bb129f9f454c5d5688a7c5dd3c78a4dc65a0ff00`.
 The optional envelope-fixture addition leaves scalar sizes and all measured
 instructions/cycles unchanged; IcyDB's artifact hash changes with the host source

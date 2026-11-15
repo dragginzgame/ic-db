@@ -8,6 +8,9 @@ use crate::{
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod query;
+pub use query::{Comparison, Query, QueryCursor, QueryPage};
+
 const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
@@ -301,43 +304,7 @@ impl<M: Memory> Database<M> {
         if values.is_empty() || values.len() > index.fields.len() || !(1..=32).contains(&limit) {
             return Err(Error::Limit);
         }
-        let mut prefix = index_prefix(E::SCHEMA.id, index.id);
-        for (value, name) in values.iter().zip(index.fields) {
-            let field = E::SCHEMA
-                .fields
-                .iter()
-                .find(|field| field.name == *name)
-                .ok_or(Error::InvalidSchema)?;
-            value.admit(field.value, field.optional)?;
-            if index.present_only && *value == IndexValue::Absent {
-                return Err(Error::InvalidOperand);
-            }
-            value.append_component(field.optional, &mut prefix);
-            if prefix.len() > crate::MAX_INDEX_KEY_BYTES {
-                return Err(Error::Limit);
-            }
-        }
-        let mut completion = if index.unique {
-            0
-        } else {
-            key::minimum_bytes(E::SCHEMA.key_type()?)?
-        };
-        for name in &index.fields[values.len()..] {
-            let field = E::SCHEMA
-                .fields
-                .iter()
-                .find(|field| field.name == *name)
-                .ok_or(Error::InvalidSchema)?;
-            completion += if field.optional && !index.present_only {
-                1
-            } else {
-                key::minimum_bytes(field.value)? + usize::from(field.optional)
-            };
-        }
-        if prefix.len() + completion > crate::MAX_INDEX_KEY_BYTES {
-            return Err(Error::Limit);
-        }
-        let prefix = StoreKey::new(prefix)?;
+        let prefix = StoreKey::new(admit_index_prefix(E::SCHEMA, index, values)?)?;
         let mut rows = Vec::new();
         for entry in self
             .map
@@ -596,6 +563,53 @@ fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
     let mut key = prefix(3, entity);
     key.extend(index.to_be_bytes());
     key
+}
+// Direct lookups and fluent reads share exact prefix admission and completion bounds.
+fn admit_index_prefix(
+    entity: &EntitySchema,
+    index: &crate::IndexSchema,
+    values: &[IndexValue<'_>],
+) -> Result<Vec<u8>, Error> {
+    if values.len() > index.fields.len() {
+        return Err(Error::Limit);
+    }
+    let mut prefix = index_prefix(entity.id, index.id);
+    for (value, name) in values.iter().zip(index.fields) {
+        let field = entity
+            .fields
+            .iter()
+            .find(|field| field.name == *name)
+            .ok_or(Error::InvalidSchema)?;
+        value.admit(field.value, field.optional)?;
+        if index.present_only && *value == IndexValue::Absent {
+            return Err(Error::InvalidOperand);
+        }
+        value.append_component(field.optional, &mut prefix);
+        if prefix.len() > crate::MAX_INDEX_KEY_BYTES {
+            return Err(Error::Limit);
+        }
+    }
+    let mut completion = if index.unique {
+        0
+    } else {
+        key::minimum_bytes(entity.key_type()?)?
+    };
+    for name in &index.fields[values.len()..] {
+        let field = entity
+            .fields
+            .iter()
+            .find(|field| field.name == *name)
+            .ok_or(Error::InvalidSchema)?;
+        completion += if field.optional && !index.present_only {
+            1
+        } else {
+            key::minimum_bytes(field.value)? + usize::from(field.optional)
+        };
+    }
+    if prefix.len() + completion > crate::MAX_INDEX_KEY_BYTES {
+        return Err(Error::Limit);
+    }
+    Ok(prefix)
 }
 fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey, bool)>, Error> {
     if info.indexes.len() != entity.indexes.len() {

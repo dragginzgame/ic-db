@@ -5,9 +5,10 @@ use crate::{
     Timestamp, TypeSchema, U256, Ulid, codec::Decoder, types::unit_enum_len,
 };
 
-/// One exact leading index component. Operand types must match declared fields;
+/// One exact ordered scalar operand for index prefixes and fluent comparisons.
+/// Operand types must match declared fields;
 /// integers are never implicitly widened, narrowed or coerced across signedness.
-/// This is a key boundary, not a general expression/value representation.
+/// This is a bounded scalar boundary, not a general expression/value representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexValue<'a> {
     /// An absent optional component, ordered before present values.

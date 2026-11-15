@@ -34,6 +34,49 @@ Inspect this fixture with `db schema EnumCollectionsRow`.
 
 ## Standalone endpoint hooks
 
+The first M2 fluent-read probe is selected separately:
+
+```sh
+make m2-queries
+```
+
+It exercises exact scalar filters, primary/index-prefix traversal, reverse order,
+empty sparse pages, byte-limit retry, oversized-row refusal, cursor identity and
+unchanged-schema upgrade. Native tests additionally cover duplicate secondary keys,
+live key updates, deleted cursor rows and corruption hidden behind rejecting filters.
+The Wasm probe advances virtual time before upgrade because its preceding query
+calls do not drain the IC install-code rate limit. No production setting is changed.
+Projection checks reuse named records, cover optional/nested output, exact
+transitive type admission, unselected corruption and projected-byte retries. The
+Wasm probe resumes a projected cursor after upgrade, rejects it for entity output,
+and compares full decoding against ID-only projection over a 1024-byte blob row.
+The local CLI adapter now uses these fluent operations for Entry and Document;
+`make m2-cli` separately checks its installed-layout command surface.
+
+Automatic ordering adds full-sort native oracles with duplicate values, fixed
+index components, both directions, rejected incomplete paths and cursor binding.
+The Wasm witness orders by category plus the implicit primary key, narrows a
+category equality to its index prefix and resumes that selected path after upgrade.
+No input-prefix sort or statistics-based planner is qualified.
+
+The blob witness returns identical IDs with 1,037 encoded bytes for full entities
+versus 8 for projected records. Its measured execution after opening is 74,795
+versus 74,464 instructions. This is selective materialization, not partial storage
+I/O. Both paths validate all input bytes. The complete fixture grows by 9,871 total
+and 9,406 code bytes, including two new endpoints and their output codecs; this
+does not isolate executor or per-output-type growth. Projection-increment fixture SHA-256:
+`fcd716b40d9a7858d75bad7898476517addf419554399dc8aa08f22719a29225`.
+
+The scalar benchmark isolates shared-code overhead, with fluent execution
+unreachable: 224,548 total/203,915 code bytes, SHA-256
+`091b9f0f02c298036443c8b383b8e64fe83342de2bf719187296fb48506c4c54`.
+Projection support adds 14 total/code bytes; hit/miss use 471,728/477,249 instructions
+(-1 each), direct listing 771,661 (-1), and read/modify/replace 828,622 (+25,
+about 0.003%) with 7,842,397 cycles (+25).
+The shared borrowed reader fills its bounded field view in place; a temporary
+copy found during measurement was removed. These costs remain below the matched
+IcyDB ceilings. No direct-to-fluent performance parity is claimed.
+
 All six canister hosts use Platform's generic `guard`, `decode_with` and
 `encode_with` hooks with the [fixed fixture codecs](transport/src/lib.rs), shared
 through one private qualification crate with ordinary Cargo dependencies. No Canic or
@@ -67,7 +110,7 @@ make m1-records
 make db
 db schema
 db query --limit 3 --min 40
-db query --after 3 --limit 3 --min 40
+db query Entry --min 40 --limit 3 --select id,amount
 ```
 
 The explicit ULID issuance witness runs with `make m1-records-wasm`. It passes
@@ -1071,16 +1114,26 @@ built for the console. Cargo artifact records select both
 build outputs. Keep the installation's `bin` directory on `PATH`.
 
 Run `db` to open a fresh temporary local record database. Commands are `schema`,
-`status`, `query [--after ID] [--limit 1..3] [--min VALUE]`, `help` and `quit`.
-Queries are read-only, order by ID ascending and inspect at most `limit` candidates.
-The minimum-value filter can return an empty page with a continuation. The CLI
-prints a next-page command preserving the filter/limit, or `Complete: no more
-candidates.` A full final page may need one last empty call. Both schema information
+`status`, `query [Entry|Document]`, `help` and `quit`. Entry is the default.
+Queries use the fluent product engine. Entry supports `--min` and `--category`;
+Document supports `--entry-id`. `--order-by FIELD[,FIELD]` selects a proven complete
+order, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
+projection (the latter is Entry-only). Full entities are the default result.
+`--limit` bounds output rows, `--work` bounds candidates and `--bytes` bounds encoded
+output. Their defaults are 3, 128 and 4096. An empty page may still continue.
+The CLI prints a hexadecimal next cursor or `none`; copy it to `--after` with the
+same entity, filters, order and projection. Numeric after-ID syntax is retired.
+A full final page may need one last empty call. Both schema information
 and records come from the running fixture's query controls. Schema responses carry
 structured field/index descriptions; only the native CLI depends on `ic-host-text`
 and renders bordered tables. Full storage identities live in `db status`.
 
-Use `db query --after 3 --limit 2` for one command, or pipe newline commands to `db`.
+Use `db query Entry --category 1 --order-by id --desc` for one command, or pipe
+newline commands to `db`. `make m2-cli` checks piped/one-shot use, cursor reuse and
+query-shape refusals, projected bytes, work-exhausted pages, both entities and help.
+The old post-page-filter fixture endpoint is removed; mutation/growth probes now
+read through the fluent witness. CLI qualification uses the concurrently selected
+Wire 0.22.3 transport lock; product dependencies and persisted bytes are unchanged.
 `db --help` needs no running server. The installed binary locates the fixture
 relative to itself and works outside the repository directory. Testkit's prepared
 server is still tied to the build checkout; run `make m0-setup` there before use.

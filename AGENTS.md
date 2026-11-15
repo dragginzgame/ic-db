@@ -80,8 +80,26 @@ installer. Do not edit vendor files or copy upstream reference documents.
   errors. Earlier acceptance of explicit entity/index IDs is superseded by the
   subsequent name/path-based authoring decision above. Common read/write performance
   regressions require an explicit tradeoff decision even when Wasm is smaller.
-- Use small typed boundaries over shared execution machinery. Measure
-  monomorphization growth across entities, fluent chains and result mapping.
+- Use small typed boundaries over shared execution machinery.
+  Fluent reads use exact top-level comparisons and proven ordered paths;
+  no predicate callbacks. `order_by` adds a primary-key tie-breaker, uses one
+  direction and selects bounded equality-prefix paths from compiled metadata.
+  Explicit paths undergo the same order proof. Refuse incomplete order rather
+  than sorting a bounded input prefix. Keep work limits separate from result limits.
+  Empty pages may continue; byte exhaustion must retry the unreturned candidate.
+  Cursor frames carry bounded logical positions, not trusted progress or access
+  claims; validate database/schema/query/direction and complete key framing.
+  Borrowed field inspection is shared with mutation integrity; decode full entities
+  only for returned rows. `make m2-queries` selects this slice's native/Wasm probe.
+  `fetch_as::<Record>()` uses existing named-record metadata and codecs for exact
+  top-level projection. Validate the full transitive named definitions, retain
+  whole-source corruption checks and count projected bytes before materialization.
+  Output records are not durable schema additions. The local CLI constructs
+  fluent queries for Entry/Document, uses opaque continuation and display-only
+  result mapping; no client-side filtering or paging engine. `make m2-cli` checks
+  installed-layout use and the migrated query caller. Broader entity adapters,
+  optimized range seeks and richer sorting remain subsequent work.
+  Measure monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
   Standalone hosts may use Platform's generic entrypoint/guard/codec hooks without
   Canic. Qualification uses those hooks with bounded Wire frames; keep its small

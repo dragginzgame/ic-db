@@ -28,6 +28,62 @@ Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required/optional integer, Ulid, Principal, Account or Subaccount references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
+The first bounded fluent read slice is also available:
+
+```rust
+let page = db.query::<Entry>()
+    .using_index("category,id", &[1_u64.into()])
+    .filter("amount", ic_db::Comparison::Ge, 40_u64)
+    .descending()
+    .limit(20)
+    .work_limit(100)
+    .byte_limit(4096)
+    .fetch()?;
+```
+
+Omit `using_index` for primary-key order. Filter operands must match the exact
+declared type. `page.next` resumes the same query through `.after(&cursor)`;
+an empty page can still carry a continuation. Output budgets count encoded row
+bytes; transport framing remains host-owned. This first slice supports AND
+comparisons over top-level ordered scalar/unit-enum fields. `make m2-queries` checks its native/Wasm
+boundaries. The local CLI now constructs these same fluent operations.
+
+Request field ordering without naming an index:
+
+```rust
+let page = db.query::<Entry>()
+    .filter("category", ic_db::Comparison::Eq, 1_u64)
+    .order_by(&["id"])
+    .descending()
+    .fetch()?;
+```
+
+`order_by` accepts up to four distinct ordered fields and adds the primary key as
+the final tie-breaker. All fields share the selected direction. Equality filters
+can fix index components; the engine chooses a path that proves the complete
+order or returns `InvalidQuery`. No bounded-prefix sorting occurs. Without
+`order_by`, the existing primary/explicit-index order remains unchanged.
+
+Use an ordinary named record for selective output, with exact matching field
+names, types, optionality and bounds:
+
+```rust
+#[ic_db::record(fields(
+    field(name="id", value(item(prim="Nat64"))),
+    field(name="amount", value(item(prim="Nat64")))
+))]
+struct Summary {}
+
+let page = db.query::<Entry>()
+    .filter("amount", ic_db::Comparison::Ge, 40_u64)
+    .fetch_as::<Summary>()?;
+```
+
+This returns `QueryPage<Summary>` without decoding a full `Entry`. Byte limits
+count the projected record, while the complete source row is still validated.
+Output records need no stored schema registration. Projection cursors require the
+same selected fields; aliases, coercions and nested field paths are not implemented.
+
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.
@@ -222,9 +278,24 @@ make db        # install/update the binary; does not start the console
 db             # open the console
 ```
 
-At the `db>` prompt, use `schema`, `status`, `query --limit 3`,
-`query --after 3 --limit 2 --min 40`, `help` or `quit`.
-For one command: `db schema` or `db query --limit 2`. Use `db --help` for help.
+At the `db>` prompt, use `schema`, `status`, `query Entry --limit 3`,
+`query Entry --min 40 --select id,amount`, `help` or `quit`.
+For one command, try:
+
+```sh
+db query Entry --category 1 --order-by id --desc --select id,amount
+db query Entry --min 100 --work 2
+db query Document --entry-id 1 --order-by score
+db query Document --select id
+db query --help
+```
+
+`Entry` is the default entity. Copy the returned hexadecimal cursor into `--after`
+with the same entity, filters, order and projection. The old `--after ID` syntax
+is retired. Limits may change: `--limit` bounds returned rows (1–32), `--work`
+bounds examined candidates (1–512), and `--bytes` bounds encoded results
+(1–131072). An empty page can still have a next cursor. `--order-by` admits only
+complete supported orderings; `--desc` reverses the whole order.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
@@ -241,13 +312,11 @@ Use `db schema EnumRow` or `db schema Document` to select one exact declared
 entity name. Only its reachable named types are included; recursive definitions
 appear once and references retain their target names. Inside the console, use
 `schema EnumRow`. Unknown names report an error; omit the name to see all entities.
-`query` currently reads Entry and shows `id` and `amount`; its `--min` filter runs over a
-bounded primary-key page, so an empty page can still have a continuation.
-The output supplies a next-page command, retaining the limit and filter, or an
-explicit completion message. Terminal layout belongs to the CLI, not the runtime.
+`query` reads Entry or Document through the fluent engine and displays the chosen
+record shape, work counts and continuation cursor. Terminal layout belongs to
+the CLI, not the runtime.
 It has no SQL, remote-canister connection or production credentials. Broader
-query support remains required in the eventual product CLI, with explicit entity
-selection once more than Entry can be queried;
+entity coverage remains required in the eventual product CLI;
 Canic will own its endpoint integration. See [probe details](qualification/README.md).
 The installed fixture lives under the prefix's `share/ic-db/m1`; PocketIC still
 uses this checkout's explicitly prepared `.tools/m0-pocketic` server.

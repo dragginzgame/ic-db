@@ -7,7 +7,7 @@ use std::{
 };
 
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type Page = (Vec<(u64, u64)>, Option<u64>, u64);
+type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 
 #[test]
 fn console_inspects_and_queries() {
@@ -33,7 +33,7 @@ fn console_inspects_and_queries() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"\n\nschema\nstatus\nquery --min 100\nquery --after 3 --limit 2\nquit\n")
+        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
@@ -88,8 +88,15 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("Enum: NestedPayload"));
     assert!(stdout.contains("OptionalLink.id (via next,id)"));
     assert!(stdout.contains("All optional keys present"));
-    assert!(stdout.contains("0 rows returned; 3 candidates examined."));
-    assert!(stdout.contains("Next page: db query --after 3 --limit 3 --min 100"));
+    assert!(stdout.contains("0 rows; 3 examined; 3 fetched; 0 encoded bytes."));
+    assert!(stdout.contains("6 rows; 6 examined; 6 fetched; 144 encoded bytes."));
+    assert!(!stdout.contains("Next page:"));
+    let cursor = stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("Next cursor: "))
+        .next_back()
+        .unwrap();
+    assert_ne!(cursor, "none");
     let contains_row = |text: &str, expected: &[&str]| {
         text.lines().any(|line| {
             line.split(['|', '│'])
@@ -128,7 +135,18 @@ fn console_inspects_and_queries() {
     assert!(contains_row(&stdout, &["5", "51"]));
     let output = Command::new(&binary)
         .current_dir(std::env::temp_dir())
-        .args(["query", "--after", "3", "--limit", "2"])
+        .args([
+            "query",
+            "Entry",
+            "--after",
+            cursor,
+            "--min",
+            "40",
+            "--limit",
+            "2",
+            "--select",
+            "id,amount",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -137,8 +155,80 @@ fn console_inspects_and_queries() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(contains_row(&stdout, &["4", "40"]));
-    assert!(contains_row(&stdout, &["5", "51"]));
+    assert!(contains_row(&stdout, &["6", "60"]));
+    assert!(stdout.contains("Next cursor: none"));
+    let output = Command::new(&binary)
+        .args([
+            "query",
+            "Entry",
+            "--category",
+            "1",
+            "--order-by",
+            "id",
+            "--desc",
+            "--select",
+            "id,amount",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ordered = String::from_utf8(output.stdout).unwrap();
+    let positions: Vec<_> = ["51", "31", "11"]
+        .iter()
+        .map(|v| ordered.find(v).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|w| w[0] < w[1]));
+    assert!(ordered.contains("3 rows; 3 examined; 3 fetched; 48 encoded bytes."));
+    let output = Command::new(&binary)
+        .args([
+            "query",
+            "Document",
+            "--entry-id",
+            "1",
+            "--order-by",
+            "score",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("First document")
+    );
+    let output = Command::new(&binary)
+        .args(["query", "Document", "--select", "id"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("1 row; 1 examined; 1 fetched; 8 encoded bytes.")
+    );
+    let output = Command::new(&binary)
+        .args([
+            "query",
+            "Entry",
+            "--after",
+            cursor,
+            "--min",
+            "41",
+            "--select",
+            "id,amount",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid cursor"));
     for (entity, expected, excluded) in [
         ("Entry", "category", "Enum: Lifecycle"),
         ("EnumRow", "Enum: Lifecycle", "Record: Details"),
@@ -179,6 +269,13 @@ fn console_inspects_and_queries() {
     for command in [
         "query --limit 0",
         "query --limit 1 --limit 2",
+        "query --after 3",
+        "query --work 513",
+        "query --bytes 0",
+        "query Missing",
+        "query Document --min 0",
+        "query Entry --order-by amount",
+        "query Entry --select id --bytes 7",
         "SELECT * FROM rows",
     ] {
         let output = Command::new(&binary)
@@ -199,6 +296,14 @@ fn console_inspects_and_queries() {
             .unwrap()
             .contains("Usage: db [COMMAND]")
     );
+    let output = Command::new(env!("CARGO_BIN_EXE_db"))
+        .args(["query", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--order-by"));
+    assert!(help.contains("An empty page may still continue"));
 }
 
 #[tokio::test]
@@ -296,17 +401,22 @@ async fn product_records_and_message_boundary() {
             .unwrap();
         native::decode_response::<Status>(1, &reply, LIMITS).unwrap()
     };
-    let page = async |after: u64, limit: u64, min: u64| {
+    let page = async |after: Option<Vec<u8>>, limit: u32, min: u64| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
-                "query",
-                native::encode_request(3, &(after, limit, min), LIMITS).unwrap(),
+                "fluent_query",
+                native::encode_request(
+                    95,
+                    &(after, false, None::<u64>, min, limit, limit, 4096_u32),
+                    LIMITS,
+                )
+                .unwrap(),
             )
             .await
             .unwrap();
-        native::decode_response::<Result<Page, u8>>(3, &reply, LIMITS).unwrap()
+        native::decode_response::<Result<Page, u8>>(95, &reply, LIMITS).unwrap()
     };
     let category = async |category: u64| {
         let reply = pic
@@ -585,17 +695,20 @@ async fn product_records_and_message_boundary() {
             ),
         ]
     );
-    assert_eq!(
-        page(0, 3, 0).await,
-        Ok((vec![(1, 11), (2, 20), (3, 31)], Some(3), 3))
-    );
-    assert_eq!(page(0, 3, 40).await, Ok((vec![], Some(3), 3)));
-    assert_eq!(
-        page(3, 3, 40).await,
-        Ok((vec![(4, 40), (5, 51), (6, 60)], Some(6), 3))
-    );
-    assert_eq!(page(6, 3, 0).await, Ok((vec![], None, 0)));
-    assert_eq!(page(0, 0, 0).await, Err(1));
+    let first = page(None, 3, 0).await.unwrap();
+    assert_eq!(first.0, [(1, 11), (2, 20), (3, 31)]);
+    assert_eq!(first.2, 3);
+    assert!(first.1.is_some());
+    let sparse = page(None, 3, 40).await.unwrap();
+    assert!(sparse.0.is_empty());
+    assert_eq!(sparse.2, 3);
+    let last = page(sparse.1, 3, 40).await.unwrap();
+    assert_eq!(last.0, [(4, 40), (5, 51), (6, 60)]);
+    assert_eq!(last.2, 3);
+    let done = page(last.1, 3, 40).await.unwrap();
+    assert!(done.0.is_empty());
+    assert_eq!((done.1, done.2), (None, 0));
+    assert_eq!(page(None, 0, 0).await, Err(3));
     assert_eq!(category(1).await, vec![(1, 11), (3, 31), (5, 51)]);
 
     let before = pic.get_stable_memory(canister).await;
@@ -709,7 +822,10 @@ async fn product_records_and_message_boundary() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(status().await.2, 2);
     assert_eq!(category(9).await, vec![(1, 900)]);
-    assert_eq!(page(0, 1, 0).await, Ok((vec![(1, 900)], Some(1), 1)));
+    let first = page(None, 1, 0).await.unwrap();
+    assert_eq!(first.0, [(1, 900)]);
+    assert_eq!(first.2, 1);
+    assert!(first.1.is_some());
     let after_upgrade = (valid.0, valid.1, valid.2, valid.3, 0, None);
     assert_eq!(document().await, (after_upgrade.clone(), 5));
     // Cold query initialization after upgrade must not leave stale leases or

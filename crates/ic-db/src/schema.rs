@@ -169,31 +169,70 @@ impl EntitySchema {
     // Called only for an admitted schema. Validate every stored field but retain
     // only selected key values; no entity or owned text/blob materialization.
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
+        let mut values = [IndexValue::Absent; MAX_FIELDS];
+        self.inspect_values(bytes, self.key_fields(), &mut values)?;
+        self.row_info(&values)
+    }
+    pub(crate) fn key_fields(&self) -> u16 {
+        self.fields
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (position, field)| {
+                if field.name == self.primary_key
+                    || self.indexes.iter().any(|i| i.fields.contains(&field.name))
+                {
+                    mask | (1 << position)
+                } else {
+                    mask
+                }
+            })
+    }
+    // One bounded borrowed field view serves mutation integrity and predicates.
+    // Unselected fields are still validated, never silently trusted or materialized.
+    // Callers supply fresh absent slots; filling in place avoids copying the view.
+    pub(crate) fn inspect_values<'a>(
+        &self,
+        bytes: &'a [u8],
+        selected: u16,
+        keys: &mut [IndexValue<'a>; MAX_FIELDS],
+    ) -> Result<(), Error> {
+        self.inspect_fields(bytes, selected, keys, None)
+    }
+    // Projection captures validated byte ranges, including presence tags. There
+    // is still one row decoder and one shared depth/node/collection budget.
+    pub(crate) fn inspect_fields<'a>(
+        &self,
+        bytes: &'a [u8],
+        selected: u16,
+        keys: &mut [IndexValue<'a>; MAX_FIELDS],
+        mut spans: Option<&mut [(u16, u16); MAX_FIELDS]>,
+    ) -> Result<(), Error> {
         let mut reader = Decoder::new(bytes)?;
-        let mut keys = [IndexValue::Absent; MAX_FIELDS];
         let mut times = [None; 2];
         for (position, field) in self.fields.iter().enumerate() {
-            if field.optional && !reader.boolean()? {
-                continue;
-            }
-            if let Some(managed) = field.managed {
+            let start = reader.position();
+            let present = !field.optional || reader.boolean()?;
+            if !present {
+                // The fresh slot remains absent; its presence tag is projected.
+            } else if let Some(managed) = field.managed {
                 let value = reader.timestamp()?;
                 times[managed.slot()] = Some(value);
                 keys[position] = IndexValue::from(value);
-            } else if field.name == self.primary_key
-                || self
-                    .indexes
-                    .iter()
-                    .any(|index| index.fields.contains(&field.name))
-            {
+            } else if selected & (1 << position) != 0 {
                 *keys.get_mut(position).ok_or(Error::Corrupt)? =
                     IndexValue::read(&mut reader, field.value)?;
             } else {
                 reader.skip(field.value)?;
             }
+            if let Some(spans) = &mut spans {
+                spans[position] = (start as u16, reader.position() as u16);
+            }
         }
         reader.finish()?;
         crate::managed::validate_order(times)?;
+        Ok(())
+    }
+    pub(crate) fn row_info(&self, keys: &[IndexValue<'_>; MAX_FIELDS]) -> Result<RowInfo, Error> {
         let key = |name: &str| {
             self.fields
                 .iter()
