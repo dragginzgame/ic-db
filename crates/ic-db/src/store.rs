@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod query;
 pub use query::{
-    Aggregate, Comparison, GroupCount, GroupExtremum, GroupOrder, Query, QueryCursor, QueryPage,
+    Aggregate, Comparison, GroupCount, GroupOrder, GroupValue, Query, QueryCursor, QueryPage,
 };
 
 const MANIFEST: &[u8] = b"ICDBMF01";

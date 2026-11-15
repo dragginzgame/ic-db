@@ -133,7 +133,7 @@ before the work cap, so a scan examining exactly the allowed number can still
 return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
-are not yet aggregate compositions. Grouped sums, decimal/float arithmetic,
+are not yet aggregate compositions. Float arithmetic,
 averages, resumable jobs and
 completed-output pagination remain required work.
 
@@ -154,7 +154,7 @@ let grouped = db.query::<Entry>().group_max::<CategoryOnly, AmountOnly>()?;
 ```
 
 `group_min::<KeyRecord, ValueRecord>()` / `group_max::<KeyRecord, ValueRecord>()`
-return `Aggregate<Vec<GroupExtremum<KeyRecord, ValueRecord>>>`. Each result has
+return `Aggregate<Vec<GroupValue<KeyRecord, ValueRecord>>>`. Each result has
 `key` and `value: Option<ValueRecord>`. An absent key still forms a group, and an
 all-absent group retains `None`; empty input has no groups. Key and operand
 projections may overlap. Group counts and extrema share the 32-group/128-KiB
@@ -164,7 +164,7 @@ output bytes count both records, excluding transport option framing.
 
 `.filter_groups(comparison, operand)` applies up to eight AND terms to the
 completed aggregate value. Counts require `u64`; extrema require the exact source
-type. Absent extrema support equality/inequality; range comparisons require
+type; sums require the declared result type. Absent extrema support equality/inequality; range comparisons require
 presence. `.order_groups(GroupOrder::AggregateAscending)` or
 `AggregateDescending` sorts completed groups, breaking ties by ascending group key.
 Absent extrema sort first ascending, last descending. `GroupOrder::Key` is the
@@ -200,7 +200,28 @@ the declared result range. Signed cancelling prefixes can exceed that result ran
 final overflow and U256 accumulator overflow return `ArithmeticOverflow`.
 No decimal or float conversion occurs. Work exhaustion refuses without a partial
 sum. Output limits never truncate input; final result bytes use the ordinary codec.
-These are scalar sums; grouped sums and broader arithmetic remain required work.
+Decimal sums retain the source field's declared scale and optionality. Coefficients
+accumulate exactly in I256 and must fit i128 at that scale on completion, even if
+normalizing trailing zeros could fit a different representation. Rescaling and
+integer/Decimal conversion refuse; there is no rounding. Group filters accept
+Decimal operands under the same declared-scale rules as ordinary comparisons.
+
+`.group_sum::<KeyRecord, ResultRecord>()` uses the same integer/Decimal rules and returns
+`Aggregate<Vec<GroupValue<KeyRecord, ResultRecord>>>`. It retains absent keys
+and all-absent groups. Group predicates must use the declared result type, so a
+Nat128 total requires a `u128` operand:
+
+```rust
+let groups = db.query::<Entry>()
+    .filter_groups(ic_db::Comparison::Ge, 100_u128)
+    .order_groups(ic_db::GroupOrder::AggregateDescending)
+    .group_sum::<CategoryOnly, TotalAmount>()?;
+```
+
+Every group must finalize successfully before selection. Overflow in an excluded
+group still refuses the query. Final result encoding counts toward the existing
+state cap, even when an output filter would remove every group. Min, max and sum
+share `GroupValue` (renamed from `GroupExtremum`); no schema attributes change.
 
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
@@ -332,7 +353,8 @@ milliseconds for timestamps, nonnegative milliseconds for durations. Use
 Timestamp sub-millisecond conversion floors before 1970; duration sub-millisecond
 conversion explicitly truncates. Value arithmetic saturates at the type boundary;
 text parsing refuses overflow. Inspect `TimeRow` with `db schema`. Managed time
-policies and aggregate arithmetic remain separate work.
+policies use `Batch::at` as described above; Timestamp/Duration aggregate
+arithmetic remains separate work.
 `value(item(prim = "Decimal", scale = 2))` stores exact decimal values at the
 declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
 `Decimal::try_new(mantissa, scale)`. Equivalent values such as 1.0 and 1.00 have
@@ -418,7 +440,7 @@ Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six
-`Entry` rows, one record each for `Document`, `WideNumbers`, `BinaryObject`, `NarrowNumbers` and `IdentityRow`,
+`Entry` rows, three `DecimalRow` samples, one record each for `Document`, `WideNumbers`, `BinaryObject`, `NarrowNumbers` and `IdentityRow`,
 and an empty `OptionalLink` entity showing an optional self-reference,
 running in local PocketIC. Each session starts fresh and is discarded on exit.
 `db schema` presents generated fields and indexes in bordered tables, with the
@@ -430,7 +452,7 @@ Use `db schema EnumRow` or `db schema Document` to select one exact declared
 entity name. Only its reachable named types are included; recursive definitions
 appear once and references retain their target names. Inside the console, use
 `schema EnumRow`. Unknown names report an error; omit the name to see all entities.
-`query` reads Entry or Document through the fluent engine and displays the chosen
+`query` reads Entry, Document or DecimalRow through the fluent engine and displays the chosen
 record shape, work counts and continuation cursor. Terminal layout belongs to
 the CLI, not the runtime.
 It has no SQL, remote-canister connection or production credentials. Broader

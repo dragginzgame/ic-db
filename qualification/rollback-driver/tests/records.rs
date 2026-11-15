@@ -33,7 +33,7 @@ fn console_inspects_and_queries() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery Entry --select count\nquery Entry --select sum:amount\nquery Document --select sum:priority\nquery Document --select sum:score\nquery Entry --select min:amount --limit 1\nquery Entry --select category,min:amount\nquery Entry --select category,max:amount\nquery Entry --select category,min:amount --group-order asc --limit 1\nquery Entry --select category,count --min 40 --group-min 2 --group-order desc\nquery Document --select entry_id,min:note\nquery Document --select entry_id,max:priority\nquery Entry --select max:amount --limit 1\nquery Document --select min:note\nquery Document --select min:priority\nquery Entry --select distinct-count:category --limit 1\nquery Document --select count:note\nquery Entry --select category,count:amount --min 40\nquery Entry --select category,count --min 40\nquery Entry --order-by category --select category --distinct\nquery Entry --category 1 --order-by category --select category --distinct\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
+        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery DecimalRow\nquery DecimalRow --select sum:value\nquery DecimalRow --select zone,sum:value --group-min 3\nquery DecimalRow --select zone,sum:maybe\nquery Entry --select count\nquery Entry --select sum:amount\nquery Entry --select category,sum:amount --group-order desc\nquery Entry --select category,sum:amount --group-min 100 --limit 1\nquery Document --select entry_id,sum:score\nquery Document --select sum:priority\nquery Document --select sum:score\nquery Entry --select min:amount --limit 1\nquery Entry --select category,min:amount\nquery Entry --select category,max:amount\nquery Entry --select category,min:amount --group-order asc --limit 1\nquery Entry --select category,count --min 40 --group-min 2 --group-order desc\nquery Document --select entry_id,min:note\nquery Document --select entry_id,max:priority\nquery Entry --select max:amount --limit 1\nquery Document --select min:note\nquery Document --select min:priority\nquery Entry --select distinct-count:category --limit 1\nquery Document --select count:note\nquery Entry --select category,count:amount --min 40\nquery Entry --select category,count --min 40\nquery Entry --order-by category --select category --distinct\nquery Entry --category 1 --order-by category --select category --distinct\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
@@ -114,7 +114,14 @@ fn console_inspects_and_queries() {
                 .eq(expected.iter().copied())
         })
     };
+    assert!(contains_row(&stdout, &["0", "120"]));
+    assert!(contains_row(&stdout, &["1", "93"]));
+    assert!(contains_row(&stdout, &["1", "-10"]));
     assert!(contains_row(&stdout, &["213"]));
+    assert!(contains_row(&stdout, &["1", "true", "1.25", "—"]));
+    assert!(contains_row(&stdout, &["true", "3"]));
+    assert!(contains_row(&stdout, &["true", "—"]));
+    assert!(stdout.contains("1 row; 3 examined; 3 fetched; 17 encoded bytes."));
     assert!(contains_row(&stdout, &["-10"]));
     assert!(contains_row(&stdout, &["0"]));
     assert!(contains_row(&stdout, &["2"]));
@@ -296,6 +303,8 @@ fn console_inspects_and_queries() {
         "query Entry --select id --bytes 7",
         "query Entry --select category --distinct --min 0 --order-by category",
         "query Entry --select count --work 6",
+        "query Entry --select category,sum:amount --work 6",
+        "query Entry --select category,sum:amount --bytes 47",
         "query Entry --select sum:amount --work 6",
         "query Entry --select sum:amount --group-min 0",
         "query Entry --select max:amount --work 6",

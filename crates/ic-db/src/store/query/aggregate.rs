@@ -4,7 +4,9 @@ mod sum;
 use super::{
     Comparison, MAX_TERMS, Plan, Query, QueryPage, admit_projection, copy_projection, execute,
 };
-use crate::{Entity, EntitySchema, Error, IndexValue, TypeSchema, Value, codec::Decoder, key};
+use crate::{
+    Entity, EntitySchema, Error, IndexValue, TypeSchema, Value, ValueSchema, codec::Decoder, key,
+};
 use ic_storage::Memory;
 use std::collections::BTreeMap;
 
@@ -18,9 +20,9 @@ pub enum GroupOrder {
     /// Ascending group-key tuple, in canonical field-name order (the default).
     #[default]
     Key,
-    /// Ascending aggregate value; absent extrema precede present values.
+    /// Ascending aggregate value; absent values precede present values.
     AggregateAscending,
-    /// Descending aggregate value; absent extrema follow present values.
+    /// Descending aggregate value; absent values follow present values.
     AggregateDescending,
 }
 
@@ -44,8 +46,15 @@ impl GroupRequest<'_> {
                     IndexValue::Nat64(value) => Some(value.to_be_bytes().to_vec()),
                     _ => return Err(Error::InvalidOperand),
                 },
-                Reducer::Extremum { position, .. } => {
-                    let field = &entity.fields[*position];
+                _ => {
+                    let field = match reducer {
+                        Reducer::Extremum { position, .. } => {
+                            let field = &entity.fields[*position];
+                            ValueSchema { value: field.value, optional: field.optional }
+                        }
+                        Reducer::Sum(sum) => sum.output(),
+                        Reducer::Count { .. } => return Err(Error::Corrupt),
+                    };
                     // Even a required input field can have an absent aggregate result.
                     value.admit(field.value, true)?;
                     if value == IndexValue::Absent {
@@ -97,19 +106,20 @@ pub struct GroupCount<K> {
     pub count: u64,
 }
 
-/// One complete group's minimum or maximum, preserving all-absent groups.
+/// One complete group's aggregate value, preserving all-absent groups.
 #[derive(Debug)]
-pub struct GroupExtremum<K, R> {
+pub struct GroupValue<K, R> {
     /// Projected grouping tuple, including optional absent keys.
     pub key: K,
-    /// Single-field operand record, or `None` when the group has no present operand.
+    /// Single-field result record, or `None` when the group has no present operand.
     pub value: Option<R>,
 }
 
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Add an AND predicate on the completed aggregate value, before group ordering
     /// and output limits. At most eight terms. Counts require Nat64 operands;
-    /// extrema require the exact source type. Absent extrema support Eq/Ne only.
+    /// extrema require the source type; sums require the declared result type.
+    /// Absent values support Eq/Ne only.
     /// Only grouped terminals accept this modifier, even for empty input.
     #[must_use]
     pub fn filter_groups(
@@ -164,21 +174,30 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn extremum<R: Value>(self, maximum: bool) -> Result<Aggregate<Option<R>>, Error> {
         let plan = self.aggregate_plan(Some(R::definition()), false)?;
-        let mut reducer = Reducer::extremum(
+        let reducer = Reducer::extremum(
             E::SCHEMA,
             plan.projection.ok_or(Error::InvalidQuery)?,
             maximum,
         )?;
+        self.scalar_value(&plan, reducer)
+    }
+
+    fn scalar_value<R: Value>(
+        self,
+        plan: &Plan<'_>,
+        mut reducer: Reducer,
+    ) -> Result<Aggregate<Option<R>>, Error> {
         let page = execute(
             &self.db.map,
             E::SCHEMA,
             &self.request,
-            &plan,
+            plan,
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
         let mut output_bytes = 0;
         let value = reducer
-            .into_extremum()?
+            .finish()?
+            .into_value()?
             .map(|bytes| {
                 admit_output(bytes.len(), self.request.bytes, &mut output_bytes)?;
                 decode_record(&bytes)
@@ -208,9 +227,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// returns `RowTooLarge`; combined output exhaustion returns `Limit`.
     /// # Panics
     /// Supplier corruption traps without repair.
-    pub fn group_min<K: Value, R: Value>(
-        self,
-    ) -> Result<Aggregate<Vec<GroupExtremum<K, R>>>, Error> {
+    pub fn group_min<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         self.group_extrema(false)
     }
 
@@ -219,34 +236,40 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// The same projection, work, state, shape and output refusals as grouped minimum.
     /// # Panics
     /// Supplier corruption traps without repair.
-    pub fn group_max<K: Value, R: Value>(
-        self,
-    ) -> Result<Aggregate<Vec<GroupExtremum<K, R>>>, Error> {
+    pub fn group_max<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         self.group_extrema(true)
     }
 
     fn group_extrema<K: Value, R: Value>(
         self,
         maximum: bool,
-    ) -> Result<Aggregate<Vec<GroupExtremum<K, R>>>, Error> {
+    ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
         let operand = admit_projection(E::SCHEMA, R::definition())?;
         let initial = Reducer::extremum(E::SCHEMA, operand, maximum)?;
         plan.selected |= operand;
-        let (groups, page) = self.grouped(&plan, initial)?;
+        self.group_values(&plan, initial)
+    }
+
+    fn group_values<K: Value, R: Value>(
+        self,
+        plan: &Plan<'_>,
+        initial: Reducer,
+    ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
+        let (groups, page) = self.grouped(plan, initial)?;
         let mut output_bytes = 0;
         let value = groups
-            .into_output()
+            .into_output()?
             .into_iter()
             .take(self.request.rows)
             .map(|(key, reducer)| {
-                let value = reducer.into_extremum()?;
+                let value = reducer.into_value()?;
                 admit_output(
                     key.len() + value.as_ref().map_or(0, Vec::len),
                     self.request.bytes,
                     &mut output_bytes,
                 )?;
-                Ok(GroupExtremum {
+                Ok(GroupValue {
                     key: decode_record(&key)?,
                     value: value.as_deref().map(decode_record).transpose()?,
                 })
@@ -320,7 +343,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
         Ok(Aggregate {
-            value: reducer.into_count()?,
+            value: reducer.finish()?.into_count()?,
             examined: page.examined,
             fetched: page.fetched,
             output_bytes: 8,
@@ -370,7 +393,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let (groups, page) = self.grouped(&plan, self.count_reducer(field)?)?;
         let mut output_bytes = 0;
         let value = groups
-            .into_output()
+            .into_output()?
             .into_iter()
             .take(self.request.rows)
             .map(|(bytes, reducer)| {
@@ -482,7 +505,6 @@ fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error
 
 // Closed choices over delivered reducers and one grouping table, not user extensions.
 pub(super) enum Accumulator<'a> {
-    Sum(&'a mut sum::IntegerSum),
     Scalar(&'a mut Reducer),
     Groups(&'a mut Groups),
 }
@@ -490,7 +512,7 @@ impl Accumulator<'_> {
     pub(super) fn needs_spans(&self) -> bool {
         !matches!(
             self,
-            Self::Sum(_) | Self::Scalar(Reducer::Count { presence: None, .. })
+            Self::Scalar(Reducer::Sum(_) | Reducer::Count { presence: None, .. })
         )
     }
 
@@ -502,7 +524,6 @@ impl Accumulator<'_> {
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
         match self {
-            Self::Sum(state) => state.push(values),
             Self::Scalar(state) => state.push(entity, values, bytes, spans, MAX_STATE_BYTES),
             Self::Groups(state) => state.push(entity, values, bytes, spans),
         }
@@ -511,6 +532,7 @@ impl Accumulator<'_> {
 
 #[derive(Clone)]
 pub(super) enum Reducer {
+    Sum(sum::ExactSum),
     Count {
         presence: Option<usize>,
         total: u64,
@@ -522,17 +544,6 @@ pub(super) enum Reducer {
     },
 }
 impl Reducer {
-    // Counts need only eight stack bytes; extrema borrow their retained ordered key.
-    fn result_key<'a>(&'a self, scratch: &'a mut [u8; 8]) -> Option<&'a [u8]> {
-        match self {
-            Self::Count { total, .. } => {
-                *scratch = total.to_be_bytes();
-                Some(scratch)
-            }
-            Self::Extremum { selected, .. } => selected.as_ref().map(|(key, _)| key.as_slice()),
-        }
-    }
-
     fn extremum(entity: &EntitySchema, mask: u16, maximum: bool) -> Result<Self, Error> {
         if mask.count_ones() != 1 {
             return Err(Error::InvalidQuery);
@@ -550,6 +561,7 @@ impl Reducer {
 
     fn retained_bytes(&self) -> usize {
         match self {
+            Self::Sum(_) => 32,
             Self::Count { .. } => 8,
             Self::Extremum { selected, .. } => selected
                 .as_ref()
@@ -557,17 +569,11 @@ impl Reducer {
         }
     }
 
-    fn into_count(self) -> Result<u64, Error> {
+    fn finish(self) -> Result<Completed, Error> {
         match self {
-            Self::Count { total, .. } => Ok(total),
-            _ => Err(Error::Corrupt),
-        }
-    }
-
-    fn into_extremum(self) -> Result<Option<Vec<u8>>, Error> {
-        match self {
-            Self::Extremum { selected, .. } => Ok(selected.map(|(_, bytes)| bytes)),
-            _ => Err(Error::Corrupt),
+            Self::Count { total, .. } => Ok(Completed::Count(total)),
+            Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
+            Self::Sum(sum) => sum.finish(),
         }
     }
 
@@ -580,6 +586,7 @@ impl Reducer {
         allowance: usize,
     ) -> Result<(), Error> {
         match self {
+            Self::Sum(sum) => sum.push(values)?,
             Self::Count { presence, total } => {
                 *total += u64::from(presence.is_none_or(|i| bytes[usize::from(spans[i].0)] != 0));
             }
@@ -618,6 +625,45 @@ impl Reducer {
     }
 }
 
+// Completed results cannot be advanced. All numeric range checks precede selection.
+enum Completed {
+    Count(u64),
+    Value(Option<(Vec<u8>, Vec<u8>)>),
+}
+impl Completed {
+    // Counts need only eight stack bytes; extrema borrow their retained ordered key.
+    fn result_key<'a>(&'a self, scratch: &'a mut [u8; 8]) -> Option<&'a [u8]> {
+        match self {
+            Self::Count(total) => {
+                *scratch = total.to_be_bytes();
+                Some(scratch)
+            }
+            Self::Value(selected) => selected.as_ref().map(|(key, _)| key.as_slice()),
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Count(_) => 8,
+            Self::Value(value) => value
+                .as_ref()
+                .map_or(0, |(key, bytes)| key.capacity() + bytes.capacity()),
+        }
+    }
+    fn into_count(self) -> Result<u64, Error> {
+        match self {
+            Self::Count(count) => Ok(count),
+            _ => Err(Error::Corrupt),
+        }
+    }
+    fn into_value(self) -> Result<Option<Vec<u8>>, Error> {
+        match self {
+            Self::Value(value) => Ok(value.map(|(_, bytes)| bytes)),
+            _ => Err(Error::Corrupt),
+        }
+    }
+}
+
 pub(super) struct Groups {
     selection: Selection,
     mask: u16,
@@ -627,22 +673,32 @@ pub(super) struct Groups {
     state_bytes: usize,
 }
 impl Groups {
-    fn into_output(self) -> Vec<(Vec<u8>, Reducer)> {
+    fn into_output(self) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
         // Accumulation has completed. Output filtering cannot relax input/state bounds.
-        let mut rows: Vec<_> = self
+        let mut state_bytes = self.state_bytes;
+        let mut rows = self
             .rows
             .into_iter()
-            .filter(|(_, (_, reducer))| {
-                let mut scratch = [0; 8];
-                let actual = reducer.result_key(&mut scratch);
-                self.selection
-                    .predicates
-                    .iter()
-                    .all(|(comparison, operand)| {
-                        comparison.accepts(actual.cmp(&operand.as_deref()), actual.is_none())
-                    })
+            .map(|(key, (record, reducer))| {
+                let previous = reducer.retained_bytes();
+                let result = reducer.finish()?;
+                state_bytes = state_bytes - previous + result.retained_bytes();
+                if state_bytes > MAX_STATE_BYTES {
+                    return Err(Error::Limit);
+                }
+                Ok((key, (record, result)))
             })
-            .collect();
+            .collect::<Result<Vec<_>, Error>>()?;
+        rows.retain(|(_, (_, result))| {
+            let mut scratch = [0; 8];
+            let actual = result.result_key(&mut scratch);
+            self.selection
+                .predicates
+                .iter()
+                .all(|(comparison, operand)| {
+                    comparison.accepts(actual.cmp(&operand.as_deref()), actual.is_none())
+                })
+        });
         if self.selection.order != GroupOrder::Key {
             rows.sort_unstable_by(|(ka, (_, a)), (kb, (_, b))| {
                 let (mut sa, mut sb) = ([0; 8], [0; 8]);
@@ -655,7 +711,7 @@ impl Groups {
                 order.then_with(|| ka.cmp(kb))
             });
         }
-        rows.into_iter().map(|(_, row)| row).collect()
+        Ok(rows.into_iter().map(|(_, row)| row).collect())
     }
 
     fn push(

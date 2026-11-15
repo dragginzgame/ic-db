@@ -6,7 +6,14 @@
 
 ```sh
 make db
+db query DecimalRow
+db query DecimalRow --select sum:value
+db query DecimalRow --select zone,sum:value --group-min 3
+db query DecimalRow --select zone,sum:maybe
 db query Entry --select sum:amount
+db query Entry --select category,sum:amount --group-order desc
+db query Entry --select category,sum:amount --group-min 100 --limit 1
+db query Document --select entry_id,sum:score
 db query Document --select sum:priority
 db query Document --select sum:score
 db query Entry --select min:amount
@@ -22,13 +29,16 @@ db query Entry --select category,count --min 40 --group-min 2 --group-order desc
 ```
 
 The local fixture returns total amount 213, priority sum 0 and score sum -10.
+The CLI's decimal rows are 1.25, 2.50 and -0.75, summing exactly to 3 at declared
+scale 2. Their optional `maybe` values are absent, so the grouped sum displays `—`.
 These sums explicitly select 128-bit results. It returns minimum amount 11 and maximum amount 60. Its absent
 note has no extremum; present priority zero returns 0. Aggregates finish within
 one execution or refuse, without partial answers or continuation.
 Grouped extrema retain the group when every operand is absent, displaying `—`.
 `--limit 1` selects the first completed group; it does not shorten the input scan.
 Aggregate ascending order puts category 1’s minimum (11) before category 0’s (20).
-The filtered count command returns category 0 with count 2.
+The filtered count command returns category 0 with count 2. Grouped amount sums
+are category 0 = 120 and category 1 = 93; `--group-min 100` keeps category 0.
 
 ```sh
 toko-cloc
@@ -38,6 +48,12 @@ toko-cloc -d 2
 
 ### 🛠️ Changes
 
+- Extend scalar/grouped sums to Decimal at the exact declared scale. Reuse I256
+  coefficient accumulation and the owned codec, with final i128 overflow checks
+  and no rounding or numeric conversion. Qualify cancellation, absent/zero groups,
+  28 fractional places, excluded-group overflow and Wasm upgrade/reopen.
+- Add DecimalRow inspection/query demos to the local CLI; its sample rows are
+  seeded through the private qualification write endpoint.
 - Add `.min::<Record>()` and `.max::<Record>()` over exact single-field
   projections. Preserve ordered scalar/unit-enum types, ignore absent operands
   and distinguish no result from a present zero. Reuse the scanner and ordering
@@ -49,7 +65,7 @@ toko-cloc -d 2
   implementation. Account for winner growth and release replaced winner storage;
   keep output limits separate from complete input and retained-state bounds.
 - Add `.filter_groups(comparison, operand)` and `.order_groups(GroupOrder)` for
-  completed counts/extrema. Filter, sort, then limit output; aggregate ties retain
+  completed counts/extrema/sums. Filter, sort, then limit output; aggregate ties retain
   ascending group keys. Reject these modifiers on scalar and row terminals.
   The local CLI exposes `--group-min` and `--group-order key|asc|desc`.
 - Add scalar integer `.sum::<Record>()` with explicit same-family result widening,
@@ -57,6 +73,11 @@ toko-cloc -d 2
   checked 256-bit accumulation precedes final result-range validation. Signed
   cancellation can recover an out-of-range prefix; overflow reports
   `ArithmeticOverflow`. Reuse the scanner and owned result codecs.
+- Add `.group_sum::<KeyRecord, ResultRecord>()` through the existing group table.
+  Validate every completed total before group filtering/order/limits, and charge
+  final result encoding to the retained-state budget. All-absent groups remain.
+  Rename `GroupExtremum` to `GroupValue` for the shared min/max/sum result shape;
+  callers naming the old type must update their import. No schema/format change.
 - Adopt Toko Tooling 0.44.3 in both workspaces through its published installer.
   Default LOC output matches `-d 0` compact totals; `-d 1` expands crates and
   `-d 2` expands modules. Executable snapshot ownership remains unchanged.

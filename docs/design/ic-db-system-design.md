@@ -165,18 +165,19 @@ flowchart TD
     App[Direct Rust caller] --> Typed
 ```
 
-Arrows are responsibility boundaries, not a mandate for a crate per box. Start
-with the `ic-db` runtime/facade and internal modules. Attribute-based authoring
-justifies a small separate procedural-macro crate when implemented, re-exported
-through `ic-db` so applications use one public entry point. Do not recreate
+Arrows are responsibility boundaries, not a mandate for a crate per box. The
+product has the `ic-db` runtime/facade with internal modules and a small
+`ic-db-macros` procedural-macro crate, re-exported through `ic-db` so applications
+use one public entry point. Do not recreate
 separate core/model/schema/diagnostic packages without an actual boundary need.
-The product scaffold has no runtime dependencies. The independent `qualification/`
-workspace selects published suppliers for the M0 Wasm rollback probe; no product
-dependency may point back into it. Endpoint generation belongs to the separately
+The runtime depends on IC Storage, Platform Types and the scalar/hash libraries
+selected in its manifest; it owns database semantics and durable codecs. The
+independent `qualification/` workspace contains the Wasm probes and fixture CLI;
+no product dependency may point back into it. Endpoint generation belongs to the separately
 owned Canic adapter; qualification exports are private experiment controls.
 The required native CLI is a separate client boundary, not part of the Wasm
-executor. During M0 its executable lives with the qualification driver and reads
-a local fixture; add the product CLI package when the real adapter contract exists.
+executor. Its executable currently lives with the qualification driver and reads
+a local M1 fixture; add the product CLI package when the real adapter contract exists.
 
 | Owner | Authoritative responsibility | Not its responsibility |
 | --- | --- | --- |
@@ -1608,7 +1609,7 @@ contracts and cursor formats are unchanged.
 `group_min::<KeyRecord, ValueRecord>()` and `group_max::<KeyRecord, ValueRecord>()`
 extend this contract through the same grouping table as counts. Keys use an exact
 record projection; the operand uses an exact single-field record, with overlap
-allowed. `GroupExtremum { key, value: Option<ValueRecord> }` retains absent-key and
+allowed. `GroupValue { key, value: Option<ValueRecord> }` retains absent-key and
 all-absent groups; empty input has no groups. Output defaults to canonical key order,
 with limits applied after complete input. Encoded bytes count the key record plus
 the present winning record, excluding transport framing. State admission includes
@@ -1622,7 +1623,7 @@ lessons from `aggregate/contracts/state/grouped/tests` and
 absence/zero, overlap, independent result oracles, shrinking/growing text winners
 and work/state/output refusals. Completed-output pagination remains implementation work.
 
-Completed grouped counts/extrema now accept `filter_groups(comparison, operand)`
+Completed grouped counts/extrema/sums now accept `filter_groups(comparison, operand)`
 and `order_groups(GroupOrder)`. Up to eight group predicates are ANDed independently
 of the eight input predicates. Counts admit exact Nat64 operands; extrema admit
 the exact source field type, including declared scale/enum identity. Grouped
@@ -1658,7 +1659,7 @@ the same scanner. The single-field record names the source field, preserves its
 optionality and explicitly selects an equal or wider integer result type within
 the same signed/unsigned family (including unsigned widening to U256). All other
 projection operations retain their exact-type contract. Narrowing, cross-family
-conversion, noninteger inputs and malformed result shapes refuse before scanning,
+conversion, unsupported inputs and malformed result shapes refuse before scanning,
 including empty input. Group modifiers and ordinary aggregate-incompatible
 modifiers refuse. Output limits do not truncate input.
 
@@ -1679,8 +1680,53 @@ not at the narrower running-result boundary. Native witnesses cover every intege
 width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow,
 absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
-backing during queries. Grouped sums, decimal/float arithmetic, averages and
-resumable execution remain required implementation work.
+backing during queries. Float arithmetic, averages and resumable execution remain
+required implementation work.
+
+Decimal sums now use the same accumulator at the field's declared scale (0–28).
+The result record must preserve scale and optionality. Each borrowed value supplies
+its exact fixed-scale coefficient; at most 512 signed i128 coefficients fit I256.
+Final conversion must fit an i128 coefficient at that scale, even when removing
+trailing zeros would fit a different representation. There is no intermediate
+rounding, rescaling or integer/Decimal coercion. Empty/all-absent and present-zero
+semantics match integer sums. The ordinary owned Decimal codec supplies result
+bytes and canonical comparison keys for group filtering/ordering.
+
+This carries forward IcyDB `6d421e3`'s absent-input and typed-overflow regressions
+from `aggregate/value_reducer/tests`. Its general numeric-to-Decimal conversion
+path is not copied. Unlike its bounded running Decimal total, this synchronous
+I256 total permits overflowing i128 prefixes to cancel before final conversion.
+Native witnesses cover scale/optionality refusal, exact cents, 28-place precision,
+both signed coefficient bounds and excluded-group overflow. Wasm repeats exact
+scalar/grouped results after upgrade and verifies unchanged stable bytes, including
+overflow refusals. The CLI seeds three DecimalRow samples through its private write
+endpoint and constructs the ordinary fluent queries; schema and durable formats
+remain unchanged. Decimal averages still need their separate rounding contract.
+
+`group_sum::<KeyRecord, ResultRecord>()` now uses that same exact sum reducer inside
+the existing group table. Group predicates admit the result type, not the source
+width: a widened Nat128 result requires Nat128 operands. Absent keys and all-absent
+groups remain; sum and key projections may overlap. Min/max/sum share
+`GroupValue { key, value }`, replacing the narrower GroupExtremum name without a
+compatibility alias. Named imports must change; schema attributes do not.
+
+A bounded completion phase consumes every retained reducer before filtering,
+sorting and limiting. Any group's result-range overflow refuses the whole query,
+including groups outside the requested output. This is deliberately stricter than
+lazy finalization of only selected output. Final result key/record allocations
+replace the accumulator payload's state charge and must still fit the 128-KiB cap.
+At most 32 groups complete; there is no job interpreter or extra durable state.
+Counts and extrema use the same completed-result selection path. IcyDB's one-table
+per-group state and completed-value-before-HAVING lessons remain applicable;
+its lazy/continuation selectors are unnecessary for this bounded synchronous slice.
+
+Native witnesses cover integer widening, absent/zero groups, stable ties, signed
+cancellation and overflow in excluded groups. A large-key witness fits count
+state but refuses sum finalization even when a filter removes all output. Wasm
+repeats grouped sums and selection across upgrade, verifies widened totals beyond
+u64, and checks unchanged backing during reads. CLI selectors construct the same
+fluent calls. The fixture's nonnegative u64 `--group-min` argument is explicitly
+converted to the selected sum result's Nat128, Int128 or Decimal type at its adapter.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed
@@ -1726,7 +1772,7 @@ grouped contracts, construction budgets and expression-label machinery are not
 imported into this structurally bounded field-order slice. Independent full-sort
 oracles check duplicate values, both directions and page/work bounds.
 `make m2-queries` selects native
-and Wasm correctness witnesses. The local `db query [Entry|Document]` adapter now
+and Wasm correctness witnesses. The local `db query [Entry|Document|DecimalRow]` adapter now
 constructs the same fluent calls, with explicit field ordering, direction, bounded
 execution and typed `id`/`id,amount` output shapes. `Entry` remains the default.
 The fixture accepts Entry amount/category filters and a Document entry-reference
@@ -2161,8 +2207,9 @@ is needed. `IndexValue` is the small exact key-operand boundary, not a second
 public query frontend. For example, `index_prefix::<E>(1, &[owner.into()], 10)`
 looks up a Principal-leading index; an integer field requires its exact Rust
 width and signedness. Incorrect operand types refuse with `InvalidOperand`.
-Nonempty prefixes and 1–32 results remain the current contract; index continuation,
-Blob indexes and the fluent builder remain separate work.
+Direct prefix lookups require nonempty prefixes and 1–32 results. The fluent
+builder supplies bounded queries and index continuation; Blob indexes remain
+separate work.
 
 Optional components use an explicit presence byte: `00` for absence, `01`
 followed by the scalar payload for presence. Ordinary indexes retain every row

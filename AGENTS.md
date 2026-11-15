@@ -129,10 +129,16 @@ installer. Do not edit vendor files or copy upstream reference documents.
   result widening while preserving optionality. Use checked I256/U256 totals;
   validate the final result range after accumulation so signed prefixes can cancel.
   Distinguish arithmetic overflow from resource refusal, absence from present zero.
-  Reuse the scanner and owned codec; grouped sums and decimal/float arithmetic
-  remain separate work. No implicit numeric coercion or general reducer framework.
+  Grouped sums use the same reducer/table and predicates use their declared result
+  type. Finalize every group before filtering or limiting: excluded overflow still
+  refuses. Charge final encoded keys/results to the retained-state budget. Min/max/
+  sum share GroupValue; remove the narrower GroupExtremum name. Reuse the scanner
+  and owned codec. Decimal sums use the same I256 accumulator at the exact declared
+  scale; reject rescaling/conversion and check the final i128 coefficient, including
+  groups later excluded. Float arithmetic and averages remain separate work.
+  No implicit numeric coercion or general reducer framework.
   Output records are not durable schema additions. The local CLI constructs
-  fluent queries for Entry/Document, uses opaque continuation and display-only
+  fluent queries for Entry/Document/DecimalRow, uses opaque continuation and display-only
   result mapping; no client-side filtering or paging engine. `make m2-cli` checks
   installed-layout use and the migrated query caller. Broader entity adapters,
   optimized range seeks and richer sorting remain subsequent work.

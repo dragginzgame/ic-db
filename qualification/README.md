@@ -50,7 +50,7 @@ Projection checks reuse named records, cover optional/nested output, exact
 transitive type admission, unselected corruption and projected-byte retries. The
 Wasm probe resumes a projected cursor after upgrade, rejects it for entity output,
 and compares full decoding against ID-only projection over a 1024-byte blob row.
-The local CLI adapter now uses these fluent operations for Entry and Document;
+The local CLI adapter now uses these fluent operations for Entry, Document and DecimalRow;
 `make m2-cli` separately checks its installed-layout command surface.
 
 Automatic ordering adds full-sort native oracles with duplicate values, fixed
@@ -103,6 +103,22 @@ unsupported result shapes refuse before scanning. The Wasm fixture returns 213
 for Entry amounts, repeats after upgrade, then checks a widened total beyond
 u64 after explicit fixture writes. Queries leave backing unchanged. The CLI adds
 `sum:amount`, `sum:priority` and `sum:score`, with 128-bit result records.
+Grouped sums add `category,sum:amount` and `entry_id,sum:priority|sum:score`
+selectors. Native coverage checks exact result-typed group predicates, absent/zero,
+stable ties, signed cancellation, excluded-group overflow and finalization-state
+refusal before output selection. Wasm repeats group totals/filtering after upgrade
+and checks widened per-group totals beyond u64. The CLI filters/orders through
+fluent calls and only formats returned `GroupValue` records.
+
+Decimal sums reuse the exact sum reducer at the source's declared scale. Native
+coverage adds exact cents and 28-place precision, optional/zero groups, rescaling
+refusal, signed cancellation and fixed-scale overflow in excluded groups. The
+separate Wasm Decimal probe writes known values through `decimal_batch`, checks
+scalar/grouped output across upgrade, then checks cancellation and overflow with
+unchanged stable bytes. CLI setup seeds three local DecimalRow samples through
+that same private endpoint; ordinary canister initialization remains unchanged.
+`sum:value`, `sum:maybe` and their `zone,` grouped forms use fluent queries.
+This does not qualify float sums, averages or resumable jobs.
 
 The blob witness returns identical IDs with 1,037 encoded bytes for full entities
 versus 8 for projected records. Its measured execution after opening is 74,795
@@ -281,7 +297,7 @@ Signed tests cover the complete i64 endpoints, negative/zero values, absence,
 literal fixed-width little-endian vectors, truncated/extra payloads, no-op revision
 preservation and incompatible signed/unsigned schema refusal. Native and Wasm
 reopen checks preserve the exact values. Signed secondary indexes are qualified
-below; signed primary keys remain unimplemented.
+below; the later primary-key witness qualifies signed primary keys.
 The separate WideNumbers fixture checks required/optional 128-bit integers,
 including signed extrema, unsigned maximum and values just beyond 64 bits.
 Independent 16-byte scalar vectors and schema hashes qualify encoding;
@@ -1160,7 +1176,7 @@ built for the console. Cargo artifact records select both
 build outputs. Keep the installation's `bin` directory on `PATH`.
 
 Run `db` to open a fresh temporary local record database. Commands are `schema`,
-`status`, `query [Entry|Document]`, `help` and `quit`. Entry is the default.
+`status`, `query [Entry|Document|DecimalRow]`, `help` and `quit`. Entry is the default.
 Queries use the fluent product engine. Entry supports `--min` and `--category`;
 Document supports `--entry-id`. `--order-by FIELD[,FIELD]` selects a proven complete
 order, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
@@ -1177,6 +1193,9 @@ Entry also supports `--select min:amount` / `max:amount`; Document supports
 produces zero output rows; present zero produces one result row.
 Prefix those extrema with `category,` for Entry or `entry_id,` for Document to
 group the results. An all-absent group stays visible with `—` as its value.
+DecimalRow has three CLI-seeded samples (1.25, 2.50, -0.75), all in zone `true`.
+`sum:value` totals 3; `zone,sum:value` groups that total. `sum:maybe` is absent,
+while `zone,sum:maybe` retains the all-absent group. Decimal sums preserve scale 2.
 These are fixed typed projections and direct fluent terminals in the private
 adapter; field presence uses the ordinary schema admission.
 For aggregates, `--limit` selects completed groups and no continuation is returned.

@@ -3,11 +3,11 @@ use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
     runtime,
-    schema::{Document, Entry},
+    schema::{DecimalRow, Document, Entry},
 };
 use ic_db::{
-    Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, Query, QueryCursor, QueryPage,
-    Value,
+    Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
+    QueryPage, Value,
 };
 
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
@@ -27,6 +27,12 @@ struct TotalAmount {}
 struct TotalPriority {}
 #[ic_db::record(fields(field(name = "score", value(item(prim = "Int128")))))]
 struct TotalScore {}
+#[ic_db::record(fields(field(name = "value", value(item(prim = "Decimal", scale = 2)))))]
+struct TotalDecimal {}
+#[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2)))))]
+struct OptionalDecimal {}
+#[ic_db::record(fields(field(name = "zone", value(item(prim = "Bool")))))]
+struct ZoneOnly {}
 
 type Request = (
     String,
@@ -165,7 +171,34 @@ fn query(
                 },
             )
         }
-        _ => Err("query supports Entry and Document in this fixture".into()),
+        "DecimalRow" => {
+            if minimum.is_some() || category.is_some() || entry_id.is_some() {
+                return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
+            }
+            execute(
+                configure(
+                    db.query::<DecimalRow>(),
+                    cursor.as_ref(),
+                    &order,
+                    descending,
+                    limit,
+                    work,
+                    bytes,
+                ),
+                &select,
+                (distinct, group_min, group_order),
+                &["id", "zone", "value", "maybe"],
+                |r| {
+                    vec![
+                        r.id.to_string(),
+                        r.zone.to_string(),
+                        r.value.to_string(),
+                        optional(r.maybe),
+                    ]
+                },
+            )
+        }
+        _ => Err("query supports Entry, Document and DecimalRow in this fixture".into()),
     }
 }
 
@@ -205,12 +238,70 @@ fn execute<E: Entity>(
         query = query.distinct();
     }
     if let Some(value) = group_min {
-        query = query.filter_groups(Comparison::Ge, value);
+        query = match select {
+            "category,sum:amount" | "entry_id,sum:priority" => {
+                query.filter_groups(Comparison::Ge, u128::from(value))
+            }
+            "entry_id,sum:score" => query.filter_groups(Comparison::Ge, i128::from(value)),
+            "zone,sum:value" | "zone,sum:maybe" => query.filter_groups(
+                Comparison::Ge,
+                ic_db::Decimal::try_new(i128::from(value), 0)
+                    .ok_or(Error::InvalidOperand)
+                    .map_err(message)?,
+            ),
+            _ => query.filter_groups(Comparison::Ge, value),
+        };
     }
     if let Some(order) = group_order {
         query = query.order_groups(order);
     }
     match select {
+        "sum:value" => query
+            .sum::<TotalDecimal>()
+            .map(|r| display_value(r, "value", |r| r.value.to_string())),
+        "sum:maybe" => query
+            .sum::<OptionalDecimal>()
+            .map(|r| display_value(r, "maybe", |r| optional(r.maybe))),
+        "zone,sum:value" => query.group_sum::<ZoneOnly, TotalDecimal>().map(|r| {
+            display_group_values(
+                r,
+                &["zone", "value"],
+                |k| k.zone.to_string(),
+                |v| v.value.to_string(),
+            )
+        }),
+        "zone,sum:maybe" => query.group_sum::<ZoneOnly, OptionalDecimal>().map(|r| {
+            display_group_values(
+                r,
+                &["zone", "maybe"],
+                |k| k.zone.to_string(),
+                |v| optional(v.maybe),
+            )
+        }),
+        "category,sum:amount" => query.group_sum::<CategoryOnly, TotalAmount>().map(|r| {
+            display_group_values(
+                r,
+                &["category", "amount"],
+                |k| k.category.to_string(),
+                |v| v.amount.to_string(),
+            )
+        }),
+        "entry_id,sum:priority" => query.group_sum::<EntryIdOnly, TotalPriority>().map(|r| {
+            display_group_values(
+                r,
+                &["entry_id", "priority"],
+                |k| k.entry_id.to_string(),
+                |v| optional(v.priority),
+            )
+        }),
+        "entry_id,sum:score" => query.group_sum::<EntryIdOnly, TotalScore>().map(|r| {
+            display_group_values(
+                r,
+                &["entry_id", "score"],
+                |k| k.entry_id.to_string(),
+                |v| v.score.to_string(),
+            )
+        }),
         "sum:amount" => query
             .sum::<TotalAmount>()
             .map(|r| display_value(r, "amount", |r| r.amount.to_string())),
@@ -292,7 +383,15 @@ fn grouped_extremum<E: Entity, K: Value, R: Value>(
     } else {
         query.group_min::<K, R>()?
     };
-    Ok((
+    Ok(display_group_values(r, columns, key, render))
+}
+fn display_group_values<K, R>(
+    r: Aggregate<Vec<GroupValue<K, R>>>,
+    columns: &[&str; 2],
+    key: fn(K) -> String,
+    render: fn(R) -> String,
+) -> Page {
+    (
         columns.iter().map(|c| (*c).into()).collect(),
         r.value
             .into_iter()
@@ -302,7 +401,7 @@ fn grouped_extremum<E: Entity, K: Value, R: Value>(
         r.examined as u32,
         r.fetched as u32,
         r.output_bytes as u32,
-    ))
+    )
 }
 fn extremum<E: Entity, R: Value>(
     query: Query<'_, E, Backing>,
@@ -376,7 +475,7 @@ fn message(error: Error) -> String {
             "unsupported order, projection, DISTINCT or aggregate shape for this entity".into()
         }
         Error::RowTooLarge => "one matching result exceeds --bytes".into(),
-        Error::ArithmeticOverflow => "sum exceeds its selected integer range".into(),
+        Error::ArithmeticOverflow => "sum exceeds its declared result range".into(),
         Error::Limit => "query exceeds a database limit".into(),
         other => format!("database refused query: {other:?}"),
     }

@@ -11,7 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query currently supports Entry and Document.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query supports Entry, Document and DecimalRow.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -32,10 +32,10 @@ enum Command {
     Status,
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
-        #[arg(default_value="Entry", value_parser=["Entry", "Document"])]
+        #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow"])]
         entity: String,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
@@ -65,14 +65,16 @@ enum Command {
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
-        /// Prefix extrema with category, for Entry or entry_id, for Document
+        /// DecimalRow supports sum:value/sum:maybe and zone,sum:value/zone,sum:maybe.
+        /// Prefix sums/extrema with category, for Entry or entry_id, for Document
         /// to group results; all-absent groups display an absent value.
         #[arg(long, default_value = "full")]
         select: String,
         /// Deduplicate a leading-index projection; filters must be constant per tuple.
         #[arg(long)]
         distinct: bool,
-        /// Keep completed Nat64 aggregate values at least VALUE (grouped terminals only).
+        /// Keep completed aggregate values at least VALUE (nonnegative u64 input).
+        /// Sum fixtures convert VALUE explicitly to their declared integer or Decimal result type.
         #[arg(long)]
         group_min: Option<u64>,
         /// Order completed groups by key or aggregate value; ties use ascending keys.
@@ -259,6 +261,25 @@ async fn main() -> Result<(), String> {
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
+    // Private CLI sample data; ordinary Wasm probes supply their own decimal rows.
+    let decimal_rows = vec![
+        (1_u64, None::<String>, "1.25".to_owned()),
+        (2, None, "2.50".to_owned()),
+        (3, None, "-0.75".to_owned()),
+    ];
+    let reply = pic
+        .update_call(
+            canister,
+            canister,
+            "decimal_batch",
+            native::encode_request(67, &(decimal_rows, false), LIMITS)
+                .map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    native::decode_response::<Result<(), u8>>(67, &reply, LIMITS)
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("decimal fixture setup failed: {e}"))?;
     println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
     let interactive = io::stdin().is_terminal() && cli.command.is_none();
     let execute = async |command: Command| -> Result<(), String> {

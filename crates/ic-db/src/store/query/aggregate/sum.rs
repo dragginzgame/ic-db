@@ -1,16 +1,18 @@
-//! Exact integer accumulation and explicitly selected result width. No coercion engine.
-use super::{Accumulator, Aggregate, Query, admit_output, decode_record, execute};
+//! Exact integer/decimal sums. Explicit integer widening, fixed decimal scale.
+use super::{Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
-    Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
+    Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
     ValueSchema, codec::Encoder,
 };
 use ethnum::I256;
 use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
-    /// Sum one integer field into a single-field result record with the same field
+    /// Sum one integer or Decimal field into a single-field result record with the same field
     /// name and optionality. Its integer width may match or widen the source within
     /// the same signed/unsigned family. Unsigned results may widen to U256.
+    /// Decimal results preserve the source's declared scale; coefficients accumulate
+    /// exactly in I256 and must fit i128 at completion. No rescaling or rounding.
     /// Empty/all-absent input returns `None`; present zero returns a record.
     /// Signed accumulation uses I256, so cancelling prefixes do not cause narrow
     /// overflow. Unsigned accumulation uses checked U256. The final total must fit
@@ -24,43 +26,42 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn sum<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
         let mut plan = self.aggregate_plan(None, false)?;
-        let mut sum = IntegerSum::admit(E::SCHEMA, R::definition())?;
+        let sum = ExactSum::admit(E::SCHEMA, R::definition())?;
         plan.selected |= 1 << sum.position;
-        let page = execute(
-            &self.db.map,
-            E::SCHEMA,
-            &self.request,
-            &plan,
-            Some(Accumulator::Sum(&mut sum)),
-        )?;
-        let mut output_bytes = 0;
-        let value = sum
-            .finish()?
-            .map(|bytes| {
-                admit_output(bytes.len(), self.request.bytes, &mut output_bytes)?;
-                decode_record(&bytes)
-            })
-            .transpose()?;
-        Ok(Aggregate {
-            value,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes,
-        })
+        self.scalar_value(&plan, Reducer::Sum(sum))
+    }
+    /// Sum one integer or Decimal operand per exact grouping record, retaining absent keys
+    /// and all-absent groups. R selects the same explicit result widening as sum.
+    /// Group predicates use R's result type; e.g. Nat128 totals require u128 operands.
+    /// Complete every group before filtering, ordering and output limits.
+    /// # Errors
+    /// Scalar sum shape/range errors and grouped query work/state/output bounds apply.
+    /// Overflow in any group refuses the whole query, even if that group would be
+    /// filtered out or fall beyond the output limit. Finalization is bounded to
+    /// 32 groups and charged to the retained-state byte cap.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn group_sum<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
+        let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
+        let sum = ExactSum::admit(E::SCHEMA, R::definition())?;
+        plan.selected |= 1 << sum.position;
+        self.group_values(&plan, Reducer::Sum(sum))
     }
 }
 
-pub(in crate::store::query) struct IntegerSum {
+#[derive(Clone)]
+pub(in crate::store::query) struct ExactSum {
     position: usize,
     output: ValueSchema,
     total: Total,
     present: bool,
 }
+#[derive(Clone)]
 enum Total {
     Signed(I256),
     Unsigned(U256),
 }
-impl IntegerSum {
+impl ExactSum {
     fn admit(entity: &EntitySchema, output: &TypeSchema) -> Result<Self, Error> {
         let TypeBody::Record([result]) = output.body else {
             return Err(Error::InvalidQuery);
@@ -71,11 +72,24 @@ impl IntegerSum {
             .enumerate()
             .find(|(_, field)| field.name == result.name)
             .ok_or(Error::InvalidQuery)?;
-        let (signed, bits) = integer(source.value).ok_or(Error::InvalidQuery)?;
-        let (result_signed, result_bits) = integer(result.value).ok_or(Error::InvalidQuery)?;
-        if source.optional != result.optional || signed != result_signed || bits > result_bits {
+        if source.optional != result.optional {
             return Err(Error::InvalidQuery);
         }
+        let signed = match (source.value, result.value) {
+            (FieldType::Decimal { scale: source }, FieldType::Decimal { scale: result })
+                if source == result =>
+            {
+                true
+            }
+            (source, result) => {
+                let (signed, bits) = integer(source).ok_or(Error::InvalidQuery)?;
+                let (result_signed, result_bits) = integer(result).ok_or(Error::InvalidQuery)?;
+                if signed != result_signed || bits > result_bits {
+                    return Err(Error::InvalidQuery);
+                }
+                signed
+            }
+        };
         Ok(Self {
             position,
             output: ValueSchema {
@@ -104,6 +118,12 @@ impl IntegerSum {
                     IndexValue::Int32(n) => i128::from(n),
                     IndexValue::Int64(n) => i128::from(n),
                     IndexValue::Int128(n) => n,
+                    IndexValue::Decimal(n) => {
+                        let FieldType::Decimal { scale } = self.output.value else {
+                            return Err(Error::Corrupt);
+                        };
+                        n.coefficient_at_scale(scale).ok_or(Error::Corrupt)?
+                    }
                     _ => return Err(Error::Corrupt),
                 };
                 // At most 512 inputs of at most 128 signed bits fit in I256.
@@ -128,36 +148,52 @@ impl IntegerSum {
         Ok(())
     }
 
-    fn finish(self) -> Result<Option<Vec<u8>>, Error> {
+    pub(super) fn output(&self) -> ValueSchema {
+        self.output
+    }
+
+    pub(super) fn finish(self) -> Result<Completed, Error> {
         if !self.present {
-            return Ok(None);
+            return Ok(Completed::Value(None));
         }
         let mut output = Encoder::new();
+        let mut key = Vec::new();
         if self.output.optional {
             output.boolean(true)?;
         }
         // The ordinary owned codec supplies result bytes; checked conversion occurs
         // only after complete accumulation, never once per input or work chunk.
         macro_rules! encode {
-            ($method:ident, $value:expr) => {
-                output.$method($value.try_into().map_err(|_| Error::ArithmeticOverflow)?)?
-            };
+            ($method:ident, $variant:ident, $value:expr) => {{
+                let value = $value.try_into().map_err(|_| Error::ArithmeticOverflow)?;
+                output.$method(value)?;
+                IndexValue::$variant(value).append_component(self.output.optional, &mut key);
+            }};
         }
         match (self.total, self.output.value) {
-            (Total::Signed(n), FieldType::Int8) => encode!(int8, n),
-            (Total::Signed(n), FieldType::Int16) => encode!(int16, n),
-            (Total::Signed(n), FieldType::Int32) => encode!(int32, n),
-            (Total::Signed(n), FieldType::Int64) => encode!(int64, n),
-            (Total::Signed(n), FieldType::Int128) => encode!(int128, n),
-            (Total::Unsigned(n), FieldType::Nat8) => encode!(nat8, n),
-            (Total::Unsigned(n), FieldType::Nat16) => encode!(nat16, n),
-            (Total::Unsigned(n), FieldType::Nat32) => encode!(nat32, n),
-            (Total::Unsigned(n), FieldType::Nat64) => encode!(nat64, n),
-            (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, n),
-            (Total::Unsigned(n), FieldType::U256) => output.u256(n)?,
+            (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, n),
+            (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, n),
+            (Total::Signed(n), FieldType::Int32) => encode!(int32, Int32, n),
+            (Total::Signed(n), FieldType::Int64) => encode!(int64, Int64, n),
+            (Total::Signed(n), FieldType::Int128) => encode!(int128, Int128, n),
+            (Total::Signed(n), FieldType::Decimal { scale }) => {
+                let coefficient = n.try_into().map_err(|_| Error::ArithmeticOverflow)?;
+                let value = Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)?;
+                output.decimal(value, scale)?;
+                IndexValue::Decimal(value).append_component(self.output.optional, &mut key);
+            }
+            (Total::Unsigned(n), FieldType::Nat8) => encode!(nat8, Nat8, n),
+            (Total::Unsigned(n), FieldType::Nat16) => encode!(nat16, Nat16, n),
+            (Total::Unsigned(n), FieldType::Nat32) => encode!(nat32, Nat32, n),
+            (Total::Unsigned(n), FieldType::Nat64) => encode!(nat64, Nat64, n),
+            (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, Nat128, n),
+            (Total::Unsigned(n), FieldType::U256) => {
+                output.u256(n)?;
+                IndexValue::U256(n).append_component(self.output.optional, &mut key);
+            }
             _ => return Err(Error::Corrupt),
         }
-        Ok(Some(output.finish()))
+        Ok(Completed::Value(Some((key, output.finish()))))
     }
 }
 

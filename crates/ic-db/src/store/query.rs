@@ -2,7 +2,7 @@
 mod aggregate;
 mod distinct;
 mod order;
-pub use aggregate::{Aggregate, GroupCount, GroupExtremum, GroupOrder};
+pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{

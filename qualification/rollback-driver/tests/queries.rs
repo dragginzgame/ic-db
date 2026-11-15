@@ -212,6 +212,36 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert!(maximum.2.is_none());
     assert!(aggregate("max:amount", 1, 6, 8).await.is_err());
     assert!(aggregate("min:amount", 1, 7, 7).await.is_err());
+    let grouped_sum = aggregate("category,sum:amount", 2, 7, 48).await.unwrap();
+    assert_eq!(grouped_sum.1, [vec!["0", "120"], vec!["1", "93"]]);
+    assert_eq!((grouped_sum.3, grouped_sum.5), (6, 48));
+    let sum_request = (
+        "Entry",
+        None,
+        1,
+        None,
+        None,
+        None,
+        vec![],
+        false,
+        7,
+        24,
+        "category,sum:amount",
+        false,
+    );
+    let selected_sum = selected(sum_request.clone(), Some(100), Some("desc"))
+        .await
+        .unwrap();
+    assert_eq!(selected_sum.1, [vec!["0", "120"]]);
+    assert_eq!(
+        selected(sum_request.clone(), None, Some("asc"))
+            .await
+            .unwrap()
+            .1,
+        [vec!["1", "93"]]
+    );
+    assert!(aggregate("category,sum:amount", 2, 6, 48).await.is_err());
+    assert!(aggregate("category,sum:amount", 2, 7, 47).await.is_err());
     let group_min = aggregate("category,min:amount", 2, 7, 32).await.unwrap();
     let group_max = aggregate("category,max:amount", 2, 7, 32).await.unwrap();
     assert_eq!(group_min.1, [vec!["0", "20"], vec!["1", "11"]]);
@@ -227,6 +257,8 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     for (select, expected, bytes) in [
         ("entry_id,min:note", "—", 8),
         ("entry_id,max:priority", "0", 17),
+        ("entry_id,sum:priority", "0", 25),
+        ("entry_id,sum:score", "-10", 24),
     ] {
         let result = console((
             "Document",
@@ -367,6 +399,16 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             .await
             .unwrap(),
         selected_groups
+    );
+    assert_eq!(
+        aggregate("category,sum:amount", 2, 7, 48).await.unwrap(),
+        grouped_sum
+    );
+    assert_eq!(
+        selected(sum_request, Some(100), Some("desc"))
+            .await
+            .unwrap(),
+        selected_sum
     );
     assert_eq!(aggregate("sum:amount", 1, 7, 16).await.unwrap(), sum);
     assert_eq!(aggregate("max:amount", 1, 7, 8).await.unwrap(), maximum);
@@ -514,6 +556,120 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert_eq!(
         widened.1,
         [vec![(u128::from(u64::MAX) * 2 + 182).to_string()]]
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let widened_groups = aggregate("category,sum:amount", 2, 7, 48).await.unwrap();
+    assert_eq!(
+        widened_groups.1,
+        [
+            vec!["0".to_string(), (u128::from(u64::MAX) + 100).to_string()],
+            vec!["1".to_string(), (u128::from(u64::MAX) + 82).to_string()]
+        ]
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.close().await;
+}
+
+#[tokio::test]
+async fn decimal_sums_are_exact_across_upgrade_and_refuse_final_overflow() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let write = async |values: Vec<String>| {
+        let rows: Vec<_> = values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| (i as u64 + 1, None::<String>, value))
+            .collect();
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "decimal_batch",
+                native::encode_request(67, &(rows, false), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<Result<(), u8>>(67, &reply, LIMITS).unwrap(),
+            Ok(())
+        );
+    };
+    let query = async |select: &str, minimum: Option<u64>| {
+        let request = (
+            "DecimalRow",
+            None::<Vec<u8>>,
+            1_u32,
+            None::<u64>,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            128_u32,
+            4096_u32,
+            select,
+            (
+                false,
+                minimum,
+                select.starts_with("zone,").then_some("desc"),
+            ),
+        );
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                native::encode_request(3, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<DisplayPage, String>>(3, &reply, LIMITS).unwrap()
+    };
+    write(vec!["1.25".into(), "2.50".into(), "-0.75".into()]).await;
+    for upgraded in [false, true] {
+        if upgraded {
+            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+        let before = pic.get_stable_memory(canister).await;
+        let sum = query("sum:value", None).await.unwrap();
+        assert_eq!(sum.1, vec![vec!["3".to_owned()]]);
+        assert_eq!(sum.5, 17);
+        assert!(query("sum:maybe", None).await.unwrap().1.is_empty());
+        assert_eq!(
+            query("zone,sum:value", Some(3)).await.unwrap().1,
+            vec![vec!["true".to_owned(), "3".to_owned()]]
+        );
+        assert!(query("zone,sum:value", Some(4)).await.unwrap().1.is_empty());
+        assert_eq!(
+            query("zone,sum:maybe", None).await.unwrap().1,
+            vec![vec!["true".to_owned(), "—".to_owned()]]
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    // Fixed scale 2: max coefficient + one cent - one cent cancels exactly.
+    let maximum = "1701411834604692317316873037158841057.27";
+    write(vec![maximum.into(), "0.01".into(), "-0.01".into()]).await;
+    assert_eq!(
+        query("sum:value", None).await.unwrap().1,
+        vec![vec![maximum.to_owned()]]
+    );
+    write(vec![maximum.into(), "0.01".into(), "0".into()]).await;
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        query("sum:value", None).await.unwrap_err(),
+        "sum exceeds its declared result range"
+    );
+    assert_eq!(
+        query("zone,sum:value", None).await.unwrap_err(),
+        "sum exceeds its declared result range"
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     owned.close().await;
