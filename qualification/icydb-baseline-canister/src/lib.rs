@@ -5,6 +5,9 @@
 
 use ic_db_qualification_transport as transport;
 
+#[cfg(feature = "envelope")]
+mod envelope;
+
 use ic_db_icydb_baseline_schema::{Entry, EntryInsert, EntryReplace};
 use ic_platform_runtime::cdk;
 use icydb::{db::WriteCell, types::Id};

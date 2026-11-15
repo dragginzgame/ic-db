@@ -5,16 +5,36 @@
 //! finite Float32/Float64, Bool, Principal, Account/Subaccount and bounded Text/Blob, with optional
 //! values. Named records and unit/payload enums support bounded recursion via explicit
 //! indirection and ordered lists; traversals share byte, depth, structured-value
-//! and total collection-item limits. Named sets/maps use strict scalar key order.
+//! and total collection-item limits. Sets/maps use strict scalar/unit-enum key order.
 //! Secondary indexes admit integers, Ulid, Date, Timestamp, Duration, Decimal, finite floats,
-//! Account/Subaccount, Principal, Bool and Text, including optional values; primary keys
-//! require non-optional integer, U256, Ulid or Principal fields. References use
+//! Account/Subaccount, Principal, Bool, Text and unit enums, including optional values; primary keys
+//! require non-optional integer, U256, Ulid, Principal, Account or Subaccount fields. References use
 //! the target’s exact key type;
 //! absence has no target, while every present target must survive the batch.
 //! Atomicity relies on the enclosing IC message: after persistent mutation starts,
 //! supplier failures trap. A later application trap also rolls back the batch.
 //! Native callers must discard their runtime after a mutation panic. No SQL,
 //! endpoint exports, automatic migration or production compatibility is promised.
+//!
+//! Payload enums cannot become index keys, even when a row selects a unit variant:
+//! ```compile_fail
+//! use ic_db::{entity, enum_};
+//! #[enum_(variant(name="Empty"), variant(name="Data", value(item(prim="Nat8"))))]
+//! struct State {}
+//! #[entity(pk(field="id"), index(field="state"), fields(
+//!     field(name="id", value(item(prim="Nat64"))),
+//!     field(name="state", value(opt, item(is="State")))
+//! ))]
+//! struct Row {}
+//! ```
+//! Payload enums also lack the generated ordering required by sets/maps:
+//! ```compile_fail
+//! use ic_db::{enum_, set};
+//! #[enum_(variant(name="Empty"), variant(name="Data", value(item(prim="Nat8"))))]
+//! struct State {}
+//! #[set(item(is="State"), max_items=3)]
+//! struct States {}
+//! ```
 
 #[doc(hidden)]
 mod codec;
@@ -27,6 +47,7 @@ mod managed;
 mod primary;
 mod schema;
 mod store;
+mod store_key;
 mod time;
 mod types;
 mod ulid;
@@ -66,6 +87,7 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{Batch, Database, Page};
+pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]

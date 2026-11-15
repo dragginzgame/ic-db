@@ -1,6 +1,6 @@
-//! Named scalar sets; field parsing and element codecs retain their existing owner.
+//! Named scalar/unit-enum sets; field parsing and codecs retain their existing owner.
 use super::{
-    field::{Field, Kind, parse_value},
+    field::{Field, parse_value},
     metas, once, text,
 };
 use proc_macro2::TokenStream;
@@ -30,11 +30,6 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         }
     }
     let (kind, optional, max) = parse_value(&syn::parse_quote!(value(many, #(#parts),*)))?;
-    if matches!(kind, Kind::Named(..)) {
-        return Err(fail(
-            "set elements currently require an ordered scalar; named values remain unimplemented",
-        ));
-    }
     let name = name.unwrap_or_else(|| item.ident.to_string());
     if name.is_empty() || name.len() > 64 {
         return Err(fail("set name must contain 1..64 UTF-8 bytes"));
@@ -59,7 +54,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     Ok(quote! {
         #(#attrs)*
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
-        #visibility struct #ident(#[doc="Authored scalar set."] pub ::std::collections::BTreeSet<#ty>);
+        #visibility struct #ident(#[doc="Authored bounded set."] pub ::std::collections::BTreeSet<#ty>);
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

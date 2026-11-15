@@ -25,7 +25,10 @@ help:
 	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
+	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
 	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
+	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
+	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make db                         Install db; run db to open the console' \
 	  'make release-patch/minor/major   Qualify and deliver a private source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
@@ -71,6 +74,14 @@ m0-icydb-baseline:
 .PHONY: m1-records-comparison
 m1-records-comparison:
 	bash scripts/measure-records.sh
+
+.PHONY: m1-envelope-comparison
+m1-envelope-comparison:
+	bash scripts/measure-records.sh envelope
+
+.PHONY: m1-entity-growth
+m1-entity-growth:
+	bash scripts/measure-records.sh growth
 
 m0-rollback:
 	@mkdir -p qualification/target/evidence/m0
@@ -128,13 +139,18 @@ m1-records-artifact:
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
 m1-records:
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
+	cargo test --locked -p ic-db --test enum_collections
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test defaults --test managed --test generation --test principal_keys -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys -- --nocapture
 
 .PHONY: m1-commit-failures
+.PHONY: m1-write-envelope
+m1-write-envelope: m1-records-artifact
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture
+
 m1-commit-failures:
 	@mkdir -p qualification/target/evidence/m1
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/fault-build.jsonl

@@ -58,7 +58,7 @@ fn canonical_text_exact_bytes_and_distinct_schema_identity() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "680db68182d7dbbe430c0fd9d96c9ad2d813ddc057bdb929a2ce1f0e0a86c330"
+        "f2ece922caafdad496d836faa9638193644c952ea1a784e32093beddd76153e5"
     );
     let known = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse::<Ulid>().unwrap();
     assert_eq!(

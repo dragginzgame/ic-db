@@ -13,6 +13,7 @@ category = "tests"
 
 [features]
 build = ["icydb/build"]
+envelope = []
 
 [dependencies]
 icydb.workspace = true

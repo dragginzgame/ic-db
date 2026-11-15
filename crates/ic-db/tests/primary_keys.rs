@@ -75,7 +75,7 @@ fn typed_keys_pages_unique_exchange_and_final_references() {
     ));
     assert_eq!(
         schema().fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "1cc097a65f523629591cdfe1bdf100a6ef3ac9fc712c96f1970aae4ec48ca266"
+        "dae66c10fc4a1b336ae176dd2fe86aa55dd94edf0f48575ea5c60a55051b19f2"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());

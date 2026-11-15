@@ -316,6 +316,12 @@ resolves the generated paths; target admission refuses host/target contract drif
 The build script explicitly maps its module root to the target module root; this
 is not a source-file/import resolver. Declaration visibility must permit the emitted
 Rust references. No second persisted schema representation is introduced.
+An admitted `Schema` can be cloned for host-owned reuse: it contains immutable
+executable metadata only. Generated assembly validates the host/target fingerprint
+once per thread, retains that immutable schema and returns clones. It never caches
+database admission. The local M1 host also retains supplier runtime custody; each
+call still opens a fresh database/collection lease and reads the current manifest.
+Revisions are validated by operations that need them, as described below.
 
 The actual M1 Wasm fixture now compiles the same schema module in its host build
 script and target, replacing the manually maintained entity list. It exercises
@@ -530,14 +536,56 @@ Earlier unit-only manifests refuse intact; scalar-only identities remain unchang
 No fallback decoder or migration is implied. `db schema` renders each reachable
 record/enum/set/map definition once, using names for recursive links.
 
+The local CLI supports `db schema ENTITY` (or `schema ENTITY` interactively),
+selected by exact declared name. It displays fields, indexes, reference targets
+and only reachable named definitions, once each even through recursion.
+This retains IcyDB's describe-by-name outcome using the existing admitted metadata
+and host-owned inspection projection. No catalog, database executor or generated
+endpoint is added; production endpoints remain Canic's responsibility.
+
+All-unit enums now support secondary indexes, including optional/boxed fields,
+compound keys and sparse uniqueness. The component is the existing canonical
+one-byte ordinal; optional presence keeps absence distinct from the first variant.
+Query operands carry the complete enum definition and refuse another type,
+changed alternatives or invalid ordinals. Declaration reorderings stay compatible.
+Adding an index changes the admitted schema as usual; existing row codecs and
+contracts without that index are unchanged. Indexed inspection still consumes
+the shared structured-value budget. Any payload variant excludes the whole enum
+from indexes, even when the selected value is a unit variant.
+
+This carries forward the whole-definition capability and exact-identity lessons
+from frozen IcyDB's `icydb-core/src/db/index/key/build/accepted_enum_tests.rs`
+at `6d421e3`. It does not copy persisted catalog/type/variant IDs: the compiled
+contract already fixes those meanings here. Native literal-byte, uniqueness-swap,
+wrong-operand and corrupt-row/key witnesses accompany the Wasm index
+rollback/reopen/upgrade probe. No attributes, durable metadata or extra execution
+path are introduced; payload-enum ordering remains a separate decision.
+
+Unit enums also serve as set elements and map keys using `item(is = "Status")`
+and `key(is = "Status")`. Generated unit enums implement Rust ordering in the
+same canonical variant-name order as their index components. The existing
+collection count framing and ordinal codec are reused; enum keys consume the
+shared structured-value budget. Transitive contract identity includes key types.
+Payload enums, records and collections still refuse as collection keys/elements,
+even if application code supplies a Rust ordering implementation.
+
+Frozen IcyDB's `value/map.rs` and `value/tests.rs` at `6d421e3` establish canonical
+map normalization and duplicate-key refusal. We retain that invariant at the
+stored-byte boundary before a `BTreeMap`/`BTreeSet` can hide duplicates; caller-side
+Rust collections still have their ordinary insertion semantics. This extends
+the existing ordered decoder and named-type admission, without copying the
+universal runtime-value comparator. No extra durable metadata, dependency or
+collection executor is introduced. Existing admitted contracts keep their bytes;
+new enum-keyed declarations have their own complete schema identity.
+
 This adapts frozen IcyDB’s authoring and its duplicate-definition, malformed
 payload, recursive graph/depth and exact-admission lessons (`6d421e3`,
 `icydb-model/tests/composite_hooks.rs` and
 `icydb-core/src/db/schema/enum_catalog/codec/tests.rs`). It does not copy catalog
 publication, persisted variant assignments, per-slot framing or Wire conversion.
 Independent bytes/hashes and native/Wasm boundary, rollback and reopen witnesses
-qualify this implementation. Nested references/indexes, non-scalar keys/set elements, tuples,
-managed policies and other retained types remain later increments.
+qualify this implementation. Nested references/indexes, payload-enum/record/collection
+keys and set elements, tuples and other retained types remain later increments.
 
 Ordered lists are now implemented for entity/record fields and enum payloads:
 `value(many, max_items = 3, item(prim = "Nat16"))` produces `Vec<u16>`;
@@ -575,8 +623,8 @@ or descending stored entries refuse as Corrupt. Application construction retains
 normal `BTreeSet` behavior, including explicit insert's duplicate result. No
 database normalizer or implicit transformation runs on keys.
 
-All existing scalar families are supported; named/container elements await an
-explicit logical comparator. Sets are usable in entity/record fields, enum
+All existing scalar families and unit enums are supported; other named/container
+elements await an explicit logical comparator. Sets are usable in entity/record fields, enum
 payloads and lists through existing named links. Optional sets distinguish absence
 from empty. Empty sets are finite constructors and consume one structured value;
 their elements share the 256-item row total with lists, in addition to declared
@@ -595,9 +643,10 @@ wrapper over `BTreeMap<i16, Option<String>>`; fields use the usual named path.
 Retain IcyDB's `key(...)`/`value(...)` spelling, scalar-key and immutable-key rules
 from `icydb-model-macros/src/node/map/mod.rs` and
 `icydb-model/tests/ui/collection_normalizers/immutable_keys.rs` at `6d421e3`.
-Key order is the same exact scalar order as sets. Values use ordinary scalar,
+Key order is the same exact scalar/unit-enum order as sets. Values use ordinary scalar,
 optional, bounded-list and named-type semantics, without an ordering requirement.
-Keys cannot be optional, indirect, named or containers in this increment.
+Keys cannot be optional or containers. Named keys admit only unit enums; boxing
+a unit enum does not change its logical order or stored contract.
 Nested entity references, normalizers and member indexes remain unimplemented.
 
 Map bytes are a u32 entry count followed by ordered key/value pairs. One shared
@@ -1485,6 +1534,14 @@ caller permissions, while the database validates job/query/schema/source identit
 Concrete job quotas, expiry durations, supported upgrade identities and cleanup
 limits remain M2 implementation contracts. Completed output belongs
 to its captured input boundary. This requires no row history or ordinary-write WAL.
+Opening is manifest admission, not a scan of every entity revision. Explicit
+revision reads validate the current counter. Batch preparation reads each touched
+entity's counter once, including no-op replacements; only real changes advance it.
+Malformed/missing counters refuse the complete affected batch before persistent
+mutation, and exhausted counters refuse real changes but permit no-ops. No counter
+survives the operation in a cache. Ordinary row reads and unrelated writes can
+proceed despite another entity's broken revision metadata: this intentionally
+narrows corruption detection from eager opening to the operation using that counter.
 Requiring eventual completion under continuous writes later would be an explicit
 scope change; the five contended probes do not establish it.
 
@@ -1543,7 +1600,7 @@ Field validation runs before encoding and after decoding; whole-row bounds apply
 independently. Secondary indexes admit Nat/Int8/16/32/64/128, U256, Ulid, Date,
 Timestamp, Duration, Decimal, finite Float32/Float64, Account/Subaccount, Principal,
 Bool and bounded Text components, including optional values; primary keys require
-non-optional signed/unsigned 8–128-bit integers, U256, Ulid or Principal. Required/optional
+non-optional signed/unsigned 8–128-bit integers, U256, Ulid, Principal, Account or Subaccount. Required/optional
 references match the target key type exactly.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
 Richer types, broader references, generated identities and fluent queries remain work;
@@ -1881,8 +1938,9 @@ are unchanged. General projections, borrowed query results and selective query
 execution have not been implemented by this increment.
 Index membership verification is shared by indexed reads and reverse-reference
 checks. No general decoded-value cache or public prepared transaction is
-introduced. Typed read loops remain generic: composition measurements must still
-establish their Wasm growth before broad query execution is built around them.
+introduced. Typed read loops remain generic. The controlled entity-growth probe
+in section 10 measures equivalent scalar entities; heterogeneous types and broad
+query shapes still need composition evidence before expanding these loops.
 
 The native record tests and Wasm host qualify scalar boundaries, incompatible
 admission, final-state batches, indexed reads, rollback and reopen. They do not
@@ -1894,7 +1952,7 @@ compiled metadata and `ic-host-text` tables, with storage identities in `db stat
 terminal rendering and test endpoints stay outside the product crates.
 
 Supplied primary keys use `Entity::Key` (signed/unsigned 8–128-bit integers, U256,
-Ulid or Principal); `get`, `delete` and entity-page continuation retain that exact Rust type.
+Ulid, Principal, Account or Subaccount); `get`, `delete` and entity-page continuation retain that exact Rust type.
 The sealed typed boundary converts to a small concrete key enum for shared
 batch/reference execution. A local macro emits only identical typed conversions; it
 adds neither a per-entity executor nor a general runtime value representation.
@@ -1903,7 +1961,8 @@ nonunique index suffixes. Primary and secondary key encoding share the existing
 ordered scalar encoder: signed integers bias the sign bit, unsigned integers use
 big-endian bytes, and ULIDs retain their exact atom bytes. Payload widths are
 1/2/4/8/16/32 bytes for fixed-width keys; Principal uses a length byte and 0–29
-significant bytes. Existing key bytes and admitted schema identities are unchanged;
+significant bytes. Account appends its 32-byte effective subaccount to that owner
+frame; Subaccount keys contain exactly 32 bytes. Existing key bytes and admitted schema identities are unchanged;
 new primary-key types were previously refused and cannot reopen another key type’s
 data. No width or signedness conversion is implicit in arguments or references.
 
@@ -1931,7 +1990,19 @@ Native/Wasm witnesses cover pages, lookup, full-width identities, cyclic referen
 unique exchanges, no-ops, refusal/late-trap rollback and unchanged upgrades;
 literal native vectors additionally reject malformed and wrong index owners.
 
-Required or optional supported integer/Ulid/Principal fields accept `references(entity = "Entry")` alongside
+Account/Subaccount primary keys extend that same typed boundary. Default-account
+aliases (`None` and `Some([0; 32])` subaccounts) remain one identity for lookup,
+duplicate insert/batch-target checks, references, no-ops and page continuation.
+Decoding canonical zero returns `None`, as in the existing row codec. This retains
+IcyDB `6d421e3`'s key-taxonomy malformed Account/Subaccount regressions and
+`icydb-schema/src/account/tests.rs` default-identity guarantees. IC DB keeps its
+already-selected owner/effective-subaccount layout instead of importing IcyDB's
+packed Account representation. Native byte/corruption cases and a Wasm mixed-key
+reference cycle qualify the result, including full-width identities, unique swaps,
+whole-message rollback and unchanged upgrades. No durable state, dependency or
+executor is added; the bounded shared key enum gains the two admitted types.
+
+Required or optional supported integer/Ulid/Principal/Account/Subaccount fields accept `references(entity = "Entry")` alongside
 their `value(...)` declaration. The target must be in the admitted schema and its
 primary-key type must match exactly; the
 selected ordinary index belongs to the dependent entity and must lead with this
@@ -1984,7 +2055,7 @@ There is no production maintenance gate yet; this format is experimental and
 must not be deployed as an upgrade-compatible product ahead of M3 admission.
 
 The scalar contract grammar uses header `ICDBSC01`: five little-endian `u32`
-versions (grammar=2, row codec=3, key codec=1, semantics=1, supplier contract=1),
+versions (grammar=2, row codec=3, key codec=1, semantics=2, supplier contract=1),
 entity count, then entities ordered by logical name. Each contains its
 length-prefixed name, field count, sorted field names and type tags, primary-key
 name, index count, then indexes ordered by logical name (name, flags byte, ordered
@@ -2045,18 +2116,16 @@ this contract deliberately, rather than silently changing derived names.
 Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
 Revision/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
 the exact ordered primary-key bytes (declared-width integer, 16-byte ULID or
-length-framed Principal). Index keys
+length-framed Principal/Account or 32-byte Subaccount). Index keys
 add the generated index handle and declared components.
 Integers occupy their exact width in big-endian order, with signed values' leading
 sign bit flipped. Principal occupies one length byte followed by 0–29 raw bytes.
 Bool occupies one strict 0/1 byte; Text escapes zero as `00 FF` and ends with
-`00 00`. These component frames concatenate unambiguously. For a valid 4 KiB
-row, distinct indexed fields require at most twice the row bytes plus eight
-terminator bytes per index, excluding namespace/primary-key bytes. A lookup
-with four maximum-bound optional Text operands encodes at most 32,780 component bytes;
-individual field bounds are checked before each operand is encoded. These
-structural caps are not a claim that every maximal index fan-out fits one IC
-message; that qualification remains part of M1. Nonunique indexes append the primary key. Index values are the exact encoded primary
+`00 00`. These component frames concatenate unambiguously. A complete physical
+index key is capped at **512 bytes**, counting the namespace, components and
+primary-key suffix where present. Query prefixes reserve the minimum valid
+completion for unknown components and owner identity; per-field bounds apply
+independently. Nonunique indexes append the primary key. Index values are the exact encoded primary
 key; revisions are little-endian `u64`. Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
@@ -2071,12 +2140,45 @@ Literal row/index vectors and the independent fingerprint accompany the generate
 codec tests. Admission does not imply a full scan for corruption; accessed rows
 and index entries are checked, while supplier corruption can trap.
 
+**Complete-key budget — adopted in semantics version 2.** Frozen IcyDB
+`6d421e3` retains the deliberate 0.277 reduction from 16,668 to 512 bytes,
+introduced in `04bc27e56`. Its [decision record](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/0.277-ic-wire-trial/0.277-status.md)
+rejects configurable limits, hashing and per-index policies. IC DB retains that
+boundedness decision independently of SQL, without claiming 512 is a measured
+optimum. Non-indexed values, row bounds and grouping/DISTINCT limits are separate.
+
+The existing commit preparation admits complete after-image keys before no-op
+shortcuts and retains those buffers for publication. Sparse omission precedes key
+admission. A small bounded key type on the same map makes the supplier check
+stored lengths before reading key payloads. No executor, map, journal, allocator
+or configurable resource framework is added. New overlong keys return a limit
+refusal before mutation; malformed supplier keys can trap without repair.
+The canonical contract's semantics version changes from 1 to 2; supported row and
+component encodings are unchanged. Old contracts refuse intact, without a fallback
+reader, automatic migration, reset or authorization to discard their data.
+
+IcyDB's [boundary tests](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/codec/tests/mod.rs)
+and [assembly/membership tests](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/build/assembly_tests.rs)
+inform the independent [native cases](../../crates/ic-db/tests/key_bounds.rs):
+512 accepted/513 refused, escaping, combined fields, wider primary keys, sparse
+omission, unchanged backing on refusal, no-op admission and successful retries.
+The supplier read test verifies that an overlong key is rejected before payload IO.
+The Wasm maximum-batch witness audits every row/index byte independently, with
+512-byte keys, full 4 KiB rows, rollback, upgrade, no-ops and deletion.
+
+Do not carry over the historical B-tree page-sizing explanation. Locked Storage
+0.74.1 uses fixed 128-byte AVL nodes and separate payload blocks. The cap bounds
+new index-key bytes to 128 KiB for 32 mutations with eight indexes; this excludes
+old keys, temporary copies, values and allocator overhead. It is not a peak-memory
+or instruction measurement. Requalify suppliers without optimizing the product
+around current size classes.
+
 Initial bounds: 32 entities, 16 fields/entity, 64 UTF-8 bytes/name, eight indexes/
 entity and four components/index; 32 mutations/batch, 128 KiB total encoded new-row
-payload, 4 KiB/row, and 1–32 rows/page. The flat scalar codec checks the input row
+payload, 4 KiB/row, 512 bytes/complete index key, and 1–32 rows/page. The flat scalar codec checks the input row
 bound and field lengths before allocating owned values; total variable payload
-cannot exceed the row envelope. Nested traversal needs explicit bounds before
-those types are admitted. Nat64-only records are smaller than that envelope; these are
+cannot exceed the row envelope. Nested traversal additionally shares depth,
+structured-value and collection-item bounds. Nat64-only records are smaller than that envelope; these are
 structural limits, not proof that every supplier growth path fits an IC message.
 Index-prefix reads return only a bounded first result collection; general index
 continuation and fluent semantics remain M2 work. Native tests and the Wasm host
@@ -2098,8 +2200,26 @@ tested by IcyDB's
 but uses an actual IC limit rejection rather than importing its budget trackers,
 diagnostic framework or mutation-job state. These results prove rollback at the
 selected boundary, not that all structurally admitted batches finish within the
-instruction envelope. Other failure/workload shapes remain unqualified; section 10
-records the first matched scalar costs. These results do not imply completion of M1.
+instruction envelope. The separate `make m1-write-envelope` now exercises a
+32-row/128 KiB batch with eight four-field indexes, 512-byte keys and unindexed padding.
+Independent raw-byte expectations cover all 32 rows and 256 index entries; no
+product budget tracker or mutation executor is added. The
+[qualification contract](../../qualification/README.md#maximum-write-envelope)
+records the measured costs and limits of this selected shape. Tree size, richer
+constraints/types, allocator history and peak heap need their own evidence. Section 10
+records the first matched scalar costs. The separately selected
+[high-fan-out comparison](../../qualification/README.md#matched-high-fan-out-writes)
+uses 48-byte Text values because frozen IcyDB rejects the original large keys
+under its 512-byte index-key bound. Before host reuse and operation-specific
+revision admission, the shared 32-row/eight-index workload measured
+76,139,333 insert and 149,570,696 replacement instructions for IC DB; IcyDB
+uses 461,923,130 and 1,190,386,058 including explicit journal settling. Immediate
+IcyDB calls alone use 184,260,093 and 528,829,971. Both fixtures include empty
+unindexed padding after the maximum-row probe was adapted to bounded keys.
+Both engines pass logical row and relevant index-membership checks. The report records differing
+host populations, codecs, measurement boundaries and artifacts; no product or
+frozen-engine code is changed for this comparison. These results do not imply
+completion of M1 or a universal performance ratio.
 
 Qualification follows the mechanism that becomes real:
 
@@ -2325,11 +2445,26 @@ The qualification lockfile is unchanged. Prior text-index evidence is preserved
 in `qualification/target/evidence/records-comparison-before-optional-indexes/`.
 
 With named records, payload enums, lists, sets, maps, U256, finite floats,
-Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID/Principal
-primary keys, literal defaults and managed-time admission, the current scalar host
-is 216,496 Wasm bytes and 196,140 code-section bytes. Hit/miss cost 488,538/494,027
-instructions; listing costs 785,610. Complete read/modify/replace costs 843,961
-instructions and 7,857,728 cycles.
+Account/Subaccount, ULID, Date, Timestamp, Duration, Decimal and supplied integer/ULID/Principal/Account/Subaccount
+primary keys, literal defaults, managed-time admission
+and the 512-byte complete-key cap, operation-specific revision admission and
+unit-enum indexes/collections, the scalar host is 224,030 Wasm bytes and 203,436 code-section
+bytes. Hit/miss cost 471,717/477,238 instructions; listing costs 772,008. Complete
+read/modify/replace costs 828,471 instructions and 7,842,238 cycles.
+
+Unit-enum support adds 1,140 total/1,211 code bytes to the preceding scalar host.
+Hit/miss add 19 instructions each, listing 339 (0.044%) and read/modify/replace
+84 (0.010%). Keep this small shared-path cost for the retained enum-index
+capability; do not introduce a separate scalar executor to recover it. This
+explicit implementation tradeoff does not establish performance for enum-heavy
+workloads. The preceding scalar evidence is retained under
+`records-comparison-before-enum-indexes`; frozen IcyDB is unchanged.
+
+Extending unit enums to set elements/map keys adds another 703 total/701 code
+bytes. All sampled scalar query/write instruction counts and execution cycles
+are unchanged. This measures shared-code cost, not an enum-collection workload;
+the focused native/Wasm probes establish that workload's correctness. Previous
+evidence is under `records-comparison-before-enum-collections`.
 
 Both hosts now use direct Platform guard/decode/encode hooks with the same bounded
 Wire transport. Relative to the preceding Wire Endpoint run, IC DB loses
@@ -2348,7 +2483,7 @@ read/modify/replace includes 2,932,321 operation plus 4,091,031 settling
 instructions (7,023,352 total), and 10,026,728 plus 11,170,845 cycles
 (21,197,573 total). Every measured IC DB scalar operation remains below the
 matched ceiling. Physical allocation is unchanged for both hosts. This measures
-shared-code overhead on the existing scalar workload, not wider-integer/ULID/Principal-primary
+shared-code overhead on the existing scalar workload, not richer-primary-key
 workloads, Decimal-heavy queries, time parsing/arithmetic, nested/collection
 workloads or full fluent parity. The normal product graph has no constructor or
 Wire dependency; ethnum and ulid have no enabled features. ULID adds the value/text
@@ -2395,11 +2530,36 @@ unchanged. This run also preserves the concurrently refreshed qualification lock
 Wire 0.22.2 transport dependency; the artifact/cost delta is not isolated to the key
 extension. Both benchmark hosts use that same transport. Product crates still do
 not depend on Wire. Earlier evidence is under records-comparison-before-principal-keys.
+Account/Subaccount keys add 1,223 total/1,172 code bytes, with unchanged lookup
+costs. Listing adds 64 instructions, inserts 128 and read/modify/replace 174;
+each query/write increase is below 0.03%. Both allocations and frozen IcyDB's
+artifact/results are unchanged. This measures shared key-representation overhead,
+not an Account-key workload or general monomorphization growth. The preceding run
+is retained under records-comparison-before-account-keys.
 The earlier Wire Endpoint comparison remains under
 records-comparison-before-endpoint-hooks. Earlier increment details remain with
 their evidence. Current artifact SHA-256 values:
-IC DB `a0a6359c76fcb3b170ad7ac8638413abd2c4e56b7cae59948af239d92f49b91d`;
-IcyDB `50e5dae63176e5e71c5ea0281d48d309b771f2a344adf0418b26db920929e9da`.
+IC DB `c8986fdd28897b4390885e596d3909f9efd1e802d87bc26e3bb62fa3d0886318`;
+IcyDB `94425d3624bca6dadba67084bb129f9f454c5d5688a7c5dd3c78a4dc65a0ff00`.
+The optional envelope-fixture addition leaves scalar sizes and all measured
+instructions/cycles unchanged; IcyDB's artifact hash changes with the host source
+layout. The envelope feature is disabled in this scalar evidence.
+The complete-key cap adds 1,890 total/1,659 code bytes. Hit/miss add 504/536
+instructions (about 0.10/0.11%), listing adds 3,339 (0.43%), and the complete
+read/modify/replace adds 1,940 (0.23%); insertion deltas remain below 0.3%.
+This is the measured cost of the selected complete-key admission and bounded
+supplier-read checks. The simpler contract is retained with that explicit cost;
+no supplier-specific optimization offsets it. IcyDB's scalar artifact, costs and
+both hosts' allocations are unchanged. Prior evidence is preserved under
+records-comparison-before-key-bounds and envelope-comparison-before-key-bounds.
+Operation-specific revision validation adds a net 2,578 total/2,553 code bytes
+for bounded per-batch preparation, while hit/miss/listing each lose 17,344
+instructions and read/modify/replace loses 17,688. Every sampled insert also
+improves. The scalar host keeps fresh runtime/schema construction so this isolates
+the product change from host reuse. IcyDB and allocation sizes are unchanged;
+the preceding comparison remains under records-comparison-before-demand-revisions.
+The envelope rerun also adds an empty unindexed Blob on both sides, so its
+difference from the earlier run is not attributed solely to the key cap.
 
 Measure total uncompressed Wasm bytes and code-section bytes, IC cycles and
 instruction counts for insert/update/delete, indexed lookup, selected scan/page,
@@ -2422,6 +2582,36 @@ settings while adding entities, query shapes, result-mapping closures and Canic 
 Report total uncompressed Wasm and code-section deltas plus IC instructions/cycles;
 source LOC, generic elegance and native timings cannot establish absence of bloat.
 Include generated codec/field glue and application mapping, not just the shared core.
+`make m1-entity-growth` now selects the first controlled 1/8/32-entity probe with
+one endpoint and the same typed scalar operations. Its
+[qualification contract](../../qualification/README.md#controlled-entity-growth)
+records independent row/index isolation and upgrade checks, complete Wasm/code
+bytes, and separate opening/operation instruction intervals. This applies the
+measurement lesson from IcyDB's
+[0.260 composition investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/0.260-runtime-footprint/w1-reconciliation.md);
+the older toolchain and Canic composition do not supply a matched numerical
+baseline. No product cache, alternate executor or durable representation is added.
+The current fresh-host run measures 220,953 / 261,066 / 398,506 total Wasm bytes
+and 200,243 / 239,900 / 376,151 code bytes: about 5.7 KB per additional equivalent
+entity. At 32 entities, opening spends 304,904 instructions in host bootstrap,
+5,340 acquiring the lease, 543,034 constructing the schema and 106,711 opening
+the collection plus validating the manifest. Revision validation now belongs to
+explicit revision reads and the touched entities in batch preparation.
+IcyDB's
+[accepted runtime root](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/accepted_schema/mod.rs)
+already separates reusable runtime facts from current durable authority. Adapt
+that distinction without importing its registry-scoped root cache, runtime DDL
+publication or reconciliation. Retaining host/runtime and immutable Schema reduces
+warm opening to 112,606–112,661 instructions, with manifest validation on every
+open. It adds about 1.4 KB Wasm to the matched host; complete read-observation
+calls save about 75–78% instructions and 10% cycles. Relative to the earlier
+all-revision checks with host reuse, warm opening drops from about 755k to 113k.
+This deliberately defers unrelated revision-corruption discovery; it neither
+caches revision values nor tunes supplier internals. Generated assembly and the
+local M1 host now reuse setup, while the scalar benchmark retains its fresh-host
+recipe. Cold upgrade initialization, late traps, retries and cold queries followed
+by updates pass; query performance, heterogeneous growth, fluent chains and Canic
+integration remain separate qualification. Setup after upgrade is still charged.
 Runtime datasets include sparse residual matches, duplicate secondary keys,
 maximum records, rejected writes and high index fan-out, not only average rows.
 

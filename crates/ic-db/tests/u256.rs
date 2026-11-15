@@ -73,7 +73,7 @@ fn exact_bytes_and_schema_do_not_narrow_large_integers() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "14412da99f44d0ee482a87da397e6e46bcfc219dfd569c18c23d204022415d42"
+        "f68531ad0f79c99125a0f3152b4199eaf82ffbe6df177006101ee563afc60788"
     );
     for value in values() {
         let row = BigNumbers {

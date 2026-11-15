@@ -54,11 +54,17 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Nested types and enum variants also use declared schema names;
   compact stored enum ordinals come from canonical variant-name order under the
   admitted contract. Renames require transitions; declaration reorderings do not.
+  Unit enums support secondary indexes through the existing component codec;
+  operands must match the complete declared enum. Any payload variant excludes
+  the whole enum from indexes. No persisted enum catalog or numeric authoring IDs.
   Attribute removals are permitted with a concrete reason: report
   each removed attribute and the changed behavior or replacement to the maintainer.
   SQL, joins and window functions are excluded. Application usage does not define
   product breadth; distinguish SQL-only machinery from shared fluent behavior.
 - Keep `make db` as the CLI installation command; it must not launch the console.
+  Normal CLI output should contain requested information, not explanatory help
+  footers or command tutorials. Put usage guidance and semantic explanations in
+  `--help`; retain result data, continuation information and clear errors.
   The installed `db` command provides schema inspection and bounded queries.
   It currently opens an explicitly labelled local M1 record fixture. Future product
   access uses the same admitted fluent semantics through Canic-owned endpoints;
@@ -97,22 +103,35 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Ordered lists use `value(many, max_items = N, item(...))`, optionally `opt`.
   Count admission precedes allocation/traversal; per-row limits also cover total
   collection items and structured values. Recursive list edges provide an empty base
-  without Box. Named scalar sets use `#[set(item(...), max_items = N)]` and
+  without Box. Scalar/unit-enum sets use `#[set(item(...), max_items = N)]` and
   `BTreeSet`; stored duplicates or non-increasing elements refuse before
   materialization can erase them. Lists and sets share one row item budget.
   Named maps use `#[map(key(...), value(...), max_items = N)]` over `BTreeMap`:
-  scalar keys have the set ordering rules; values use ordinary field shapes,
+  scalar/unit-enum keys have the set ordering rules; values use ordinary field shapes,
   including optional, list and recursive named values. Stored duplicate keys
   refuse before insertion can overwrite them. A map entry counts once in the
   shared collection budget, with nested collection contents counted additionally.
-  Nested indexes/references, collection indexes and non-scalar keys/set elements
-  remain work. Build-time
+  Unit enums share canonical variant-name order across indexes, sets and map keys;
+  each stored enum key counts toward the structured-value budget. Payload enums
+  and named records/collections remain unsupported as set elements or map keys.
+  Nested indexes/references and collection indexes remain work. Build-time
   Rust paths do not silently replace declared durable names.
 - IC DB owns its durable row codec. Keep `ic-wire` and transport serialization
   out of product dependencies and persisted encoding. Transport adapters may
   convert at their boundary; wire-format optimization must not alter stored
   bytes or decoding. Version durable codec changes explicitly and refuse
   unsupported old contracts intact until a supported transition exists.
+  Complete secondary-index keys have one fixed 512-byte cap, including namespace,
+  components and any primary-key suffix. Keep the bounded key codec on the existing
+  map; query prefixes reserve minimum completion space. Admit after-images before
+  no-op shortcuts and preserve sparse omission. No truncation, hashing or per-index
+  escape hatch. Semantics version 2 refuses prior wider-key contracts intact.
+  Opening checks the current manifest, not every entity's revision. Validate
+  counters on explicit revision reads and once per touched entity during batch
+  preparation, including no-ops; advance only entities with real changes.
+  Missing/malformed unrelated counters do not block ordinary row reads or other
+  entities' writes. Never retain revision values or durable admission across calls.
+  Non-indexed row values and future grouping/DISTINCT retain separate bounds.
   U256 uses the re-exported feature-free `ethnum::U256` with an explicitly owned
   32-byte big-endian row/index codec, adapted from IcyDB. Do not introduce Wire
   serialization or a numeric conversion engine for that storage boundary.
@@ -134,12 +153,14 @@ installer. Do not edit vendor files or copy upstream reference documents.
   current execution. Do not infer automatic generation attributes or durable
   issuer recovery from this utility. Never substitute a timestamp/sequence for
   independently provisioned randomness across separate/reset streams.
-  Supplied integer/ULID/Principal primary keys keep lookups, deletes and page cursors typed
+  Supplied integer/ULID/Principal/Account/Subaccount primary keys keep lookups, deletes and page cursors typed
   to the entity, including signed/unsigned 8–128-bit integers and U256. References
   must match the target key type exactly; other identity/composite keys
   and automatic generation remain separate increments. Principal keys reuse the
   length-first index encoding, including the empty management principal. Consume
   framed reference components instead of assuming every target has a fixed width.
+  Account keys use owner then effective subaccount; absent and explicit-zero
+  subaccounts are one identity across primary uniqueness, batch targets and references.
   Typed `Entity::insert()` inputs distinguish omission from explicit values and
   enter the ordinary batch through `insert_input`. Integer, Bool and bounded Text
   literals may declare `field(..., default = ...)`; optional defaults supply a
@@ -185,6 +206,10 @@ resource-failure or matched-performance gates.
 backing-write traps and physical growth refusal
 inside real product commits. Its fault feature belongs only to qualification;
 the normal CLI host and product library do not expose injection controls.
+`make m1-write-envelope` separately selects maximum row bytes, batch cardinality
+and text-index fan-out in real Wasm. Keep its raw-byte inspection and synthetic
+schema in qualification; it does not add a product query API or establish every
+valid workload's instruction/memory envelope.
 `make m0-setup` explicitly prepares Testkit's server;
 `make m0-contracts` checks native numeric/schema/row/query semantics without a server.
 `make m0-rollback`, `make m0-batch`, `make m0-reads`, `make m0-aggregation` and
@@ -200,6 +225,16 @@ one-entity IC DB qualification host and that frozen IcyDB host. Keep matched
 input/result checks, feature/build evidence and complete write journeys including
 IcyDB settling. Direct IC DB index reads are not yet a fluent-planner comparison;
 do not extrapolate this slice to the full retained product scope.
+`make m1-entity-growth` separately measures 1/8/32 equivalent scalar entities
+with one fixed endpoint and reachable typed writes/lookups/pages/index reads.
+It compares fresh construction with a retained host/runtime and cloned immutable
+Schema. Every Database open still checks current durable authority; revision
+validation is operation-specific. Generated schema assembly retains only immutable
+executable metadata, and the local M1 host retains supplier runtime custody.
+Retain cold/post-upgrade and warm costs in the report. The growth fixture is
+update-only; the normal record witness separately checks cold queries after
+upgrade followed by updates. Heterogeneous growth, fluent chains and Canic
+integration remain separate qualification.
 
 ## Qualification and simplicity
 

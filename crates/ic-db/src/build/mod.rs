@@ -86,6 +86,7 @@ impl Registry {
         let mut code = String::from(
             "// Generated from the validated host schema; do not edit.\n\
             fn compiled() -> ::ic_db::Schema {\n\
+            ::std::thread_local! { static SCHEMA: ::ic_db::Schema = {\n\
             let schema = ::ic_db::Schema::new(&[\n",
         );
         for (path, _) in selected {
@@ -99,7 +100,7 @@ impl Registry {
             schema.fingerprint()
         )
         .unwrap();
-        code.push_str("schema\n}\n");
+        code.push_str("schema\n}; }\nSCHEMA.with(::std::clone::Clone::clone)\n}\n");
         self.sealed = true;
         Ok(code)
     }
@@ -129,6 +130,8 @@ pub fn __register(path: &'static str, schema: &'static EntitySchema) {
 /// `OUT_DIR`, then include it in the target. Rust resolves types; this function
 /// only remaps the known module root. Supply a trusted Rust target path from the
 /// build script; the target compiler checks it. Runtime admission checks the host fingerprint.
+/// The generated function prepares immutable executable metadata once per thread
+/// and returns a clone. It never retains database admission or revision values.
 /// Constructors must have completed; success seals registration for this process.
 /// # Errors
 /// Refuses duplicates, late registration, empty modules or invalid schemas,

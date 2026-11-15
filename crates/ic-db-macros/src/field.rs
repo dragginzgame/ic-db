@@ -130,7 +130,7 @@ impl Field {
         if reference.is_some() && (many.is_some() || !kind.primary_key()) {
             return Err(syn::Error::new_spanned(
                 meta,
-                "references currently require a fixed-width integer, U256, Ulid or Principal",
+                "references currently require an integer, U256, Ulid, Principal, Account or Subaccount",
             ));
         }
         Ok(Self {
@@ -176,9 +176,22 @@ impl Field {
                     | Kind::Principal
                     | Kind::Bool
                     | Kind::Text(_)
+                    | Kind::Named(_, _)
             )
     }
     pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
+        if let Kind::Named(_, indirect) = &self.kind {
+            return match (self.optional, indirect) {
+                (true, true) => {
+                    quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
+                }
+                (true, false) => {
+                    quote!(row.#ident.as_ref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
+                }
+                (false, true) => quote!(::ic_db::IndexValue::from(row.#ident.as_ref())),
+                (false, false) => quote!(::ic_db::IndexValue::from(&row.#ident)),
+            };
+        }
         if self.optional {
             if matches!(self.kind, Kind::Text(_)) {
                 quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
@@ -601,6 +614,8 @@ impl Kind {
                 | Self::U256
                 | Self::Ulid
                 | Self::Principal
+                | Self::Account
+                | Self::Subaccount
         )
     }
 }

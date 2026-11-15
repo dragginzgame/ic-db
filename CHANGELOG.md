@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.7.0] - Unreleased
+
+### ▶️ Try it
+
+Inspect `AccountKey` / `SubaccountKey` for typed primary keys and mutual references.
+`EnvelopeRow` is the synthetic maximum-row/index-fan-out fixture.
+`EnumRow` now shows the `state,id` and sparse unique `previous` indexes over `Lifecycle`.
+The CLI uses a fresh local fixture; `schema` shows all entities and `query` reads `Entry`.
+
+```sh
+make db
+db schema
+db schema EnumRow
+db schema EnumCollectionsRow
+db schema Document
+db query --limit 2
+```
+
+Measure controlled entity growth separately from the local CLI fixture:
+
+```sh
+make m1-entity-growth
+```
+
+### 🛠️ Changes
+
+- Keep CLI output focused on results: move schema explanations to
+  `db schema --help` and remove the startup command tutorial.
+
+- Support unit enums as set elements and map keys, with canonical ordering shared
+  by indexes and codecs. Retain count/node bounds and reject corrupt duplicates,
+  reversed order and invalid variants before materialization or mutation.
+  `EnumCollectionsRow` demonstrates the declarations; payload enums remain excluded.
+
+- Add `db schema ENTITY` for one declared entity, with its fields, indexes,
+  references and reachable nested types. Recursive definitions appear once;
+  unknown names refuse clearly. The same command works inside the console.
+  `db schema` retains the whole-schema view; this remains the local fixture.
+
+- Support unit-enum secondary indexes, including compound, optional and sparse
+  unique keys. Canonical variant-name order agrees with row encoding; query
+  operands must match the whole declared enum. Payload enums remain unsupported
+  as keys. Native byte/corruption checks and Wasm rollback/upgrade qualification
+  cover the existing index path; no new durable catalog or executor.
+
+- Keep opening focused on the manifest. Revision reads and write preparation
+  validate only the needed entities; no-ops validate without advancing, while
+  malformed/overflowed counters refuse the complete affected batch. Generated
+  schemas reuse immutable metadata and the local M1 host retains storage-runtime
+  custody. No revision/admission cache or format change. Warm 32-entity opening
+  falls from about 755k to 113k instructions after removing unrelated checks.
+
+- Add `make m1-entity-growth` to measure 1/8/32 equivalent entities with a fixed
+  endpoint count. Check typed row/index isolation, replacement, deletion and
+  upgrade; separate host bootstrap, lease, schema construction and database-open
+  instructions. Compare fresh and retained hosts, including cold upgrade/trap
+  recovery. With operation-specific revision validation, current fresh/retained
+  hosts measure about 960k/113k opening instructions at 32 entities. Retaining
+  host setup adds about 1.4 KB Wasm; no durable metadata or executor is added.
+
+- Enforce IcyDB's 512-byte complete index-key budget in the existing write/read
+  paths, including framing and owner suffixes. Check new keys before no-op
+  shortcuts, reserve query-prefix completion space, and bound supplier key reads
+  before payload allocation. Semantics version 2 refuses older contracts intact;
+  row/component bytes and schema attributes are unchanged. Keep 4 KiB rows with
+  unindexed padding in the maximum-batch fixture; independently audit 512-byte
+  keys and 513-byte refusal. No extra map, executor, WAL or dependency.
+
+- Add `make m1-envelope-comparison` for matched 32-row, eight-index writes
+  against frozen IcyDB, including its journal settling. Retain the original
+  large-key refusal separately: IcyDB's 512-byte key bound excludes that shape.
+  The common workload uses four 48-byte Text values; product code is unchanged.
+
+- Add `make m1-write-envelope` for real Wasm qualification of 32 × 4 KiB rows
+  and eight compound indexes per row. Independently check every stored row/index
+  byte, preparation refusals, no-ops, rollback, upgrade and deletion. Keep the
+  probe and bounded raw inspection in qualification; product execution is unchanged.
+
+- Support supplied Account/Subaccount primary keys, typed lookup/delete/page
+  cursors and exact references. Absent and explicit-zero subaccounts identify
+  the same Account across primary uniqueness, batch targets and references.
+  Reuse the owned key codec and existing batch executor; malformed stored owners
+  refuse intact. Existing stored contracts remain unchanged; no attribute is removed.
+  Native and Wasm tests cover aliases, cross-entity references, rollback and upgrade.
+  The unchanged scalar benchmark adds 1.2 KB Wasm and under 0.03% query/write
+  instructions; Account-specific workload costs remain separate qualification.
+
 ## [0.6.0] - 2026-11-14 (development checkpoint)
 
 ### ▶️ Try it

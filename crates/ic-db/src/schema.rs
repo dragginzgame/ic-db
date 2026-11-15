@@ -32,7 +32,8 @@ pub enum FieldType {
         /// Maximum number of elements, from zero through 256.
         max_items: u32,
     },
-    /// A named record, enum, set or map; not yet admitted as a key or reference.
+    /// A named record, enum, set or map. Unit enums support secondary keys;
+    /// other named shapes and named primary/reference keys remain unsupported.
     Named(TypeLink),
     /// Exact unsigned 8-bit integer.
     Nat8,
@@ -148,7 +149,7 @@ pub struct EntitySchema {
     pub name: &'static str,
     /// Fields in canonical name order.
     pub fields: &'static [FieldSchema],
-    /// Supplied integer, U256, Ulid or Principal primary-key field.
+    /// Supplied scalar primary-key field; its type must implement `PrimaryKey`.
     pub primary_key: &'static str,
     /// Indexes ordered by logical name.
     pub indexes: &'static [IndexSchema],
@@ -228,6 +229,10 @@ impl EntitySchema {
 }
 
 /// Validated executable schema. It is never reconstructed from stored data.
+/// Clones retain only immutable executable metadata; each database open still
+/// validates the current durable manifest independently. Revision reads and
+/// writes validate the affected counters when used, without caching them.
+#[derive(Clone)]
 pub struct Schema {
     pub(crate) entities: Vec<&'static EntitySchema>,
     pub(crate) fingerprint: [u8; 32],
@@ -248,7 +253,9 @@ impl Schema {
         // Contract grammar, row codec, key codec, semantics, supplier contract.
         // Supplier contract 1 is qualified with Storage 0.74.1; it is not a guess
         // that every future supplier release uses a compatible collection format.
-        for version in [2, crate::codec::ROW_CODEC_VERSION, 1, 1, 1] {
+        // Semantics 2 admits complete physical index keys of at most 512 bytes.
+        // Older wider-key contracts refuse intact; stored component bytes are unchanged.
+        for version in [2, crate::codec::ROW_CODEC_VERSION, 1, 2, 1] {
             bytes.extend(version.to_le_bytes());
         }
         bytes.extend((entities.len() as u32).to_le_bytes());

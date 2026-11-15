@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "aggregation-canister",
+    "entity-growth-canister",
     "icydb-baseline-canister",
     "icydb-baseline-schema",
     "maintenance-canister",

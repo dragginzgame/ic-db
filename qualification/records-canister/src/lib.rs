@@ -4,7 +4,10 @@
 
 use ic_db_qualification_transport as transport;
 
+mod account_keys;
 mod defaults;
+mod enum_collections;
+mod envelope;
 mod generation;
 mod managed;
 mod principal_keys;
@@ -36,7 +39,15 @@ type Status = ([u8; 32], [u8; 16], u64, u64);
 type QueryPage = (Vec<(u64, u64)>, Option<u64>, u64);
 
 include!(concat!(env!("OUT_DIR"), "/schema.rs"));
-fn runtime() -> MemoryRuntime<Backing> {
+fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
+    // Host custody survives calls; Database handles and leases remain local.
+    // Upgrade clears this heap state and the next access re-admits the runtime.
+    thread_local! {
+        static HOST: std::rc::Rc<MemoryRuntime<Backing>> = std::rc::Rc::new(new_runtime());
+    }
+    HOST.with(std::rc::Rc::clone)
+}
+fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
     let declarations =
         SealedDeclarationSnapshot::new(vec![MemoryRequest::new("m1", KEY).unwrap()]).unwrap();
@@ -145,7 +156,7 @@ fn inspect() -> Status {
     status(&db, &host)
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, String, Option<(u32, String)>);
+type FieldView = (String, String, bool, String, Option<(String, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
@@ -154,18 +165,25 @@ type TypeView = (String, String, Vec<(String, String, bool, String)>);
     decode_with = "crate::transport::decode::<_, 2>",
     encode_with = "crate::transport::encode::<_, 2>"
 )]
-fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "transport endpoint requires an owned request"
+)]
+fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
     let db = open(&host);
+    let mut included_types = std::collections::BTreeSet::new();
     let entities = db
         .schema()
         .entities()
         .iter()
+        .filter(|entity| selected.as_deref().is_none_or(|name| name == entity.name))
         .map(|entity| {
             let fields = entity
                 .fields
                 .iter()
                 .map(|field| {
+                    include_type_names(field.value, &mut included_types);
                     let (kind, mut info) = type_view(field.value);
                     if let Some(default) = field.default {
                         let value = match default {
@@ -192,7 +210,15 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
                         info,
                         field.reference.map(|reference| {
                             (
-                                reference.entity,
+                                {
+                                    let target = db
+                                        .schema()
+                                        .entities()
+                                        .iter()
+                                        .find(|target| target.id == reference.entity)
+                                        .unwrap();
+                                    format!("{}.{}", target.name, target.primary_key)
+                                },
                                 entity
                                     .indexes
                                     .iter()
@@ -229,6 +255,7 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let types = db
         .schema()
         .types()
+        .filter(|definition| selected.is_none() || included_types.contains(definition.name))
         .map(|definition| {
             let (kind, members) = match &definition.body {
                 ic_db::TypeBody::Map {
@@ -296,6 +323,34 @@ fn schema() -> (Status, Vec<EntityView>, Vec<TypeView>) {
         })
         .collect();
     (status(&db, &host), entities, types)
+}
+
+// Presentation selection over an already admitted graph. Names terminate recursive
+// definitions; this neither validates nor reconstructs the database schema.
+fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&'static str>) {
+    match value {
+        FieldType::List { item, .. } => include_type_names(*item, names),
+        FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
+            ic_db::TypeBody::Record(fields) => {
+                for field in *fields {
+                    include_type_names(field.value, names);
+                }
+            }
+            ic_db::TypeBody::Enum(variants) => {
+                for variant in *variants {
+                    if let Some(payload) = variant.payload {
+                        include_type_names(payload.value, names);
+                    }
+                }
+            }
+            ic_db::TypeBody::Map { key, value, .. } => {
+                include_type_names(*key, names);
+                include_type_names(value.value, names);
+            }
+            ic_db::TypeBody::Set { item, .. } => include_type_names(*item, names),
+        },
+        _ => {}
+    }
 }
 #[ic_platform_runtime::cdk::query(
     guard = "crate::transport::admit::<3>",
@@ -1028,7 +1083,37 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
     Ok((
         db.get::<EnumRow>(1)
             .unwrap()
-            .map(|row| row.encode().unwrap())
+            .map(|row| {
+                assert_eq!(
+                    db.index_prefix::<EnumRow>("state,id", &[(&row.state).into()], 3)
+                        .unwrap(),
+                    std::slice::from_ref(&row)
+                );
+                for value in [
+                    schema::Lifecycle::Archived,
+                    schema::Lifecycle::Draft,
+                    schema::Lifecycle::Ready,
+                ] {
+                    let expected = if row.previous == Some(value) {
+                        vec![row.clone()]
+                    } else {
+                        vec![]
+                    };
+                    assert_eq!(
+                        db.index_prefix::<EnumRow>("previous", &[(&value).into()], 3)
+                            .unwrap(),
+                        expected
+                    );
+                    if row.state != value {
+                        assert!(
+                            db.index_prefix::<EnumRow>("state,id", &[(&value).into()], 3)
+                                .unwrap()
+                                .is_empty()
+                        );
+                    }
+                }
+                row.encode().unwrap()
+            })
             .unwrap_or_default(),
         db.revision::<EnumRow>().unwrap(),
     ))

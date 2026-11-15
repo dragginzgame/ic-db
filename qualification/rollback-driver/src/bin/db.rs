@@ -21,7 +21,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Inspect generated fields, types, indexes and admitted schema identity.
-    Schema,
+    #[command(
+        after_help = "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes.\nPresent references require an existing target and restrict its deletion; absent references have no target.\nUse db status for stored schema admission and storage details."
+    )]
+    Schema {
+        /// Exact declared entity name; omit to inspect the whole schema.
+        entity: Option<String>,
+    },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
     /// Read bounded Entry candidates in ID order; continue even when no rows match.
@@ -45,18 +51,22 @@ fn help() {
     println!();
 }
 type Status = ([u8; 32], [u8; 16], u64, u64);
-type FieldView = (String, String, bool, String, Option<(u32, String)>);
+type FieldView = (String, String, bool, String, Option<(String, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
 
 fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
-    println!("\nSchema: {} entities\n", entities.len());
-    let targets: std::collections::BTreeMap<_, _> = entities
-        .iter()
-        .map(|(name, id, primary, _, _)| (*id, format!("{name}.{primary}")))
-        .collect();
+    println!(
+        "\nSchema: {} {}\n",
+        entities.len(),
+        if entities.len() == 1 {
+            "entity"
+        } else {
+            "entities"
+        }
+    );
     for (name, _, primary, mut fields, indexes) in entities {
         println!("{}", terminal_text(&name));
         println!(
@@ -79,7 +89,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                 if references {
                     row.push(reference.map_or_else(
                         || "-".into(),
-                        |(entity, index)| format!("{} (via {index})", targets[&entity]),
+                        |(target, index)| format!("{target} (via {index})"),
                     ));
                 }
                 row
@@ -149,13 +159,6 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             )
         );
     }
-    println!(
-        "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes."
-    );
-    println!(
-        "Present references require an existing target and restrict its deletion; absent references have no target."
-    );
-    println!("Stored schema matches this executable. Use db status for storage details.");
 }
 
 fn print_status((schema, incarnation, revision, pages): Status) {
@@ -203,31 +206,38 @@ async fn main() -> Result<(), String> {
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
     println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
-    println!("Enter help for commands. Use schema to inspect all entities; query reads Entry.");
     let interactive = io::stdin().is_terminal() && cli.command.is_none();
     let execute = async |command: Command| -> Result<(), String> {
         match command {
             Command::Help => help(),
             Command::Quit => {}
-            Command::Schema | Command::Status => {
-                let id = if matches!(command, Command::Schema) {
-                    2
-                } else {
-                    1
+            Command::Schema { .. } | Command::Status => {
+                let (id, selected) = match command {
+                    Command::Schema { entity } => (2, entity),
+                    _ => (1, None),
                 };
                 let endpoint = if id == 2 { "schema" } else { "inspect" };
+                let request = if id == 2 {
+                    native::encode_request(id, &selected, LIMITS)
+                } else {
+                    native::encode_request(id, &(), LIMITS)
+                }
+                .map_err(|e| e.to_string())?;
                 let reply = pic
-                    .query_call(
-                        canister,
-                        canister,
-                        endpoint,
-                        native::encode_request(id, &(), LIMITS).map_err(|e| e.to_string())?,
-                    )
+                    .query_call(canister, canister, endpoint, request)
                     .await
                     .map_err(|e| format!("{e:?}"))?;
                 if id == 2 {
                     let (_, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
                         native::decode_response(id, &reply, LIMITS).map_err(|e| e.to_string())?;
+                    if entities.is_empty()
+                        && let Some(name) = selected
+                    {
+                        return Err(format!(
+                            "Unknown entity '{}'. Use db schema to list entities.",
+                            terminal_text(&name)
+                        ));
+                    }
                     print_schema(entities, types);
                 } else {
                     print_status(

@@ -1,11 +1,11 @@
 //! Small typed identity boundary over shared commit/traversal execution.
 //! Primary and secondary keys share their ordered component encoding.
-use crate::{Error, FieldType, IndexValue, Principal, U256, Ulid, key};
+use crate::{Account, Error, FieldType, IndexValue, Principal, Subaccount, U256, Ulid, key};
 
 mod sealed {
     pub trait Sealed {}
 }
-/// Supported supplied primary key: fixed-width integers, U256, Ulid or Principal.
+/// Supported supplied primary key: integers, U256, Ulid, Principal, Account or Subaccount.
 /// This sealed boundary keeps lookup/delete/page arguments typed to their entity.
 pub trait PrimaryKey: sealed::Sealed + Copy + Eq {
     /// Convert at the generated entity boundary.
@@ -56,7 +56,9 @@ primary_keys!(
     Int128(i128),
     U256(U256),
     Ulid(Ulid),
-    Principal(Principal)
+    Principal(Principal),
+    Subaccount(Subaccount),
+    Account(Account)
 );
 impl RowKey {
     pub(crate) fn decode(bytes: &[u8], field: FieldType) -> Result<Self, Error> {
@@ -107,15 +109,30 @@ impl RowKey {
             FieldType::Ulid => Ok(Self::Ulid(Ulid::from_bytes(
                 bytes.try_into().map_err(|_| Error::Corrupt)?,
             ))),
-            FieldType::Principal => {
+            FieldType::Subaccount => Ok(Self::Subaccount(
+                bytes.try_into().map_err(|_| Error::Corrupt)?,
+            )),
+            FieldType::Principal | FieldType::Account => {
                 let mut remaining = bytes;
                 key::consume(&mut remaining, field)?;
                 if !remaining.is_empty() {
                     return Err(Error::Corrupt);
                 }
-                Principal::try_from_slice(&bytes[1..])
-                    .map(Self::Principal)
-                    .map_err(|_| Error::Corrupt)
+                // Component admission proves the owner length and, for an
+                // account, the complete effective-subaccount suffix.
+                let owner_end = 1 + usize::from(bytes[0]);
+                let owner =
+                    Principal::try_from_slice(&bytes[1..owner_end]).map_err(|_| Error::Corrupt)?;
+                if field == FieldType::Principal {
+                    Ok(Self::Principal(owner))
+                } else {
+                    let subaccount: Subaccount =
+                        bytes[owner_end..].try_into().map_err(|_| Error::Corrupt)?;
+                    Ok(Self::Account(Account {
+                        owner,
+                        subaccount: (subaccount != [0; 32]).then_some(subaccount),
+                    }))
+                }
             }
             _ => Err(Error::Corrupt),
         }

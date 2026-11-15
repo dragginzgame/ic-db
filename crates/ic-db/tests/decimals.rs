@@ -192,7 +192,7 @@ fn fixed_scale_bytes_and_corruption() {
             .fingerprint()
             .map(|v| format!("{v:02x}"))
             .concat(),
-        "2045e0de3c89a5d8bd02ceb9575ded46b0ac32fea764faeff372f0ebb16c4af5"
+        "270a9258a4c72824057f415df4fefcd58c43ac2b24bfffe7940692d0fb1dde0c"
     );
     let absent = DecimalRow { maybe: None, ..row };
     let zero = DecimalRow {

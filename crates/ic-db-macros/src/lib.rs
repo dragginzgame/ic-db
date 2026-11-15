@@ -16,11 +16,11 @@ mod record;
 mod set;
 use field::Field;
 
-/// Author a typed record with named fields, a supplied integer/Ulid/Principal key and indexes.
+/// Author a typed record with named fields, a supplied scalar key and indexes.
 ///
 /// Field types follow the implemented `ic_db::FieldType` contract, with explicit
 /// bounds for variable-size values. Secondary indexes admit supported ordered
-/// scalar fields, including optional forms. Optional unique indexes require
+/// scalar fields and unit enums, including optional forms. Optional unique indexes require
 /// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Entity names default to the type name; `name = "StableName"` overrides it.
@@ -50,6 +50,8 @@ pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
 /// Supports 1–64 unit or typed payload variants. Canonical name order determines
 /// stored ordinals; source declaration order does not. Use item(indirect, is = "Self")
 /// for boxed recursion, with a finite base alternative.
+/// All-unit enums also convert by reference into `ic_db::IndexValue`, using the
+/// same canonical order. Any payload variant excludes the whole enum from indexes.
 #[proc_macro_attribute]
 pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
     enumeration::expand(args.into(), item.into())
@@ -57,7 +59,7 @@ pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Declare a named scalar set with `item(...)` and `max_items = N` (0..256).
+/// Declare a scalar/unit-enum set with `item(...)` and `max_items = N` (0..256).
 /// The empty struct becomes a tuple wrapper over `BTreeSet<T>`. Stored elements
 /// use strict logical order; malformed duplicates/order refuse on decoding.
 #[proc_macro_attribute]
@@ -68,7 +70,7 @@ pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Declare a named `BTreeMap` wrapper using `key(...)`, `value(...)` and
-/// `max_items = N` (0..256). Keys are required ordered scalars. Values use the
+/// `max_items = N` (0..256). Keys are required ordered scalars or unit enums. Values use the
 /// ordinary optional/list/named field rules; stored duplicate keys refuse.
 #[proc_macro_attribute]
 pub fn map(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -257,7 +259,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .find(|field| field.name == primary && field.required_key())
         .ok_or_else(|| {
-            fail("primary key currently requires a non-optional fixed-width integer, U256, Ulid or Principal")
+            fail("primary key currently requires a non-optional integer, U256, Ulid, Principal, Account or Subaccount")
         })?
         .rust_type();
     let key_id: syn::Ident = syn::parse_str(&primary)?;
@@ -306,7 +308,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             })
         {
             return Err(fail(
-                "index requires 1..4 distinct integer, Principal, Bool or Text fields",
+                "index requires 1..4 distinct supported scalar or unit-enum fields",
             ));
         }
         let fields: Vec<syn::Ident> = index

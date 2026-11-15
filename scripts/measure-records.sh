@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
-# Explicit scalar comparison; no release/CI selection or product optimization.
+# Explicit record comparisons or entity growth; no implicit release/CI selection.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-evidence="$PWD/qualification/target/evidence/records-comparison"
+workload="${1:-scalar}"
+case "$workload" in
+    scalar)
+        evidence="$PWD/qualification/target/evidence/records-comparison"
+        engines=(records-benchmark icydb-baseline)
+        test_name=records_comparison
+        ;;
+    envelope)
+        evidence="$PWD/qualification/target/evidence/envelope-comparison"
+        engines=(m1-records icydb-baseline)
+        test_name=envelope_comparison
+        ;;
+    growth)
+        evidence="$PWD/qualification/target/evidence/entity-growth"
+        engines=(entities-1 entities-8 entities-32 retained-1 retained-8 retained-32)
+        test_name=entity_growth
+        ;;
+    *) printf 'Expected scalar, envelope or growth workload\n' >&2; exit 2 ;;
+esac
 mkdir -p "$evidence"
 rustc -Vv > "$evidence/compiler.txt"
 git rev-parse HEAD > "$evidence/source-commit.txt"
@@ -24,12 +42,28 @@ git ls-files -z --cached --others --exclude-standard -- \
 printf 'RUSTFLAGS=%s\nCARGO_ENCODED_RUSTFLAGS=%s\n' \
     "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" > "$evidence/build-environment.txt"
 
-for engine in records-benchmark icydb-baseline; do
+for engine in "${engines[@]}"; do
     package="ic-db-$engine-canister"
+    build_features=""
+    if [[ "$workload" == growth ]]; then
+        package=ic-db-entity-growth-canister
+        count="${engine##*-}"
+        if [[ "$count" != 1 ]]; then
+            build_features="entities-$count"
+        fi
+        if [[ "$engine" == retained-* ]]; then
+            build_features="${build_features:+$build_features,}retained-host"
+        fi
+    fi
+    if [[ "$workload" == envelope && "$engine" == icydb-baseline ]]; then
+        build_features=envelope
+    fi
     cargo tree --manifest-path qualification/Cargo.toml --locked -p "$package" \
+        --features "$build_features" \
         --target wasm32-unknown-unknown -e normal,build --format '{p} features=[{f}]' \
         > "$evidence/$engine-features.txt"
     cargo build --manifest-path qualification/Cargo.toml --locked -p "$package" \
+        --features "$build_features" \
         --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics \
         > "$evidence/$engine-build.jsonl"
     artifact="$(jq -ers --arg target "${package//-/_}" \
@@ -42,5 +76,8 @@ done
 
 export IC_DB_RECORDS_BENCHMARK_WASM="$evidence/records-benchmark.wasm"
 export IC_DB_ICYDB_BASELINE_WASM="$evidence/icydb-baseline.wasm"
+export IC_DB_M1_RECORDS_WASM="$evidence/m1-records.wasm"
+export IC_DB_ICYDB_ENVELOPE_WASM="$evidence/icydb-baseline.wasm"
+export IC_DB_ENTITY_GROWTH_DIR="$evidence"
 cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver \
-    --test records_comparison -- --nocapture 2>&1 | tee "$evidence/results.log"
+    --test "$test_name" -- --nocapture 2>&1 | tee "$evidence/results.log"

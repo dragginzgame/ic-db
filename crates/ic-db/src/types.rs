@@ -36,18 +36,18 @@ pub struct TypeSchema {
 /// A compiled named type; record/enum members use canonical name order.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeBody {
-    /// Canonical map with scalar keys and arbitrary admitted value shapes.
+    /// Canonical map with scalar/unit-enum keys and arbitrary admitted value shapes.
     Map {
-        /// Required ordered scalar key.
+        /// Required ordered scalar or unit-enum key.
         key: FieldType,
         /// Value type and optionality, independent of map presence.
         value: ValueSchema,
         /// Maximum entries, sharing the enclosing row's collection budget.
         max_items: u32,
     },
-    /// Canonical scalar set. Stored elements must be strictly increasing.
+    /// Canonical scalar/unit-enum set. Stored elements must be strictly increasing.
     Set {
-        /// Exact ordered scalar; named/container elements are not yet supported.
+        /// Exact ordered scalar or unit enum; other named/container elements refuse.
         item: FieldType,
         /// Maximum entries, also subject to the enclosing row's shared budget.
         max_items: u32,
@@ -64,6 +64,23 @@ pub struct VariantSchema {
     pub name: &'static str,
     /// None means a unit variant, distinct from an optional absent payload.
     pub payload: Option<ValueSchema>,
+}
+
+// Ordered capability belongs to the complete enum, including unused variants.
+// Bound unchecked operand definitions before comparing them with admitted metadata.
+pub(crate) fn unit_enum_len(definition: &TypeSchema) -> Option<usize> {
+    let TypeBody::Enum(variants) = &definition.body else {
+        return None;
+    };
+    (!definition.name.is_empty()
+        && definition.name.len() <= 64
+        && !variants.is_empty()
+        && variants.len() <= 64
+        && variants
+            .iter()
+            .all(|v| v.payload.is_none() && !v.name.is_empty() && v.name.len() <= 64)
+        && variants.windows(2).all(|w| w[0].name < w[1].name))
+    .then_some(variants.len())
 }
 /// Payload shape, shared with the field type/optionality rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,7 +108,7 @@ pub trait Value: Sized {
     fn decode_from(reader: &mut Decoder<'_>) -> Result<Self, Error>;
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct TypeGraph {
     definitions: BTreeMap<&'static str, &'static TypeSchema>,
     // Addresses only terminate traversal of compiler-emitted static nodes; they
@@ -140,19 +157,17 @@ impl TypeGraph {
                 value,
                 max_items,
             } => {
-                if *max_items > MAX_COLLECTION_ITEMS as u32
-                    || matches!(key, FieldType::Named(_) | FieldType::List { .. })
-                {
+                if *max_items > MAX_COLLECTION_ITEMS as u32 {
                     return Err(Error::InvalidSchema);
                 }
+                self.include_ordered(*key)?;
                 self.include(value.value)?;
             }
             TypeBody::Set { item, max_items } => {
-                if *max_items > MAX_COLLECTION_ITEMS as u32
-                    || matches!(item, FieldType::Named(_) | FieldType::List { .. })
-                {
+                if *max_items > MAX_COLLECTION_ITEMS as u32 {
                     return Err(Error::InvalidSchema);
                 }
+                self.include_ordered(*item)?;
             }
             TypeBody::Record(fields) => {
                 if fields.len() > MAX_FIELDS {
@@ -174,6 +189,16 @@ impl TypeGraph {
             }
         }
         Ok(())
+    }
+    fn include_ordered(&mut self, value: FieldType) -> Result<(), Error> {
+        match value {
+            FieldType::List { .. } => return Err(Error::InvalidSchema),
+            FieldType::Named(link) if unit_enum_len((link.definition)()).is_none() => {
+                return Err(Error::InvalidSchema);
+            }
+            _ => {}
+        }
+        self.include(value)
     }
     pub fn definitions(&self) -> impl Iterator<Item = &'static TypeSchema> + '_ {
         self.definitions.values().copied()

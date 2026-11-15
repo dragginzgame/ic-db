@@ -26,7 +26,7 @@ exactly admitted schemas, persists signed/unsigned 8/16/32/64/128-bit integers,
 U256, Ulid, Date, Timestamp, Duration, Decimal, finite floats, Bool, Principal,
 Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
-batches with required/optional integer, Ulid or Principal references and indexed restricted deletion. This is
+batches with required/optional integer, Ulid, Principal, Account or Subaccount references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
@@ -35,15 +35,20 @@ Rich types, broader references and the broad fluent builder remain required
 implementation work; this increment does not complete M1. Secondary indexes now
 support Nat/Int8/16/32/64/128, U256, Ulid, Date, Timestamp, Duration, Decimal,
 finite Float32/Float64, Account/Subaccount,
-Principal, Bool and bounded Text fields, including
+Principal, Bool, bounded Text and unit-enum fields, including
 optional values, compound keys and uniqueness. Optional unique indexes explicitly
-require `present_only`; ordinary indexes retain absent values. Primary keys support supplied signed/unsigned 8–128-bit integers, U256, Ulid and Principal;
+require `present_only`; ordinary indexes retain absent values. Primary keys support supplied signed/unsigned 8–128-bit integers, U256, Ulid, Principal, Account and Subaccount;
 references must match the target’s exact key type.
 For Principal identities, declare `pk(field = "id")` and an `id` field with
 `value(item(prim = "Principal"))`. Lookup, delete and page cursors take
 `ic_db::Principal` directly. Ordering is length first, then bytes; the empty
 management principal is a valid identity, distinct from an absent reference.
 `db schema` shows the `PrincipalKey` example and its indexed self-reference.
+Account/Subaccount primary keys use the same field declarations with
+`prim = "Account"` / `"Subaccount"`. Account ordering is owner then effective
+subaccount. An absent and explicit-zero subaccount always name the same key;
+the database does not treat that alias as a second row or an update.
+`db schema` shows `AccountKey` / `SubaccountKey` with mutual references.
 An optional reference's `None` has no target; `Some(id)` requires a surviving
 target. Unlinking the last dependant and deleting its target can share one batch.
 Schemas no longer require numeric entity or index IDs. Entity names default to
@@ -62,7 +67,10 @@ Records use `#[record(fields(...))]` and enums use
 Both retain the empty-struct authoring style. Fields use `value(item(is = "Type"))`;
 optional values add `opt`. Recursive values can use `item(indirect, is = "Self")`
 and need a finite base case. Encoding, decoding and stored-row inspection share
-32-level, 256-structured-value and 4 KiB row bounds. Lists use
+32-level, 256-structured-value and 4 KiB row bounds. Complete encoded secondary-index
+keys are limited to 512 bytes, including namespace and any primary-key suffix.
+Oversized keys refuse before mutation; non-indexed values retain their row/field
+bounds. Semantics version 2 refuses older wider-key contracts intact. Lists use
 `value(many, max_items = 3, item(prim = "Nat16"))`, or a named item type;
 adding `opt` gives `Option<Vec<T>>`. Order and duplicates are preserved, with
 at most 256 collection items across the entire row and an explicit per-list maximum.
@@ -75,7 +83,7 @@ record/enum/set/map definition once, including payload types and recursive links
 `SetRow` and its `Scores` definition are also available for inspection.
 Maps use `#[map(key(prim = "Int16"), value(opt, item(prim = "Text", max_bytes = 4)), max_items = 3)]`
 on an empty struct, producing a tuple wrapper over `BTreeMap<i16, Option<String>>`.
-Keys are ordered scalars; values may also be lists or named types. Stored duplicate
+Keys are ordered scalars or unit enums; values may also be lists or named types. Stored duplicate
 or descending keys refuse without overwriting values. Map entries share the row's
 collection budget, and their nested contents consume the same budget. Inspect
 `MapRow`/`Rates` and recursive `MapTree` with `db schema`.
@@ -157,12 +165,21 @@ declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
 the same equality, hash and index key. Writes refuse excess precision or
 coefficient overflow; they never round. Inspect `DecimalRow` with `db schema`.
 Decimal aggregate arithmetic remains separate work.
-Enum/nested/collection indexes, nested references and non-scalar keys/set elements remain work.
+Unit enums also support `#[set(item(is = "Status"), max_items = 3)]` and
+`#[map(key(is = "Status"), value(item(prim = "Nat64")), max_items = 3)]`.
+Their canonical variant-name order agrees with secondary indexes. Stored duplicate,
+reversed or invalid variants refuse before collection construction. Inspect
+`db schema EnumCollectionsRow` for an example. Payload-enum/nested/collection
+indexes, nested references and other named collection keys/elements remain work.
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
 version 1 or 2 codec contract refuses without changing its data. The named schema
 grammar is version 2; earlier numbered contracts also refuse intact.
+Generated schemas reuse immutable executable metadata. Opening still checks the
+current manifest; explicit revision reads and write preparation validate only
+the counters they need. Unrelated broken counters do not block ordinary row
+reads or other entities' writes. No revision values are cached across calls.
 The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
 No public licence or crates.io publication has been selected; packages are unpublished.
 
@@ -220,6 +237,10 @@ primary key first and separate Type, Optional and Info columns. Info contains
 byte/item/entry limits, including list-element bounds; type names stay uncluttered. The CLI
 uses `ic-host-text`, as IcyDB's describe renderer did. `db status` contains the
 full manifest fingerprint, incarnation, Entry revision and physical pages.
+Use `db schema EnumRow` or `db schema Document` to select one exact declared
+entity name. Only its reachable named types are included; recursive definitions
+appear once and references retain their target names. Inside the console, use
+`schema EnumRow`. Unknown names report an error; omit the name to see all entities.
 `query` currently reads Entry and shows `id` and `amount`; its `--min` filter runs over a
 bounded primary-key page, so an empty page can still have a continuation.
 The output supplies a next-page command, retaining the limit and filter, or an

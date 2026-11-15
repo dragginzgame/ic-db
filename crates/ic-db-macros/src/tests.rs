@@ -329,15 +329,7 @@ fn references_require_a_bounded_reverse_access_path() {
 
 #[test]
 fn scalar_storage_does_not_admit_unimplemented_keys_or_bounds() {
-    for prim in [
-        "Date",
-        "Timestamp",
-        "Duration",
-        "Account",
-        "Subaccount",
-        "Float32",
-        "Float64",
-    ] {
+    for prim in ["Date", "Timestamp", "Duration", "Float32", "Float64"] {
         let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
         let wide = quote!(field(name="wide",value(item(prim=#prim))));
         for args in [
@@ -515,7 +507,7 @@ fn names_and_reverse_selection_are_unambiguous() {
 }
 
 #[test]
-fn enum_authoring_is_bounded_and_does_not_imply_index_support() {
+fn enum_authoring_is_bounded_and_named_index_types_resolve_in_rust() {
     for args in [
         quote!(),
         quote!(variant(name = "A"), variant(name = "A")),
@@ -568,7 +560,7 @@ fn enum_authoring_is_bounded_and_does_not_imply_index_support() {
                 struct Row {}
             )
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         expand(
@@ -704,9 +696,16 @@ fn list_authoring_requires_explicit_bounds_and_refuses_unsupported_key_shapes() 
 }
 
 #[test]
-fn named_sets_require_bounded_ordered_scalar_elements() {
+fn sets_resolve_named_elements_and_require_bounds() {
     let declaration = quote!(
         struct Scores {}
+    );
+    assert!(
+        super::set::expand(
+            quote!(item(is = "State"), max_items = 3),
+            declaration.clone()
+        )
+        .is_ok()
     );
     assert!(
         super::set::expand(
@@ -718,7 +717,6 @@ fn named_sets_require_bounded_ordered_scalar_elements() {
     for args in [
         quote!(item(prim = "Int16")),
         quote!(item(prim = "Int16"), max_items = 257),
-        quote!(item(is = "Other"), max_items = 3),
         quote!(item(prim = "Text"), max_items = 3),
         quote!(item(prim = "Int16"), max_items = 3, opt),
         quote!(item(prim = "Int16"), max_items = 3, max_items = 2),
@@ -728,9 +726,16 @@ fn named_sets_require_bounded_ordered_scalar_elements() {
 }
 
 #[test]
-fn maps_require_scalar_keys_bounded_counts_and_an_explicit_value() {
+fn maps_resolve_named_keys_and_require_bounds_and_values() {
     let declaration = quote!(
         struct Rates {}
+    );
+    assert!(
+        super::map::expand(
+            quote!(key(is = "State"), value(item(prim = "Nat8")), max_items = 3),
+            declaration.clone()
+        )
+        .is_ok()
     );
     assert!(
         super::map::expand(
@@ -746,7 +751,6 @@ fn maps_require_scalar_keys_bounded_counts_and_an_explicit_value() {
     for args in [
         quote!(key(prim = "Int16"), value(item(prim = "Nat8"))),
         quote!(key(prim = "Int16"), max_items = 3),
-        quote!(key(is = "Other"), value(item(prim = "Nat8")), max_items = 3),
         quote!(
             key(prim = "Text"),
             value(item(prim = "Nat8")),
@@ -837,6 +841,8 @@ fn primary_keys_require_nonoptional_scalar_fields() {
         "U256",
         "Ulid",
         "Principal",
+        "Account",
+        "Subaccount",
     ] {
         let id = quote!(field(name="id",value(item(prim=#prim))));
         assert!(

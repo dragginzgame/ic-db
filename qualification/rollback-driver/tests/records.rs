@@ -63,6 +63,7 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("Exact match"));
     assert!(stdout.contains("Membership"));
     assert!(stdout.contains("Enum: Lifecycle"));
+    assert!(stdout.contains("state,id"));
     assert!(stdout.contains("Record: Details"));
     assert!(stdout.contains("List<Nat16>"));
     assert!(stdout.contains("Info"));
@@ -138,6 +139,43 @@ fn console_inspects_and_queries() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(contains_row(&stdout, &["4", "40"]));
     assert!(contains_row(&stdout, &["5", "51"]));
+    for (entity, expected, excluded) in [
+        ("Entry", "category", "Enum: Lifecycle"),
+        ("EnumRow", "Enum: Lifecycle", "Record: Details"),
+        ("NestedRow", "Record: Details", "Enum: Lifecycle"),
+        ("ListRow", "Record: ListNode", "Enum: Lifecycle"),
+        ("MapTreeRow", "Map: MapTree", "Enum: Lifecycle"),
+        (
+            "Document",
+            "Entry.id (via entry_id,score)",
+            "Enum: Lifecycle",
+        ),
+    ] {
+        let output = Command::new(&binary)
+            .args(["schema", entity])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("Schema: 1 entity"));
+        assert!(stdout.contains(expected), "{entity}: {stdout}");
+        assert!(!stdout.contains(excluded), "{entity}: {stdout}");
+        assert!(!stdout.lines().any(|line| line == "WideNumbers"));
+        assert_eq!(
+            stdout.matches("Record: ListNode").count(),
+            usize::from(entity == "ListRow")
+        );
+    }
+    let output = Command::new(&binary)
+        .args(["schema", "Missing"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown entity 'Missing'"));
     for command in [
         "query --limit 0",
         "query --limit 1 --limit 2",
@@ -295,7 +333,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
         // Independently assembled with Node byte framing and SHA-256.
-        "606ead81e464255bf5482dffea866809b3b2d8dbde15ff924968a5476366e15f"
+        "3d9eff928eeb4e73eceeec428f447f05512e428f53f51fb9a878dbbb195260f8"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -304,11 +342,11 @@ async fn product_records_and_message_boundary() {
             canister,
             canister,
             "schema",
-            native::encode_request(2, &(), LIMITS).unwrap(),
+            native::encode_request(2, &None::<String>, LIMITS).unwrap(),
         )
         .await
         .unwrap();
-    type FieldView = (String, String, bool, String, Option<(u32, String)>);
+    type FieldView = (String, String, bool, String, Option<(String, String)>);
     type IndexView = (String, Vec<String>, bool, bool);
     type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
     type TypeView = (String, String, Vec<(String, String, bool, String)>);
@@ -316,8 +354,8 @@ async fn product_records_and_message_boundary() {
         native::decode_response(2, &reply, LIMITS).unwrap();
     assert_eq!(admitted, original);
     let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
-    assert_eq!(entities.len(), 27);
-    assert_eq!(types.len(), 8);
+    assert_eq!(entities.len(), 31);
+    assert_eq!(types.len(), 10);
     assert!(entity("ManagedRow").3.contains(&(
         "updated".into(),
         "Timestamp".into(),
@@ -383,7 +421,7 @@ async fn product_records_and_message_boundary() {
         "Nat64".into(),
         true,
         String::new(),
-        Some((entity("OptionalLink").1, "next,id".into()))
+        Some(("OptionalLink.id".into(), "next,id".into()))
     )));
     assert_eq!(entity("IdentityRow").0, "IdentityRow");
     assert!(
@@ -489,7 +527,7 @@ async fn product_records_and_message_boundary() {
                 "Nat64".into(),
                 false,
                 String::new(),
-                Some((entity("Entry").1, "entry_id,score".into()))
+                Some(("Entry.id".into(), "entry_id,score".into()))
             ),
             ("id".into(), "Nat64".into(), false, String::new(), None),
             (
@@ -672,10 +710,15 @@ async fn product_records_and_message_boundary() {
     assert_eq!(status().await.2, 2);
     assert_eq!(category(9).await, vec![(1, 900)]);
     assert_eq!(page(0, 1, 0).await, Ok((vec![(1, 900)], Some(1), 1)));
-    assert_eq!(
-        document().await,
-        ((valid.0, valid.1, valid.2, valid.3, 0, None), 5)
-    );
+    let after_upgrade = (valid.0, valid.1, valid.2, valid.3, 0, None);
+    assert_eq!(document().await, (after_upgrade.clone(), 5));
+    // Cold query initialization after upgrade must not leave stale leases or
+    // admission in the subsequent replicated update and query.
+    let mut next = after_upgrade;
+    next.4 = 1;
+    assert_eq!(replace_document(next.clone()).await, Ok(()));
+    assert_eq!(document().await, (next, 6));
+    assert_eq!(status().await.2, 2);
     owned.close().await;
 }
 
@@ -1432,7 +1475,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
 }
 
 #[tokio::test]
-async fn named_enums_preserve_ordinals_and_message_rollback() {
+async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();

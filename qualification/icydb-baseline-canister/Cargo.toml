@@ -14,6 +14,9 @@ category = "tests"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+envelope = ["ic-db-icydb-baseline-schema/envelope"]
+
 [dependencies]
 ic-db-icydb-baseline-schema.workspace = true
 ic-db-qualification-transport.workspace = true

@@ -1,0 +1,192 @@
+//! Maximum structural write shape using ordinary product APIs and the real supplier.
+//! Raw inspection is private qualification transport, never a product query lane.
+use super::{Batch, Entity, KEY, cdk, open, runtime};
+use ic_db::Error;
+use ic_db_m1_records_schema::EnvelopeRow;
+use ic_storage::{StableKey, adapter::StableBTreeMap};
+use std::ops::Bound;
+
+fn write(
+    mode: u8,
+    count: u8,
+    generation: u8,
+    oversized: bool,
+    text_len: usize,
+) -> Result<(), Error> {
+    assert!(count <= 33 && generation <= 1);
+    let host = runtime();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    for id in 1..=u64::from(count) {
+        if mode == 2 {
+            batch.delete::<EnvelopeRow>(id)?;
+            continue;
+        }
+        // Maximal probe: 512-byte keys and unindexed padding to a 4096-byte row.
+        let text = "\0".repeat(text_len);
+        let mut a = if text_len == 60 {
+            format!("abcdefg{text}")
+        } else {
+            text.clone()
+        };
+        if generation == 1 {
+            let offset = if text_len == 60 { 7 } else { 0 };
+            a.replace_range(offset..offset + 1, "\u{1}");
+        }
+        if oversized {
+            a.push('\0');
+        }
+        let row = EnvelopeRow {
+            id,
+            a,
+            b: text.clone(),
+            c: text.clone(),
+            d: text,
+            padding: if text_len == 60 {
+                vec![0; 3821]
+            } else {
+                Vec::new()
+            },
+        };
+        match mode {
+            0 => batch.insert(&row)?,
+            1 => batch.replace(&row)?,
+            _ => panic!("invalid fixture mode"),
+        }
+    }
+    db.commit(batch)
+}
+
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<88>",
+    decode_with = "crate::transport::decode::<_, 88>",
+    encode_with = "crate::transport::encode::<_, 88>"
+)]
+fn envelope_write(
+    (mode, count, generation, oversized, trap): (u8, u8, u8, bool, bool),
+) -> (Result<(), u8>, u64) {
+    // Includes reopen, row construction, batch preparation and commit. Transport
+    // decode/encode is outside this interval; the driver measures whole-call cycles.
+    let start = cdk::api::instruction_counter();
+    let result = match write(mode, count, generation, oversized, 60) {
+        Ok(()) => Ok(()),
+        Err(Error::Limit) => Err(1),
+        Err(Error::Exists) => Err(2),
+        Err(error) => panic!("unexpected envelope refusal: {error:?}"),
+    };
+    if trap {
+        cdk::api::trap("after envelope commit");
+    }
+    (result, cdk::api::instruction_counter() - start)
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<89>",
+    decode_with = "crate::transport::decode::<_, 89>",
+    encode_with = "crate::transport::encode::<_, 89>"
+)]
+fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
+    assert!(index < 8 && generation <= 1);
+    let start = cdk::api::instruction_counter();
+    let host = runtime();
+    let db = open(&host);
+    let index = &EnvelopeRow::SCHEMA.indexes[usize::from(index)];
+    let mut leading = "\0".repeat(60);
+    if index.fields[0] == "a" {
+        leading.insert_str(0, "abcdefg");
+        if generation == 1 {
+            leading.replace_range(7..8, "\u{1}");
+        }
+    }
+    let rows = db
+        .index_prefix::<EnvelopeRow>(index.name, &[leading.as_str().into()], 32)
+        .unwrap();
+    let ids = rows.into_iter().map(|row| row.id).collect();
+    let revision = db.revision::<EnvelopeRow>().unwrap();
+    (ids, revision, cdk::api::instruction_counter() - start)
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<91>",
+    decode_with = "crate::transport::decode::<_, 91>",
+    encode_with = "crate::transport::encode::<_, 91>"
+)]
+fn envelope_row(id: u64) -> (String, String, String, String) {
+    let host = runtime();
+    let db = open(&host);
+    let row = db.get::<EnvelopeRow>(id).unwrap().unwrap();
+    assert!(row.padding.is_empty());
+    (row.a, row.b, row.c, row.d)
+}
+
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<93>",
+    decode_with = "crate::transport::decode::<_, 93>",
+    encode_with = "crate::transport::encode::<_, 93>"
+)]
+fn envelope_comparison_write(
+    (mode, generation, text_len): (u8, u8, u16),
+) -> (Result<(), u16>, u64) {
+    assert!(mode <= 1 && matches!(text_len, 48 | 61 | 1018));
+    let start = cdk::api::instruction_counter();
+    let result = match write(mode, 32, generation, false, usize::from(text_len)) {
+        Ok(()) => Ok(()),
+        Err(Error::Limit) => Err(1),
+        Err(error) => panic!("unexpected comparison refusal: {error:?}"),
+    };
+    (result, cdk::api::instruction_counter() - start)
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<92>",
+    decode_with = "crate::transport::decode::<_, 92>",
+    encode_with = "crate::transport::encode::<_, 92>"
+)]
+fn envelope_listing(generation: u8) -> Vec<u64> {
+    assert!(generation <= 1);
+    let mut text = "\0".repeat(48);
+    if generation == 1 {
+        text.replace_range(..1, "\u{1}");
+    }
+    let host = runtime();
+    let db = open(&host);
+    db.index_prefix::<EnvelopeRow>(
+        EnvelopeRow::SCHEMA.indexes[0].name,
+        &[text.as_str().into()],
+        32,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|row| row.id)
+    .collect()
+}
+
+type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<90>",
+    decode_with = "crate::transport::decode::<_, 90>",
+    encode_with = "crate::transport::encode::<_, 90>"
+)]
+fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
+    assert!(matches!(tag, 2 | 3));
+    let host = runtime();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut prefix = vec![tag];
+    prefix.extend(EnvelopeRow::ID.to_be_bytes());
+    let lower = match after {
+        Some(key) => {
+            assert!(key.len() <= 512 && key.starts_with(&prefix));
+            Bound::Excluded(key)
+        }
+        None => Bound::Included(prefix.clone()),
+    };
+    // Two maximal rows fit the transport bound. Continue from the last key.
+    raw.range((lower, Bound::Unbounded))
+        .take_while(|entry| entry.key().starts_with(&prefix))
+        .take(2)
+        .map(|entry| (entry.key().clone(), entry.value()))
+        .collect()
+}

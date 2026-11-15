@@ -1,0 +1,26 @@
+[package]
+name = "ic-db-entity-growth-canister"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.toko-tooling.loc]
+category = "benchmarks"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+entities-8 = []
+entities-32 = ["entities-8"]
+retained-host = []
+
+[dependencies]
+ic-db.workspace = true
+ic-db-qualification-transport.workspace = true
+ic-platform-runtime = { workspace = true, features = ["cdk"] }
+ic-storage.workspace = true
+
+[lints]
+workspace = true

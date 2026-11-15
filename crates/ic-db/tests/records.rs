@@ -272,6 +272,8 @@ fn previous_codec_identities_are_refused_without_changing_storage() {
         "daeb2925a2a9e739d630f56189a8956a63e88fe624984a25034c5600ca2e7b60",
         "cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa",
         "a1e8982196ded1c94a3625762e178927acc467051a8c37210a4e84c7c76ab851",
+        // Named schema with owned row bytes, before complete-key semantics v2.
+        "0b7e8c6d325ad8572c3bc388975ceebf7d26a03c266ea2e724ecf7b078aac3db",
     ] {
         let mut raw =
             StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
@@ -317,7 +319,7 @@ fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
     // digest verified independently, not the product's schema serializer.
     assert_eq!(
         one.fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "0b7e8c6d325ad8572c3bc388975ceebf7d26a03c266ea2e724ecf7b078aac3db"
+        "34c3b07f55b52646501835ddd758029761e7c40901f48610559c670b50b20626"
     );
     assert_eq!(
         one.fingerprint(),
@@ -396,7 +398,7 @@ fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "6a224092e396ae970163379edce04f0711f1e434d9e14291139fa243b2fed583"
+        "324c35cdb4ded35300f3dd06b351efe8ec9f38be98c3f0d8712d033344a8cc8a"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -518,7 +520,7 @@ fn wide_integers_preserve_all_bits_and_require_exact_widths() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "360359f62db210360c7f72e1df10c73f0f842aecdcc082fa9fbd06e1dd993130"
+        "4b181c9d29c86462df255b917118521fa3926c6971bfe8aa96a9a8fd08f4eefb"
     );
     let values = [
         (i128::MIN, u128::MAX),
@@ -662,7 +664,7 @@ fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
     // name lengths and OpenSSL SHA-256, alongside the unchanged Nat64 vector.
     assert_eq!(
         fingerprint.map(|b| format!("{b:02x}")).concat(),
-        "056ede721f96c39b2f9ef504fcd5e88104cb77f95b82da2990db0d0997cff605"
+        "3adaa8dc2c8318fae48cc3dce3f736a612e6b4957f08e86695db9defa935414e"
     );
     for variant in 0..3 {
         let mut fields = Document::SCHEMA.fields.to_vec();
@@ -927,7 +929,7 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "435c934513687753eebbbaab93829755aa4cfefdb2458125813ddab94a7e973e"
+        "2669a982e08ec0931505e7d268d3e97329afef6b24b85f83c326801e670b08ec"
     );
     assert!(matches!(
         Schema::new(&[Child::SCHEMA]),
@@ -1244,7 +1246,7 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "3029c2e983acc5c3626c2bea9ef7b125a81a0392f52c8c2e2b071948d151ffba"
+        "906a491993e3a46d027520e23c71cd249d57db45cafabd84fed5123c5d747d66"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1473,7 +1475,7 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "926b0ca5f7aabb15cb4b1a6c90e5d6db2bb6cd935fc934c17be3da885db05a2c"
+        "e0f4be4328cfae8a0ccc16fcdc0e51554ce2f0b40cd30693941b3898ce90be3d"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1546,7 +1548,7 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "2517ad1b3a1f777349f3bf1575d7f2d3c94beb9681c76639c76132a0279fe42b"
+        "581058955e0ecb8d7af7a60486c6815dafd161387504754299bdaa5940ea2770"
     );
 
     let backing = VectorMemory::default();
@@ -2208,16 +2210,16 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
 struct LargeTextIndex {}
 
 #[test]
-fn indexed_text_retains_field_and_row_bounds_even_when_escaping_doubles_bytes() {
+fn indexed_text_obeys_complete_key_bound_while_retaining_row_bounds() {
     let contract = || Schema::new(&[LargeTextIndex::SCHEMA]).unwrap();
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let key = StableKey::parse("test.db.v1").unwrap();
     let mut db = Database::create(runtime.open_memory(&key).unwrap(), contract(), [1; 16]).unwrap();
-    // 8-byte ID + 4-byte row length + 4084 payload bytes = 4096.
+    // Unique key: 9 namespace bytes + 501 escaped text bytes + 2 terminator bytes.
     let row = LargeTextIndex {
         id: 1,
-        text: "\0".repeat(4084),
+        text: format!("{}a", "\0".repeat(250)),
     };
     let mut batch = Batch::new();
     batch.insert(&row).unwrap();
@@ -2228,6 +2230,20 @@ fn indexed_text_retains_field_and_row_bounds_even_when_escaping_doubles_bytes() 
         std::slice::from_ref(&row)
     );
     let before = backing.borrow().clone();
+    let oversized_key = format!("{}ab", "\0".repeat(250));
+    let mut batch = Batch::new();
+    batch
+        .replace(&LargeTextIndex {
+            text: oversized_key.clone(),
+            ..row.clone()
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::Limit)));
+    assert!(matches!(
+        db.index_prefix::<LargeTextIndex>("text", &[oversized_key.as_str().into()], 1),
+        Err(Error::Limit)
+    ));
+    assert_eq!(*backing.borrow(), before);
     let mut batch = Batch::new();
     assert!(matches!(
         batch.replace(&LargeTextIndex {
@@ -2669,7 +2685,7 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "16f3579cad339704f809d47e96ce7e36f0e618541bb55b8f11688bd1eced42bb"
+        "f65b2dea1070b84fd62a941de81bd497fd9b266fc4fdaf28c451bdd05c0351b0"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -2939,7 +2955,7 @@ fn named_enums_use_canonical_ordinals_and_exact_admission() {
             .fingerprint()
             .map(|byte| format!("{byte:02x}"))
             .concat(),
-        "405a6edf6b205539bddbd4a632bf985479e08e6aafee966d24afa717d28edf9f"
+        "20e6f1d4b2c5b8a34fa2b3032c7686c1872302d22934dd9b70a428f373ea0e3e"
     );
     assert_eq!(
         contract().fingerprint(),

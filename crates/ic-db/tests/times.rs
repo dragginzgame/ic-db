@@ -89,7 +89,7 @@ fn independent_bytes_full_domains_and_absence() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "2e00af1b3915a3a1154bb5b83cbefca9c8fd66064018f3077cf4a9dced668487"
+        "747450a00cd3026b5fc4bd3154ba484ed7c3240b314de61ba6069df85e6a9d0b"
     );
     for row in rows() {
         let mut bytes = vec![u8::from(row.delay.is_some())];

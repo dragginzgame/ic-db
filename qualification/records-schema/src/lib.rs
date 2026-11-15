@@ -102,6 +102,8 @@ pub struct OptionalLink {}
 pub struct Lifecycle {}
 #[entity(
     pk(field = "id"),
+    index(fields = ["state", "id"]),
+    index(field = "previous", unique, present_only),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "state", value(item(is = "Lifecycle"))),
@@ -109,6 +111,20 @@ pub struct Lifecycle {}
     )
 )]
 pub struct EnumRow {}
+
+#[ic_db::set(item(is = "Lifecycle"), max_items = 3)]
+pub struct LifecycleSet {}
+#[ic_db::map(key(is = "Lifecycle"), value(opt, item(prim = "Nat16")), max_items = 3)]
+pub struct LifecycleCounts {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "counts", value(item(is = "LifecycleCounts"))),
+        field(name = "states", value(item(is = "LifecycleSet")))
+    )
+)]
+pub struct EnumCollectionsRow {}
 
 #[ic_db::record(fields(
     field(name = "label", value(item(prim = "Text", max_bytes = 8))),
@@ -357,6 +373,36 @@ pub struct ManagedRow {}
     field(name="rank",value(item(prim="Nat64")))
 ))]
 pub struct PrincipalKey {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
+    field(name="id",value(item(prim="Account"))),
+    field(name="peer",value(opt,item(prim="Subaccount")),references(entity="SubaccountKey")),
+    field(name="rank",value(item(prim="Nat64")))
+))]
+pub struct AccountKey {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
+    field(name="id",value(item(prim="Subaccount"))),
+    field(name="peer",value(opt,item(prim="Account")),references(entity="AccountKey")),
+    field(name="rank",value(item(prim="Nat64")))
+))]
+pub struct SubaccountKey {}
+
+// Synthetic maximum row/batch/index-fan-out witness, not an application schema.
+#[entity(pk(field="id"),
+    index(fields=["a","b","c","d"]),index(fields=["a","b","d","c"]),
+    index(fields=["a","c","b","d"]),index(fields=["a","c","d","b"]),
+    index(fields=["a","d","b","c"]),index(fields=["a","d","c","b"]),
+    index(fields=["b","a","c","d"]),index(fields=["b","a","d","c"]),
+    fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="a",value(item(prim="Text",max_bytes=1024))),
+        field(name="b",value(item(prim="Text",max_bytes=1024))),
+        field(name="c",value(item(prim="Text",max_bytes=1024))),
+        field(name="d",value(item(prim="Text",max_bytes=1024))),
+        field(name="padding",value(item(prim="Blob",max_bytes=4096)))
+))]
+pub struct EnvelopeRow {}
 
 /// Collect this crate’s declarations and emit their target schema assembly.
 /// # Errors

@@ -9,7 +9,7 @@
 use crate::{
     Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
     Timestamp, TypeBody, TypeLink, U256, Ulid, Value, ValueSchema,
-    types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES},
+    types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES, unit_enum_len},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -230,6 +230,19 @@ impl<'a> Decoder<'a> {
         self.budget.depth -= 1;
         result
     }
+    // Indexed unit enums still consume the ordinary structured-value budget.
+    pub(crate) fn unit_enum(&mut self, variants: usize) -> Result<u8, Error> {
+        self.budget.enter()?;
+        let result = self.nat8().and_then(|ordinal| {
+            if usize::from(ordinal) < variants {
+                Ok(ordinal)
+            } else {
+                Err(Error::Corrupt)
+            }
+        });
+        self.budget.depth -= 1;
+        result
+    }
     fn list_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = self.collection_count(max)?;
         self.budget.enter()?;
@@ -406,7 +419,16 @@ impl<'a> Decoder<'a> {
                 read_value,
                 |_, ()| {},
             ),
-            FieldType::Named(_) | FieldType::List { .. } => Err(Error::Corrupt),
+            FieldType::Named(link) => {
+                let count_variants = unit_enum_len((link.definition)()).ok_or(Error::Corrupt)?;
+                self.ordered(
+                    count,
+                    |r| r.unit_enum(count_variants),
+                    read_value,
+                    |_, ()| {},
+                )
+            }
+            FieldType::List { .. } => Err(Error::Corrupt),
         }
     }
 

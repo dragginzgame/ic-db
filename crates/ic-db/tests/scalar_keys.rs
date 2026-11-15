@@ -1,5 +1,5 @@
 //! Scalar primary keys share ordering, references and corruption checks.
-use ic_db::{Batch, Database, Entity, Error, Principal, Schema, U256, entity};
+use ic_db::{Account, Batch, Database, Entity, Error, Principal, Schema, U256, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -195,6 +195,164 @@ struct U256Row {}
 ))]
 struct PrincipalRow {}
 
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
+    field(name="id",value(item(prim="Subaccount"))),
+    field(name="next",value(opt,item(prim="Subaccount")),references(entity="Self")),
+    field(name="rank",value(item(prim="Nat64"))),
+    field(name="zone",value(item(prim="Bool")))
+))]
+struct SubaccountRow {}
+
+#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
+    field(name="id",value(item(prim="Account"))),
+    field(name="next",value(opt,item(prim="Account")),references(entity="Self")),
+    field(name="rank",value(item(prim="Nat64"))),
+    field(name="zone",value(item(prim="Bool")))
+))]
+struct AccountRow {}
+
+#[test]
+fn subaccount_keys_preserve_all_32_bytes() {
+    let mut low = [0; 32];
+    low[31] = 1;
+    let mut high = [0; 32];
+    high[0] = 1;
+    let ids = [[0; 32], low, high, [255; 32]];
+    exercise(&ids, &ids.map(|id| id.to_vec()), |id, next, rank| {
+        SubaccountRow {
+            id,
+            next,
+            rank,
+            zone: true,
+        }
+    });
+}
+
+#[test]
+fn account_keys_order_owner_then_effective_subaccount() {
+    let inputs = [
+        (&[][..], None),
+        (&[][..], Some([255; 32])),
+        (&[9][..], None),
+        (&[1, 0][..], None),
+        (&[255; 29][..], Some([255; 32])),
+    ];
+    let ids: Vec<_> = inputs
+        .iter()
+        .map(|(owner, subaccount)| Account {
+            owner: Principal::from_slice(owner),
+            subaccount: *subaccount,
+        })
+        .collect();
+    // Independently frame the declared owner lengths and effective bytes.
+    let frames: Vec<_> = [0, 0, 1, 2, 29]
+        .into_iter()
+        .zip(inputs)
+        .map(|(len, (owner, sub))| {
+            let mut b = vec![len];
+            b.extend(owner);
+            b.extend(sub.unwrap_or([0; 32]));
+            b
+        })
+        .collect();
+    exercise(&ids, &frames, |id, next, rank| AccountRow {
+        id,
+        next,
+        rank,
+        zone: true,
+    });
+}
+
+#[test]
+fn account_default_alias_is_one_primary_and_reference_identity() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let schema = || Schema::new(&[AccountRow::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [13; 16]).unwrap();
+    let absent = Account {
+        owner: Principal::from_slice(&[9]),
+        subaccount: None,
+    };
+    let zero = Account {
+        subaccount: Some([0; 32]),
+        ..absent
+    };
+    let row = AccountRow {
+        id: absent,
+        next: Some(zero),
+        rank: 0,
+        zone: true,
+    };
+    let mut b = Batch::new();
+    b.insert(&row).unwrap();
+    db.commit(b).unwrap();
+    assert_eq!(db.get::<AccountRow>(zero).unwrap(), Some(row.clone()));
+    let saved = db.get::<AccountRow>(absent).unwrap().unwrap();
+    assert_eq!(saved.id.subaccount, None);
+    assert_eq!(saved.next.unwrap().subaccount, None);
+    let before = backing.borrow().clone();
+    let alias = AccountRow {
+        id: zero,
+        next: Some(absent),
+        ..row.clone()
+    };
+    let mut b = Batch::new();
+    b.insert(&alias).unwrap();
+    assert!(matches!(db.commit(b), Err(Error::Exists)));
+    let mut b = Batch::new();
+    b.replace(&alias).unwrap();
+    db.commit(b).unwrap();
+    let mut b = Batch::new();
+    b.delete::<AccountRow>(absent).unwrap();
+    b.delete::<AccountRow>(zero).unwrap();
+    assert!(matches!(db.commit(b), Err(Error::DuplicateTarget)));
+    assert_eq!(*backing.borrow(), before);
+    assert!(
+        db.page::<AccountRow>(Some(zero), 1)
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    let mut b = Batch::new();
+    b.delete::<AccountRow>(zero).unwrap();
+    db.commit(b).unwrap();
+    assert!(db.get::<AccountRow>(absent).unwrap().is_none());
+}
+
+#[test]
+fn malformed_account_and_subaccount_owners_refuse_intact() {
+    malformed_owners(
+        &SubaccountRow {
+            id: [0; 32],
+            next: None,
+            rank: 0,
+            zone: true,
+        },
+        vec![vec![], vec![0; 31], vec![0; 33], vec![1; 32]],
+    );
+    let mut oversized = vec![30];
+    oversized.extend([0; 62]);
+    let mut wrong_owner = vec![1, 8];
+    wrong_owner.extend([0; 32]);
+    let mut truncated = vec![1, 9];
+    truncated.extend([0; 31]);
+    let mut trailing = vec![1, 9];
+    trailing.extend([0; 33]);
+    malformed_owners(
+        &AccountRow {
+            id: Account {
+                owner: Principal::from_slice(&[9]),
+                subaccount: None,
+            },
+            next: None,
+            rank: 0,
+            zone: true,
+        },
+        vec![vec![], oversized, wrong_owner, truncated, trailing],
+    );
+}
+
 #[test]
 fn principals_keep_length_first_order_and_empty_identity() {
     let payloads = [vec![], vec![9], vec![1, 0], vec![0; 29], vec![255; 29]];
@@ -218,35 +376,37 @@ fn principals_keep_length_first_order_and_empty_identity() {
 
 #[test]
 fn malformed_principal_owners_refuse_without_mutating_backing() {
+    let mut oversized = vec![30];
+    oversized.extend([1; 30]);
+    malformed_owners(
+        &PrincipalRow {
+            id: Principal::from_slice(&[9]),
+            next: None,
+            rank: 0,
+            zone: true,
+        },
+        vec![vec![], vec![2, 9], vec![1, 9, 0], oversized, vec![1, 8]],
+    );
+}
+
+fn malformed_owners<E: Entity>(row: &E, invalid: Vec<Vec<u8>>) {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let slot = StableKey::parse("test.db.v1").unwrap();
-    let schema = || Schema::new(&[PrincipalRow::SCHEMA]).unwrap();
-    let row = PrincipalRow {
-        id: Principal::from_slice(&[9]),
-        next: None,
-        rank: 0,
-        zone: true,
-    };
+    let schema = || Schema::new(&[E::SCHEMA]).unwrap();
     let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [13; 16]).unwrap();
     let mut batch = Batch::new();
-    batch.insert(&row).unwrap();
+    batch.insert(row).unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let index = PrincipalRow::SCHEMA
-        .indexes
-        .iter()
-        .find(|i| i.name == "rank")
-        .unwrap();
+    let index = E::SCHEMA.indexes.iter().find(|i| i.name == "rank").unwrap();
     let mut key = vec![3];
-    key.extend(PrincipalRow::ID.to_be_bytes());
+    key.extend(E::ID.to_be_bytes());
     key.extend(index.id.to_be_bytes());
     key.extend(0_u64.to_be_bytes());
     // Missing length, truncation, trailing bytes, oversized principal, and a
     // valid but wrong owner all fail at the storage boundary.
-    let mut oversized = vec![30];
-    oversized.extend([1; 30]);
-    for invalid in [vec![], vec![2, 9], vec![1, 9, 0], oversized, vec![1, 8]] {
+    for invalid in invalid {
         let mut raw =
             StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
                 .unwrap();
@@ -255,11 +415,11 @@ fn malformed_principal_owners_refuse_without_mutating_backing() {
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
         let before = backing.borrow().clone();
         assert!(matches!(
-            db.index_prefix::<PrincipalRow>("rank", &[0_u64.into()], 1),
+            db.index_prefix::<E>("rank", &[0_u64.into()], 1),
             Err(Error::Corrupt)
         ));
         let mut batch = Batch::new();
-        batch.delete::<PrincipalRow>(row.id).unwrap();
+        batch.delete::<E>(row.key()).unwrap();
         assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
         assert_eq!(*backing.borrow(), before);
     }
@@ -328,7 +488,7 @@ fn reference_types_are_exact_and_schema_identity_is_independent() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "45fae6814b3f66f892c7097123ed9d0dd47a29240692a0dce559fb0f9e847602"
+        "aff5474ffb42e4093e383b9fd543f5bda640d70623c610394e9d3e6ed30af7bf"
     );
     for wrong in [WrongSignedness::SCHEMA, WrongWidth::SCHEMA] {
         assert!(matches!(

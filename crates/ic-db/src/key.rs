@@ -2,7 +2,7 @@
 
 use crate::{
     Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
-    Timestamp, U256, Ulid, codec::Decoder,
+    Timestamp, TypeSchema, U256, Ulid, codec::Decoder, types::unit_enum_len,
 };
 
 /// One exact leading index component. Operand types must match declared fields;
@@ -58,6 +58,13 @@ pub enum IndexValue<'a> {
     Bool(bool),
     /// Exact UTF-8 bytes, without case folding or normalization.
     Text(&'a str),
+    /// Unit enum in canonical variant-name order, bound to its complete definition.
+    UnitEnum {
+        /// Declared enum identity and alternatives.
+        definition: &'static TypeSchema,
+        /// Zero-based ordinal in canonical variant-name order.
+        ordinal: u8,
+    },
 }
 
 impl<'a> IndexValue<'a> {
@@ -70,6 +77,24 @@ impl<'a> IndexValue<'a> {
             };
         }
         match (self, field) {
+            (
+                Self::UnitEnum {
+                    definition,
+                    ordinal,
+                },
+                FieldType::Named(link),
+            ) => {
+                let expected = (link.definition)();
+                if unit_enum_len(definition).is_some_and(|len| usize::from(ordinal) < len)
+                    && unit_enum_len(expected).is_some()
+                    && link.name == definition.name
+                    && definition == expected
+                {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidOperand)
+                }
+            }
             (Self::Nat8(_), FieldType::Nat8)
             | (Self::Nat16(_), FieldType::Nat16)
             | (Self::Nat32(_), FieldType::Nat32)
@@ -118,6 +143,7 @@ impl<'a> IndexValue<'a> {
     fn append_to(self, out: &mut Vec<u8>) {
         match self {
             Self::Absent => {}
+            Self::UnitEnum { ordinal, .. } => out.push(ordinal),
             Self::Nat8(value) => out.extend(value.to_be_bytes()),
             Self::Nat16(value) => out.extend(value.to_be_bytes()),
             Self::Nat32(value) => out.extend(value.to_be_bytes()),
@@ -190,6 +216,15 @@ impl<'a> IndexValue<'a> {
 
     pub(crate) fn read(reader: &mut Decoder<'a>, field: FieldType) -> Result<Self, Error> {
         Ok(match field {
+            FieldType::Named(link) => {
+                let definition = (link.definition)();
+                let len = unit_enum_len(definition).ok_or(Error::Corrupt)?;
+                let ordinal = reader.unit_enum(len)?;
+                Self::UnitEnum {
+                    definition,
+                    ordinal,
+                }
+            }
             FieldType::Nat8 => Self::Nat8(reader.nat8()?),
             FieldType::Nat16 => Self::Nat16(reader.nat16()?),
             FieldType::Nat32 => Self::Nat32(reader.nat32()?),
@@ -216,6 +251,30 @@ impl<'a> IndexValue<'a> {
             _ => return Err(Error::Corrupt),
         })
     }
+}
+
+// Minimum completion of a query prefix, including unknown trailing components.
+// Variable-width identities reserve their shortest valid frame, not their maximum.
+pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
+    Ok(match field {
+        FieldType::Named(link) if unit_enum_len((link.definition)()).is_some() => 1,
+        FieldType::Bool
+        | FieldType::Nat8
+        | FieldType::Int8
+        | FieldType::Principal
+        | FieldType::Decimal { .. } => 1,
+        FieldType::Nat16 | FieldType::Int16 | FieldType::Text { .. } => 2,
+        FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 | FieldType::Date => 4,
+        FieldType::Nat64
+        | FieldType::Int64
+        | FieldType::Float64
+        | FieldType::Timestamp
+        | FieldType::Duration => 8,
+        FieldType::Nat128 | FieldType::Int128 | FieldType::Ulid => 16,
+        FieldType::U256 | FieldType::Subaccount => 32,
+        FieldType::Account => 33,
+        _ => return Err(Error::InvalidOperand),
+    })
 }
 
 /// Shared generated/stored-row membership and component encoding.
@@ -351,6 +410,7 @@ impl From<Account> for IndexValue<'_> {
 // Schema admission and byte framing share the fixed-width contract here.
 fn fixed_width(field: FieldType) -> Option<usize> {
     match field {
+        FieldType::Named(link) if unit_enum_len((link.definition)()).is_some() => Some(1),
         FieldType::Nat8 | FieldType::Int8 | FieldType::Bool => Some(1),
         FieldType::Nat16 | FieldType::Int16 => Some(2),
         FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 | FieldType::Date => Some(4),
@@ -378,6 +438,15 @@ pub(crate) fn supports(field: FieldType) -> bool {
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
 pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> {
+    if let FieldType::Named(link) = field {
+        let len = unit_enum_len((link.definition)()).ok_or(Error::Corrupt)?;
+        let (&ordinal, rest) = bytes.split_first().ok_or(Error::Corrupt)?;
+        if usize::from(ordinal) >= len {
+            return Err(Error::Corrupt);
+        }
+        *bytes = rest;
+        return Ok(());
+    }
     if let FieldType::Decimal { scale } = field {
         let (value, width) = Decimal::read_ordered(bytes).ok_or(Error::Corrupt)?;
         value.coefficient_at_scale(scale).ok_or(Error::Corrupt)?;

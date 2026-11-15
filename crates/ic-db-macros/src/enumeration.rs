@@ -96,16 +96,36 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         }
     }
     let copy = if variants.iter().all(|(_, p)| p.is_none()) {
-        quote!(#[derive(Copy)])
+        quote!(#[derive(Copy, PartialOrd, Ord)])
     } else {
         quote!()
     };
     let ident = item.ident;
+    let index_value = if variants.iter().all(|(_, p)| p.is_none()) {
+        let arms = variants.iter().enumerate().map(|(ordinal, (name, _))| {
+            let variant: syn::Ident = syn::parse_str(name).expect("validated variant");
+            let ordinal = ordinal as u8;
+            quote!(#ident::#variant => #ordinal)
+        });
+        quote! {
+            impl From<&#ident> for ::ic_db::IndexValue<'_> {
+                fn from(value: &#ident) -> Self {
+                    Self::UnitEnum {
+                        definition: <#ident as ::ic_db::Value>::definition(),
+                        ordinal: match value { #(#arms,)* },
+                    }
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
     let visibility = item.vis;
     let attrs = item.attrs;
     Ok(quote! {
         #(#attrs)* #copy #[derive(Clone,Debug,PartialEq,Eq)]
         #visibility enum #ident { #(#declarations,)* }
+        #index_value
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

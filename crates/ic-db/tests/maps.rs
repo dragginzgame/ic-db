@@ -124,7 +124,7 @@ fn canonical_map_bytes_distinguish_missing_absent_and_empty() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "7d3bdc97432a8124e0767619a4dee102997d14f762052a1c197c366e56303737"
+        "b06aaaf0dfbba0ac0a9e422d6116ee0f89cf2f4a5097500b57b519cd1c187f05"
     );
     let golden = [
         7, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0,

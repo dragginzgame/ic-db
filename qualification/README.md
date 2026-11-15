@@ -11,6 +11,27 @@ as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
+The M1 `EnumRow` fixture now indexes the all-unit `Lifecycle` type through
+`state,id` and sparse unique `previous`. Its focused Wasm witness checks reads,
+replacement cleanup, no-ops, invalid ordinals, whole-message rollback and upgrade.
+Native `enum_indexes` tests independently inspect literal keys, exercise swaps,
+refuse wrong enum definitions and corrupt rows/indexes, and distinguish absence.
+Payload-enum indexes remain unsupported, including optional fields selecting a
+unit variant; a compile-fail witness covers the generated boundary.
+
+`db schema ENTITY` selects one exact declared entity name. The fixture projects
+its admitted fields/indexes and transitive named types; the CLI owns all tables.
+References carry target names so selecting one entity does not require rendering
+its targets. Recursive types appear once. Console checks cover scalar, enum,
+record/list/map recursion, cross-entity references and unknown-name refusal.
+
+`EnumCollectionsRow` adds bounded unit-enum sets and enum-keyed maps. Native
+literal-byte tests check order, malformed ordinals, duplicates, reversed entries,
+transitive key metadata and shared node exhaustion, including borrowed inspection
+before deletion. The focused `enum_collections` Wasm test checks persistence,
+no-op/refusal invariance, whole-message rollback, upgrade, replacement and deletion.
+Inspect this fixture with `db schema EnumCollectionsRow`.
+
 ## Standalone endpoint hooks
 
 All six canister hosts use Platform's generic `guard`, `decode_with` and
@@ -63,7 +84,7 @@ and the real typed insert builder. It checks omission versus explicit zero/false
 `None`, unique default collisions, missing/oversized inputs, full backing rollback
 after refusal or a late trap, replacement/no-op revisions and unchanged upgrade.
 Native cases cover every integer width, canonical default identity and refusing a
-changed policy without touching storage. The schema fixture has 27 entities and
+changed policy without touching storage. The schema fixture has 30 entities and
 eight named types; its expected hash includes independently framed default and
 managed-policy bytes. `db schema` displays those policies in **Info**.
 
@@ -80,6 +101,12 @@ length-first pages, exact lookup, cycles including `Some(empty Principal)`, uniq
 rank exchanges, restricted deletion, no-ops, late traps and upgrade preservation.
 Native scalar-key tests add literal row/index frames, malformed lengths and wrong
 owners; previously supported integer/ULID schemas retain their fingerprints.
+
+The Account/Subaccount-key witness covers typed pages and direct lookup, mixed
+reference cycles, canonical default-account aliases, duplicate targets, restricted
+deletion, unique swaps, no-ops, rollback and upgrade preservation. Native scalar-key
+tests independently frame owner/subaccount bytes and reject truncated, oversized,
+trailing and wrong index owners. No transport bytes are used as durable keys.
 
 The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
 Its [shared declarations](records-schema/src/lib.rs) are a private qualification
@@ -197,10 +224,13 @@ Principal uniqueness and signed score ordering, including duplicate secondary
 values, final-state swaps, refusals without writes, late traps and unchanged
 upgrades. Required Bool/Text indexes are also qualified: complete leading-field
 matching, empty/NUL/Unicode order, tuple boundaries, uniqueness, byte bounds,
-replacement and deletion. The full 4 KiB row with escaping doubled in its index
-is covered natively. Wasm checks Document's `(published, title)` index through
+replacement and deletion. Native checks enforce the 512-byte complete-key cap,
+including escaping and primary-key suffixes, while retaining 4 KiB row bounds.
+Wasm checks Document's `(published, title)` index through
 updates, bounds refusals, late traps and unchanged upgrades. Original admitted
-key bytes/fingerprints remain unchanged; new index declarations change identity.
+key bytes remain unchanged; semantics version 2 changes fingerprints and refuses
+prior wider-key contracts intact. A supplier-level read witness injects a 513-byte
+raw key and proves refusal before its payload is read, without changing backing.
 
 Blob qualification carries over IcyDB's empty, zero-bound and over-limit cases.
 Literal length-framed payloads contain non-UTF-8 bytes; absence differs from an
@@ -278,9 +308,10 @@ revision, reference and index checks remain unchanged after rejection. The later
 successful replacement proves the instruction fault does not leave the host armed
 or poison retry. This carries over IcyDB's instruction-refusal preservation
 invariant using IC DB's message rollback boundary, without its budget machinery.
-The current six-entity fixture with optional indexes, codec v3 and Storage 0.74.1 covers 121 replacement writes and reaches growth
-with the insert batch starting at ID 1700. The named-schema rerun performs 1,336 backing
-writes, one growth request and expands from 26 to 34 physical pages. These are
+The current 30-entity fixture with codec v3, retained host setup and Storage 0.74.1
+covers 137 replacement writes and reaches growth with the insert batch starting
+at ID 1700. That batch performs 1,326 backing writes, one growth request and
+expands from 26 to 34 physical pages. These are
 version-specific observations, not layout assertions or performance measurements.
 The test discovers boundaries instead of depending on those counts. Reopen after
 unchanged upgrade also passes. Instruction exhaustion is qualified at this selected
@@ -296,7 +327,7 @@ ordinary CLI host. The product library has no injection feature or durable fault
 state; the instrumented host must not be used for comparative performance claims.
 The M0 maintenance fixture remains available only through its dedicated probe.
 Remaining scope includes other identity/composite primary keys, nested references
-and broad fluent queries. Supplied integer/ULID/Principal primary keys and exact reference
+and broad fluent queries. Supplied integer/ULID/Principal/Account/Subaccount primary keys and exact reference
 types use the shared paths qualified above. Secondary-index capabilities follow
 the current product type contract.
 Ordinary indexes retain absent values; optional unique indexes require explicit
@@ -312,10 +343,270 @@ the current `query` command reads Entry only. The private Wasm controls test
 Document updates and unchanged-upgrade persistence.
 
 The current M1 selection uses Storage 0.74.1, Runtime/macros/guard 0.22.5 and
-Types 0.20.4. Testkit's transitive Platform now resolves to published 0.33.3;
-the earlier dependency-update check preceded its publication.
+Types 0.20.4, Wire 0.22.2 and Testkit 0.106.0/PocketIC 16.1.0. Testkit's
+transitive Platform resolves to 0.33.5.
 Prior recorded M0/baseline results used the versions stated with that evidence;
 the updated lockfile does not retroactively requalify those results.
+
+## Maximum write envelope
+
+```sh
+make m1-write-envelope
+```
+
+`EnvelopeRow` exercises 32 rows of exactly 4096 encoded bytes, with eight
+four-field indexes each. Its zero-heavy text components form complete 512-byte
+keys; an unindexed 3821-byte Blob fills each row to the maximum. The 128 KiB row
+batch creates 256 entries containing 128 KiB of index-key bytes. Replacement
+changes the leading text value and produces 511-byte keys. A separate four-field
+513-byte key case refuses before mutation even though its row fits easily.
+The driver independently assembles all row/index bytes, then reads both complete
+namespaces through bounded private audit calls. Two maximal rows fit each reply;
+continuation uses the last returned key without duplicate metadata.
+
+The Wasm journey covers oversized row/batch/key refusals, insertion, all eight
+indexed reads, byte-identical no-ops, duplicate refusal, late-trap rollback,
+replacement with changed keys, unchanged upgrade and complete deletion. It records
+IC instructions over reopen/construction/preparation/commit and whole-update cycles.
+This is a selected shape on a small database, not proof of every type/constraint
+combination, tree size, allocation history or peak heap envelope. IC Storage owns
+allocation behavior; repeat the evidence after its planned overhaul.
+
+The earlier semantics-v2 key-cap run, before host reuse and operation-specific
+revision admission, recorded:
+
+| Operation | Instructions | Whole-update cycles |
+| --- | ---: | ---: |
+| Insert 32 maximum rows | 89,485,042 | 96,494,127 |
+| Replace all 32 and their index keys | 175,000,090 | 182,009,175 |
+| No-op replacement | 23,204,470 | 30,213,555 |
+| Delete all 32 | 92,956,462 | 99,967,599 |
+| Refuse a 33-row batch | 8,817,197 | 15,826,455 |
+| Refuse a 4097-byte row | 1,862,320 | 8,871,463 |
+
+Indexed reads use 19,553,560–19,769,806 instructions. Physical stable allocation
+is 2,228,224 bytes after insertion and deletion; logical cleanup does not shrink it.
+Refusals, no-ops, traps and upgrade compare complete backing, including supplier
+metadata. Artifact SHA-256:
+`fb57769bb7a0b813c432989a29cd16873a344850a7a8030ca08781f05544a9b8`.
+Those logs and independent identity evidence remain under `target/evidence/key-bounds/`.
+
+The earlier wider-key run is historical evidence under
+`target/evidence/write-envelope/`; it used 8169-byte keys, approximately 950M
+insert and 1.96B replacement instructions, and 3,801,088 physical bytes. The new
+fixture moves most payload out of the indexes while retaining full-size rows.
+Those costs are different workloads, not a like-for-like optimization claim.
+The former large-key transport-failure regression was removed when that reply
+shape ceased to be part of the supported key contract.
+
+## Matched high-fan-out writes
+
+The optional `make m1-envelope-comparison` selects the baseline's `envelope`
+fixture feature. Ordinary scalar builds do not include that schema or its controls.
+It runs 32-row inserts and replacements with the same eight four-field indexes
+on both engines, using four 48-byte zero-filled Text values and empty unindexed
+padding per row. Every row is checked against independent logical values after
+each write; queries check
+current and obsolete leading-field membership. IcyDB's explicit journal settling
+is reported separately and included in total instructions. This is the same
+logical workload, not identical codecs, storage layout or generated host schema:
+IC DB uses its 30-entity qualification host with other fixture rows already present;
+IcyDB uses Entry plus EnvelopeRow, initially empty.
+It is not a Wasm-size or planner comparison.
+
+The original 1018-byte values cannot be a matched successful-write benchmark:
+frozen IcyDB caps the **whole index key at 512 bytes** (individual components at
+487). The earlier IC DB stress fixture created 8169-byte keys. IC DB now adopts
+the same complete-key cap. The comparison verifies IcyDB's refusal with unchanged
+stable bytes before running the smaller
+common workload. It does not relax either engine's limits. Reproduce with:
+
+```sh
+make m1-envelope-comparison
+```
+
+Source/lock hashes, compiler, features, Wasm artifacts and raw measurements are
+recorded under `target/evidence/envelope-comparison/`. The initial oversized-key
+attempt is retained there separately. The frozen IcyDB source is unchanged.
+
+The earlier 0.7 comparison, before host reuse and operation-specific revision
+admission, passed under the recorded locked suppliers and release profile.
+Instructions, excluding transport framing, were:
+
+| Operation | IC DB operation/total | IcyDB operation | IcyDB settling | IcyDB total | IC DB reduction vs total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Insert all 32 | 76,139,333 | 184,260,093 | 277,663,037 | 461,923,130 | 83.5% |
+| Replace all 32 and their index keys | 149,570,696 | 528,829,971 | 661,556,087 | 1,190,386,058 | 87.4% |
+
+IC DB has no settling messages. Against just IcyDB's immediate operation, the
+reductions are 58.7% and 71.7%. IcyDB needs one settling call after each measured
+write under this harness policy; that policy is not a throughput benchmark or a
+claim about Canic scheduling. Whole-update cycles are 83,167,906 / 156,599,238
+for IC DB and 476,111,521 / 1,204,574,566 including settling for IcyDB.
+Initial startup and the oversized-key refusal are reported separately, outside
+the successful-write totals. Both engines' final row values and relevant index
+membership checks pass. No SQL is enabled on either side. These are workload
+observations, not an attribution of every saved instruction to the missing WAL.
+
+Artifact SHA-256:
+
+- IC DB: `fb57769bb7a0b813c432989a29cd16873a344850a7a8030ca08781f05544a9b8`.
+- IcyDB: `8addf7680016ce09bb0fc3c0c2667010045a6071b4752aa1937e3f288b2de9c6`.
+
+## Controlled entity growth
+
+```sh
+make m1-entity-growth
+```
+
+One private qualification host builds with 1, 8 or 32 distinct entities, each
+with three Nat64 fields and the same `(category, id)` index. A single update
+endpoint selects the entity and operation from runtime input. Every entity's
+typed insert/replace/delete, lookup, primary page, index-prefix read and tuple
+mapping stays reachable. The driver independently checks the same primary key
+with different values in all entities, old-index removal, atomic revisions,
+unchanged upgrade and complete deletion. Each shape has a fresh-host build and
+a `retained-host` build. The latter retains the supplier runtime and immutable
+Schema only; each call clones the schema and opens a new database/lease, checking
+its current manifest. Explicit revision reads and batch preparation validate the
+needed counters. The product exposes ordinary
+Schema cloning, not a cache registry or a second admission path.
+This isolates equivalent-entity growth;
+it does not vary endpoint counts, field shapes or query syntax.
+
+Host Artifacts inspects uncompressed Wasm/code-section bytes and verifies the
+fixed export set. Four IC counter intervals record host bootstrap, acquiring the
+allocation lease, schema construction/clone and database open. A fifth records
+the selected operation plus its lookup/page/index/revision observations. All
+five belong in the complete call; the fifth is not a standalone mutation cost. Update-cycle deltas include
+transport and system charges. Read-only observations also use the one update
+endpoint, so those cycle values are not query-cycle estimates. Every sample is
+retained under `target/evidence/entity-growth/`, alongside artifacts, source/lock
+hashes, feature trees and compiler/build settings. The release profile matches
+the scalar comparison; there is no post-link optimization. Installation cycles
+include initial setup. After unchanged upgrade, the first call rebuilds cold
+state, commits a replacement and traps; complete stable bytes must roll back.
+The next call must return the old row/index/revision, then deletion proves the
+lease/runtime remain usable. Cold and warm instruction samples stay separate.
+
+This follows IcyDB's
+[controlled composition investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/0.260-runtime-footprint/w1-reconciliation.md):
+distinguish the first reachable engine path from the incremental cost of more
+entities, and do not infer heterogeneous-application growth from matching simple
+records. Its older toolchain/Canic workload is a methodological reference, not
+a subtraction baseline. No IcyDB or Canic source is modified or copied.
+
+Current 0.7 results (Rust 1.100.0, Storage 0.74.1, Runtime 0.22.5,
+Testkit 0.106.0/PocketIC 16.1.0; native driver Platform 0.33.6):
+
+| Host | Entities | Wasm bytes | Code-section bytes | Opening instructions | Complete measured instructions |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh | 1 | 220,953 | 200,243 | 433,718 | 516,225 |
+| Retained, warm | 1 | 222,375 | 201,491 | 98,590 | 181,208 |
+| Fresh | 8 | 261,066 | 239,900 | 555,709 | 671,197–687,321 |
+| Retained, warm | 8 | 262,495 | 241,155 | 106,972 | 222,606–238,781 |
+| Fresh | 32 | 398,506 | 376,151 | 959,989 | 1,090,306–1,134,854 |
+| Retained, warm | 32 | 399,925 | 377,396 | 112,606–112,661 | 243,256–287,842 |
+
+Instruction ranges are the per-entity read observations after every row has been
+replaced. Each includes a lookup, primary page, index read, revision read and tuple
+mapping. There is one row per entity; the total dataset grows with entity count.
+At 32 entities, whole-update cycles fall from 8,104,083–8,148,631 to
+7,252,307–7,296,893: about 10%, versus roughly 75–78% fewer measured instructions.
+These are not standalone lookup or query costs. Query-message heap retention is
+not qualified by this update-only fixture; do not apply its warm costs to
+query-only traffic. The first successful call following the upgrade/trap sequence
+costs 1,125,788 measured instructions in the retained 32-entity build;
+later calls reuse the freshly prepared host state. Initialization is not free.
+The preceding trapped execution is checked for rollback but its cost is not
+included in that successful-call figure or the warm table.
+
+From 1 to 32 fresh entities, growth is 177,553 total bytes and 175,908 code bytes:
+approximately 5.7 KB per additional equivalent entity. This includes generated
+codecs/metadata, typed generic paths, mapping closures and fixture dispatch.
+It does not identify those contributions individually or prove all generic
+execution is shared. Identical layouts also permit compiler merging; richer
+schema/query/endpoint growth remains unmeasured.
+
+The fresh 32-entity opening breakdown is:
+
+| Stage | Instructions |
+| --- | ---: |
+| Storage runtime construction/bootstrap | 304,904 |
+| Acquire allocation lease | 5,340 |
+| Validate/hash executable schema | 543,034 |
+| Load collection and validate manifest | 106,711 |
+
+This carries forward IcyDB's
+[separation of cached runtime facts and current durable authority](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/accepted_schema/mod.rs).
+Its accepted-root publication/invalidation tests establish the stale-authority
+failure to preserve; IC DB does not copy the registry cache, historical schema
+reconciliation or runtime-DDL invalidation. Only immutable executable metadata
+and supplier host custody survive calls here; no database handle, lease,
+manifest, incarnation or revision is cached. The native `schema_reuse` test
+checks independent allocations and changed manifest identity under a reused nested
+schema. Missing/malformed revisions refuse explicit revision reads and affected
+writes, including no-op replacement; exhausted valid counters permit no-ops but
+refuse real changes. A mixed batch with a bad counter leaves every row/index and
+revision untouched. Other entities' valid writes and ordinary row reads proceed.
+
+The accepted contract now defers revision validation from opening to operations
+using that counter. One bounded preparation map holds each touched entity's current
+revision and real-change flag, replacing the previous changed-entity set; nothing
+survives the batch. This deliberately changes when corrupt metadata is discovered,
+not its encoding or repair policy. Row reads need no revision value. Compared with
+the preceding all-revision opening run, warm 32-entity opening drops from about
+755k to 113k instructions. Relative to the original fresh host's 1.61m, the two
+changes remove about 93% of opening work. Residual variation includes storage-tree
+size and allocation layout; no constant-cost claim or supplier tuning is made.
+
+Generated schema assembly now reuses immutable metadata per thread, and the local
+M1 host retains its supplier runtime. The normal record witness checks cold
+queries after upgrade followed by an update and fresh query. The separate growth
+fixture still measures update-call costs; query performance and Canic integration
+remain unmeasured. The scalar comparison deliberately retains its fresh-host recipe
+to isolate the product change: before unit-enum indexes it measured 222,187 total/201,524 code bytes,
+with hit/miss/listing 471,698/477,219/771,669 instructions and read/modify/replace
+828,387 instructions, 7,842,154 cycles. Its SHA-256 is
+`3852bfcdda0d40dea989ce2caa003b35f8c55d5ef34a7727bf1ff09cc32c6186`.
+The product change adds a net 2,578 total/2,553 code bytes to that scalar
+artifact; every sampled query/write uses fewer instructions. Keeping host setup
+adds roughly 1.4 KB at each entity count in the matched growth pair. No schema
+attribute, durable representation or product dependency changes.
+
+After unit-enum index support, the same scalar host measures 223,327 total/202,735
+code bytes; hit/miss/listing cost 471,717/477,238/772,008 instructions and
+read/modify/replace costs 828,471 instructions, 7,842,238 cycles. SHA-256:
+`9462837ca78620396b7dffe6c6a34505d4b7e13599b50e98a35b1ee60e9c281b`.
+This adds 1,140 total/1,211 code bytes and 19/19/339 query instructions, with 84
+additional instructions on the complete replacement journey. The design records
+the explicit tradeoff for enum capability. Frozen IcyDB is unchanged. The growth
+results below precede enum indexes; they have not been remeasured for this addition.
+
+Enum-keyed collections subsequently add 703 total/701 code bytes: the current
+scalar host is 224,030 total/203,436 code bytes, SHA-256
+`c8986fdd28897b4390885e596d3909f9efd1e802d87bc26e3bb62fa3d0886318`.
+Every sampled scalar read/write instruction count and execution-cycle measurement
+is unchanged; frozen IcyDB is also unchanged. This is shared-code overhead only,
+not collection-heavy performance evidence.
+
+Artifact SHA-256 values:
+
+- Fresh 1: `7bf7e9e157227e651f0d71675adf5beae2ba90bdfd5afedd6056403ac0c67f57`
+- Fresh 8: `1f417f6414152440c74b0adc71d2da147664855684701499ff4aaadcd16c8eb8`
+- Fresh 32: `5cc9af5983a68521a6d93517490cc2a4c4ae0774e0a64f9c758a752ef88eafb8`
+- Retained 1: `8356b4d6c7f4c5c2f61b1054f7c8124aad5011535982b47a2b56c33d56e588ab`
+- Retained 8: `57ab693128bfc06c1070f2249ff497349afc9670f3205879424fbf2fce26c664`
+- Retained 32: `2593a4cb9b841396579e15c505db576e2d0ca8c7a61185ca62126938385f70da`
+
+The original 218,020/257,937/394,627-byte fresh-host artifacts and source evidence
+remain in `target/evidence/entity-growth-before-opening-profile/`; the subsequent
+four-stage breakdown is in `target/evidence/entity-growth-before-host-reuse/`.
+The all-revision admission comparison is in
+`target/evidence/entity-growth-before-demand-revisions/`, with the preceding
+scalar comparison in `target/evidence/records-comparison-before-demand-revisions/`.
+The added counter/reply fields and trap branch affect current fixture Wasm;
+use the current matched fresh/retained pairs to attribute reuse cost.
 
 ## Frozen IcyDB baseline
 
@@ -390,7 +681,7 @@ the same five query/update controls and use one three-Nat64 entity with a
 tuple oracle: 32 inserts, duplicate refusal, hit/miss reads, ordered category
 listing, index-changing read/modify/replace and all-row/index checks after upgrade.
 The IC DB host calls the actual product, without fault controls or the CLI's other
-four entities. No engine code is copied into the host.
+fixture entities. No engine code is copied into the host.
 
 The IC DB interval includes construction of its storage runtime, compiled schema,
 manifest admission, database operation and result mapping on every request.

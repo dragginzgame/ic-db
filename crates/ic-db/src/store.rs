@@ -3,7 +3,7 @@
 
 use crate::{
     __private::RowInfo, Entity, EntitySchema, Error, IndexValue, PrimaryKey, Schema, key,
-    primary::RowKey,
+    primary::RowKey, store_key::StoreKey,
 };
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
-type Map<M> = StableBTreeMap<Vec<u8>, Vec<u8>, M>;
+type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
 
 /// A bounded synchronous batch; preparation is internal to `Database::commit`.
 #[derive(Default)]
@@ -156,7 +156,7 @@ impl<M: Memory> Database<M> {
         let mut manifest = MANIFEST.to_vec();
         manifest.extend(schema.fingerprint);
         manifest.extend(incarnation);
-        map.insert(vec![0], manifest);
+        map.insert(StoreKey::new(vec![0]).expect("manifest key fits"), manifest);
         for entity in &schema.entities {
             map.insert(revision_key(entity.id), 0_u64.to_le_bytes().to_vec());
         }
@@ -167,11 +167,17 @@ impl<M: Memory> Database<M> {
         })
     }
     /// Open only an exact manifest/compiled-contract match, without mutation.
+    /// This is not a whole-database integrity scan. Entity revisions are checked
+    /// when read explicitly or when preparing a write to that entity.
     /// # Errors
     /// Refuses missing/corrupt manifests, foreign contracts or supplier formats.
+    /// # Panics
+    /// Supplier corruption, including overlong stored keys, traps without repair.
     pub fn open(memory: RuntimeMemory<M>, schema: Schema) -> Result<Self, Error> {
         let map = Map::load(memory).map_err(Error::Storage)?;
-        let manifest = map.get(&vec![0]).ok_or(Error::Corrupt)?;
+        let manifest = map
+            .get(&StoreKey::new(vec![0]).expect("manifest key fits"))
+            .ok_or(Error::Corrupt)?;
         if manifest.len() != 56 {
             return Err(Error::Corrupt);
         }
@@ -182,15 +188,11 @@ impl<M: Memory> Database<M> {
         if incarnation == [0; 16] {
             return Err(Error::Corrupt);
         }
-        let database = Self {
+        Ok(Self {
             map,
             schema,
             incarnation,
-        };
-        for entity in &database.schema.entities {
-            database.revision_by_id(entity.id)?;
-        }
-        Ok(database)
+        })
     }
     /// Borrow the admitted executable description for inspection.
     #[must_use]
@@ -237,6 +239,8 @@ impl<M: Memory> Database<M> {
     /// Read at most 32 rows in primary-key order; continuation is live, not a snapshot.
     /// # Errors
     /// Refuses zero/oversized limits, unadmitted types or corrupt rows.
+    /// # Panics
+    /// Supplier corruption, including overlong stored keys, traps without repair.
     pub fn page<E: Entity>(&self, after: Option<E::Key>, limit: usize) -> Result<Page<E>, Error> {
         self.schema.admits(E::SCHEMA)?;
         if !(1..=32).contains(&limit) {
@@ -244,7 +248,7 @@ impl<M: Memory> Database<M> {
         }
         let prefix = prefix(2, E::SCHEMA.id);
         let start = after.map_or_else(
-            || prefix.clone(),
+            || StoreKey::new(prefix.clone()).expect("row namespace fits"),
             |key| row_key(E::SCHEMA.id, key.into_row_key()),
         );
         let lower = if after.is_some() {
@@ -276,7 +280,7 @@ impl<M: Memory> Database<M> {
         })
     }
     /// Read the first bounded collection under an exact, nonempty leading index prefix.
-    /// Each operand must have its field's exact type and fit its declared bounds.
+    /// Exact operands obey field bounds and the 512-byte complete-key budget.
     /// Use `IndexValue::Absent` for an absent optional component. A present-only
     /// unique index refuses absent operands because it does not enumerate those rows.
     /// # Errors
@@ -309,7 +313,31 @@ impl<M: Memory> Database<M> {
                 return Err(Error::InvalidOperand);
             }
             value.append_component(field.optional, &mut prefix);
+            if prefix.len() > crate::MAX_INDEX_KEY_BYTES {
+                return Err(Error::Limit);
+            }
         }
+        let mut completion = if index.unique {
+            0
+        } else {
+            key::minimum_bytes(E::SCHEMA.key_type()?)?
+        };
+        for name in &index.fields[values.len()..] {
+            let field = E::SCHEMA
+                .fields
+                .iter()
+                .find(|field| field.name == *name)
+                .ok_or(Error::InvalidSchema)?;
+            completion += if field.optional && !index.present_only {
+                1
+            } else {
+                key::minimum_bytes(field.value)? + usize::from(field.optional)
+            };
+        }
+        if prefix.len() + completion > crate::MAX_INDEX_KEY_BYTES {
+            return Err(Error::Limit);
+        }
+        let prefix = StoreKey::new(prefix)?;
         let mut rows = Vec::new();
         for entry in self
             .map
@@ -341,7 +369,9 @@ impl<M: Memory> Database<M> {
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();
         let mut unique = BTreeSet::new();
-        let mut changed = BTreeSet::new();
+        // Per-batch preparation only: observed revision and whether any row
+        // actually changes. Nothing is retained between calls.
+        let mut revisions = BTreeMap::new();
         let mut required = BTreeSet::new();
         let mut deleted = Vec::new();
         for mut mutation in batch.mutations {
@@ -376,6 +406,20 @@ impl<M: Memory> Database<M> {
                     Kind::Delete => {}
                 }
             }
+            // Admit complete after-image keys even when the row is a no-op.
+            // Retain these buffers for publication instead of encoding twice.
+            let after_indexes = match &mutation.kind {
+                Kind::Insert(_, info) | Kind::Replace(_, info) => {
+                    index_entries(mutation.entity, info)?
+                }
+                Kind::Delete => Vec::new(),
+            };
+            let (_, changed) = match revisions.entry(mutation.entity.id) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((self.revision_by_id(mutation.entity.id)?, false))
+                }
+            };
             if let (Kind::Replace(bytes, _), Some(old)) = (&mutation.kind, &old)
                 && bytes == old
             {
@@ -393,7 +437,7 @@ impl<M: Memory> Database<M> {
                     removes.insert(key);
                 }
             }
-            changed.insert(mutation.entity.id);
+            *changed = true;
             match mutation.kind {
                 Kind::Delete => {
                     deleted.push((mutation.entity.id, mutation.key));
@@ -401,7 +445,7 @@ impl<M: Memory> Database<M> {
                 }
                 Kind::Insert(bytes, info) | Kind::Replace(bytes, info) => {
                     writes.insert(key, bytes);
-                    for (key, is_unique) in index_entries(mutation.entity, &info)? {
+                    for (key, is_unique) in after_indexes {
                         if is_unique && !unique.insert(key.clone()) {
                             return Err(Error::UniqueViolation);
                         }
@@ -449,12 +493,11 @@ impl<M: Memory> Database<M> {
             }
         }
         self.validate_references(&required, &deleted, &removes, &writes)?;
-        for entity in changed {
-            let next = self
-                .revision_by_id(entity)?
-                .checked_add(1)
-                .ok_or(Error::Limit)?;
-            writes.insert(revision_key(entity), next.to_le_bytes().to_vec());
+        for (entity, (current, changed)) in revisions {
+            if changed {
+                let next = current.checked_add(1).ok_or(Error::Limit)?;
+                writes.insert(revision_key(entity), next.to_le_bytes().to_vec());
+            }
         }
         // Proven IC rollback boundary: no recoverable Result branch below this line.
         for key in removes {
@@ -472,8 +515,8 @@ impl<M: Memory> Database<M> {
         &self,
         required: &BTreeSet<(u32, RowKey)>,
         deleted: &[(u32, RowKey)],
-        removes: &BTreeSet<Vec<u8>>,
-        writes: &BTreeMap<Vec<u8>, Vec<u8>>,
+        removes: &BTreeSet<StoreKey>,
+        writes: &BTreeMap<StoreKey, Vec<u8>>,
     ) -> Result<(), Error> {
         for &(entity, id) in required {
             let key = row_key(entity, id);
@@ -504,6 +547,7 @@ impl<M: Memory> Database<M> {
                     let mut prefix = index_prefix(entity.id, reference.index);
                     id.index_value()
                         .append_component(field.optional, &mut prefix);
+                    let prefix = StoreKey::new(prefix)?;
                     // Each skipped entry belongs to a distinct changed row in
                     // this range. At most MAX_BATCH skips plus one survivor.
                     for (position, entry) in self
@@ -540,20 +584,20 @@ fn prefix(tag: u8, entity: u32) -> Vec<u8> {
     key.extend(entity.to_be_bytes());
     key
 }
-fn revision_key(entity: u32) -> Vec<u8> {
-    prefix(1, entity)
+fn revision_key(entity: u32) -> StoreKey {
+    StoreKey::new(prefix(1, entity)).expect("revision key fits")
 }
-fn row_key(entity: u32, id: RowKey) -> Vec<u8> {
+fn row_key(entity: u32, id: RowKey) -> StoreKey {
     let mut key = prefix(2, entity);
     id.append_to(&mut key);
-    key
+    StoreKey::new(key).expect("bounded primary key fits")
 }
 fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
     let mut key = prefix(3, entity);
     key.extend(index.to_be_bytes());
     key
 }
-fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, bool)>, Error> {
+fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey, bool)>, Error> {
     if info.indexes.len() != entity.indexes.len() {
         return Err(Error::Corrupt);
     }
@@ -591,7 +635,7 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(Vec<u8>, 
         if !index.unique {
             info.key.append_to(&mut key);
         }
-        entries.push((key, index.unique));
+        entries.push((StoreKey::new(key)?, index.unique));
     }
     Ok(entries)
 }
@@ -607,7 +651,7 @@ fn validate_index_entry(
     if info.key != owner
         || !index_entries(entity, info)?
             .iter()
-            .any(|(entry, _)| entry == key)
+            .any(|(entry, _)| &entry[..] == key)
     {
         return Err(Error::Corrupt);
     }

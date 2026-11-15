@@ -1,6 +1,6 @@
-//! Named maps with scalar keys; ordinary field rules own value composition.
+//! Named maps with scalar/unit-enum keys; field rules own value composition.
 use super::{
-    field::{Field, Kind, parse_value},
+    field::{Field, parse_value},
     list, metas, once,
     record::resolve_self,
     text,
@@ -38,9 +38,6 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let max = max.ok_or_else(|| fail("map requires max_items"))?;
     let (kind, optional, max) =
         parse_value(&syn::parse_quote!(value(many, #max, item(#(#key),*))))?;
-    if matches!(kind, Kind::Named(..)) {
-        return Err(fail("map keys currently require an ordered scalar"));
-    }
     let max = max.expect("many requires max_items");
     let key = Field {
         default: None,
