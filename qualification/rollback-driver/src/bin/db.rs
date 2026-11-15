@@ -32,7 +32,7 @@ enum Command {
     Status,
     /// Run a retained aggregate, displaying progress and each completed result page.
     #[command(
-        after_help = "Runs bounded update calls against this temporary fixture, then cancels the job. No partial aggregate is presented as a result.\n--min and --category filter Entry rows; --entry-id filters Document rows. --group-min, --group-order and --limit select completed groups. --limit never truncates input.\n--work bounds input candidates per call; --page-size bounds completed groups per response. The fixture and jobs are discarded on exit."
+        after_help = "Runs bounded update calls against this temporary fixture, then cancels the job. No partial aggregate is presented as a result.\n--min and --category filter Entry rows; --entry-id filters Document rows. --group-min, --group-max, --group-order and --limit select completed groups. --limit never truncates input.\n--work bounds input candidates per call; --page-size bounds completed groups per response. The fixture and jobs are discarded on exit."
     )]
     Aggregate {
         #[arg(value_parser=["Entry", "Document", "DecimalRow"])]
@@ -40,8 +40,8 @@ enum Command {
         /// Entry: count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
         /// prefix with category, for groups. Document: count/count:note/count:priority,
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
-        /// prefix with entry_id, for groups. DecimalRow: count, sum/avg:value or
-        /// sum/avg:maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
+        /// prefix with entry_id, for groups. DecimalRow: count, count/distinct-count/min/max/sum/avg
+        /// of :value or :maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
         #[arg(long, default_value = "count")]
         select: String,
         /// Entry.amount >= VALUE.
@@ -56,10 +56,15 @@ enum Command {
         /// Maximum completed groups across all pages, not an input-row limit.
         #[arg(long, default_value_t=32, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
-        /// Keep completed aggregate values >= VALUE (nonnegative u64 input).
-        /// Convert the threshold exactly to the aggregate result type.
-        #[arg(long)]
-        group_min: Option<u64>,
+        /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
+        /// Signed sums accept negatives; Decimal results accept fractions at their scale.
+        /// Integer results reject fractions; threshold text is bounded to 64 bytes.
+        #[arg(long, allow_hyphen_values = true)]
+        group_min: Option<String>,
+        /// Keep completed aggregate values <= VALUE; same exact types as --group-min.
+        /// Both bounds are inclusive and apply before ordering or output limits.
+        #[arg(long, allow_hyphen_values = true)]
+        group_max: Option<String>,
         /// Order completed groups; aggregate ties use ascending keys.
         #[arg(long, value_parser=["key", "asc", "desc"])]
         group_order: Option<String>,
@@ -107,7 +112,8 @@ enum Command {
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
-        /// DecimalRow supports sum:value/sum:maybe and zone,sum:value/zone,sum:maybe.
+        /// DecimalRow supports count/distinct-count/min/max/sum:value or :maybe,
+        /// optionally grouped by zone. DISTINCT includes one absent value.
         /// avg:amount/category,avg:amount for Entry; avg:value/avg:maybe with optional
         /// zone, grouping for DecimalRow. Averages use Decimal scale 2, ties to even.
         /// Prefix sums/extrema with category, for Entry or entry_id, for Document
@@ -117,10 +123,15 @@ enum Command {
         /// Deduplicate a leading-index projection; filters must be constant per tuple.
         #[arg(long)]
         distinct: bool,
-        /// Keep completed aggregate values at least VALUE (nonnegative u64 input).
-        /// Numeric aggregates convert VALUE to their declared integer or Decimal result type.
-        #[arg(long)]
-        group_min: Option<u64>,
+        /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
+        /// Signed sums accept negatives; Decimal results accept fractions at their scale.
+        /// Integer results reject fractions; threshold text is bounded to 64 bytes.
+        #[arg(long, allow_hyphen_values = true)]
+        group_min: Option<String>,
+        /// Keep completed aggregate values <= VALUE; same exact types as --group-min.
+        /// Both bounds are inclusive and apply before ordering or output limits.
+        #[arg(long, allow_hyphen_values = true)]
+        group_max: Option<String>,
         /// Order completed groups by key or aggregate value; ties use ascending keys.
         #[arg(long, value_parser=["key", "asc", "desc"])]
         group_order: Option<String>,
@@ -338,6 +349,7 @@ async fn main() -> Result<(), String> {
                 entry_id,
                 limit,
                 group_min,
+                group_max,
                 group_order,
                 work,
                 page_size,
@@ -348,7 +360,7 @@ async fn main() -> Result<(), String> {
                     select.as_str(),
                     (minimum, category, entry_id),
                     limit,
-                    group_min,
+                    (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
                 );
                 let reply = pic
@@ -468,6 +480,7 @@ async fn main() -> Result<(), String> {
                 select,
                 distinct,
                 group_min,
+                group_max,
                 group_order,
             } => {
                 let reply = pic
@@ -489,7 +502,7 @@ async fn main() -> Result<(), String> {
                                 work,
                                 bytes,
                                 select,
-                                (distinct, group_min, group_order),
+                                (distinct, (group_min, group_max), group_order),
                             ),
                             LIMITS,
                         )

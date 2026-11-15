@@ -25,18 +25,18 @@ type Selection = (
     String,
     (Option<u64>, Option<u64>, Option<u64>),
     u32,
-    Option<u64>,
+    (Option<String>, Option<String>),
     Option<String>,
 );
 fn configured<'a, E: Entity>(
     query: Query<'a, E, Backing>,
     selection: &Selection,
 ) -> Result<Query<'a, E, Backing>, String> {
-    let (_, select, _, limit, group_min, group_order) = selection;
+    let (_, select, _, limit, (group_min, group_max), group_order) = selection;
     select_groups(
         query.limit(*limit as usize),
         select,
-        *group_min,
+        (group_min.as_deref(), group_max.as_deref()),
         parse_group_order(group_order.as_deref())?,
     )
 }
@@ -560,8 +560,32 @@ fn start_decimal(
     select: &str,
 ) -> Result<JobHandle, Error> {
     match select {
+        "count:value" => query.start_count_field("value", jobs, now, expires),
+        "distinct-count:value" => query.start_count_distinct::<TotalDecimal>(jobs, now, expires),
+        "zone,count:value" => {
+            query.start_group_count_field::<ZoneOnly>("value", jobs, now, expires)
+        }
+        "zone,distinct-count:value" => {
+            query.start_group_count_distinct::<ZoneOnly, TotalDecimal>(jobs, now, expires)
+        }
+        "count:maybe" => query.start_count_field("maybe", jobs, now, expires),
+        "distinct-count:maybe" => query.start_count_distinct::<OptionalDecimal>(jobs, now, expires),
+        "zone,count:maybe" => {
+            query.start_group_count_field::<ZoneOnly>("maybe", jobs, now, expires)
+        }
+        "zone,distinct-count:maybe" => {
+            query.start_group_count_distinct::<ZoneOnly, OptionalDecimal>(jobs, now, expires)
+        }
         "count" => query.start_count(jobs, now, expires),
         "zone,count" => query.start_group_count::<ZoneOnly>(jobs, now, expires),
+        "min:value" => query.start_min::<TotalDecimal>(jobs, now, expires),
+        "zone,min:value" => query.start_group_min::<ZoneOnly, TotalDecimal>(jobs, now, expires),
+        "max:value" => query.start_max::<TotalDecimal>(jobs, now, expires),
+        "zone,max:value" => query.start_group_max::<ZoneOnly, TotalDecimal>(jobs, now, expires),
+        "min:maybe" => query.start_min::<OptionalDecimal>(jobs, now, expires),
+        "zone,min:maybe" => query.start_group_min::<ZoneOnly, OptionalDecimal>(jobs, now, expires),
+        "max:maybe" => query.start_max::<OptionalDecimal>(jobs, now, expires),
+        "zone,max:maybe" => query.start_group_max::<ZoneOnly, OptionalDecimal>(jobs, now, expires),
         "sum:value" => query.start_sum::<TotalDecimal>(jobs, now, expires),
         "zone,sum:value" => query.start_group_sum::<ZoneOnly, TotalDecimal>(jobs, now, expires),
         "avg:value" => query.start_avg::<TotalDecimal>(jobs, now, expires),
@@ -583,26 +607,57 @@ fn resume_decimal(
     select: &str,
 ) -> Result<Response, Error> {
     match select {
+        "count:value" => query
+            .resume_count_field("value", jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct-count:value" => query
+            .resume_count_distinct::<TotalDecimal>(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "zone,count:value" => query
+            .resume_group_count_field::<ZoneOnly>("value", jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "zone", |k| k.zone.to_string()))),
+        "zone,distinct-count:value" => query
+            .resume_group_count_distinct::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "zone", |k| k.zone.to_string()))),
+        "count:maybe" => query
+            .resume_count_field("maybe", jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct-count:maybe" => query
+            .resume_count_distinct::<OptionalDecimal>(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "zone,count:maybe" => query
+            .resume_group_count_field::<ZoneOnly>("maybe", jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "zone", |k| k.zone.to_string()))),
+        "zone,distinct-count:maybe" => query
+            .resume_group_count_distinct::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "zone", |k| k.zone.to_string()))),
         "count" => query
             .resume_count(jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
         "zone,count" => query
             .resume_group_count::<ZoneOnly>(jobs, handle, sequence, now)
             .map(|s| display(s, |p| counts(p, "zone", |k| k.zone.to_string()))),
-        "sum:value" | "avg:value" => {
-            let result = if select == "avg:value" {
-                query.resume_avg::<TotalDecimal>(jobs, handle, sequence, now)
-            } else {
-                query.resume_sum::<TotalDecimal>(jobs, handle, sequence, now)
+        "sum:value" | "avg:value" | "min:value" | "max:value" => {
+            let result = match select {
+                "avg:value" => query.resume_avg::<TotalDecimal>(jobs, handle, sequence, now),
+                "min:value" => query.resume_min::<TotalDecimal>(jobs, handle, sequence, now),
+                "max:value" => query.resume_max::<TotalDecimal>(jobs, handle, sequence, now),
+                _ => query.resume_sum::<TotalDecimal>(jobs, handle, sequence, now),
             };
             result.map(|s| display(s, |v| scalar("value", v.map(|r| r.value.to_string()))))
         }
-        "zone,sum:value" | "zone,avg:value" => {
-            let result = if select == "zone,avg:value" {
-                query.resume_group_avg::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now)
-            } else {
-                query.resume_group_sum::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now)
-            };
+        "zone,sum:value" | "zone,avg:value" | "zone,min:value" | "zone,max:value" => {
+            let result =
+                match select {
+                    "zone,avg:value" => query
+                        .resume_group_avg::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now),
+                    "zone,min:value" => query
+                        .resume_group_min::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now),
+                    "zone,max:value" => query
+                        .resume_group_max::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now),
+                    _ => query
+                        .resume_group_sum::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now),
+                };
             result.map(|s| {
                 display(s, |p| {
                     values(
@@ -614,20 +669,27 @@ fn resume_decimal(
                 })
             })
         }
-        "sum:maybe" | "avg:maybe" => {
-            let result = if select == "avg:maybe" {
-                query.resume_avg::<OptionalDecimal>(jobs, handle, sequence, now)
-            } else {
-                query.resume_sum::<OptionalDecimal>(jobs, handle, sequence, now)
+        "sum:maybe" | "avg:maybe" | "min:maybe" | "max:maybe" => {
+            let result = match select {
+                "avg:maybe" => query.resume_avg::<OptionalDecimal>(jobs, handle, sequence, now),
+                "min:maybe" => query.resume_min::<OptionalDecimal>(jobs, handle, sequence, now),
+                "max:maybe" => query.resume_max::<OptionalDecimal>(jobs, handle, sequence, now),
+                _ => query.resume_sum::<OptionalDecimal>(jobs, handle, sequence, now),
             };
             result.map(|s| display(s, |v| scalar("maybe", v.map(|r| optional(r.maybe)))))
         }
-        "zone,sum:maybe" | "zone,avg:maybe" => {
-            let result = if select == "zone,avg:maybe" {
-                query.resume_group_avg::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now)
-            } else {
-                query.resume_group_sum::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now)
-            };
+        "zone,sum:maybe" | "zone,avg:maybe" | "zone,min:maybe" | "zone,max:maybe" => {
+            let result =
+                match select {
+                    "zone,avg:maybe" => query
+                        .resume_group_avg::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now),
+                    "zone,min:maybe" => query
+                        .resume_group_min::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now),
+                    "zone,max:maybe" => query
+                        .resume_group_max::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now),
+                    _ => query
+                        .resume_group_sum::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now),
+                };
             result.map(|s| {
                 display(s, |p| {
                     values(

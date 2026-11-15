@@ -1395,14 +1395,23 @@ The CLI's `query` selectors remain synchronous. `db aggregate Entry` demonstrate
 retained counts, present-field/DISTINCT counts and min/max/sum/avg of amount,
 optionally grouped by category. Document adds row/note/priority counts, DISTINCT
 notes, note/priority extrema and priority/score sums, optionally grouped by
-`entry_id`, with `--entry-id` filtering source rows. DecimalRow exposes counts
-and required/optional Decimal sums and averages, optionally grouped by `zone`,
-using the synchronous console's scale-2 result records. These adapters reconstruct typed fluent queries on
+`entry_id`, with `--entry-id` filtering source rows. DecimalRow exposes row,
+present-field and DISTINCT counts
+and required/optional Decimal min/max, sums and averages, optionally grouped by `zone`,
+using the synchronous console's scale-2 result records. Counts retain Nat64
+thresholds and include one absent DISTINCT value while excluding absence from
+field counts. These adapters reconstruct typed fluent queries on
 each update call, displays explicit progress and follows completed-page cursors.
-`--min`/`--category` filter source records; `--group-min`/`--group-order` and the
+`--min`/`--category` filter source records; `--group-min`/`--group-max`/`--group-order` and the
 total `--limit` select complete results. The response-only `--page-size` cannot
 truncate input or change the bound total selection. Synchronous and retained
-console paths share entity-specific filters and exact integer/Decimal threshold conversion.
+console paths share entity-specific filters and exact integer/Decimal threshold
+parsing. Each bound's text is limited to 64 bytes and parsed directly into the
+selected result type; engine admission enforces range and declared Decimal scale.
+Signed and fractional inputs never pass through floating point or rounding.
+The optional lower/upper bounds compose inclusive engine predicates before
+ordering, limiting or paging. Both operands are validated; an otherwise valid
+inverted range selects no groups, without an adapter-side shortcut.
 The fixture uses a 60-second expiry and a 32-call host bound, then explicitly
 cancels on success or refusal. It computes no aggregate locally and never silently
 restarts. The `retained-console` feature shares host job-store custody with the
@@ -1874,7 +1883,7 @@ top-k and page-resumption machinery is not copied: this slice has one aggregate
 value per group and the accepted small synchronous cap. Native witnesses cover
 stage composition, ties, absence, exact operand refusal and resource bounds;
 Wasm repeats group filtering/order after upgrade with unchanged backing bytes.
-The local CLI maps `--group-min` (Nat64 aggregate >= operand) and
+The local CLI maps `--group-min`/`--group-max` (inclusive exact typed bounds) and
 `--group-order key|asc|desc` to these fluent methods without local result sorting.
 No durable state, schema contract, cursor format or macro changes are introduced.
 
@@ -1949,8 +1958,8 @@ cancellation and overflow in excluded groups. A large-key witness fits count
 state but refuses sum finalization even when a filter removes all output. Wasm
 repeats grouped sums and selection across upgrade, verifies widened totals beyond
 u64, and checks unchanged backing during reads. CLI selectors construct the same
-fluent calls. The fixture's nonnegative u64 `--group-min` argument is explicitly
-converted to the selected sum result's Nat128, Int128 or Decimal type at its adapter.
+fluent calls. The fixture's bounded `--group-min`/`--group-max` text is parsed directly into
+the selected sum result's Nat128, Int128 or Decimal type at its adapter.
 
 `avg::<ResultRecord>()` and `group_avg::<KeyRecord, ResultRecord>()` now accept
 integer inputs of every width, including U256, and Decimal inputs. The result

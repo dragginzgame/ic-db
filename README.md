@@ -193,11 +193,19 @@ uses retained jobs, displays each call's progress and completed result pages, th
 cancels the temporary job. Count, field/DISTINCT count and min/max/sum/avg of amount
 are supported, optionally grouped by category. Document supports row/note/priority
 counts, DISTINCT notes, note/priority min/max and priority/score sums, optionally
-grouped by `entry_id`. DecimalRow supports counts and sum/average of `value` or
+grouped by `entry_id`. DecimalRow supports row/field/DISTINCT counts and
+min/max/sum/average of `value` or
 optional `maybe`, optionally grouped by `zone`, using the existing scale-2 result
-records. All-absent scalar sums/averages return no value; grouped results retain
+records. An all-absent field has present count zero and DISTINCT count one;
+count thresholds are integers. All-absent scalar extrema/sums/averages return no value; grouped results retain
 the group with `—`. `--min` and `--category` filter Entry rows; `--entry-id`
-filters Document rows. `--group-min` and `--group-order` select completed groups. `--limit`
+filters Document rows. `--group-min`, `--group-max` and `--group-order` select
+completed groups. Either bound is optional; together they form an inclusive
+range applied before ordering, total output limits and pagination.
+Thresholds use the exact result type: signed sums accept negative values and
+Decimal results accept fractions at the declared scale. Integer fractions,
+overflow and threshold text above 64 bytes per bound refuse. A valid inverted
+range selects no groups. `--limit`
 caps the total selected groups across pages, independently of `--page-size`;
 it never truncates aggregate input. The CLI follows server cursors
 without accumulating values itself. Each invocation uses the local disposable

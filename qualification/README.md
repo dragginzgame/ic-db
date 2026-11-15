@@ -103,7 +103,8 @@ Completed-group selection adds input/group-filter composition, exact operands,
 aggregate ties, absent-value ordering and output limits after sorting. Refused
 modifiers on scalar/row terminals and work/state caps remain covered. Wasm
 repeats selected group output across upgrade with unchanged backing bytes.
-The installed CLI exposes `--group-min VALUE` and `--group-order key|asc|desc`;
+The installed CLI exposes inclusive `--group-min VALUE`/`--group-max VALUE`
+bounds and `--group-order key|asc|desc`;
 these construct fluent operations, without client-side filtering or sorting.
 
 Scalar integer sums add every supported integer width, explicit same-family
@@ -1275,6 +1276,20 @@ input and empty selected output. Invalid entity/filter/selector combinations
 refuse. Fourteen DecimalRow cases cover ten count/sum/average selectors and
 completed-group controls over signed fractional inputs and all-absent optional
 inputs. Every supported entity reuses synchronous query input-filter validation.
+Ninety-six paired synchronous/retained CLI cases cover signed, fractional and
+full-width integer group thresholds, inclusive bounds, absent results, inverted
+ranges and filter/order/limit/page composition, plus required/optional Decimal
+extrema and their exact fractional bounds, plus field/DISTINCT counts that
+distinguish absent values and zero counts. Count thresholds stay Nat64 even for
+Decimal fields. Direct query cases check that equivalent Decimal spellings and
+signed zero deduplicate before and after upgrade, without changing stored bytes.
+Incomplete retained steps emit no
+result tables. Direct Wasm query cases check invalid
+syntax, integer fractions, numeric overflow, excess Decimal precision and the
+64-byte text bound, including Decimal admission after upgrade. Retained CLI
+refusals cover integer fractions, signed overflow and excess Decimal precision.
+Upper-bound refusals include invalid operands even when the lower bound would
+exclude every group, and group modifiers on scalar aggregates.
 It also preserves the existing installed-layout query/schema and product-record
 checks. `make db` installs this console fixture without starting the program.
 
@@ -1349,6 +1364,12 @@ produces zero output rows; present zero produces one result row.
 Prefix those extrema with `category,` for Entry or `entry_id,` for Document to
 group the results. An all-absent group stays visible with `—` as its value.
 DecimalRow has three CLI-seeded samples (1.25, 2.50, -0.75), all in zone `true`.
+`count:value` and `distinct-count:value` both return 3. `count:maybe` returns
+0 while `distinct-count:maybe` returns 1; prefix with `zone,` for grouped counts.
+Its `min:value` is -0.75 and `max:value` is 2.5; prefix either with `zone,`
+for grouped results. Optional `min:maybe`/`max:maybe` return no scalar row,
+while grouped extrema retain the all-absent group. Decimal extrema use exact
+scale-2 operands for group bounds in both synchronous and retained CLI modes.
 `sum:value` totals 3; `zone,sum:value` groups that total. `sum:maybe` is absent,
 while `zone,sum:maybe` retains the all-absent group. Decimal sums preserve scale 2.
 These are fixed typed projections and direct fluent terminals in the private

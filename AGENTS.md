@@ -69,18 +69,24 @@ installer. Do not edit vendor files or copy upstream reference documents.
   `db aggregate Entry` demonstrates retained scalar/category-grouped counts,
   DISTINCT counts and min/max/sum/avg through typed fluent terminals. Document
   adds optional note/priority counts and extrema, DISTINCT notes and priority/score
-  sums, optionally grouped by entry_id. DecimalRow exposes counts and required/
-  optional Decimal sums/averages, optionally grouped by zone, through the same
+  sums, optionally grouped by entry_id. DecimalRow exposes row/field/DISTINCT counts and required/
+  optional Decimal min/max/sums/averages, optionally grouped by zone, through the same
   fixed-scale result records as synchronous queries. Show progress
   and completed pages, follow server continuations, then cancel the temporary job
   on success or refusal. Keep its 32-call fixture bound and 60-second job expiry;
   no hidden restart or client reducer. `retained-console` enables its host store
-  with the same entity-specific filters and exact group-threshold conversion as synchronous
+  with the same entity-specific filters and exact group-threshold parsing as synchronous
   query. Reconstruct/bind input filters, group selection and total limit on every
   call; keep total limit separate from response page size. Do not filter or sort
   returned groups in the CLI. This feature runs
   without qualification fault controls. Keep normal product/measurement builds
   independent of this optional fixture feature.
+  Parse bounded CLI group-threshold text (at most 64 bytes per bound) directly into the
+  selected result type: u64 counts/extrema, u128 unsigned sums, i128 signed sums
+  or Decimal. Reuse existing parsers and engine scale/range admission; never
+  round thresholds or convert through floating point. `--group-min` and
+  `--group-max` compose inclusive engine predicates before output selection;
+  validate both operands even when the range would select no groups.
   It currently opens an explicitly labelled local M1 record fixture. Future product
   access uses the same admitted fluent semantics through Canic-owned endpoints;
   the CLI must not introduce SQL or a second query engine.

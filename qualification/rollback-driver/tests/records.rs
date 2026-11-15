@@ -9,6 +9,8 @@ use std::{
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 
+type ConsoleCase<'a> = (&'a str, &'a [&'a [&'a str]]);
+
 fn result_table_rows(text: &str) -> Vec<Vec<&str>> {
     text.lines()
         .filter(|line| line.contains(['│', '|']))
@@ -373,7 +375,7 @@ fn console_inspects_and_queries() {
     if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
         // One console session exercises every retained selector. More than 16 jobs
         // proves successful commands release slots instead of leaking capacity.
-        let cases: [(&str, &[&[&str]]); 14] = [
+        let cases: [ConsoleCase<'_>; 14] = [
             ("count", &[&["6"]]),
             ("count:amount", &[&["6"]]),
             ("distinct-count:amount", &[&["6"]]),
@@ -399,7 +401,7 @@ fn console_inspects_and_queries() {
             })
             .collect::<String>();
         commands.push_str("aggregate Entry\naggregate Entry\naggregate Entry\n");
-        let controls: [(&str, &[&[&str]]); 12] = [
+        let controls: [ConsoleCase<'_>; 12] = [
             ("count --min 40", &[&["3"]]),
             ("sum:amount --min 40 --limit 1", &[&["151"]]),
             ("distinct-count:amount --category 1 --min 30", &[&["2"]]),
@@ -484,6 +486,13 @@ fn console_inspects_and_queries() {
             "aggregate DecimalRow --category 1",
             "aggregate DecimalRow --entry-id 1",
             "aggregate DecimalRow --select sum:amount",
+            "aggregate Entry --select category,count --group-min 1.5",
+            "aggregate Entry --select category,count --group-min 4 --group-max -1",
+            "aggregate DecimalRow --select zone,avg:value --group-max 0.001",
+            "aggregate DecimalRow --select zone,distinct-count:value --group-min 1.5",
+            "aggregate Entry --select count --group-max 1",
+            "aggregate Document --select entry_id,sum:score --group-min -170141183460469231731687303715884105729",
+            "aggregate DecimalRow --select zone,avg:value --group-min 0.001",
             "aggregate Document --min 0",
             "aggregate Document --category 1",
             "aggregate Document --select min:amount",
@@ -499,7 +508,7 @@ fn console_inspects_and_queries() {
                 "{command}"
             );
         }
-        let documents: [(&str, &[&[&str]]); 26] = [
+        let documents: [ConsoleCase<'_>; 26] = [
             ("count", &[&["1"]]),
             ("count:note", &[&["0"]]),
             ("count:priority", &[&["1"]]),
@@ -553,7 +562,7 @@ fn console_inspects_and_queries() {
                 assert!(section.contains("Running; sequence 1; 1 examined"));
             }
         }
-        let decimals: [(&str, &[&[&str]]); 14] = [
+        let decimals: [ConsoleCase<'_>; 14] = [
             ("count", &[&["3"]]),
             ("zone,count", &[&["true", "3"]]),
             ("sum:value", &[&["3"]]),
@@ -593,6 +602,126 @@ fn console_inspects_and_queries() {
             assert!(section.contains("Running; sequence 3; 3 examined"));
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
+        }
+        let paired_queries: &[(&str, &[ConsoleCase<'_>])] = &[
+            (
+                "Document",
+                &[
+                    ("entry_id,sum:score --group-min -10", &[&["1", "-10"]]),
+                    ("entry_id,sum:score --group-min -9", &[]),
+                    ("entry_id,sum:score --group-max -10", &[&["1", "-10"]]),
+                    ("entry_id,sum:score --group-max -11", &[]),
+                    (
+                        "entry_id,sum:score --group-min -11 --group-max -9",
+                        &[&["1", "-10"]],
+                    ),
+                    ("entry_id,min:priority --group-max 0", &[&["1", "0"]]),
+                    (
+                        "entry_id,sum:score --group-min -170141183460469231731687303715884105728",
+                        &[&["1", "-10"]],
+                    ),
+                ],
+            ),
+            (
+                "DecimalRow",
+                &[
+                    ("count:value", &[&["3"]]),
+                    ("count:maybe", &[&["0"]]),
+                    ("distinct-count:value", &[&["3"]]),
+                    ("distinct-count:maybe", &[&["1"]]),
+                    ("zone,count", &[&["true", "3"]]),
+                    ("zone,count:value", &[&["true", "3"]]),
+                    ("zone,count:maybe", &[&["true", "0"]]),
+                    ("zone,distinct-count:value", &[&["true", "3"]]),
+                    ("zone,distinct-count:maybe", &[&["true", "1"]]),
+                    ("zone,count:maybe --group-max 0", &[&["true", "0"]]),
+                    (
+                        "zone,distinct-count:maybe --group-min 1 --group-max 1",
+                        &[&["true", "1"]],
+                    ),
+                    ("zone,distinct-count:value --group-min 4", &[]),
+                    ("min:value", &[&["-0.75"]]),
+                    ("max:value", &[&["2.5"]]),
+                    ("min:maybe", &[]),
+                    ("max:maybe", &[]),
+                    ("zone,min:value", &[&["true", "-0.75"]]),
+                    ("zone,max:value", &[&["true", "2.5"]]),
+                    ("zone,min:maybe", &[&["true", "—"]]),
+                    ("zone,max:maybe", &[&["true", "—"]]),
+                    (
+                        "zone,min:value --group-min -0.75 --group-max -0.75",
+                        &[&["true", "-0.75"]],
+                    ),
+                    (
+                        "zone,max:value --group-min 2.50 --group-max 2.50",
+                        &[&["true", "2.5"]],
+                    ),
+                    ("zone,max:value --group-max 2.49", &[]),
+                    ("zone,min:value --group-min -0.74", &[]),
+                    ("zone,avg:value --group-min 0.75", &[&["true", "1"]]),
+                    ("zone,avg:value --group-min 1.01", &[]),
+                    (
+                        "zone,avg:value --group-min 0.75 --group-max 1.00",
+                        &[&["true", "1"]],
+                    ),
+                    ("zone,avg:value --group-max 0.99", &[]),
+                    ("zone,avg:maybe --group-max 0", &[]),
+                    ("zone,sum:value --group-min 3.01 --group-max 3", &[]),
+                    ("zone,sum:value --group-min 3.00", &[&["true", "3"]]),
+                    ("zone,sum:value --group-min 3.01", &[]),
+                    ("zone,sum:value --group-min -3.01", &[&["true", "3"]]),
+                ],
+            ),
+            (
+                "Entry",
+                &[
+                    ("category,avg:amount --group-min 31.50", &[&["0", "40"]]),
+                    ("category,sum:amount --group-min 18446744073709551616", &[]),
+                    (
+                        "category,sum:amount --group-min 340282366920938463463374607431768211455",
+                        &[],
+                    ),
+                    ("category,count --group-min 18446744073709551615", &[]),
+                    (
+                        "category,sum:amount --group-min 93 --group-max 120",
+                        &[&["0", "120"], &["1", "93"]],
+                    ),
+                    (
+                        "category,sum:amount --group-min 93 --group-max 120 --group-order asc --limit 1",
+                        &[&["1", "93"]],
+                    ),
+                    ("category,min:amount --group-max 11", &[&["1", "11"]]),
+                    ("category,count --group-max 3", &[&["0", "3"], &["1", "3"]]),
+                ],
+            ),
+        ];
+        for (entity, cases) in paired_queries {
+            let mut commands = cases
+                .iter()
+                .flat_map(|(options, _)| {
+                    [
+                        format!("query {entity} --select {options}\n"),
+                        format!("aggregate {entity} --select {options} --work 1 --page-size 1\n"),
+                    ]
+                })
+                .collect::<String>();
+            commands.push_str("quit\n");
+            let stdout = run_console(&binary, &commands);
+            let separator = format!("\n{entity}");
+            let sections = stdout.split(&separator).skip(1).collect::<Vec<_>>();
+            assert_eq!(sections.len(), cases.len() * 2);
+            for ((options, expected), pair) in cases.iter().zip(sections.as_chunks::<2>().0) {
+                for section in pair {
+                    assert_eq!(
+                        &result_table_rows(section),
+                        expected,
+                        "{entity} {options}: {section}"
+                    );
+                }
+                assert_eq!(pair[1].matches("Complete;").count(), expected.len().max(1));
+                let complete = pair[1].find("Complete;").unwrap();
+                assert!(!pair[1][..complete].contains(['│', '|']));
+            }
         }
     }
     std::fs::remove_dir_all(prefix).unwrap();

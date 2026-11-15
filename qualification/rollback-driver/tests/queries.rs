@@ -51,7 +51,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     };
     let before = pic.get_stable_memory(canister).await;
     let selected =
-        async |request: ConsoleRequest<'_>, group_min: Option<u64>, group_order: Option<&str>| {
+        async |request: ConsoleRequest<'_>, group_min: Option<&str>, group_order: Option<&str>| {
             let (
                 entity,
                 cursor,
@@ -78,7 +78,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 work,
                 bytes,
                 select,
-                (distinct, group_min, group_order),
+                (distinct, (group_min, None::<&str>), group_order),
             );
             let reply = pic
                 .query_call(
@@ -106,11 +106,25 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         "category,min:amount",
         false,
     );
-    let selected_groups = selected(ordered_request.clone(), Some(15), Some("desc"))
+    let selected_groups = selected(ordered_request.clone(), Some("15"), Some("desc"))
         .await
         .unwrap();
     assert_eq!(selected_groups.1, [vec!["0", "20"]]);
     assert_eq!((selected_groups.3, selected_groups.5), (6, 16));
+    for operand in ["-1", "1.5", "18446744073709551616", "NaN", "1e2", ""] {
+        assert!(
+            selected(ordered_request.clone(), Some(operand), None)
+                .await
+                .is_err(),
+            "{operand}"
+        );
+    }
+    let oversized = "0".repeat(65);
+    assert!(
+        selected(ordered_request.clone(), Some(&oversized), None)
+            .await
+            .is_err()
+    );
     let ascending = selected(ordered_request.clone(), None, Some("asc"))
         .await
         .unwrap();
@@ -261,7 +275,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         "category,sum:amount",
         false,
     );
-    let selected_sum = selected(sum_request.clone(), Some(100), Some("desc"))
+    let selected_sum = selected(sum_request.clone(), Some("100"), Some("desc"))
         .await
         .unwrap();
     assert_eq!(selected_sum.1, [vec!["0", "120"]]);
@@ -272,6 +286,26 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             .1,
         [vec!["1", "93"]]
     );
+    for operand in [
+        "18446744073709551616",
+        "340282366920938463463374607431768211455",
+    ] {
+        assert!(
+            selected(sum_request.clone(), Some(operand), None)
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+    for operand in ["-1", "1.5", "340282366920938463463374607431768211456"] {
+        assert!(
+            selected(sum_request.clone(), Some(operand), None)
+                .await
+                .is_err(),
+            "{operand}"
+        );
+    }
     assert!(aggregate("category,sum:amount", 2, 6, 48).await.is_err());
     assert!(aggregate("category,sum:amount", 2, 7, 47).await.is_err());
     let group_min = aggregate("category,min:amount", 2, 7, 32).await.unwrap();
@@ -433,7 +467,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         distinct_groups
     );
     assert_eq!(
-        selected(ordered_request, Some(15), Some("desc"))
+        selected(ordered_request, Some("15"), Some("desc"))
             .await
             .unwrap(),
         selected_groups
@@ -443,7 +477,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         grouped_sum
     );
     assert_eq!(
-        selected(sum_request, Some(100), Some("desc"))
+        selected(sum_request, Some("100"), Some("desc"))
             .await
             .unwrap(),
         selected_sum
@@ -639,7 +673,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
             Ok(())
         );
     };
-    let query = async |select: &str, minimum: Option<u64>| {
+    let query = async |select: &str, minimum: Option<&str>| {
         let request = (
             "DecimalRow",
             None::<Vec<u8>>,
@@ -654,7 +688,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
             select,
             (
                 false,
-                minimum,
+                (minimum, None::<&str>),
                 select.starts_with("zone,").then_some("desc"),
             ),
         );
@@ -684,27 +718,86 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
             query("avg:value", None).await.unwrap().1,
             vec![vec!["1".to_owned()]]
         );
+        for threshold in ["0.75", "-1.25", "1.00"] {
+            assert_eq!(
+                query("zone,avg:value", Some(threshold)).await.unwrap().1,
+                vec![vec!["true".to_owned(), "1".to_owned()]]
+            );
+        }
+        assert!(
+            query("zone,avg:value", Some("1.01"))
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        for threshold in [
+            "0.001",
+            "NaN",
+            "1e0",
+            "1701411834604692317316873037158841057.28",
+            "",
+        ] {
+            assert!(
+                query("zone,avg:value", Some(threshold)).await.is_err(),
+                "{threshold}"
+            );
+        }
         assert!(query("avg:maybe", None).await.unwrap().1.is_empty());
         assert_eq!(
-            query("zone,avg:value", Some(1)).await.unwrap().1,
+            query("zone,avg:value", Some("1")).await.unwrap().1,
             vec![vec!["true".to_owned(), "1".to_owned()]]
         );
-        assert!(query("zone,avg:value", Some(2)).await.unwrap().1.is_empty());
+        assert!(
+            query("zone,avg:value", Some("2"))
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
         assert_eq!(
             query("zone,avg:maybe", None).await.unwrap().1,
             vec![vec!["true".to_owned(), "—".to_owned()]]
         );
         assert!(query("sum:maybe", None).await.unwrap().1.is_empty());
         assert_eq!(
-            query("zone,sum:value", Some(3)).await.unwrap().1,
+            query("zone,sum:value", Some("3")).await.unwrap().1,
             vec![vec!["true".to_owned(), "3".to_owned()]]
         );
-        assert!(query("zone,sum:value", Some(4)).await.unwrap().1.is_empty());
+        assert!(
+            query("zone,sum:value", Some("4"))
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
         assert_eq!(
             query("zone,sum:maybe", None).await.unwrap().1,
             vec![vec!["true".to_owned(), "—".to_owned()]]
         );
         assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    for aliases in [["1", "1.0", "1.00"], ["0", "-0.00", "0.0"]] {
+        write(aliases.into_iter().map(str::to_owned).collect()).await;
+        for upgraded in [false, true] {
+            if upgraded {
+                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+            let before = pic.get_stable_memory(canister).await;
+            for (select, expected) in [
+                ("count:value", vec![vec!["3"]]),
+                ("count:maybe", vec![vec!["0"]]),
+                ("distinct-count:value", vec![vec!["1"]]),
+                ("distinct-count:maybe", vec![vec!["1"]]),
+                ("zone,distinct-count:value", vec![vec!["true", "1"]]),
+                ("zone,distinct-count:maybe", vec![vec!["true", "1"]]),
+            ] {
+                assert_eq!(query(select, None).await.unwrap().1, expected, "{select}");
+            }
+            assert_eq!(pic.get_stable_memory(canister).await, before);
+        }
     }
     // Fixed scale 2: max coefficient + one cent - one cent cancels exactly.
     let maximum = "1701411834604692317316873037158841057.27";

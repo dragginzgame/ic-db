@@ -50,7 +50,7 @@ type Request = (
     u32,
     u32,
     String,
-    (bool, Option<u64>, Option<String>),
+    (bool, (Option<String>, Option<String>), Option<String>),
 );
 type Page = (
     Vec<String>,
@@ -79,7 +79,7 @@ fn query(
         work,
         bytes,
         select,
-        (distinct, group_min, group_order),
+        (distinct, (group_min, group_max), group_order),
     ): Request,
 ) -> Result<Page, String> {
     let group_order = parse_group_order(group_order.as_deref())?;
@@ -105,7 +105,11 @@ fn query(
                     bytes,
                 ),
                 &select,
-                (distinct, group_min, group_order),
+                (
+                    distinct,
+                    (group_min.as_deref(), group_max.as_deref()),
+                    group_order,
+                ),
                 &["id", "category", "amount"],
                 |r| {
                     vec![
@@ -129,7 +133,11 @@ fn query(
                     bytes,
                 ),
                 &select,
-                (distinct, group_min, group_order),
+                (
+                    distinct,
+                    (group_min.as_deref(), group_max.as_deref()),
+                    group_order,
+                ),
                 &[
                     "id",
                     "entry_id",
@@ -165,7 +173,11 @@ fn query(
                 bytes,
             ),
             &select,
-            (distinct, group_min, group_order),
+            (
+                distinct,
+                (group_min.as_deref(), group_max.as_deref()),
+                group_order,
+            ),
             &["id", "zone", "value", "maybe"],
             |r| {
                 vec![
@@ -265,26 +277,49 @@ fn decimal_query(
 fn select_groups<'a, E: Entity>(
     mut query: Query<'a, E, Backing>,
     select: &str,
-    group_min: Option<u64>,
+    (group_min, group_max): (Option<&str>, Option<&str>),
     group_order: Option<GroupOrder>,
 ) -> Result<Query<'a, E, Backing>, String> {
-    if let Some(value) = group_min {
+    for (comparison, value) in [(Comparison::Ge, group_min), (Comparison::Le, group_max)] {
+        let Some(value) = value else {
+            continue;
+        };
+        if value.len() > 64 {
+            return Err(message(Error::InvalidOperand));
+        }
         query = match select {
-            "category,sum:amount" | "entry_id,sum:priority" => {
-                query.filter_groups(Comparison::Ge, u128::from(value))
-            }
-            "entry_id,sum:score" => query.filter_groups(Comparison::Ge, i128::from(value)),
+            "category,sum:amount" | "entry_id,sum:priority" => query.filter_groups(
+                comparison,
+                value
+                    .parse::<u128>()
+                    .map_err(|_| message(Error::InvalidOperand))?,
+            ),
+            "entry_id,sum:score" => query.filter_groups(
+                comparison,
+                value
+                    .parse::<i128>()
+                    .map_err(|_| message(Error::InvalidOperand))?,
+            ),
             "zone,sum:value"
             | "zone,sum:maybe"
             | "zone,avg:value"
             | "zone,avg:maybe"
+            | "zone,min:value"
+            | "zone,max:value"
+            | "zone,min:maybe"
+            | "zone,max:maybe"
             | "category,avg:amount" => query.filter_groups(
-                Comparison::Ge,
-                ic_db::Decimal::try_new(i128::from(value), 0)
-                    .ok_or(Error::InvalidOperand)
-                    .map_err(message)?,
+                comparison,
+                value
+                    .parse::<ic_db::Decimal>()
+                    .map_err(|_| message(Error::InvalidOperand))?,
             ),
-            _ => query.filter_groups(Comparison::Ge, value),
+            _ => query.filter_groups(
+                comparison,
+                value
+                    .parse::<u64>()
+                    .map_err(|_| message(Error::InvalidOperand))?,
+            ),
         };
     }
     if let Some(order) = group_order {
@@ -296,14 +331,14 @@ fn select_groups<'a, E: Entity>(
 fn execute<E: Entity>(
     mut query: Query<'_, E, Backing>,
     select: &str,
-    (distinct, group_min, group_order): (bool, Option<u64>, Option<GroupOrder>),
+    (distinct, bounds, group_order): (bool, (Option<&str>, Option<&str>), Option<GroupOrder>),
     columns: &[&str],
     render: fn(E) -> Vec<String>,
 ) -> Result<Page, String> {
     if distinct {
         query = query.distinct();
     }
-    let query = select_groups(query, select, group_min, group_order)?;
+    let query = select_groups(query, select, bounds, group_order)?;
     match select {
         "avg:amount" => query
             .avg::<AverageAmount>()
@@ -316,27 +351,30 @@ fn execute<E: Entity>(
                 |v| v.amount.to_string(),
             )
         }),
-        "sum:value" | "avg:value" => {
-            let result = if select == "avg:value" {
-                query.avg::<TotalDecimal>()
-            } else {
-                query.sum::<TotalDecimal>()
+        "sum:value" | "avg:value" | "min:value" | "max:value" => {
+            let result = match select {
+                "avg:value" => query.avg::<TotalDecimal>(),
+                "min:value" => query.min::<TotalDecimal>(),
+                "max:value" => query.max::<TotalDecimal>(),
+                _ => query.sum::<TotalDecimal>(),
             };
             result.map(|r| display_value(r, "value", |r| r.value.to_string()))
         }
-        "sum:maybe" | "avg:maybe" => {
-            let result = if select == "avg:maybe" {
-                query.avg::<OptionalDecimal>()
-            } else {
-                query.sum::<OptionalDecimal>()
+        "sum:maybe" | "avg:maybe" | "min:maybe" | "max:maybe" => {
+            let result = match select {
+                "avg:maybe" => query.avg::<OptionalDecimal>(),
+                "min:maybe" => query.min::<OptionalDecimal>(),
+                "max:maybe" => query.max::<OptionalDecimal>(),
+                _ => query.sum::<OptionalDecimal>(),
             };
             result.map(|r| display_value(r, "maybe", |r| optional(r.maybe)))
         }
-        "zone,sum:value" | "zone,avg:value" => {
-            let result = if select == "zone,avg:value" {
-                query.group_avg::<ZoneOnly, TotalDecimal>()
-            } else {
-                query.group_sum::<ZoneOnly, TotalDecimal>()
+        "zone,sum:value" | "zone,avg:value" | "zone,min:value" | "zone,max:value" => {
+            let result = match select {
+                "zone,avg:value" => query.group_avg::<ZoneOnly, TotalDecimal>(),
+                "zone,min:value" => query.group_min::<ZoneOnly, TotalDecimal>(),
+                "zone,max:value" => query.group_max::<ZoneOnly, TotalDecimal>(),
+                _ => query.group_sum::<ZoneOnly, TotalDecimal>(),
             };
             result.map(|r| {
                 display_group_values(
@@ -347,11 +385,12 @@ fn execute<E: Entity>(
                 )
             })
         }
-        "zone,sum:maybe" | "zone,avg:maybe" => {
-            let result = if select == "zone,avg:maybe" {
-                query.group_avg::<ZoneOnly, OptionalDecimal>()
-            } else {
-                query.group_sum::<ZoneOnly, OptionalDecimal>()
+        "zone,sum:maybe" | "zone,avg:maybe" | "zone,min:maybe" | "zone,max:maybe" => {
+            let result = match select {
+                "zone,avg:maybe" => query.group_avg::<ZoneOnly, OptionalDecimal>(),
+                "zone,min:maybe" => query.group_min::<ZoneOnly, OptionalDecimal>(),
+                "zone,max:maybe" => query.group_max::<ZoneOnly, OptionalDecimal>(),
+                _ => query.group_sum::<ZoneOnly, OptionalDecimal>(),
             };
             result.map(|r| {
                 display_group_values(
@@ -430,6 +469,27 @@ fn execute<E: Entity>(
             "priority",
             |r: PriorityOnly| optional(r.priority),
         ),
+        "zone,count" => query
+            .group_count::<ZoneOnly>()
+            .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
+        "distinct-count:value" => query
+            .count_distinct::<TotalDecimal>()
+            .map(|r| display_count(&r)),
+        "zone,distinct-count:value" => query
+            .group_count_distinct::<ZoneOnly, TotalDecimal>()
+            .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
+        "zone,count:value" => query
+            .group_count_field::<ZoneOnly>("value")
+            .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
+        "distinct-count:maybe" => query
+            .count_distinct::<OptionalDecimal>()
+            .map(|r| display_count(&r)),
+        "zone,distinct-count:maybe" => query
+            .group_count_distinct::<ZoneOnly, OptionalDecimal>()
+            .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
+        "zone,count:maybe" => query
+            .group_count_field::<ZoneOnly>("maybe")
+            .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "count" => query.count().map(|r| display_count(&r)),
         "distinct-count:category" => query
             .count_distinct::<CategoryOnly>()

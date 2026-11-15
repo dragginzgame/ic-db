@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.13.0] - 2026-11-15 (development checkpoint)
+
+### ▶️ Try it
+
+```sh
+make db
+db aggregate Document --select entry_id,sum:score --group-min -10 --work 1
+db aggregate DecimalRow --select zone,avg:value --group-min 0.75 --work 1
+db query Entry --select category,avg:amount --group-min 31.50
+db aggregate Entry --select category,sum:amount --group-min 93 --group-max 120 --page-size 1
+db query DecimalRow --select zone,avg:value --group-min 0.75 --group-max 1.00
+db aggregate DecimalRow --select min:value --work 1
+db aggregate DecimalRow --select zone,max:value --group-min 2.50 --group-max 2.50 --work 1
+db query DecimalRow --select zone,min:maybe
+db aggregate DecimalRow --select count:maybe --work 1
+db aggregate DecimalRow --select zone,distinct-count:maybe --work 1
+db query DecimalRow --select distinct-count:value
+```
+
+### 🛠️ Changes
+
+- Parse CLI group thresholds in the selected aggregate's exact result type,
+  shared by synchronous and retained queries. Signed sums accept negative
+  thresholds; Decimal results accept fractions within their declared scale;
+  widened integer sums accept their full result domain. Integer fractions,
+  overflow, excess Decimal precision and threshold text above 64 bytes refuse.
+  Reuse existing parsers and engine admission without changing durable formats.
+- Add `--group-max` to synchronous and retained CLI queries. Either bound may
+  be used alone; together they form an inclusive range on completed aggregate
+  values before ordering, total limits and paging. Share typed parsing for both
+  bounds and compose existing engine predicates. Valid inverted ranges return
+  no groups; malformed operands still refuse. No local result filtering is added.
+- Expose Decimal min/max in both CLI query modes for required `value` and
+  optional `maybe`, with optional `zone` grouping. Keep exact Decimal operands
+  for group bounds, empty scalar results for all-absent input, and absent grouped
+  results. Share existing result records and formatting with sum/average;
+  product reducers, codecs and job formats remain unchanged.
+- Add Decimal field and DISTINCT counts to both CLI modes, optionally grouped
+  by `zone`. Retain zero-count groups and one DISTINCT absent value; count
+  thresholds remain Nat64 rather than Decimal. Reuse existing projection records,
+  presence checks and bounded key sets. Qualification checks equivalent Decimal
+  spellings and signed zero across upgrade, without changing storage semantics.
+
 ## [0.12.0] - 2026-11-15 (development checkpoint)
 
 ### ▶️ Try it
