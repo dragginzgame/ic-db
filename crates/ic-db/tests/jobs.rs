@@ -33,6 +33,40 @@ fn time(ms: i64) -> Timestamp {
 }
 
 #[test]
+fn exclusion_jobs_share_inequality_identity_and_exact_counts() {
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(10)], 0);
+    let values = [ic_db::IndexValue::Absent, 10_i128.into(), 10_i128.into()];
+    let handle = db
+        .query::<Row>()
+        .filter_not_in("amount", &values)
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let mut sequence = 0;
+    for _ in 0..4 {
+        let step = db
+            .query::<Row>()
+            .filter("amount", Comparison::Ne, ic_db::IndexValue::Absent)
+            .filter("amount", Comparison::Ne, 10_i128)
+            .filter("amount", Comparison::Ne, 10_i128)
+            .work_limit(2)
+            .resume_count(&mut jobs, &handle, sequence, time(1))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {}
+            JobOutcome::Complete(value) => {
+                assert_eq!(value, 1);
+                assert_eq!(step.examined, 4);
+                return;
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    panic!("bounded exclusion must complete");
+}
+
+#[test]
 fn membership_jobs_share_equality_clause_identity_and_exact_counts() {
     let runtime = host(VectorMemory::default());
     let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(10)], 0);

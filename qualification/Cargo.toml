@@ -1,16 +1,16 @@
 [workspace]
 members = [
-    "aggregation-canister",
-    "entity-growth-canister",
-    "icydb-baseline-canister",
-    "icydb-baseline-schema",
-    "maintenance-canister",
-    "records-benchmark-canister",
-    "records-canister",
-    "records-schema",
-    "rollback-canister",
-    "rollback-driver",
-    "transport",
+    "ic-db-entity-growth-canister",
+    "ic-db-icydb-baseline-canister",
+    "ic-db-icydb-baseline-schema",
+    "ic-db-m0-aggregation-canister",
+    "ic-db-m0-maintenance-canister",
+    "ic-db-m0-rollback-canister",
+    "ic-db-m0-rollback-driver",
+    "ic-db-m1-records-canister",
+    "ic-db-m1-records-schema",
+    "ic-db-qualification-transport",
+    "ic-db-records-benchmark-canister",
 ]
 resolver = "3"
 
@@ -22,20 +22,20 @@ publish = false
 [workspace.dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 ic-db = { path = "../crates/ic-db" }
-ic-db-icydb-baseline-schema = { path = "icydb-baseline-schema" }
-ic-db-m1-records-schema = { path = "records-schema" }
-ic-db-qualification-transport = { path = "transport" }
+ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }
+ic-db-m1-records-schema = { path = "ic-db-m1-records-schema" }
+ic-db-qualification-transport = { path = "ic-db-qualification-transport" }
 ic-host-artifacts = "0.79.0"
 ic-host-text = "0.76.0"
 ic-platform-runtime = { version = "0.22.4", default-features = false }
 ic-storage = "0.74.1"
 ic-testkit = "0.106.0"
-ic-wire = "0.22.1"
+ic-wire = "0.24.0"
 icydb = { git = "https://github.com/dragginzgame/icydb", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
 serde = "1.0.229"
 sha2 = { version = "0.11.1", default-features = false }
 tokio = "1.54.1"
-toko-tooling = "=0.44.3"
+toko-tooling = "=0.44.4"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

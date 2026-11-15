@@ -119,6 +119,9 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Empty lists refuse; duplicates consume the comparison budget but never repeat
   rows. Optional absence requires an explicit absent member. Do not sort, deduplicate
   or coerce operands before admission or silently change continuation identity.
+  `filter_not_in` lowers to consecutive `Ne` filters in supplied order, with
+  their existing cursor/job identity. Keep the nonempty-list/eight-term bounds;
+  absent values remain eligible unless explicitly excluded. No negation executor.
   `Comparison::StartsWith` accepts present Text operands only, including for
   completed text min/max groups. Match exact UTF-8 without case folding or
   normalization; an empty prefix matches present empty text, never absence.
@@ -236,12 +239,12 @@ installer. Do not edit vendor files or copy upstream reference documents.
   transport helpers outside product crates. Do not restore Wire Endpoint, a second
   executor or an endpoint registry. `make m0-endpoints` checks admission and reply
   failure across synchronous and callback execution boundaries.
-  Shared fixture codecs live in the private `qualification/transport` crate,
+  Shared fixture codecs live in the private `qualification/ic-db-qualification-transport` crate,
   with ordinary Cargo dependencies rather than shared-source path modules.
 - Retain IcyDB's two-stage schema path expansion: Rust resolves typed paths,
   host-only `ctor` registration collects declarations, then a second stage
   validates/seals the graph and emits target artifacts. Keep collection and ctor
-  out of deployed Wasm. Qualification's `records-schema` crate supplies the same
+  out of deployed Wasm. Qualification's `ic-db-m1-records-schema` crate supplies the same
   declarations to host and target through ordinary Cargo dependencies; keep it
   private and outside the product workspace. The scalar entity pipeline is implemented through the
   optional `ic-db/build` feature. Named records and unit/payload enums resolve through entity field

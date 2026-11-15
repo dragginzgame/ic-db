@@ -329,6 +329,131 @@ fn text_prefix_groups_and_refusals_share_exact_admission() {
 }
 
 #[test]
+fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for excluded in [vec![Some(1), Some(1)], vec![None], vec![None, Some(1)]] {
+        let values: Vec<_> = excluded
+            .iter()
+            .map(|value| value.map_or(IndexValue::Absent, IndexValue::Nat64))
+            .collect();
+        let expected: Vec<_> = (1..=8)
+            .map(row)
+            .filter(|r| !excluded.contains(&r.maybe))
+            .map(|r| r.id)
+            .collect();
+        for descending in [false, true] {
+            let mut actual = Vec::new();
+            let mut cursor = None;
+            for step in 0..16 {
+                let mut query = db
+                    .query::<Entry>()
+                    .filter_not_in("maybe", &values)
+                    .work_limit(1);
+                if descending {
+                    query = query.descending();
+                }
+                if let Some(cursor) = &cursor {
+                    query = query.after(cursor);
+                }
+                let page = query.fetch().unwrap();
+                assert!(page.examined <= 1);
+                actual.extend(ids(&page.rows));
+                cursor = page.next;
+                if cursor.is_none() {
+                    break;
+                }
+                assert!(
+                    step < 15,
+                    "exclusion must progress past rejected candidates"
+                );
+            }
+            let mut ordered = expected.clone();
+            if descending {
+                ordered.reverse();
+            }
+            assert_eq!(actual, ordered);
+        }
+        assert_eq!(
+            db.query::<Entry>()
+                .filter_not_in("maybe", &values)
+                .count()
+                .unwrap()
+                .value,
+            expected.len() as u64
+        );
+    }
+    let values = [1_u64.into(), 3_u64.into(), 3_u64.into()];
+    let first = db
+        .query::<Entry>()
+        .filter_not_in("id", &values)
+        .limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&first.rows), [2]);
+    let cursor = first.next.unwrap();
+    let rest = db
+        .query::<Entry>()
+        .filter("id", C::Ne, 1_u64)
+        .filter("id", C::Ne, 3_u64)
+        .filter("id", C::Ne, 3_u64)
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [4, 5, 6, 7, 8]);
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_not_in("id", &[values[1], values[0], values[2]])
+            .after(&cursor)
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
+}
+
+#[test]
+fn exclusion_admits_every_member_and_shares_the_filter_budget() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for values in [vec![], vec![1_u64.into(); 9]] {
+        assert!(matches!(
+            db.query::<Entry>().filter_not_in("id", &values).fetch(),
+            Err(Error::Limit)
+        ));
+    }
+    assert_eq!(
+        db.query::<Entry>()
+            .filter_not_in("id", &[1_u64.into(); 8])
+            .count()
+            .unwrap()
+            .value,
+        7
+    );
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("amount", C::Ge, 0_u64)
+            .filter_not_in("id", &[1_u64.into(); 8])
+            .fetch(),
+        Err(Error::Limit)
+    ));
+    for invalid in [IndexValue::Absent, 1_u8.into(), "wrong".into()] {
+        // No row survives the first filter; invalid later operands still refuse.
+        assert!(matches!(
+            db.query::<Entry>()
+                .filter("id", C::Lt, 0_u64)
+                .filter_not_in("id", &[1_u64.into(), invalid])
+                .fetch(),
+            Err(Error::InvalidOperand)
+        ));
+    }
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_not_in("missing", &[1_u64.into()])
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

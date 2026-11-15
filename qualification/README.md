@@ -6,6 +6,12 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
+Package directories match their Cargo package names. Qualification callers use
+Wire 0.24's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
+frozen IcyDB comparison retains its separate transitive Wire 0.22.4 selection;
+there is no cross-version Wire type exchange or product Wire dependency.
+
 Probe schemas are synthetic examples of generic database invariants. Names such
 as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
@@ -65,6 +71,11 @@ empty/oversized lists, hidden invalid operands and cross-method cursor/job ident
 The Wasm witness pages duplicate-containing membership lists in both directions,
 applies an explicit index prefix, refuses changed members, and resumes unchanged
 cursors after upgrade without changing stable bytes.
+Exclusion-list native qualification checks `filter_not_in` against an independent
+optional-value oracle, both paging directions, invalid/empty/oversized lists and
+the shared term budget. Cursors and retained counts resume through equivalent
+ordinary inequality chains. This builder-only addition introduces no new Wasm
+execution branch or checkpoint format.
 Text-prefix qualification compares `Comparison::StartsWith` against Rust's
 `str::starts_with`, including empty/absent text, embedded NUL, case differences
 and canonically different Unicode strings. Native cases cover ordered pages,
@@ -184,9 +195,9 @@ copy found during measurement was removed. These costs remain below the matched
 IcyDB ceilings. No direct-to-fluent performance parity is claimed.
 
 All six canister hosts use Platform's generic `guard`, `decode_with` and
-`encode_with` hooks with the [fixed fixture codecs](transport/src/lib.rs), shared
+`encode_with` hooks with the [fixed fixture codecs](ic-db-qualification-transport/src/lib.rs), shared
 through one private qualification crate with ordinary Cargo dependencies. No Canic or
-Wire Endpoint dependency is needed. The [standalone example](rollback-canister/src/entrypoints.rs)
+Wire Endpoint dependency is needed. The [standalone example](ic-db-m0-rollback-canister/src/entrypoints.rs)
 is executable qualification, not a new product API or endpoint framework.
 Platform owns execution/reply; Wire owns native frames. Existing method names,
 IDs, payloads and directional limits remain unchanged: each direction allows
@@ -258,8 +269,8 @@ tests independently frame owner/subaccount bytes and reject truncated, oversized
 trailing and wrong index owners. No transport bytes are used as durable keys.
 
 The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
-Its [shared declarations](records-schema/src/lib.rs) are a private qualification
-crate used by both the [host build script](records-canister/build.rs) and Wasm
+Its [shared declarations](ic-db-m1-records-schema/src/lib.rs) are a private qualification
+crate used by both the [host build script](ic-db-m1-records-canister/build.rs) and Wasm
 target through ordinary Cargo dependencies. Host-only `ctor`
 registration collects full Rust paths; the second stage validates and seals the
 selected module's schema, then emits its typed assembly and expected fingerprint.
@@ -922,8 +933,9 @@ The existing identity witness now uses named variants (`ICDBM0C4`); its independ
 OpenSSL vector changed deliberately. No product format or retained data exists
 under either fixture encoding.
 
-`nested_row_codec` adds one handwritten recursive row projection using published
-Wire 0.22.1 and test-only Serde 1.0.229 (registry-verified, already transitive).
+`nested_row_codec` adds one handwritten recursive row projection, originally
+qualified with Wire 0.22.1 and now using Wire 0.24.0's payload API. It retains
+test-only Serde 1.0.229 (already transitive).
 The application struct and enum declaration orders deliberately differ from their
 storage traversal. A literal payload oracle checks canonical order; map/set
 construction order does not affect bytes, while list order and absent/empty
@@ -950,7 +962,7 @@ cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollbac
 ```
 
 `make m0-contracts` also runs `row_codec`, a fixed `(amount, id, note)` tuple in
-canonical field-name order. Wire 0.22.1 owns payload serialization; a small
+canonical field-name order. Wire 0.24.0 owns this fixture's payload serialization; a small
 database-owned frame and externally admitted schema identity precede decoding.
 The literal example occupies 19 bytes: 12 fixture framing bytes and 7 payload
 bytes, with no repeated field names. This is not a production overhead budget.

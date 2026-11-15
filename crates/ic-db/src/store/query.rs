@@ -232,6 +232,24 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         )
     }
 
+    /// Exclude every supplied exact value, ANDed with other filters.
+    /// Equivalent to consecutive `filter(field, Comparison::Ne, value)` calls
+    /// in the supplied order. Absent fields match unless absence is explicitly
+    /// excluded. Empty lists refuse; all members, including duplicates, count
+    /// toward the shared eight-comparison budget. Every operand is admitted.
+    /// The equivalent inequality chain shares cursor/job identity; reordering
+    /// the list changes that identity. No coercion or deduplication is performed.
+    #[must_use]
+    pub fn filter_not_in(mut self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
+        if values.is_empty() || values.len() > MAX_TERMS - self.request.predicates.len() {
+            self.request.over_limit = true;
+            return self;
+        }
+        values.iter().fold(self, |query, &value| {
+            query.filter(field, Comparison::Ne, value)
+        })
+    }
+
     fn or_clause(
         mut self,
         alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, IndexValue<'a>)>,

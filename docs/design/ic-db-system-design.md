@@ -1687,6 +1687,18 @@ from `db/predicate/normalize/tests/owned_membership.rs`, without its sorting,
 deduplication or canonical membership representation. Both fluent methods share
 clause construction; no temporary member collection or new execution path is needed.
 
+`filter_not_in(field, values)` adds consecutive ordinary `Ne` filters in supplied
+order, under the same nonempty-list and eight-comparison bounds. An absent field
+matches unless an explicit absent operand excludes it. Every member is admitted,
+even if an earlier predicate rejects all rows; duplicates consume budget. The
+equivalent inequality chain has identical cursor/job identity. This retains the
+exact exclusion requirement represented by frozen IcyDB `6d421e3`'s `NotIn` in
+`db/predicate/runtime/compare/value.rs`; its list-value/coercion evaluator is not
+copied. IC DB rejects invalid operands during admission and needs no additional
+comparison variant, negation executor or retained representation. Native oracles
+cover optional values, duplicate exclusions, both page directions, bounds and
+continuation through ordinary inequalities, including retained counts.
+
 `Comparison::StartsWith` admits present Text operands under the declared byte
 limit, for row filters and completed text min/max group selection. Matching is
 literal, case-sensitive UTF-8 with no normalization; the empty prefix matches
@@ -2780,7 +2792,7 @@ reverse-index name after the type payload. Adding new tags preserves contracts
 that do not use them; changed codec semantics require a declared version change.
 Independent golden fingerprints remain in the
 [native record tests](../../crates/ic-db/tests/records.rs) and
-[Wasm fixture tests](../../qualification/rollback-driver/tests/records.rs),
+[Wasm fixture tests](../../qualification/ic-db-m0-rollback-driver/tests/records.rs),
 rather than a second fixture-identity ledger here. CLI sessions create fresh data;
 changes to these examples are not migrations of an existing deployment.
 
@@ -3432,13 +3444,18 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.43.2. Qualification selects
+The current tooling baseline is Toko Tooling 0.44.4. Qualification selects
 IC Storage 0.74.1, Testkit 0.106.0 (PocketIC 16.1.0), Platform Runtime 0.22.5
-and Wire 0.22.1, with exact resolution in its own lockfile. Wire Endpoint and its
+and Wire 0.24.0, with exact resolution in its own lockfile. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions
 are probe inputs, not a product compatibility promise. Earlier M0 runs used the
 versions recorded with their evidence; product codec carryover from IcyDB is
 identified in the corresponding implementation sections above.
+Fixture callers use Wire's root-level APIs with explicit payload or framed
+request/response encoding; method identities and bounds stay unchanged. The
+frozen IcyDB comparison alone retains transitive Wire 0.22.4. No Wire type crosses
+that boundary or enters the product's codecs. Qualification package directories
+now match their existing Cargo package names, without changing package identities.
 Host Artifacts/FS/Process select 0.79.0 and Host Text selects 0.76.0; the CLI and
 probes use their retained APIs. The tooling installer updates the qualification
 release-lock planner; no product release or publication is part of adoption.

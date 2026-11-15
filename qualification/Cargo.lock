@@ -1002,7 +1002,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
+ "ic-wire 0.24.1",
  "toko-tooling",
 ]
 
@@ -1014,7 +1014,7 @@ dependencies = [
  "ic-host-artifacts",
  "ic-host-text",
  "ic-testkit",
- "ic-wire",
+ "ic-wire 0.24.1",
  "serde",
  "sha2 0.11.1",
  "tokio",
@@ -1030,7 +1030,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
+ "ic-wire 0.24.1",
  "toko-tooling",
 ]
 
@@ -1056,7 +1056,7 @@ name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
  "ic-platform-runtime",
- "ic-wire",
+ "ic-wire 0.24.1",
  "serde",
  "toko-tooling",
 ]
@@ -1254,6 +1254,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-wire"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6811e5270a9c430cf0b1cf86ba4c8f6a3c15b597cd8f2f99fa2af7a4f82e1297"
+dependencies = [
+ "bytemuck",
+ "postcard",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "ic0"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1363,7 +1375,7 @@ dependencies = [
  "ic-platform-runtime",
  "ic-platform-types",
  "ic-storage",
- "ic-wire",
+ "ic-wire 0.22.4",
  "icydb-core",
  "icydb-diagnostic-code",
  "icydb-model",
@@ -1383,7 +1395,7 @@ dependencies = [
  "ic-entropy",
  "ic-platform-runtime",
  "ic-storage",
- "ic-wire",
+ "ic-wire 0.22.4",
  "icydb-diagnostic-code",
  "icydb-schema",
  "remain",
@@ -1446,7 +1458,7 @@ source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea
 dependencies = [
  "ethnum",
  "ic-platform-types",
- "ic-wire",
+ "ic-wire 0.22.4",
  "serde",
  "sha2 0.11.1",
  "thiserror 2.0.18",
@@ -2781,9 +2793,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.44.3"
+version = "0.44.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9bc7b6827044baac8134cada7ee6bc31f86c70beec9608d1d39d911eba15e1"
+checksum = "b52bb793b386309b8c4a9e88f32711bb5d1fd11a47bf337c11c63ca2aa22fc97"
 
 [[package]]
 name = "toml_datetime"

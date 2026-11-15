@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.15.0] - Unreleased
+
+### ▶️ Try it
+
+```sh
+make db
+db schema Entry
+db query Entry --limit 2
+db aggregate Entry --select category,count \
+  --work 1 --page-size 1
+```
+
+These commands use the disposable local fixture with the updated Wire transport.
+
+### 🔧 Dependencies
+
+- Adopt Toko Tooling 0.44.4 through its published snapshot installer in both
+  workspaces. Rename qualification directories to their existing Cargo package
+  names and update workspace paths and documentation; package identities stay
+  unchanged.
+- Upgrade qualification transport to IC Wire 0.24.0 and migrate callers to its
+  root-level APIs with explicit payload/request/response encoding. Preserve
+  fixture method IDs and resource bounds without a legacy API wrapper. The
+  frozen IcyDB comparison still brings Wire 0.22.4 transitively; the IC DB product
+  remains independent of Wire.
+
+### ➕ Added
+
+- Add fluent `filter_not_in(field, values)` for bounded exact-value exclusion.
+  It expands to ordinary inequality filters and shares their cursor/job identity,
+  admission and execution. Absent fields match unless absence is explicitly
+  excluded. Lists must be nonempty; duplicates count toward the shared
+  eight-comparison budget. No new executor, stored format or CLI flag is added.
+
 ## [0.14.0] - 2026-11-15
 
 ### ▶️ Try it

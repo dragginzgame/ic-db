@@ -82,6 +82,12 @@ matches only an explicit `IndexValue::Absent` member. No member is coerced or
 discarded before validation. The supplied order binds cursors/jobs, and the same
 ordered equality clause can resume work started through `filter_in`.
 
+Use `filter_not_in("id", &[1_u64.into(), 3_u64.into()])` to exclude listed values.
+It is equivalent to consecutive `Ne` filters, including their cursor/job identity.
+Absent fields remain eligible unless the list includes `IndexValue::Absent`.
+The list must be nonempty; every member consumes the same comparison budget and
+undergoes exact admission. Reordering it changes continuation identity.
+
 Text fields also accept exact prefixes:
 
 ```rust
@@ -464,8 +470,8 @@ define durable identity. The fixture now uses
 IcyDB's two-stage approach: host-only `ctor` registration, followed by validated
 schema assembly generated for the target. This is implemented for scalar entities;
 named records and payload enums participate through typed fields. See the
-[shared schema](qualification/records-schema/src/lib.rs) and its
-[build script](qualification/records-canister/build.rs).
+[shared schema](qualification/ic-db-m1-records-schema/src/lib.rs) and its
+[build script](qualification/ic-db-m1-records-canister/build.rs).
 Records use `#[record(fields(...))]` and enums use
 `#[enum_(variant(name = "Ready"), variant(name = "Data", value(item(is = "Details"))))]`.
 Both retain the empty-struct authoring style. Fields use `value(item(is = "Type"))`;
@@ -617,7 +623,7 @@ The authoring comparison is complete. M1 keeps the familiar attribute-owned
 entity/record declarations with empty struct bodies; alternatives may be explored
 later. For a real executable declaration and write/reopen journey, see
 [the record tests](crates/ic-db/tests/records.rs) and
-[the CLI fixture](qualification/records-canister/src/lib.rs).
+[the CLI fixture](qualification/ic-db-m1-records-canister/src/lib.rs).
 Run `make m1-records` for their focused native and Wasm checks.
 
 ## Database console
