@@ -312,12 +312,25 @@ pub(super) fn group_binding(
         },
     ]);
     hash.update([groups.selection.predicates.len() as u8]);
-    for (comparison, operand) in &groups.selection.predicates {
+    for (comparison, operand, _) in &groups.selection.predicates {
         hash.update([*comparison as u8]);
         // Frame admitted operands so binding never relies on implicit widths.
         let bytes = operand.as_deref().unwrap_or_default();
         hash.update((bytes.len() as u32).to_le_bytes());
         hash.update(bytes);
+    }
+    // Preserve conjunction-only bindings; add identity only for actual OR clauses.
+    let clauses = groups
+        .selection
+        .predicates
+        .iter()
+        .enumerate()
+        .fold(0_u8, |mask, (i, (_, _, or_next))| {
+            mask | (u8::from(*or_next) << i)
+        });
+    if clauses != 0 {
+        hash.update(b"group-or-clauses\0");
+        hash.update([clauses]);
     }
     Ok(hash.finalize().into())
 }

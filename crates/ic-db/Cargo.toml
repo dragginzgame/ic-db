@@ -23,6 +23,7 @@ ethnum.workspace = true
 ic-db-macros.workspace = true
 ic-platform-types.workspace = true
 ic-storage.workspace = true
+memchr.workspace = true
 sha2.workspace = true
 ulid.workspace = true
 

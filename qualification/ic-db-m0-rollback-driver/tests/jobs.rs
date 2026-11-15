@@ -5,6 +5,95 @@ use ic_wire::{Direction, Encoding};
 type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
 
 #[tokio::test]
+async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let reply = pic
+        .update_call(
+            canister,
+            canister,
+            "job_start",
+            ic_wire::encode(
+                &(14_u8, 0_i64, 100_i64, 0_u64),
+                Encoding::Frame {
+                    method: 110,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
+        &reply,
+        Encoding::Frame {
+            method: 110,
+            direction: Direction::Response,
+        },
+        LIMITS,
+    )
+    .unwrap()
+    .unwrap();
+    let advance = async |operation: u8, sequence: u64, fault: u64| {
+        pic.update_call(
+            canister,
+            canister,
+            "job_advance",
+            ic_wire::encode(
+                &(&handle, operation, sequence, 2_u32, 1_i64, fault, false),
+                Encoding::Frame {
+                    method: 111,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+    };
+    let decode = |bytes: Vec<u8>| {
+        ic_wire::decode::<Result<Response, String>>(
+            &bytes,
+            Encoding::Frame {
+                method: 111,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+    let first = decode(advance(14, 0, 0).await.unwrap()).unwrap();
+    assert_eq!((first.0, first.2, first.4), (1, 2, 0));
+    let before = pic.get_stable_memory(canister).await;
+    assert!(decode(advance(15, first.0, 0).await.unwrap()).is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert!(advance(14, first.0, 1).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    let mut sequence = first.0;
+    for _ in 0..4 {
+        let step = decode(advance(14, sequence, 0).await.unwrap()).unwrap();
+        sequence = step.0;
+        if step.4 == 1 {
+            assert_eq!(step.2, 6);
+            assert_eq!(step.5.as_deref(), Some("0:3,1:3"));
+            return;
+        }
+        assert_eq!(step.4, 0);
+    }
+    panic!("bounded grouped OR must finish");
+}
+
+#[tokio::test]
 async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();

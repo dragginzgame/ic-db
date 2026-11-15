@@ -28,7 +28,622 @@ type DisplayPage = (
 );
 
 #[tokio::test]
-async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
+async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
+    type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let setup = pic
+        .update_call(
+            canister,
+            canister,
+            "reference_batch",
+            ic_wire::encode(
+                &4_u8,
+                Encoding::Frame {
+                    method: 10,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ic_wire::decode::<Result<(), u8>>(
+            &setup,
+            Encoding::Frame {
+                method: 10,
+                direction: Direction::Response
+            },
+            LIMITS
+        )
+        .unwrap(),
+        Ok(())
+    );
+    let call = async |needle: &str, descending: bool, cursor: Option<Vec<u8>>, bytes: u32| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_text_seek",
+                ic_wire::encode(
+                    &(needle, descending, cursor, 4_u32, bytes),
+                    Encoding::Frame {
+                        method: 132,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<IdPage, u8>>(
+            &reply,
+            Encoding::Frame {
+                method: 132,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+        .unwrap()
+    };
+    for title in ["", "\0x", "a\0b", "\u{10ffff}x", "Dependent\0"] {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "replace_document",
+                ic_wire::encode(
+                    &(
+                        title,
+                        None::<String>,
+                        false,
+                        Some(0_u64),
+                        -10_i64,
+                        None::<i64>,
+                    ),
+                    Encoding::Frame {
+                        method: 8,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ic_wire::decode::<Result<(), u8>>(
+                &reply,
+                Encoding::Frame {
+                    method: 8,
+                    direction: Direction::Response
+                },
+                LIMITS
+            )
+            .unwrap(),
+            Ok(())
+        );
+        let before = pic.get_stable_memory(canister).await;
+        for needle in ["", "D", "Dependent\0", "a\0", "\0", "\u{10ffff}", "missing"] {
+            let mut expected: Vec<_> = [(title, 1_u64), ("Dependent first", 2)]
+                .into_iter()
+                .filter(|(value, _)| value.starts_with(needle))
+                .collect();
+            expected.sort();
+            for descending in [false, true] {
+                let page = call(needle, descending, None, 32).await;
+                let mut ids: Vec<_> = expected.iter().map(|(_, id)| *id).collect();
+                if descending {
+                    ids.reverse();
+                }
+                assert_eq!(page, (ids, None, expected.len() as u32));
+            }
+        }
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+    let before = pic.get_stable_memory(canister).await;
+    let ascending = call("Dependent", false, None, 8).await;
+    let descending = call("Dependent", true, None, 8).await;
+    assert_eq!((&ascending.0, ascending.2), (&vec![1], 2));
+    assert_eq!((&descending.0, descending.2), (&vec![2], 2));
+    assert_eq!(ascending.1.as_ref().unwrap()[1], 1);
+    assert_eq!(descending.1.as_ref().unwrap()[1], 1);
+    pic.advance_time(std::time::Duration::from_secs(600)).await;
+    pic.tick().await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(
+        call("Dependent", false, ascending.1, 8).await,
+        (vec![2], None, 1)
+    );
+    assert_eq!(
+        call("Dependent", true, descending.1, 8).await,
+        (vec![1], None, 1)
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
+
+#[tokio::test]
+async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuation() {
+    type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let call = async |cursor: Option<Vec<u8>>,
+                      descending: bool,
+                      category: Option<u64>,
+                      lower: u64,
+                      upper: u64,
+                      bytes: u32| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_index_range",
+                ic_wire::encode(
+                    &(cursor, descending, category, lower, upper, 32_u32, bytes),
+                    Encoding::Frame {
+                        method: 131,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<IdPage, u8>>(
+            &reply,
+            Encoding::Frame {
+                method: 131,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let before = pic.get_stable_memory(canister).await;
+    let ascending = call(None, false, None, 0, 0, 8).await;
+    let descending = call(None, true, None, 0, 0, 8).await;
+    assert_eq!((&ascending.0, ascending.2), (&vec![2], 2));
+    assert_eq!((&descending.0, descending.2), (&vec![6], 2));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    pic.advance_time(std::time::Duration::from_secs(600)).await;
+    pic.tick().await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    for (direction, first, expected) in [
+        (false, ascending, vec![2, 4, 6]),
+        (true, descending, vec![6, 4, 2]),
+    ] {
+        let mut rows = first.0;
+        let mut cursor = first.1;
+        for _ in 0..3 {
+            let page = call(cursor, direction, None, 0, 0, 8).await;
+            rows.extend(page.0);
+            cursor = page.1;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(rows, expected);
+        assert!(cursor.is_none());
+    }
+    let prefixed = call(None, false, Some(1), 3, 5, 32).await;
+    assert_eq!(prefixed, (vec![3, 5], None, 2));
+    assert_eq!(call(None, false, None, 2, 3, 8).await, (vec![], None, 0));
+    assert_eq!(call(None, true, Some(1), 5, 2, 8).await, (vec![], None, 0));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
+
+#[tokio::test]
+async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
+    type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let call = async |cursor: Option<Vec<u8>>,
+                      descending: bool,
+                      lower: u64,
+                      upper: u64,
+                      work: u32,
+                      bytes: u32| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_primary_range",
+                ic_wire::encode(
+                    &(cursor, descending, lower, upper, work, bytes),
+                    Encoding::Frame {
+                        method: 130,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<IdPage, u8>>(
+            &reply,
+            Encoding::Frame {
+                method: 130,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let backing = pic.get_stable_memory(canister).await;
+    let ascending = call(None, false, 3, 5, 1, 8).await;
+    let descending = call(None, true, 3, 5, 1, 8).await;
+    assert_eq!((&ascending.0, ascending.2), (&vec![3], 1));
+    assert_eq!((&descending.0, descending.2), (&vec![5], 1));
+    assert_eq!(pic.get_stable_memory(canister).await, backing);
+    pic.advance_time(std::time::Duration::from_secs(600)).await;
+    pic.tick().await;
+    pic.upgrade_canister(canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    for (direction, first, expected) in [
+        (false, ascending, vec![3, 4, 5]),
+        (true, descending, vec![5, 4, 3]),
+    ] {
+        let mut rows = first.0;
+        let mut cursor = first.1;
+        for _ in 0..3 {
+            let page = call(cursor, direction, 3, 5, 1, 8).await;
+            assert_eq!(page.2 as usize, page.0.len());
+            rows.extend(page.0);
+            cursor = page.1;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert!(cursor.is_none());
+        assert_eq!(rows, expected);
+    }
+    for (lower, upper) in [(8, 9), (5, 2)] {
+        assert_eq!(
+            call(None, false, lower, upper, 1, 8).await,
+            (vec![], None, 0)
+        );
+    }
+    let first = call(None, false, 3, 5, 10, 8).await;
+    assert_eq!(first.0, [3]);
+    assert_eq!(first.2, 2);
+    let rest = call(first.1, false, 3, 5, 10, 16).await;
+    assert_eq!(rest.0, [4, 5]);
+    assert!(rest.1.is_none());
+    assert_eq!(pic.get_stable_memory(canister).await, backing);
+}
+
+#[tokio::test]
+async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let call = async |minimum: Option<u64>, work: u32| {
+        let request = (
+            "Entry",
+            None::<Vec<u8>>,
+            32_u32,
+            minimum,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            work,
+            1_u32,
+            "exists",
+            (false, (None::<String>, None::<String>), None::<String>),
+        );
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 3,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<DisplayPage, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 3,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+    let before = pic.get_stable_memory(canister).await;
+    for upgraded in [false, true] {
+        if upgraded {
+            pic.advance_time(std::time::Duration::from_secs(600)).await;
+            pic.tick().await;
+            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+        for (minimum, work, expected, examined) in [
+            (None, 1, "true", 1),
+            (Some(50), 5, "true", 5),
+            (Some(999), 7, "false", 6),
+        ] {
+            let result = call(minimum, work).await.unwrap();
+            assert_eq!(result.0, vec!["exists"]);
+            assert_eq!(result.1, vec![vec![expected]]);
+            assert!(result.2.is_none());
+            assert_eq!((result.3, result.4, result.5), (examined, examined, 1));
+        }
+        assert!(call(Some(999), 6).await.is_err());
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+}
+
+#[tokio::test]
+async fn optional_list_filters_project_and_continue_across_upgrade() {
+    type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let call = async |present: bool, cursor: Option<Vec<u8>>| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_list_presence",
+                ic_wire::encode(
+                    &(present, cursor),
+                    Encoding::Frame {
+                        method: 129,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<IdPage, u8>>(
+            &reply,
+            Encoding::Frame {
+                method: 129,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+    for (mode, shape, size) in [(1_u8, 0_u8, 0_u8), (2, 2, 0), (2, 2, 2)] {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "list_write",
+                ic_wire::encode(
+                    &(mode, shape, size),
+                    Encoding::Frame {
+                        method: 33,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
+                &reply,
+                Encoding::Frame {
+                    method: 33,
+                    direction: Direction::Response
+                },
+                LIMITS
+            )
+            .unwrap()
+            .is_ok()
+        );
+        let before = pic.get_stable_memory(canister).await;
+        for present in [false, true] {
+            let first = call(present, None).await.unwrap();
+            assert_eq!(
+                first.0,
+                if present == (shape == 2) {
+                    vec![1]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(first.2, 1);
+            let cursor = first.1.unwrap();
+            assert_eq!(call(!present, Some(cursor.clone())).await.unwrap_err(), 1);
+            if present {
+                pic.advance_time(std::time::Duration::from_secs(600)).await;
+                pic.tick().await;
+                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+            let done = call(present, Some(cursor)).await.unwrap();
+            assert!(done.0.is_empty());
+            assert!(done.1.is_none());
+        }
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+}
+
+#[tokio::test]
+async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_matches() {
+    type SparsePage = (Vec<u64>, Option<Vec<u8>>, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let rows: Vec<_> = [Some("3.00"), None, Some("1.00"), Some("2.00"), None]
+        .into_iter()
+        .enumerate()
+        .map(|(i, maybe)| (i as u64 + 1, maybe, "0.00"))
+        .collect();
+    let reply = pic
+        .update_call(
+            canister,
+            canister,
+            "decimal_batch",
+            ic_wire::encode(
+                &(rows, false),
+                Encoding::Frame {
+                    method: 67,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ic_wire::decode::<Result<(), u8>>(
+            &reply,
+            Encoding::Frame {
+                method: 67,
+                direction: Direction::Response
+            },
+            LIMITS
+        )
+        .unwrap(),
+        Ok(())
+    );
+    let call =
+        async |include_absent: bool, descending: bool, cursor: Option<Vec<u8>>, bytes: u32| {
+            let reply = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "fluent_sparse_presence",
+                    ic_wire::encode(
+                        &(include_absent, descending, cursor, bytes),
+                        Encoding::Frame {
+                            method: 128,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            ic_wire::decode::<Result<SparsePage, u8>>(
+                &reply,
+                Encoding::Frame {
+                    method: 128,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap()
+        };
+    let before = pic.get_stable_memory(canister).await;
+    // OR admits absence here: the only available optional-field order is incomplete.
+    assert_eq!(call(true, false, None, 8).await.unwrap_err(), 3);
+    assert_eq!(call(false, false, None, 7).await.unwrap_err(), 2);
+    for descending in [false, true] {
+        let first = call(false, descending, None, 8).await.unwrap();
+        let mut actual = first.0;
+        let mut cursor = first.1;
+        assert_eq!(first.2, 1);
+        assert_eq!(
+            call(false, !descending, cursor.clone(), 8)
+                .await
+                .unwrap_err(),
+            1
+        );
+        pic.advance_time(std::time::Duration::from_secs(600)).await;
+        pic.tick().await;
+        pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        let mut examined = first.2;
+        for step in 0..4 {
+            let page = call(false, descending, cursor, 8).await.unwrap();
+            actual.extend(page.0);
+            examined += page.2;
+            cursor = page.1;
+            if cursor.is_none() {
+                break;
+            }
+            assert!(step < 3);
+        }
+        assert_eq!(
+            actual,
+            if descending {
+                vec![1, 4, 3]
+            } else {
+                vec![3, 4, 1]
+            }
+        );
+        assert_eq!(examined, 3);
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
+
+#[tokio::test]
+async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
     type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
@@ -39,17 +654,22 @@ async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let call = async |prefix: &str, cursor: Option<Vec<u8>>, bytes: u32| {
-        let request = (prefix, cursor, 1_u32, bytes);
+    let call = async |mode: u8, needle: &str, cursor: Option<Vec<u8>>, bytes: u32| {
+        let request = (needle, cursor, 1_u32, bytes);
+        let (name, method) = match mode {
+            0 => ("fluent_text_prefix", 125),
+            1 => ("fluent_text_suffix", 126),
+            _ => ("fluent_text_contains", 127),
+        };
         let reply = pic
             .query_call(
                 canister,
                 canister,
-                "fluent_text_prefix",
+                name,
                 ic_wire::encode(
                     &request,
                     Encoding::Frame {
-                        method: 125,
+                        method,
                         direction: Direction::Request,
                     },
                     LIMITS,
@@ -61,7 +681,7 @@ async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
         ic_wire::decode::<Result<TextPage, u8>>(
             &reply,
             Encoding::Frame {
-                method: 125,
+                method,
                 direction: Direction::Response,
             },
             LIMITS,
@@ -74,6 +694,9 @@ async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
         Some("a\0b"),
         Some("éclair"),
         Some("e\u{301}clair"),
+        Some("\u{1}"),
+        Some("end\0"),
+        Some("\0\u{1}"),
     ] {
         let request = ("Document", note, false, Some(0_u64), -10_i64, None::<i64>);
         let reply = pic
@@ -106,30 +729,55 @@ async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
             Ok(())
         );
         let before = pic.get_stable_memory(canister).await;
-        for prefix in ["", "a", "a\0", "a\0c", "A", "é", "e\u{301}"] {
-            let page = call(prefix, None, 80).await.unwrap();
-            let expected: Vec<_> = note
-                .filter(|note| note.starts_with(prefix))
-                .map(|text| Some(text.to_owned()))
-                .into_iter()
-                .collect();
-            assert_eq!(page.0, expected);
-            assert_eq!(page.2, 1);
-            let cursor = page.1.unwrap();
-            assert!(call("different", Some(cursor.clone()), 80).await.is_err());
-            if note == Some("a\0b") && prefix == "a\0" {
-                assert_eq!(call(prefix, None, 1).await.unwrap_err(), 2);
-                pic.advance_time(std::time::Duration::from_secs(600)).await;
-                pic.tick().await;
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+        for mode in 0..3 {
+            for needle in [
+                "", "a", "a\0", "a\0c", "A", "é", "e\u{301}", "\0b", "air", "\u{1}", "\0",
+                "\0\u{1}", "lai", "\u{301}",
+            ] {
+                let page = call(mode, needle, None, 80).await.unwrap();
+                let expected: Vec<_> = note
+                    .filter(|note| match mode {
+                        0 => note.starts_with(needle),
+                        1 => note.ends_with(needle),
+                        _ => note.contains(needle),
+                    })
+                    .map(|text| Some(text.to_owned()))
+                    .into_iter()
+                    .collect();
+                assert_eq!(page.0, expected);
+                assert_eq!(page.2, 1);
+                let cursor = page.1.unwrap();
+                assert!(
+                    call((mode + 1) % 3, needle, Some(cursor.clone()), 80)
+                        .await
+                        .is_err()
+                );
+                assert!(
+                    call(mode, "different", Some(cursor.clone()), 80)
+                        .await
+                        .is_err()
+                );
+                if note == Some("a\0b")
+                    && needle
+                        == match mode {
+                            0 => "a\0",
+                            1 => "\0b",
+                            _ => "\0",
+                        }
+                {
+                    assert_eq!(call(mode, needle, None, 1).await.unwrap_err(), 2);
+                    pic.advance_time(std::time::Duration::from_secs(600)).await;
+                    pic.tick().await;
+                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                        .await
+                        .unwrap();
+                }
+                let finished = call(mode, needle, Some(cursor), 80).await.unwrap();
+                assert!(finished.0.is_empty());
+                assert!(finished.1.is_none());
             }
-            let finished = call(prefix, Some(cursor), 80).await.unwrap();
-            assert!(finished.0.is_empty());
-            assert!(finished.1.is_none());
+            assert!(call(mode, &"x".repeat(65), None, 80).await.is_err());
         }
-        assert!(call(&"x".repeat(65), None, 80).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
 }
@@ -428,6 +1076,43 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             .unwrap()
         };
     let console = async |request: ConsoleRequest<'_>| selected(request, None, None).await;
+    let complete_distinct = async |limit, work, bytes, descending| {
+        console((
+            "Entry",
+            None,
+            limit,
+            Some(0),
+            None,
+            None,
+            vec![],
+            descending,
+            work,
+            bytes,
+            "category",
+            true,
+        ))
+        .await
+    };
+    let collected = complete_distinct(2, 7, 16, false).await.unwrap();
+    assert_eq!(collected.1, [vec!["1"], vec!["0"]]);
+    assert_eq!((collected.3, collected.4, collected.5), (6, 6, 16));
+    assert!(collected.2.is_none());
+    assert_eq!(
+        complete_distinct(2, 7, 16, true).await.unwrap().1,
+        [vec!["0"], vec!["1"]]
+    );
+    for (limit, work, bytes) in [(1, 7, 16), (2, 6, 16), (2, 7, 15)] {
+        assert_eq!(
+            complete_distinct(limit, work, bytes, false)
+                .await
+                .unwrap_err(),
+            "query exceeds a database limit"
+        );
+    }
+    assert_eq!(
+        complete_distinct(2, 7, 7, false).await.unwrap_err(),
+        "one matching result exceeds --bytes"
+    );
     let ordered_request = (
         "Entry",
         None,
@@ -820,6 +1505,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     pic.upgrade_canister(canister, wasm, vec![], None)
         .await
         .unwrap();
+    assert_eq!(complete_distinct(2, 7, 16, false).await.unwrap(), collected);
     assert_eq!(
         aggregate("category,count", 1, 7, 16).await.unwrap(),
         grouped

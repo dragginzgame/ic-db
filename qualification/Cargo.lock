@@ -941,6 +941,7 @@ dependencies = [
  "ic-db-macros",
  "ic-platform-types",
  "ic-storage",
+ "memchr",
  "sha2 0.11.1",
  "ulid",
 ]

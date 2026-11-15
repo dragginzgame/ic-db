@@ -22,8 +22,17 @@ fn query(db: &Database<Backing>, operation: u8) -> Query<'_, Entry, Backing> {
     let query = db.query::<Entry>();
     if operation == 3 {
         query
-            .filter_groups(Comparison::Ge, 2_u64)
+            .filter_groups_any(&[(Comparison::Ge, 2_u64.into())])
             .order_groups(GroupOrder::AggregateDescending)
+    } else if operation == 14 {
+        query.filter_groups_any(&[
+            (Comparison::Eq, 0_u64.into()),
+            (Comparison::Eq, 3_u64.into()),
+        ])
+    } else if operation == 15 {
+        query
+            .filter_groups(Comparison::Eq, 0_u64)
+            .filter_groups(Comparison::Eq, 3_u64)
     } else if matches!(operation, 12 | 13) {
         query.order_groups(GroupOrder::AggregateDescending)
     } else {
@@ -76,7 +85,7 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
         ),
-        3 => query.start_group_count::<Category>(
+        3 | 14 | 15 => query.start_group_count::<Category>(
             &mut jobs,
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
@@ -178,7 +187,7 @@ fn job_advance(
         0 => query
             .resume_count(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
             .map(|s| progress(s, |n| Some(n.to_string()))),
-        3 => query
+        3 | 14 | 15 => query
             .resume_group_count::<Category>(
                 &mut jobs,
                 &handle,

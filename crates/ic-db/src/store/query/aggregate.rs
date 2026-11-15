@@ -3,7 +3,9 @@ pub(super) mod jobs;
 mod numeric;
 
 use super::{
-    Comparison, MAX_TERMS, Plan, Query, QueryPage, admit_projection, copy_projection, execute,
+    Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan, Query,
+    QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
+    copy_projection, execute, projection_size,
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema,
@@ -12,10 +14,7 @@ use crate::{
 use ic_storage::Memory;
 use std::collections::{BTreeMap, BTreeSet};
 
-const MAX_COMPARISON_KEY: usize = 4096;
 const MAX_GROUPS: usize = 32;
-const MAX_DISTINCT_VALUES: usize = 32;
-const MAX_STATE_BYTES: usize = 128 * 1024;
 
 /// Completed-group ordering. Aggregate ties always use ascending canonical keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,7 +30,8 @@ pub enum GroupOrder {
 
 #[derive(Default)]
 pub(super) struct GroupRequest<'a> {
-    predicates: Vec<(Comparison, IndexValue<'a>)>,
+    // The final bool joins this term to the next alternative in one OR clause.
+    predicates: Vec<(Comparison, IndexValue<'a>, bool)>,
     order: Option<GroupOrder>,
     page: Option<jobs::pages::PageRequest<'a>>,
 }
@@ -47,51 +47,50 @@ impl GroupRequest<'_> {
         {
             return Err(Error::Limit);
         }
-        let predicates = self.predicates.iter().map(|&(comparison, value)| {
+        let field = match reducer {
+            Reducer::Count { .. } | Reducer::Distinct { .. } => ValueSchema {
+                value: FieldType::Nat64,
+                optional: false,
+            },
+            Reducer::Extremum { position, .. } => {
+                let field = &entity.fields[*position];
+                ValueSchema {
+                    value: field.value,
+                    optional: field.optional,
+                }
+            }
+            Reducer::Numeric(state) => state.output(),
+        };
+        // Extrema/numeric results may be absent even with required input fields.
+        let absent_result = !matches!(reducer, Reducer::Count { .. } | Reducer::Distinct { .. });
+        let predicates = self.predicates.iter().map(|&(comparison, value, or_next)| {
             if matches!(value, IndexValue::Text(text) if text.len() > crate::codec::MAX_ROW_BYTES) {
                 return Err(Error::Limit);
             }
-            let key = match reducer {
-                Reducer::Count { .. } | Reducer::Distinct { .. } => {
-                    comparison.admit(FieldType::Nat64, false, value)?;
-                    match value {
-                        IndexValue::Nat64(value) => Some(value.to_be_bytes().to_vec()),
-                        _ => return Err(Error::InvalidOperand),
-                    }
-                },
-                _ => {
-                    let field = match reducer {
-                        Reducer::Extremum { position, .. } => {
-                            let field = &entity.fields[*position];
-                            ValueSchema { value: field.value, optional: field.optional }
-                        }
-                        Reducer::Numeric(state) => state.output(),
-                        Reducer::Count { .. } | Reducer::Distinct { .. } => return Err(Error::Corrupt),
-                    };
-                    // Even a required input field can have an absent aggregate result.
-                    comparison.admit(field.value, true, value)?;
-                    if value == IndexValue::Absent {
-                        None
-                    } else {
-                        let mut key = Vec::new();
-                        value.append_component(field.optional, &mut key);
-                        if key.len() > MAX_COMPARISON_KEY { return Err(Error::Limit); }
-                        Some(key)
-                    }
-                }
+            comparison.admit(field.value, absent_result, value)?;
+            let key = if value == IndexValue::Absent {
+                None
+            } else {
+                let mut key = Vec::new();
+                value.append_component(field.optional, &mut key);
+                if key.len() > MAX_COMPARISON_KEY { return Err(Error::Limit); }
+                Some(key)
             };
-            Ok((comparison, key))
+            Ok((comparison, key, or_next))
         }).collect::<Result<_, Error>>()?;
         Ok(Selection {
             predicates,
             order: self.order.unwrap_or_default(),
+            optional: field.optional,
         })
     }
 }
 
 struct Selection {
-    predicates: Vec<(Comparison, Option<Vec<u8>>)>,
+    predicates: Vec<(Comparison, Option<Vec<u8>>, bool)>,
     order: GroupOrder,
+    // Physical comparison-key framing, distinct from an absent aggregate result.
+    optional: bool,
 }
 
 /// A completed aggregate and its execution costs. No partial result or cursor.
@@ -139,7 +138,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Add an AND predicate on the completed aggregate value, before group ordering
     /// and output limits. At most eight terms. Counts require Nat64 operands;
     /// extrema require the source type; sums require the declared result type.
-    /// Absent values support Eq/Ne only. Text extrema also accept StartsWith.
+    /// Absent values support Eq/Ne only. Text extrema also accept StartsWith,
+    /// EndsWith and Contains.
     /// Only grouped terminals accept this modifier, even for empty input.
     #[must_use]
     pub fn filter_groups(
@@ -153,7 +153,29 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.request
                 .groups
                 .predicates
-                .push((comparison, value.into()));
+                .push((comparison, value.into(), false));
+        }
+        self
+    }
+
+    /// Add an OR clause on completed aggregate values, ANDed with other group
+    /// filters. The clause must be nonempty; all group filters together permit
+    /// eight comparisons. Every operand is admitted before reading any rows.
+    /// Uses `filter_groups`' exact type and absence rules. All groups must finish
+    /// and validate before selection, ordering and output limits. Clause boundaries
+    /// bind retained jobs; a singleton clause is equivalent to `filter_groups`.
+    #[must_use]
+    pub fn filter_groups_any(mut self, alternatives: &[(Comparison, IndexValue<'a>)]) -> Self {
+        let count = alternatives.len();
+        if count == 0 || count > MAX_TERMS - self.request.groups.predicates.len() {
+            self.request.over_limit = true;
+        } else {
+            self.request.groups.predicates.extend(
+                alternatives
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(comparison, value))| (comparison, value, i + 1 != count)),
+            );
         }
         self
     }
@@ -296,6 +318,35 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             examined: page.examined,
             fetched: page.fetched,
             output_bytes,
+        })
+    }
+
+    /// Whether at least one row matches, without materializing an entity.
+    /// Stops after validating the first matching row; later rows are not inspected.
+    /// Returns false only after observing the end of the selected input.
+    /// `limit` does not truncate input. The boolean result occupies one byte.
+    /// # Errors
+    /// Refuses cursors, DISTINCT, explicit ordering and group modifiers, as for
+    /// `count`. Exhausting `work_limit` without a match returns `Limit`, never
+    /// false; an exact-boundary no-match scan can conservatively refuse.
+    /// Ordinary admission and examined-row integrity errors still apply.
+    /// # Panics
+    /// Supplier corruption traps without repair, as for ordinary query execution.
+    pub fn exists(self) -> Result<Aggregate<bool>, Error> {
+        let plan = self.aggregate_plan(None, false)?;
+        let mut found = false;
+        let page = execute(
+            &self.db.map,
+            E::SCHEMA,
+            &self.request,
+            &plan,
+            Some(Accumulator::Exists(&mut found)),
+        )?;
+        Ok(Aggregate {
+            value: found,
+            examined: page.examined,
+            fetched: page.fetched,
+            output_bytes: 1,
         })
     }
 
@@ -536,32 +587,6 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 }
 
-fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
-    for (i, field) in entity.fields.iter().enumerate() {
-        if mask & (1 << i) != 0 && !key::supports(field.value) {
-            return Err(Error::InvalidQuery);
-        }
-    }
-    Ok(())
-}
-
-fn comparison_key(
-    entity: &EntitySchema,
-    mask: u16,
-    values: &[IndexValue<'_>],
-) -> Result<Vec<u8>, Error> {
-    let mut key = Vec::new();
-    for (i, field) in entity.fields.iter().enumerate() {
-        if mask & (1 << i) != 0 {
-            values[i].append_component(field.optional, &mut key);
-            if key.len() > MAX_COMPARISON_KEY {
-                return Err(Error::Limit);
-            }
-        }
-    }
-    Ok(key)
-}
-
 fn value_output<K: Value, R: Value>(
     groups: Groups,
     rows: usize,
@@ -623,19 +648,10 @@ fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
     Ok(value)
 }
 
-fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error> {
-    if size > limit {
-        return Err(Error::RowTooLarge);
-    }
-    if size > limit - *used {
-        return Err(Error::Limit);
-    }
-    *used += size;
-    Ok(())
-}
-
 // Closed choices over delivered reducers and one grouping table, not user extensions.
 pub(super) enum Accumulator<'a> {
+    // Synchronous existence can complete on the first matching row; no job state.
+    Exists(&'a mut bool),
     Scalar(&'a mut Reducer),
     Groups(&'a mut Groups),
 }
@@ -643,11 +659,12 @@ impl Accumulator<'_> {
     pub(super) fn needs_spans(&self) -> bool {
         !matches!(
             self,
-            Self::Scalar(
-                Reducer::Numeric(_)
-                    | Reducer::Count { presence: None, .. }
-                    | Reducer::Distinct { .. }
-            )
+            Self::Exists(_)
+                | Self::Scalar(
+                    Reducer::Numeric(_)
+                        | Reducer::Count { presence: None, .. }
+                        | Reducer::Distinct { .. }
+                )
         )
     }
 
@@ -659,6 +676,10 @@ impl Accumulator<'_> {
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
         match self {
+            Self::Exists(found) => {
+                **found = true;
+                Ok(())
+            }
             Self::Scalar(state) => state.push(entity, values, bytes, spans, MAX_STATE_BYTES),
             Self::Groups(state) => state.push(entity, values, bytes, spans),
         }
@@ -860,8 +881,12 @@ impl Groups {
             let actual = result.result_key(&mut scratch);
             self.selection
                 .predicates
-                .iter()
-                .all(|(comparison, operand)| comparison.accepts(actual, operand.as_deref()))
+                .split_inclusive(|(_, _, or_next)| !or_next)
+                .all(|clause| {
+                    clause.iter().any(|(comparison, operand, _)| {
+                        comparison.accepts(actual, operand.as_deref(), self.selection.optional)
+                    })
+                })
         });
         if self.selection.order != GroupOrder::Key {
             rows.sort_unstable_by(|(ka, (_, a)), (kb, (_, b))| {
@@ -886,12 +911,7 @@ impl Groups {
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
         let key = comparison_key(entity, self.mask, values)?;
-        let mut size = 0;
-        for (i, span) in spans.iter().enumerate() {
-            if self.mask & (1 << i) != 0 {
-                size += usize::from(span.1 - span.0);
-            }
-        }
+        let size = projection_size(spans, self.mask);
         if let Some((_, reducer)) = self.rows.get_mut(&key) {
             let previous = reducer.retained_bytes();
             reducer.push(

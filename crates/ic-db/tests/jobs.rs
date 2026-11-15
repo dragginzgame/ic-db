@@ -33,6 +33,173 @@ fn time(ms: i64) -> Timestamp {
 }
 
 #[test]
+fn range_counts_resume_after_reopen_without_visiting_outside_rows() {
+    for index in [false, true] {
+        let (field, lower, upper) = if index {
+            (
+                "flag",
+                ic_db::IndexValue::from(1_u8),
+                ic_db::IndexValue::from(2_u8),
+            )
+        } else {
+            (
+                "id",
+                ic_db::IndexValue::from(3_u64),
+                ic_db::IndexValue::from(7_u64),
+            )
+        };
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let (db, mut jobs) = create(&runtime, &[Some(1); 8], 0);
+        let query = || {
+            let query = db
+                .query::<Row>()
+                .filter(field, Comparison::Ge, lower)
+                .filter(field, Comparison::Lt, upper);
+            if index {
+                query.using_index("flag", &[])
+            } else {
+                query
+            }
+        };
+        let handle = query().start_count(&mut jobs, time(0), time(100)).unwrap();
+        let first = query()
+            .work_limit(2)
+            .resume_count(&mut jobs, &handle, 0, time(1))
+            .unwrap();
+        assert_eq!(first.examined, 2);
+        assert!(matches!(first.outcome, JobOutcome::Running));
+        drop((db, jobs, runtime));
+        let runtime = host(backing);
+        let db = Database::open(
+            runtime
+                .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                .unwrap(),
+            schema(),
+        )
+        .unwrap();
+        let mut jobs = AggregateJobs::open(
+            runtime
+                .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let query = || {
+            let query = db
+                .query::<Row>()
+                .filter(field, Comparison::Ge, lower)
+                .filter(field, Comparison::Lt, upper);
+            if index {
+                query.using_index("flag", &[])
+            } else {
+                query
+            }
+        };
+        let second = query()
+            .work_limit(2)
+            .resume_count(&mut jobs, &handle, first.sequence, time(2))
+            .unwrap();
+        assert_eq!(second.examined, 4);
+        assert!(matches!(second.outcome, JobOutcome::Running));
+        let final_step = query()
+            .work_limit(1)
+            .resume_count(&mut jobs, &handle, second.sequence, time(3))
+            .unwrap();
+        assert_eq!(final_step.examined, 4);
+        assert!(matches!(final_step.outcome, JobOutcome::Complete(4)));
+        let retry = query()
+            .work_limit(1)
+            .resume_count(&mut jobs, &handle, second.sequence, time(3))
+            .unwrap();
+        assert_eq!(retry.examined, 4);
+        assert!(matches!(retry.outcome, JobOutcome::Complete(4)));
+    }
+}
+
+#[test]
+fn group_or_jobs_bind_clauses_and_resume_completed_pages_after_reopen() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[Some(1); 6], 0);
+    let alternatives = [
+        (Comparison::Eq, 0_u64.into()),
+        (Comparison::Eq, 3_u64.into()),
+    ];
+    let handle = db
+        .query::<Row>()
+        .filter_groups_any(&alternatives)
+        .start_group_count::<Flag>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = db
+        .query::<Row>()
+        .filter_groups_any(&alternatives)
+        .work_limit(2)
+        .resume_group_count::<Flag>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    // Singleton clauses retain ordinary conjunction identities.
+    let singleton = db
+        .query::<Row>()
+        .filter_groups(Comparison::Ge, 0_u64)
+        .start_group_count::<Flag>(&mut jobs, time(0), time(100))
+        .unwrap();
+    assert!(matches!(
+        db.query::<Row>()
+            .filter_groups_any(&[(Comparison::Ge, 0_u64.into())])
+            .resume_group_count::<Flag>(&mut jobs, &singleton, 0, time(1))
+            .unwrap()
+            .outcome,
+        JobOutcome::Complete(_)
+    ));
+    drop((db, jobs, runtime));
+    let runtime = host(backing.clone());
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema(),
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let saved = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Row>()
+            .filter_groups(Comparison::Eq, 0_u64)
+            .filter_groups(Comparison::Eq, 3_u64)
+            .resume_group_count::<Flag>(&mut jobs, &handle, first.sequence, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), saved);
+    let result = db
+        .query::<Row>()
+        .filter_groups_any(&alternatives)
+        .group_page(1, None)
+        .resume_group_count::<Flag>(&mut jobs, &handle, first.sequence, time(2))
+        .unwrap();
+    let JobOutcome::Complete(page) = result.outcome else {
+        panic!("expected completion");
+    };
+    assert_eq!((page.rows[0].key.flag, page.rows[0].count), (0, 3));
+    let cursor = page.next.unwrap();
+    let result = db
+        .query::<Row>()
+        .filter_groups_any(&alternatives)
+        .group_page(1, Some(&cursor))
+        .resume_group_count::<Flag>(&mut jobs, &handle, result.sequence, time(3))
+        .unwrap();
+    let JobOutcome::Complete(page) = result.outcome else {
+        panic!("expected second page");
+    };
+    assert_eq!((page.rows[0].key.flag, page.rows[0].count), (1, 3));
+    assert!(page.next.is_none());
+}
+
+#[test]
 fn exclusion_jobs_share_inequality_identity_and_exact_counts() {
     let runtime = host(VectorMemory::default());
     let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(10)], 0);
@@ -1939,6 +2106,7 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
 
 #[entity(
     pk(field = "id"),
+    index(fields = ["note", "id"], unique, present_only),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "flag", value(item(prim = "Nat8"))),
@@ -1952,7 +2120,17 @@ struct PresenceRow {}
 struct PresenceNote {}
 
 #[test]
-fn text_prefix_jobs_bind_input_and_completed_group_selection_across_reopen() {
+fn text_jobs_bind_input_and_completed_group_selection_across_reopen() {
+    for (comparison, needle, count) in [
+        (Comparison::StartsWith, "a\0", 2),
+        (Comparison::EndsWith, "\0c", 1),
+        (Comparison::Contains, "\0", 2),
+    ] {
+        text_job_reopen(comparison, needle, count);
+    }
+}
+
+fn text_job_reopen(comparison: Comparison, needle: &str, expected_count: u64) {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let schema = Schema::new(&[PresenceRow::SCHEMA]).unwrap();
@@ -1974,17 +2152,26 @@ fn text_prefix_jobs_bind_input_and_completed_group_selection_across_reopen() {
     db.commit(batch).unwrap();
     let count = db
         .query::<PresenceRow>()
-        .filter("note", Comparison::StartsWith, "a\0")
+        .filter("note", comparison, needle)
+        .using_index("note,id", &[])
         .start_count(&mut jobs, time(0), time(100))
         .unwrap();
+    let count_first = db
+        .query::<PresenceRow>()
+        .filter("note", comparison, needle)
+        .using_index("note,id", &[])
+        .work_limit(1)
+        .resume_count(&mut jobs, &count, 0, time(1))
+        .unwrap();
+    assert!(matches!(count_first.outcome, JobOutcome::Running));
     let groups = db
         .query::<PresenceRow>()
-        .filter_groups(Comparison::StartsWith, "a\0")
+        .filter_groups(comparison, needle)
         .start_group_max::<Flag, PresenceNote>(&mut jobs, time(0), time(100))
         .unwrap();
     let first = db
         .query::<PresenceRow>()
-        .filter_groups(Comparison::StartsWith, "a\0")
+        .filter_groups(comparison, needle)
         .work_limit(1)
         .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, 0, time(1))
         .unwrap();
@@ -1992,14 +2179,15 @@ fn text_prefix_jobs_bind_input_and_completed_group_selection_across_reopen() {
     let saved = backing.borrow().clone();
     assert!(matches!(
         db.query::<PresenceRow>()
-            .filter_groups(Comparison::StartsWith, "a")
+            .filter_groups(comparison, "changed")
             .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, first.sequence, time(1)),
         Err(Error::InvalidJob)
     ));
     assert!(matches!(
         db.query::<PresenceRow>()
-            .filter("note", Comparison::Eq, "a\0")
-            .resume_count(&mut jobs, &count, 0, time(1)),
+            .filter("note", Comparison::Eq, needle)
+            .using_index("note,id", &[])
+            .resume_count(&mut jobs, &count, count_first.sequence, time(1)),
         Err(Error::InvalidJob)
     ));
     assert_eq!(*backing.borrow(), saved);
@@ -2020,15 +2208,24 @@ fn text_prefix_jobs_bind_input_and_completed_group_selection_across_reopen() {
     .unwrap();
     let count = db
         .query::<PresenceRow>()
-        .filter("note", Comparison::StartsWith, "a\0")
-        .resume_count(&mut jobs, &count, 0, time(2))
+        .filter("note", comparison, needle)
+        .using_index("note,id", &[])
+        .resume_count(&mut jobs, &count, count_first.sequence, time(2))
         .unwrap();
-    assert_eq!(count.outcome, JobOutcome::Complete(2));
+    assert_eq!(count.outcome, JobOutcome::Complete(expected_count));
+    assert_eq!(
+        count.examined,
+        if comparison == Comparison::StartsWith {
+            expected_count
+        } else {
+            4
+        }
+    );
     let mut sequence = first.sequence;
     for _ in 0..8 {
         let step = db
             .query::<PresenceRow>()
-            .filter_groups(Comparison::StartsWith, "a\0")
+            .filter_groups(comparison, needle)
             .work_limit(1)
             .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, sequence, time(2))
             .unwrap();
@@ -2091,6 +2288,18 @@ fn retained_presence_counts_empty_text_and_collections_and_reopens_zero_groups()
         .work_limit(2)
         .resume_group_count_field::<Flag>("note", &mut jobs, &groups, 0, time(1))
         .unwrap();
+    let selected = db
+        .query::<PresenceRow>()
+        .filter("items", Comparison::Ne, ic_db::IndexValue::Absent)
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let selected_step = db
+        .query::<PresenceRow>()
+        .filter("items", Comparison::Ne, ic_db::IndexValue::Absent)
+        .work_limit(2)
+        .resume_count(&mut jobs, &selected, 0, time(1))
+        .unwrap();
+    assert!(matches!(selected_step.outcome, JobOutcome::Running));
     drop((db, jobs, runtime));
     let runtime = host(backing);
     let db = Database::open(
@@ -2106,6 +2315,20 @@ fn retained_presence_counts_empty_text_and_collections_and_reopens_zero_groups()
             .unwrap(),
     )
     .unwrap();
+    assert!(matches!(
+        db.query::<PresenceRow>()
+            .filter("items", Comparison::Eq, ic_db::IndexValue::Absent)
+            .resume_count(&mut jobs, &selected, selected_step.sequence, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(
+        db.query::<PresenceRow>()
+            .filter("items", Comparison::Ne, ic_db::IndexValue::Absent)
+            .resume_count(&mut jobs, &selected, selected_step.sequence, time(2))
+            .unwrap()
+            .outcome,
+        JobOutcome::Complete(2)
+    );
     assert_eq!(
         db.query::<PresenceRow>()
             .resume_count_field("items", &mut jobs, &count, 1, time(2))
@@ -2792,16 +3015,14 @@ fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
     let handle = query()
         .start_group_count_distinct::<Flag, Amount>(&mut jobs, time(0), time(100))
         .unwrap();
-    for sequence in 0..3 {
-        let step = query()
-            .work_limit(1)
-            .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, sequence, time(1))
-            .unwrap();
-        assert_eq!(step.examined, sequence + 1);
-        assert!(matches!(step.outcome, JobOutcome::Running));
-    }
+    let step = query()
+        .work_limit(1)
+        .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert_eq!(step.examined, 1);
+    assert!(matches!(step.outcome, JobOutcome::Running));
     let JobOutcome::Complete(rows) = query()
-        .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 3, time(2))
+        .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 1, time(2))
         .unwrap()
         .outcome
     else {
@@ -2837,7 +3058,7 @@ fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
     let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
     assert!(matches!(
-        query().resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 3, time(2)),
+        query().resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 1, time(2)),
         Err(Error::Corrupt)
     ));
     assert_eq!(*backing.borrow(), before);

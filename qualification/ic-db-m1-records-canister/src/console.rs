@@ -475,7 +475,7 @@ fn execute<'a, E: Entity>(
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "distinct-count:value" => query
             .count_distinct::<TotalDecimal>()
-            .map(|r| display_count(&r)),
+            .map(|r| display_scalar(&r, "count")),
         "zone,distinct-count:value" => query
             .group_count_distinct::<ZoneOnly, TotalDecimal>()
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
@@ -484,17 +484,18 @@ fn execute<'a, E: Entity>(
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "distinct-count:maybe" => query
             .count_distinct::<OptionalDecimal>()
-            .map(|r| display_count(&r)),
+            .map(|r| display_scalar(&r, "count")),
         "zone,distinct-count:maybe" => query
             .group_count_distinct::<ZoneOnly, OptionalDecimal>()
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "zone,count:maybe" => query
             .group_count_field::<ZoneOnly>("maybe")
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
-        "count" => query.count().map(|r| display_count(&r)),
+        "exists" => query.exists().map(|r| display_scalar(&r, "exists")),
+        "count" => query.count().map(|r| display_scalar(&r, "count")),
         "distinct-count:category" => query
             .count_distinct::<CategoryOnly>()
-            .map(|r| display_count(&r)),
+            .map(|r| display_scalar(&r, "count")),
         "category,distinct-count:amount" => query
             .group_count_distinct::<CategoryOnly, AmountOnly>()
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
@@ -507,7 +508,9 @@ fn execute<'a, E: Entity>(
         "category,count" => query
             .group_count::<CategoryOnly>()
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
-        s if s.starts_with("count:") => query.count_field(&s[6..]).map(|r| display_count(&r)),
+        s if s.starts_with("count:") => query
+            .count_field(&s[6..])
+            .map(|r| display_scalar(&r, "count")),
         s if s.starts_with("category,count:") => query
             .group_count_field::<CategoryOnly>(&s[15..])
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
@@ -585,9 +588,9 @@ fn display_value<R>(r: Aggregate<Option<R>>, column: &str, render: fn(R) -> Stri
         r.output_bytes as u32,
     )
 }
-fn display_count(r: &Aggregate<u64>) -> Page {
+fn display_scalar<T: ToString>(r: &Aggregate<T>, column: &str) -> Page {
     (
-        vec!["count".into()],
+        vec![column.into()],
         vec![vec![r.value.to_string()]],
         None,
         r.examined as u32,

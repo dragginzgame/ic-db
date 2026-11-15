@@ -8,14 +8,30 @@
 make db
 db schema Entry
 db query Entry --limit 2
+db query Entry --select category --distinct
+db query Entry --select category --distinct --min 40 --order-by category
+db query Entry --select exists --work 1 --bytes 1
+db query Entry --select exists --min 999 --work 7
 db aggregate Entry --select category,count \
   --work 1 --page-size 1
 ```
 
 These commands use the disposable local fixture with the updated Wire transport.
+The existence examples return `true` after one candidate and `false` after a
+completed six-row scan. A work budget of six for the latter query refuses with
+`Limit`, because completion has not yet been observed.
+The DISTINCT examples return complete category sets without a continuation;
+the first preserves first-match ID order (`1`, `0`), the second category order
+(`0`, `1`). A fallback query with `--limit 1` refuses rather than truncating.
 
 ### 🔧 Dependencies
 
+- Release review confirms the locked Platform, Storage, Host, Testkit, Wire
+  0.24.1 and Toko Tooling 0.44.4 selections match current stable registry versions.
+  Defer the optional release-editor IC Build 0.84.1 → 0.86.0 refresh to the next
+  dependency-maintenance pass. The frozen IcyDB comparison retains its transitive
+  IC Entropy 0.2.0 and Wire 0.22.4; revisiting those belongs to a separately reviewed
+  baseline refresh, not a change to the comparison during this release.
 - Adopt Toko Tooling 0.44.4 through its published snapshot installer in both
   workspaces. Rename qualification directories to their existing Cargo package
   names and update workspace paths and documentation; package identities stay
@@ -28,6 +44,66 @@ These commands use the disposable local fixture with the updated Wire transport.
 
 ### ➕ Added
 
+- Add bounded complete DISTINCT projections when leading-index adjacency cannot
+  be proven. Reuse the scanner, exact aggregate tuple equality and projection
+  copying; preserve first-match traversal order and validate examined duplicates.
+  Return one complete page without a cursor, capped at 32 tuples, 4096-byte keys
+  and 128 KiB of key/row buffers. Work, result-count and combined byte exhaustion
+  return `Limit`; an oversized single row returns `RowTooLarge`. Existing live
+  indexed DISTINCT stays unchanged. No durable state, replay or new CLI flag.
+- Seek mandatory `StartsWith` filters on the first secondary-index field after
+  its fixed prefix. Reuse byte-range bounds for exact UTF-8, embedded NULs, empty
+  prefixes and optional presence. Preserve DISTINCT, retained aggregation and
+  upgrade continuation without changing stored bytes or query identities.
+  Oversized derived bounds stay residual; `EndsWith` and `Contains` still scan.
+  Available through the existing fluent API; no new CLI flag.
+- Extend range seeks to the first secondary-index field after its admitted fixed
+  prefix. Bound complete equal-value classes, exclude optional absence from range
+  comparisons and retain forward/reverse byte retries. Oversized derived bounds
+  remain residual filters instead of introducing new refusals. Pages, DISTINCT and
+  aggregates share execution; cursor/job identities and stored bytes are unchanged.
+  Available through existing fluent filters and index/order selection; no new CLI flag.
+- Seek directly to the intersection of mandatory primary-key equality/range
+  filters on primary traversal. Pages and aggregates share inclusive/exclusive
+  bounds, empty intersections and cursor clamping; rows outside the range no
+  longer consume candidate budget. Preserve existing cursor/job identities and
+  byte-limited retries. No new schema attribute, durable format or CLI flag;
+  use the fluent `filter` API. OR alternatives remain residual.
+- Add synchronous fluent `exists()` and `db query ... --select exists`. Return
+  true after the first validated match, without entity materialization; return
+  false only after exhausting the selected input. Work exhaustion without a match
+  refuses with `Limit`. Reuse ordinary query admission and traversal, report one
+  output byte, and keep grouped/retained state formats unchanged.
+- Add `filter_groups_any` for nonempty OR clauses over completed aggregate values,
+  ANDed with other group filters under their existing eight-comparison budget.
+  Validate all operands and finalize every group before selection, so OR cannot
+  hide overflow or relax resource bounds. Synchronous and retained groups share
+  execution; real OR clauses bind retained jobs while singleton clauses preserve
+  existing conjunction identity. No query AST or durable format is added.
+- Extend `Eq`/`Ne` with `IndexValue::Absent` to every optional stored field,
+  including blobs, lists, records, payload enums, sets and maps. Empty values
+  remain present. Row filters, OR clauses and retained aggregates reuse validated
+  decoder spans and existing comparison bindings; no new predicate or stored format.
+  Required fields still reject absent operands, and unsupported value comparisons
+  remain refused. Available through the fluent API.
+- Allow sparse indexes to serve fluent queries when filters prove every optional
+  indexed field present, including ranges, text matches and non-null membership
+  lists. Every OR alternative in a proving clause must reject absence on the
+  same field. Automatic and explicit paths share this check; presence never
+  substitutes for equality in ordering or DISTINCT proofs. No storage changes.
+  A newly selected physical path invalidates continuations bound to the old path.
+- Add `Comparison::Contains` for literal text substring matching in fluent row
+  and completed text min/max group filters, including retained jobs. It shares
+  prefix/suffix admission, absence rules and scan bounds; collection membership,
+  case folding and pattern syntax are not implied. Feature-free `memchr` 2.8.3
+  supplies linear-time, constant-space search over existing comparison keys.
+  No durable format changes. Exhaustive comparison matches need the new variant.
+- Add `Comparison::EndsWith` for exact, case-sensitive text suffix filters on
+  rows and completed text min/max groups, including retained jobs. Empty suffixes
+  match all present text; absence never matches. Matching shares text admission,
+  existing keys and bounded scans, with no new stored format or index-seek path.
+  Exhaustive matches on `Comparison` must handle the new variant. Available
+  through the fluent Rust API; no new CLI flag.
 - Add fluent `filter_not_in(field, values)` for bounded exact-value exclusion.
   It expands to ordinary inequality filters and shares their cursor/job identity,
   admission and execution. Absent fields match unless absence is explicitly

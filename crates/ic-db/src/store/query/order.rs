@@ -42,7 +42,7 @@ pub(super) fn select<'a>(
             return Err(Error::InvalidQuery);
         }
         let prefix = admit_index_prefix(entity, index, values)?;
-        if !complete_membership(entity, index, values)
+        if !complete_membership(entity, index, values, request)
             || !satisfies(entity, request, Some(index), values.len())
         {
             return Err(Error::InvalidQuery);
@@ -65,7 +65,7 @@ pub(super) fn select<'a>(
             .iter()
             .map_while(|name| equality(request, name))
             .collect();
-        if !complete_membership(entity, index, &values)
+        if !complete_membership(entity, index, &values, request)
             || !satisfies(entity, request, Some(index), values.len())
         {
             continue;
@@ -100,12 +100,14 @@ pub(super) fn select<'a>(
     }))
 }
 
-// Sparse traversal must cover every possible match. Initially require a present
-// equality-prefix operand for every optional indexed field, as explicit reads do.
+// Sparse traversal must cover every possible match. Each optional component needs
+// a present prefix operand or a mandatory clause whose alternatives all reject
+// absence on that same field. Presence alone never makes an ordering field fixed.
 fn complete_membership(
     entity: &EntitySchema,
     index: &IndexSchema,
     values: &[IndexValue<'_>],
+    request: &Request<'_>,
 ) -> bool {
     !index.present_only
         || index.fields.iter().enumerate().all(|(i, name)| {
@@ -114,7 +116,19 @@ fn complete_membership(
                 .iter()
                 .find(|f| f.name == *name)
                 .is_some_and(|field| {
-                    !field.optional || values.get(i).is_some_and(|v| *v != IndexValue::Absent)
+                    !field.optional
+                        || values.get(i).is_some_and(|v| *v != IndexValue::Absent)
+                        || request
+                            .predicates
+                            .split_inclusive(|p| !p.or_next)
+                            .any(|clause| {
+                                clause.iter().all(|predicate| {
+                                    predicate.field == *name
+                                        && !predicate
+                                            .comparison
+                                            .accepts_absent(predicate.value == IndexValue::Absent)
+                                })
+                            })
                 })
         })
 }

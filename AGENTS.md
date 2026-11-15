@@ -106,13 +106,19 @@ installer. Do not edit vendor files or copy upstream reference documents.
   subsequent name/path-based authoring decision above. Common read/write performance
   regressions require an explicit tradeoff decision even when Wasm is smaller.
 - Use small typed boundaries over shared execution machinery.
-  Fluent reads use exact top-level comparisons and proven ordered paths;
-  no predicate callbacks. `order_by` adds a primary-key tie-breaker, uses one
+  Fluent reads use exact top-level comparisons and proven ordered paths, without
+  predicate callbacks.
+  `Eq`/`Ne` with `IndexValue::Absent` also admit any optional stored field,
+  including blobs, records, enums and containers. Read validated presence tags
+  through existing decoder spans; empty values remain present. Do not construct
+  ordered keys or a second value representation for these fields. Required fields
+  still refuse absent operands; other non-orderable comparisons remain unsupported.
+  `order_by` adds a primary-key tie-breaker, uses one
   direction and selects bounded equality-prefix paths from compiled metadata.
   `filter_any` adds nonempty OR clauses, ANDed with other filters under the same
   eight-comparison budget. Admit all alternatives before reading, and keep one
   traversal. Only singleton equality clauses establish fixed fields/index prefixes;
-  alternatives must not narrow membership or justify an incomplete order.
+  alternatives must not establish a fixed value or justify an incomplete order.
   Clause boundaries bind cursors/jobs; conjunction-only identities stay unchanged.
   `filter_in` is the same OR clause of exact equalities in supplied order. Share
   clause construction without a temporary operand list or membership executor.
@@ -122,16 +128,42 @@ installer. Do not edit vendor files or copy upstream reference documents.
   `filter_not_in` lowers to consecutive `Ne` filters in supplied order, with
   their existing cursor/job identity. Keep the nonempty-list/eight-term bounds;
   absent values remain eligible unless explicitly excluded. No negation executor.
-  `Comparison::StartsWith` accepts present Text operands only, including for
+  `Comparison::StartsWith`, `EndsWith` and `Contains` accept present Text operands only, including for
   completed text min/max groups. Match exact UTF-8 without case folding or
-  normalization; an empty prefix matches present empty text, never absence.
+  normalization; an empty operand matches all present text, never absence.
   Reuse the terminated comparison-key codec and shared comparison admission.
-  Prefix matching is residual filtering, not a new index-seek or collation path.
+  Strip presence and terminator framing only for matching, preserving existing
+  encoded operands and continuation identities. `EndsWith` and `Contains` remain
+  residual filters. `Contains` means literal substring,
+  not collection membership. Use feature-free `memchr::memmem` for linear-time,
+  constant-space byte search rather than a custom searcher or repeated windows.
   Preserve DISTINCT's whole-class predicate proof. No predicate tree, normalization,
   union executor or durable query representation is implied.
   Explicit paths undergo the same order proof. Refuse incomplete order rather
   than sorting a bounded input prefix. Keep work limits separate from result limits.
+  Sparse index membership requires every optional component to be proven present
+  by a prefix operand or a mandatory filter clause. Every OR alternative in that
+  clause must target the same field and reject absence. Share execution's absence
+  rule; presence does not establish a fixed value or an equality prefix. Keep this
+  bounded proof in path admission, without a general implication engine.
   Empty pages may continue; byte exhaustion must retry the unreturned candidate.
+  Primary traversal intersects mandatory singleton Eq/Lt/Le/Gt/Ge primary-key
+  comparisons using the already admitted ordered components. Equal endpoints
+  tighten toward exclusion; contradictory bounds complete empty after full
+  admission. Intersect cursors without widening the range, preserving existing
+  cursor/job bindings and byte retries. Secondary ranges use the first field after
+  the actual admitted fixed prefix; carry its component count into the plan.
+  Bound whole equal-value classes with byte-prefix successors, including trailing
+  fields/owners. Optional ranges exclude absence. OR alternatives, later fields
+  and derived bounds over 512 bytes remain residual; do not reject an admitted
+  operand merely because its seek bound is too large. Only examined rows receive
+  integrity checks.
+  Mandatory StartsWith on that first unfixed index field uses the same bounds:
+  drop only the text terminator, retaining escaped bytes and optional presence.
+  Empty prefixes select every present text value. Bound the whole byte prefix
+  with the existing successor; do not introduce Unicode upper-value construction,
+  collation, a second path or new cursor/job identities.
+  Keep one scanner for rows and aggregates; no new range executor or durable state.
   Cursor frames carry bounded logical positions, not trusted progress or access
   claims; validate database/schema/query/direction and complete key framing.
   Borrowed field inspection is shared with mutation integrity; decode full entities
@@ -145,16 +177,26 @@ installer. Do not edit vendor files or copy upstream reference documents.
   have one predicate result. Carry the actual selected prefix count from ordering;
   do not reconstruct planner choices in DISTINCT admission.
   Reuse physical-key equality and bounded logical cursors; do not substitute
-  page-local deduplication or trust cursor claims about emitted groups. Filters
-  varying within a duplicate class need a separate progress proof and currently
-  refuse. General noncontiguous DISTINCT output remains required implementation
-  work; bounded distinct counts and the aggregate terminals below are implemented.
+  page-local deduplication or trust cursor claims about emitted groups. Other
+  ordered-field projections, including filters varying within a duplicate class,
+  collect one complete result through the same scanner. Keep the first matching
+  projection in traversal order; no cursor or partial output. Cap at 32 tuples,
+  4096-byte comparison keys and 128 KiB of retained key/row buffers; count/output
+  and work exhaustion refuse. Share aggregate tuple equality and projection
+  copying; no replay pagination, universal Value layer or durable seen-set.
+  Larger paginated/resumable DISTINCT output remains implementation work.
   Synchronous `count`/`group_count::<Record>` reuse the scanner and exact ordered
   scalar keys. Absent keys form a group; row counts include those rows. Scan all
   matching input before applying output limits; never return prefix counts after
   work exhaustion. Keep group/state/output bounds separate. Grouped count output
   uses canonical field-name tuple order, without a required index. No durable
   jobs or extra cursor state are implied by those synchronous terminals.
+  Synchronous `exists()` uses that scanner with a one-bit accumulator, stopping
+  after the first fully validated matching row. A no-match work boundary returns
+  `Limit` until input exhaustion is observed; never turn incomplete work into
+  false. Keep scalar modifier admission, one-byte output and no typed entity
+  materialization. No retained existence payload is admitted. The CLI exposes it
+  through `db query --select exists` and only renders the product result.
   Follow the [retained aggregation contract](docs/design/ic-db-system-design.md#constrained-resumable-aggregation)
   for job quotas, identities, revision invalidation, retry, expiry and cleanup.
   Keep one host-governed job allocation and atomically save accumulator/cursor/
@@ -208,6 +250,11 @@ installer. Do not edit vendor files or copy upstream reference documents.
   selection cannot relax state bounds; no separate extrema executor or job store.
   `filter_groups` and `order_groups` act only on completed grouped values before
   output limits. Exact count operands are Nat64; extrema retain source types.
+  `filter_groups_any` adds a nonempty OR clause, ANDed with other group filters
+  under their shared eight-term budget. Admit every alternative and validate all
+  completed groups before selection. Bind clause boundaries only for real OR,
+  preserving conjunction/singleton job identities. Keep one completed selection
+  path without a general expression tree or separate group-filter executor.
   Aggregate ties use ascending canonical keys; absent extrema sort first ascending
   and last descending. Scalar/row terminals refuse group modifiers. Keep the
   bounded 32-group sort concrete; output filters cannot relax scan/state caps.
@@ -231,7 +278,7 @@ installer. Do not edit vendor files or copy upstream reference documents.
   fluent queries for Entry/Document/DecimalRow, uses opaque continuation and display-only
   result mapping; no client-side filtering or paging engine. `make m2-cli` checks
   installed-layout use and the migrated query caller. Broader entity adapters,
-  optimized range seeks and richer sorting remain subsequent work.
+  richer sorting remains subsequent work.
   Measure monomorphization growth across entities, fluent chains and result mapping.
   All product endpoints belong to the Canic adapter, not database macros.
   Standalone hosts may use Platform's generic entrypoint/guard/codec hooks without

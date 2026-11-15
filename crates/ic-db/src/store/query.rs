@@ -2,23 +2,27 @@
 mod aggregate;
 mod distinct;
 mod order;
+mod range;
 pub use aggregate::jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep};
 pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
-    codec::Decoder, key, primary::RowKey, store_key::StoreKey, types::TypeGraph,
+    codec::Decoder, key, primary::RowKey, types::TypeGraph,
 };
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
-use std::{marker::PhantomData, ops::Bound};
+use std::marker::PhantomData;
 
 const MAX_TERMS: usize = 8;
 const MAX_WORK: usize = 512;
 const MAX_OUTPUT: usize = 128 * 1024;
+const MAX_COMPARISON_KEY: usize = 4096;
+const MAX_DISTINCT_VALUES: usize = 32;
+const MAX_STATE_BYTES: usize = 128 * 1024;
 
-/// Exact comparison. Equality distinguishes absent values; ranges and text prefixes require presence.
+/// Exact comparison. Equality distinguishes absent values; ranges and text matches require presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Comparison {
@@ -37,12 +41,20 @@ pub enum Comparison {
     /// Present text starts with the exact UTF-8 operand, without normalization.
     /// Empty prefixes match all present text, including empty text; other types refuse.
     StartsWith = 6,
+    /// Present text ends with the exact UTF-8 operand, without normalization.
+    /// Empty suffixes match all present text, including empty text; other types refuse.
+    EndsWith = 7,
+    /// Present text contains the exact UTF-8 operand, without normalization.
+    /// Empty needles match all present text; this is not collection membership.
+    Contains = 8,
 }
 
 impl Comparison {
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
-        if self == Self::StartsWith && !matches!(field, FieldType::Text { .. }) {
+        if matches!(self, Self::StartsWith | Self::EndsWith | Self::Contains)
+            && !matches!(field, FieldType::Text { .. })
+        {
             return Err(Error::InvalidQuery);
         }
         if value == IndexValue::Absent && !matches!(self, Self::Eq | Self::Ne) {
@@ -51,22 +63,46 @@ impl Comparison {
         Ok(())
     }
 
-    fn accepts(self, actual: Option<&[u8]>, operand: Option<&[u8]>) -> bool {
+    fn accepts(self, actual: Option<&[u8]>, operand: Option<&[u8]>, optional: bool) -> bool {
+        if actual.is_none() {
+            return self.accepts_absent(operand.is_none());
+        }
         match self {
             Self::Eq => actual == operand,
             Self::Ne => actual != operand,
-            Self::StartsWith => actual.zip(operand).is_some_and(|(actual, operand)| {
-                // Text components escape embedded NUL and terminate with 00 00.
-                // Drop only that terminator, retaining optional-presence framing.
-                operand
-                    .strip_suffix(&[0, 0])
-                    .is_some_and(|prefix| actual.starts_with(prefix))
-            }),
+            Self::StartsWith | Self::EndsWith | Self::Contains => {
+                // Compare only escaped text, never the presence byte or terminator.
+                // In particular, optional empty text must not match suffix U+0001.
+                fn text(key: &[u8], optional: bool) -> Option<&[u8]> {
+                    key.get(usize::from(optional)..)?.strip_suffix(&[0, 0])
+                }
+                actual
+                    .and_then(|key| text(key, optional))
+                    .zip(operand.and_then(|key| text(key, optional)))
+                    .is_some_and(|(actual, operand)| match self {
+                        Self::StartsWith => actual.starts_with(operand),
+                        Self::EndsWith => actual.ends_with(operand),
+                        // Valid UTF-8 needles cannot start within an escaped NUL
+                        // (00 FF) or a multibyte character. Search is linear and
+                        // constant-space even for repetitive bounded operands.
+                        _ => memchr::memmem::find(actual, operand).is_some(),
+                    })
+            }
             _ if actual.is_none() || operand.is_none() => false,
             Self::Lt => actual < operand,
             Self::Le => actual <= operand,
             Self::Gt => actual > operand,
             Self::Ge => actual >= operand,
+        }
+    }
+
+    // One side is absent. Equality/inequality are symmetric; execution,
+    // presence-only filters and sparse membership share this rule.
+    fn accepts_absent(self, other_absent: bool) -> bool {
+        match self {
+            Self::Eq => other_absent,
+            Self::Ne => !other_absent,
+            _ => false,
         }
     }
 }
@@ -174,18 +210,27 @@ impl<M: Memory> Database<M> {
     }
 }
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
-    /// Remove duplicate output records across pages. Identity projections are
-    /// already unique. Other projections require a leading index tuple after
-    /// fixed prefix components. Filters may reference only projected fields or
-    /// fixed prefix fields; unsupported shapes refuse. This is live enumeration,
-    /// not an exact aggregate snapshot.
+    /// Remove duplicate output records. Identity projections and proven leading
+    /// index tuples use live pages. Other ordered-field projections scan to
+    /// completion in one call, retaining at most 32 tuples within 128 KiB.
+    /// That fallback preserves first-match traversal order, refuses cursors and
+    /// returns `Limit` if work, result count or combined bytes cannot fit; it
+    /// never returns a partial result. An individually oversized row returns
+    /// `RowTooLarge`. Comparison keys are bounded to 4096 bytes.
     #[must_use]
     pub fn distinct(mut self) -> Self {
         self.request.distinct = true;
         self
     }
     /// Add an AND term over an exact top-level ordered scalar/unit-enum field.
+    /// Eq/Ne with `IndexValue::Absent` also accept any optional stored field,
+    /// including blobs and containers. Empty values are present, not absent.
     /// All operands are admitted before storage reads, including contradictory terms.
+    /// On a primary traversal, mandatory Eq/Lt/Le/Gt/Ge primary-key comparisons
+    /// narrow the scanned range. On an index path, those comparisons can narrow
+    /// its first field after the admitted fixed prefix. Only examined rows
+    /// undergo integrity checks; oversized derived bounds remain residual filters.
+    /// Indexed StartsWith can seek that field's exact encoded text prefix too.
     #[must_use]
     pub fn filter(
         mut self,
@@ -271,7 +316,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
     /// Select index order and exact leading components (at most four).
     /// All rows matching this prefix are considered. Sparse indexes require
-    /// every optional indexed component to be covered by a present prefix operand.
+    /// every optional indexed component to be proven present by the prefix or
+    /// filters. Every alternative in a proving OR clause must reject absence.
     #[must_use]
     pub fn using_index(mut self, name: &'a str, values: &[IndexValue<'a>]) -> Self {
         if values.len() > 4 {
@@ -302,6 +348,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
     /// Return at most 1..=32 matching rows in this page.
+    /// Complete-collection DISTINCT refuses if the full result exceeds this cap.
     /// For grouped aggregates, cap the complete selected result instead; use
     /// `group_page` to set a retained grouped response's page size separately.
     #[must_use]
@@ -444,7 +491,54 @@ struct Term {
     or_next: bool,
 }
 
-// One owner for copying already validated projection spans into a record codec.
+fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
+    for (i, field) in entity.fields.iter().enumerate() {
+        if mask & (1 << i) != 0 && !key::supports(field.value) {
+            return Err(Error::InvalidQuery);
+        }
+    }
+    Ok(())
+}
+
+// Grouping, distinct counts and collected DISTINCT share exact tuple equality.
+fn comparison_key(
+    entity: &EntitySchema,
+    mask: u16,
+    values: &[IndexValue<'_>],
+) -> Result<Vec<u8>, Error> {
+    let mut key = Vec::new();
+    for (i, field) in entity.fields.iter().enumerate() {
+        if mask & (1 << i) != 0 {
+            values[i].append_component(field.optional, &mut key);
+            if key.len() > MAX_COMPARISON_KEY {
+                return Err(Error::Limit);
+            }
+        }
+    }
+    Ok(key)
+}
+
+fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error> {
+    if size > limit {
+        return Err(Error::RowTooLarge);
+    }
+    if size > limit - *used {
+        return Err(Error::Limit);
+    }
+    *used += size;
+    Ok(())
+}
+
+// Size and copy already validated projection spans using the same field mask.
+fn projection_size(spans: &[(u16, u16)], mask: u16) -> usize {
+    spans
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| mask & (1 << i) != 0)
+        .map(|(_, (start, end))| usize::from(end - start))
+        .sum()
+}
+
 fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -> Vec<u8> {
     let mut output = Vec::with_capacity(size);
     for (i, &(start, end)) in spans.iter().enumerate() {
@@ -457,11 +551,14 @@ fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -
 struct Plan<'a> {
     index: Option<&'a IndexSchema>,
     prefix: Vec<u8>,
+    fixed_components: usize,
     terms: Vec<Term>,
     selected: u16,
+    // Non-orderable fields need only their validated optional tags, never key slots.
+    presence: u16,
     binding: [u8; 32],
     projection: Option<u16>,
-    distinct_components: Option<usize>,
+    distinct: distinct::Strategy,
 }
 impl<'a> Plan<'a> {
     fn admit(
@@ -501,13 +598,15 @@ impl<'a> Plan<'a> {
         let mut plan = Self {
             index: None,
             prefix: prefix(2, entity.id),
+            fixed_components: 0,
             terms: Vec::new(),
             selected: 1 << primary,
+            presence: 0,
             binding: [0; 32],
             projection: projection
                 .map(|output| admit_projection(entity, output))
                 .transpose()?,
-            distinct_components: None,
+            distinct: distinct::Strategy::Identity,
         };
         for predicate in &request.predicates {
             let position = entity
@@ -516,7 +615,11 @@ impl<'a> Plan<'a> {
                 .position(|f| f.name == predicate.field)
                 .ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
-            if !key::supports(field.value) {
+            let ordered = key::supports(field.value);
+            if !ordered
+                && !(predicate.value == IndexValue::Absent
+                    && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne))
+            {
                 return Err(Error::InvalidQuery);
             }
             predicate
@@ -534,21 +637,31 @@ impl<'a> Plan<'a> {
                 absent,
                 or_next: predicate.or_next,
             });
-            plan.selected |= 1 << position;
+            if ordered {
+                plan.selected |= 1 << position;
+            } else {
+                plan.presence |= 1 << position;
+            }
         }
         // Admit every operand before selecting a path, even for empty or
         // contradictory queries. The scanner consumes this one proven choice.
-        let fixed = if let Some(path) = order::select(entity, request)? {
+        if let Some(path) = order::select(entity, request)? {
             plan.index = Some(path.index);
             plan.prefix = path.prefix;
             plan.selected |= entity.key_fields();
-            path.fixed
-        } else {
-            0
-        };
+            plan.fixed_components = path.fixed;
+        }
         if request.distinct {
-            plan.distinct_components =
-                distinct::admit(entity, request, plan.projection, plan.index, fixed)?;
+            plan.distinct = distinct::admit(
+                entity,
+                request,
+                plan.projection,
+                plan.index,
+                plan.fixed_components,
+            )?;
+            if plan.distinct == distinct::Strategy::Complete {
+                plan.selected |= plan.projection.ok_or(Error::InvalidQuery)?;
+            }
         }
         let mut hash = Sha256::new();
         hash.update(b"ic-db:query:v1\0");
@@ -683,29 +796,6 @@ fn execute_inner<M: Memory>(
     mut aggregate: Option<&mut aggregate::Accumulator<'_>>,
     mut input_bytes: Option<&mut usize>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
-    let mut upper = plan.prefix.clone();
-    // Namespace prefixes always have a successor; no unbounded reverse scan.
-    while upper.last() == Some(&255) {
-        upper.pop();
-    }
-    let last = upper.last_mut().ok_or(Error::InvalidQuery)?;
-    *last += 1;
-    let mut lower = Bound::Included(StoreKey::new(plan.prefix.clone())?);
-    let mut upper = Bound::Excluded(StoreKey::new(upper)?);
-    if let Some(cursor) = request.cursor {
-        let key = StoreKey::new(cursor.position.clone())?;
-        let boundary = if cursor.inclusive {
-            Bound::Included(key)
-        } else {
-            Bound::Excluded(key)
-        };
-        if request.descending {
-            upper = boundary;
-        } else {
-            lower = boundary;
-        }
-    }
-    let mut entries = map.range((lower, upper));
     let mut page = QueryPage {
         rows: Vec::new(),
         next: None,
@@ -713,17 +803,22 @@ fn execute_inner<M: Memory>(
         fetched: 0,
         output_bytes: 0,
     };
+    let Some(bounds) = range::bounds(entity, request, plan)? else {
+        return Ok(page);
+    };
+    let mut entries = map.range(bounds);
+    let mut collected = if plan.distinct == distinct::Strategy::Complete {
+        Some(distinct::Collection::new(
+            plan.projection.ok_or(Error::InvalidQuery)?,
+        ))
+    } else {
+        None
+    };
     let mut component = Vec::new();
     // Each processed equivalence class is either wholly rejected or already
     // emitted. Inclusive byte retries point at an unreturned class instead.
     let mut previous = if let Some(cursor) = request.cursor.filter(|c| !c.inclusive) {
-        distinct::boundary(
-            entity,
-            plan.index,
-            plan.distinct_components,
-            &cursor.position,
-        )?
-        .map(<[u8]>::to_vec)
+        distinct::boundary(entity, plan.index, plan.distinct, &cursor.position)?.map(<[u8]>::to_vec)
     } else {
         None
     };
@@ -767,8 +862,10 @@ fn execute_inner<M: Memory>(
             &bytes,
             plan.selected,
             &mut values,
-            (plan.projection.is_some() || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
-                .then_some(&mut spans),
+            (plan.presence != 0
+                || plan.projection.is_some()
+                || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
+            .then_some(&mut spans),
         )?;
         let primary = entity
             .fields
@@ -786,29 +883,36 @@ fn execute_inner<M: Memory>(
             .split_inclusive(|term| !term.or_next)
             .all(|clause| {
                 clause.iter().any(|term| {
+                    if plan.presence & (1 << term.position) != 0 {
+                        // Admission permits only Eq/Ne(Absent) here. Full decoding
+                        // validated this optional tag and the entire present value.
+                        let absent = bytes[usize::from(spans[term.position].0)] == 0;
+                        return term.comparison.accepts_absent(absent);
+                    }
                     let value = values[term.position];
                     component.clear();
                     value.append_component(entity.fields[term.position].optional, &mut component);
                     term.comparison.accepts(
                         (value != IndexValue::Absent).then_some(component.as_slice()),
                         (!term.absent).then_some(term.operand.as_slice()),
+                        entity.fields[term.position].optional,
                     )
                 })
             });
-        let boundary =
-            distinct::boundary(entity, plan.index, plan.distinct_components, stored_key)?;
+        let boundary = distinct::boundary(entity, plan.index, plan.distinct, stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {
             accumulator.push(entity, &values, &bytes, &spans)?;
+            if matches!(accumulator, aggregate::Accumulator::Exists(_)) {
+                // One validated match proves existence, even at the work boundary.
+                return Ok(page);
+            }
+        } else if matches && let Some(collection) = collected.as_mut() {
+            collection.push(entity, request, &values, &bytes, &spans)?;
         } else if matches && !duplicate {
-            let size = plan.projection.map_or(bytes.len(), |mask| {
-                spans
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| mask & (1 << i) != 0)
-                    .map(|(_, (start, end))| usize::from(end - start))
-                    .sum()
-            });
+            let size = plan
+                .projection
+                .map_or(bytes.len(), |mask| projection_size(&spans, mask));
             if size > request.bytes {
                 return Err(Error::RowTooLarge);
             }
@@ -832,14 +936,18 @@ fn execute_inner<M: Memory>(
                 .as_deref()
                 .is_some_and(|used| *used > STEP_INPUT_BYTES - CANDIDATE_BYTES)
         {
-            if aggregate.is_some() && input_bytes.is_none() {
-                // Completion has not been observed. Never expose prefix aggregates;
+            if (aggregate.is_some() && input_bytes.is_none()) || collected.is_some() {
+                // Completion has not been observed. Never expose partial reductions;
                 // an exact-boundary scan may conservatively require more budget.
                 return Err(Error::Limit);
             }
             page.next = Some(plan.cursor(stored_key, false));
             return Ok(page);
         }
+    }
+    if let Some(collection) = collected {
+        page.output_bytes = collection.output_bytes;
+        page.rows = collection.rows;
     }
     Ok(page)
 }

@@ -68,6 +68,18 @@ prefixes. Clauses also work with aggregates and with DISTINCT when its existing
 whole-class predicate proof holds. Clause boundaries and operands bind cursors and
 retained jobs. Nested boolean trees and index unions are not introduced by this API.
 
+Presence filters also work on optional blobs, lists, records, enums, sets and maps:
+
+```rust
+let page = db.query::<ListRow>()
+    .filter("labels", ic_db::Comparison::Ne, ic_db::IndexValue::Absent)
+    .fetch()?;
+```
+
+`Ne(Absent)` selects present values, including empty containers; `Eq(Absent)`
+selects absence. Required fields reject absent operands. This does not enable
+ordering or value comparisons on otherwise unsupported types.
+
 For membership on one field, use the equivalent equality shorthand:
 
 ```rust
@@ -88,20 +100,45 @@ Absent fields remain eligible unless the list includes `IndexValue::Absent`.
 The list must be nonempty; every member consumes the same comparison budget and
 undergoes exact admission. Reordering it changes continuation identity.
 
-Text fields also accept exact prefixes:
+Text fields also accept exact prefixes, suffixes and substrings:
 
 ```rust
 let page = db.query::<Document>()
     .filter("note", ic_db::Comparison::StartsWith, "alpha")
+    .filter("note", ic_db::Comparison::Contains, "preview")
+    .filter("note", ic_db::Comparison::EndsWith, ".png")
     .fetch()?;
 ```
 
-`StartsWith` is case-sensitive and performs no Unicode normalization. An empty
-prefix matches every present text value, including empty text; absence never
+These comparisons are case-sensitive and perform no Unicode normalization. An empty
+operand matches every present text value, including empty text; absence never
 matches. The operand must fit the declared text byte limit. Other field types
-refuse. The same comparison works with `filter_any` and with `filter_groups` on
-completed text min/max results, including retained jobs. Matching uses the chosen
-scan's work budget; it does not add a prefix index seek.
+refuse; `Contains` is substring search, not collection membership. They work with `filter_any` and with `filter_groups` on
+completed text min/max results, including retained jobs. A mandatory `StartsWith`
+can seek on the first index field after its fixed prefix, using exact escaped
+UTF-8 bytes. Empty prefixes include present empty text and exclude absence.
+`EndsWith`, `Contains`, OR alternatives and unseekable fields remain residual
+filters under the chosen scan's work budget.
+
+Mandatory primary-key `Eq`, `Lt`, `Le`, `Gt` and `Ge` filters seek directly to
+their intersected range on primary traversal. For example:
+
+```rust
+let page = db.query::<Entry>()
+    .filter("id", ic_db::Comparison::Ge, 100_u64)
+    .filter("id", ic_db::Comparison::Lt, 200_u64)
+    .fetch()?;
+```
+
+Rows outside that range consume no candidate budget and are not inspected for
+corruption. Contradictory bounds return an empty result after validating all
+operands. Selected secondary-index paths apply the same comparisons to the first
+field after their fixed prefix. For index `(category, id)` with category fixed,
+an `id` range therefore skips unrelated IDs. Equal values include every trailing
+component and owner; optional ranges exclude absence. OR alternatives, later
+fields and derived bounds exceeding 512 bytes remain residual filters.
+Continuations intersect the range in either direction, including output-byte
+retries. Counts and retained aggregates use the same traversal.
 
 Request field ordering without naming an index:
 
@@ -118,6 +155,12 @@ the final tie-breaker. All fields share the selected direction. Equality filters
 can fix index components; the engine chooses a path that proves the complete
 order or returns `InvalidQuery`. No bounded-prefix sorting occurs. Without
 `order_by`, the existing primary/explicit-index order remains unchanged.
+
+Sparse indexes (`present_only`) can supply order when filters exclude absence
+for every optional indexed field. For example, `Ne` with `IndexValue::Absent`,
+a range comparison or a text match proves presence; `Ne` with a present value
+does not. Every alternative in a proving OR clause must exclude absence on the
+same field. This also applies to `using_index`; incomplete paths still refuse.
 
 Use an ordinary named record for selective output, with exact matching field
 names, types, optionality and bounds:
@@ -151,16 +194,47 @@ let page = db.query::<Entry>()
     .fetch_as::<CategoryOnly>()?;
 ```
 
-This slice requires a leading index projection after any fixed index prefix.
+Live DISTINCT pages require a leading index projection after any fixed index prefix.
 Filters may read projected fields or fields fixed by that prefix, so each duplicate
 group has one filter result. For example, add
 `.filter("category", ic_db::Comparison::Ge, 1_u64)` to the query above.
 Full entities and projections containing the primary
-key are already unique and allow ordinary filters. Filters varying within a
-duplicate group and other DISTINCT shapes refuse for now. Duplicate candidates
+key are already unique and allow ordinary filters. Duplicate candidates
 consume work, so an empty page can still continue.
 Continuation preserves duplicate suppression; live pages do not provide a frozen
 input for exact aggregates.
+
+Other projections of ordered scalar/unit-enum fields use one bounded complete
+scan, including nonadjacent duplicates and filters varying within a class:
+
+```rust
+let categories = db.query::<Entry>().distinct().fetch_as::<CategoryOnly>()?;
+```
+
+This returns the first matching occurrence of each tuple in traversal order,
+with `next: None`. It retains at most 32 tuples, comparison keys of at most 4096
+bytes and 128 KiB of key/row buffers. The query's `limit` is a result capacity for
+this path: exceeding it, the combined output-byte budget, or the work budget
+returns `Limit`, never a partial result. Even a scan ending exactly at the work
+budget can refuse until exhaustion is observed. An individually oversized row
+returns `RowTooLarge`. Cursors refuse; larger paginated DISTINCT remains later work.
+Try `db query Entry --select category --distinct` in the fixture CLI.
+
+Check existence without fetching an entity or counting all matches:
+
+```rust
+let result = db.query::<Entry>()
+    .filter("amount", ic_db::Comparison::Ge, 40_u64)
+    .exists()?;
+```
+
+`result.value` is true after the first validated match, or false after observing
+the end of the input. Work exhaustion without a match returns `Limit`, including
+an exact-boundary scan whose end has not yet been observed. The result occupies
+one byte; `limit` does not truncate input. Like scalar counts, this terminal
+refuses cursors, DISTINCT, input ordering and group modifiers. It validates every
+examined row, but stops before inspecting rows beyond the first match.
+Try `db query Entry --select exists --work 1 --bytes 1` in the local fixture.
 
 Exact bounded counts use the same scanner:
 
@@ -358,8 +432,11 @@ retained-state bounds, including winner growth and replacement. Output follows
 canonical key order and is limited only after the full input completes. Encoded
 output bytes count both records, excluding transport option framing.
 
-`.filter_groups(comparison, operand)` applies up to eight AND terms to the
-completed aggregate value. Counts require `u64`; extrema require the exact source
+`.filter_groups(comparison, operand)` adds an AND term to the completed aggregate
+value. `.filter_groups_any(&[(comparison, operand), ...])` adds a nonempty OR
+clause, ANDed with other group filters. All group comparisons share an eight-term
+budget, separate from input filters; every operand is admitted even if another
+alternative matches. Counts require `u64`; extrema require the exact source
 type; sums require the declared result type. Absent extrema support equality/inequality; range comparisons require
 presence. `.order_groups(GroupOrder::AggregateAscending)` or
 `AggregateDescending` sorts completed groups, breaking ties by ascending group key.
@@ -378,6 +455,20 @@ let groups = db.query::<Entry>()
 All input and retained-state bounds apply before group filtering. Output limits
 and bytes apply after filtering and ordering; an excluded group uses no output
 bytes. Final sorting is bounded by the existing 32-group cap.
+
+For example, retain groups with at most one or at least five rows:
+
+```rust
+let groups = db.query::<Entry>()
+    .filter_groups_any(&[
+        (ic_db::Comparison::Le, 1_u64.into()),
+        (ic_db::Comparison::Ge, 5_u64.into()),
+    ])
+    .group_count::<CategoryOnly>()?;
+```
+
+The same filters work on retained grouped jobs. Clause boundaries bind the job;
+a singleton OR clause has the same identity as an ordinary group filter.
 
 Scalar integer `.sum::<Record>()` returns `Aggregate<Option<Record>>`. The record
 selects one field by name, preserving optionality; its integer type may match or

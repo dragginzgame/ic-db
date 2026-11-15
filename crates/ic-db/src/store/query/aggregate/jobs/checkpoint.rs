@@ -13,6 +13,8 @@ use std::collections::BTreeSet;
 impl Accumulator<'_> {
     pub(super) fn restore(&mut self, entity: &EntitySchema, record: &Record) -> Result<(), Error> {
         match self {
+            // Existence is synchronous-only and has no admitted durable payload.
+            Self::Exists(_) => Err(Error::InvalidQuery),
             Self::Groups(groups) => groups.restore(entity, record),
             Self::Scalar(reducer @ Reducer::Extremum { .. }) => {
                 reducer.restore_extremum(entity, record.count, &record.state)
@@ -38,6 +40,7 @@ impl Accumulator<'_> {
 
     pub(super) fn checkpoint(&self, record: &mut Record) -> Result<(), Error> {
         (record.count, record.state) = match self {
+            Self::Exists(_) => return Err(Error::InvalidQuery),
             Self::Groups(groups) => groups.checkpoint()?,
             Self::Scalar(Reducer::Extremum { selected, .. }) => selected
                 .as_ref()

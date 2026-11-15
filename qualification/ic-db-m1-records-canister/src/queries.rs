@@ -4,7 +4,7 @@ use crate::{
     open, runtime,
     schema::{Document, Entry},
 };
-use ic_db::{Comparison, QueryCursor};
+use ic_db::{Comparison, IndexValue, QueryCursor};
 
 #[ic_db::record(fields(
     field(name = "id", value(item(prim = "Nat64"))),
@@ -68,13 +68,224 @@ fn fluent_membership(request: Request) -> Result<Page, u8> {
 }
 
 type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
+type TextRequest = (String, Option<Vec<u8>>, u32, u32);
 #[ic_platform_runtime::cdk::query(
     guard = "crate::transport::admit::<125>",
     decode_with = "crate::transport::decode::<_, 125>",
     encode_with = "crate::transport::encode::<_, 125>"
 )]
-fn fluent_text_prefix(
-    (prefix, after, work, bytes): (String, Option<Vec<u8>>, u32, u32),
+fn fluent_text_prefix(request: TextRequest) -> Result<TextPage, u8> {
+    text_match(request, Comparison::StartsWith)
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<126>",
+    decode_with = "crate::transport::decode::<_, 126>",
+    encode_with = "crate::transport::encode::<_, 126>"
+)]
+fn fluent_text_suffix(request: TextRequest) -> Result<TextPage, u8> {
+    text_match(request, Comparison::EndsWith)
+}
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<127>",
+    decode_with = "crate::transport::decode::<_, 127>",
+    encode_with = "crate::transport::encode::<_, 127>"
+)]
+fn fluent_text_contains(request: TextRequest) -> Result<TextPage, u8> {
+    text_match(request, Comparison::Contains)
+}
+
+type SparseRequest = (bool, bool, Option<Vec<u8>>, u32);
+type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+type TextSeekRequest = (String, bool, Option<Vec<u8>>, u32, u32);
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<132>",
+    decode_with = "crate::transport::decode::<_, 132>",
+    encode_with = "crate::transport::encode::<_, 132>"
+)]
+fn fluent_text_seek(
+    (needle, descending, after, work, bytes): TextSeekRequest,
+) -> Result<IdPage, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let cursor = after
+        .as_deref()
+        .map(QueryCursor::from_bytes)
+        .transpose()
+        .map_err(|error| query_error(&error))?;
+    let mut query = db
+        .query::<Document>()
+        .using_index("published,title", &[false.into()])
+        .filter("title", Comparison::StartsWith, needle.as_str())
+        .work_limit(work as usize)
+        .byte_limit(bytes as usize);
+    if descending {
+        query = query.descending();
+    }
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+    let page = query
+        .fetch_as::<IdOnly>()
+        .map_err(|error| query_error(&error))?;
+    Ok((
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u32,
+    ))
+}
+
+type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<130>",
+    decode_with = "crate::transport::decode::<_, 130>",
+    encode_with = "crate::transport::encode::<_, 130>"
+)]
+fn fluent_primary_range(request: PrimaryRangeRequest) -> Result<IdPage, u8> {
+    range_read(request, None, "id")
+}
+
+type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<131>",
+    decode_with = "crate::transport::decode::<_, 131>",
+    encode_with = "crate::transport::encode::<_, 131>"
+)]
+fn fluent_index_range(
+    (after, descending, category, lower, upper, work, bytes): IndexRangeRequest,
+) -> Result<IdPage, u8> {
+    let request = (after, descending, lower, upper, work, bytes);
+    match category {
+        Some(category) => range_read(request, Some(&[category.into()]), "id"),
+        None => range_read(request, Some(&[]), "category"),
+    }
+}
+
+fn range_read(
+    (after, descending, lower, upper, work, bytes): PrimaryRangeRequest,
+    index_prefix: Option<&[IndexValue<'_>]>,
+    field: &str,
+) -> Result<IdPage, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let cursor = after
+        .as_deref()
+        .map(QueryCursor::from_bytes)
+        .transpose()
+        .map_err(|error| query_error(&error))?;
+    let mut query = db
+        .query::<Entry>()
+        .filter(field, Comparison::Ge, lower)
+        .filter(field, Comparison::Le, upper)
+        .work_limit(work as usize)
+        .byte_limit(bytes as usize);
+    if let Some(prefix) = index_prefix {
+        query = query.using_index("category,id", prefix);
+    }
+    if descending {
+        query = query.descending();
+    }
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+    let page = query
+        .fetch_as::<IdOnly>()
+        .map_err(|error| query_error(&error))?;
+    Ok((
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u32,
+    ))
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<128>",
+    decode_with = "crate::transport::decode::<_, 128>",
+    encode_with = "crate::transport::encode::<_, 128>"
+)]
+fn fluent_sparse_presence(
+    (include_absent, descending, after, bytes): SparseRequest,
+) -> Result<IdPage, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let cursor = after
+        .as_deref()
+        .map(QueryCursor::from_bytes)
+        .transpose()
+        .map_err(|error| query_error(&error))?;
+    let mut query = db
+        .query::<crate::schema::DecimalRow>()
+        .filter_any(&[
+            ("maybe", Comparison::Ne, ic_db::IndexValue::Absent),
+            (
+                "maybe",
+                if include_absent {
+                    Comparison::Eq
+                } else {
+                    Comparison::Ne
+                },
+                ic_db::IndexValue::Absent,
+            ),
+        ])
+        .order_by(&["maybe"])
+        .work_limit(1)
+        .byte_limit(bytes as usize);
+    if descending {
+        query = query.descending();
+    }
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+    let page = query
+        .fetch_as::<IdOnly>()
+        .map_err(|error| query_error(&error))?;
+    Ok((
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u32,
+    ))
+}
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<129>",
+    decode_with = "crate::transport::decode::<_, 129>",
+    encode_with = "crate::transport::encode::<_, 129>"
+)]
+fn fluent_list_presence((present, after): (bool, Option<Vec<u8>>)) -> Result<IdPage, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let cursor = after
+        .as_deref()
+        .map(QueryCursor::from_bytes)
+        .transpose()
+        .map_err(|error| query_error(&error))?;
+    let mut query = db
+        .query::<crate::schema::ListRow>()
+        .filter(
+            "labels",
+            if present {
+                Comparison::Ne
+            } else {
+                Comparison::Eq
+            },
+            ic_db::IndexValue::Absent,
+        )
+        .work_limit(1);
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+    let page = query
+        .fetch_as::<IdOnly>()
+        .map_err(|error| query_error(&error))?;
+    Ok((
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u32,
+    ))
+}
+
+fn text_match(
+    (needle, after, work, bytes): TextRequest,
+    comparison: Comparison,
 ) -> Result<TextPage, u8> {
     let host = runtime();
     let db = open(&host);
@@ -85,7 +296,7 @@ fn fluent_text_prefix(
         .map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Document>()
-        .filter("note", Comparison::StartsWith, prefix.as_str())
+        .filter("note", comparison, needle.as_str())
         .limit(1)
         .work_limit(work as usize)
         .byte_limit(bytes as usize);

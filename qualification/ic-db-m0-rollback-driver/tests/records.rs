@@ -159,6 +159,27 @@ fn console_inspects_and_queries() {
                 .eq(expected.iter().copied())
         })
     };
+    let existence = run_console(
+        &binary,
+        "query Entry --select exists --work 1 --bytes 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 2\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&existence),
+        vec![vec!["true"], vec!["true"], vec!["false"], vec!["false"]]
+    );
+    assert!(existence.contains("1 row; 1 examined; 1 fetched; 1 encoded bytes."));
+    let distinct = run_console(&binary, "query Entry --select category --distinct\nquit\n");
+    assert_eq!(result_table_rows(&distinct), [vec!["1"], vec!["0"]]);
+    assert!(distinct.contains("2 rows; 6 examined; 6 fetched; 16 encoded bytes."));
+    assert!(distinct.contains("Next cursor: none"));
+    let filtered_distinct = run_console(
+        &binary,
+        "query Entry --select category --distinct --min 0 --order-by category\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&filtered_distinct),
+        [vec!["0"], vec!["1"]]
+    );
     assert!(contains_row(&stdout, &["0", "120"]));
     assert!(contains_row(&stdout, &["1", "93"]));
     assert!(contains_row(&stdout, &["1", "-10"]));
@@ -351,8 +372,11 @@ fn console_inspects_and_queries() {
         "query Document --min 0",
         "query Entry --order-by amount",
         "query Entry --select id --bytes 7",
-        "query Entry --select category --distinct --min 0 --order-by category",
+        "query Entry --select category --distinct --limit 1",
         "query Entry --select count --work 6",
+        "query Entry --select exists --min 999 --work 6",
+        "query Entry --select exists --group-min 0",
+        "query Entry --select exists --distinct",
         "query Entry --select category,sum:amount --work 6",
         "query Entry --select category,sum:amount --bytes 47",
         "query Entry --select sum:amount --work 6",

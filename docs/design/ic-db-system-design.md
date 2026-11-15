@@ -1174,8 +1174,11 @@ For a projection whose access path orders by the distinct key, product
 seen-set, following the earlier M0 witness. Predicates must be constant within
 each duplicate class. Prefer that direct path when its proof holds; it does not
 remove the need for bounded retained keys or full collection for other admitted
-DISTINCT shapes. Predicates varying within a class and ordering by another field
-need their own progress/equality proof. Live ordered enumeration
+DISTINCT shapes. The product also admits a bounded complete collection for ordered
+projections whose duplicates are not provably adjacent, including varying filters.
+It preserves first-match traversal order, returns no cursor and refuses rather
+than returning partial output. Larger paginated/resumable output remains work.
+Live ordered enumeration
 still does not establish a frozen input for an exact count or aggregate.
 
 Accepted 2026-11-14: use explicit source-change invalidation with a conservative
@@ -1658,7 +1661,8 @@ explicit gaps, not silently removed capabilities. M3 transformation recovery and
 M4 Canic integration/full-workload comparisons remain separate gates.
 
 The M2 slice delivers `Database::query::<E>()` with up to eight comparisons over
-top-level ordered scalar/unit-enum fields. `filter` adds an AND term; `filter_any`
+top-level ordered scalar/unit-enum fields, plus absence checks on every optional
+stored type. `filter` adds an AND term; `filter_any`
 adds a nonempty OR clause, ANDed with other terms/clauses. All alternatives count
 toward the same eight-term budget; empty or oversized clauses refuse with `Limit`.
 Runtime field names
@@ -1666,6 +1670,66 @@ resolve against the admitted entity, and operand widths/types must match exactly
 Equality includes absence; inequality is its complement. Range predicates require
 a present operand and do not match absent fields. No numeric coercion, callbacks,
 arbitrary expression language or separate public dynamic frontend is added.
+
+Primary traversal now intersects mandatory singleton `Eq`, `Lt`, `Le`, `Gt`
+and `Ge` predicates on the primary key with its namespace bounds. It reuses the
+admitted encoded operand: primary keys and comparison components have the same
+ordered encoding. Equal endpoints tighten toward exclusion; contradictory
+intervals finish empty only after all operands and cursor framing are admitted.
+OR alternatives do not narrow this interval. Secondary paths retain their selected
+equality prefix and apply these comparisons to the first field after it. The plan
+carries the admitted fixed-component count already used by DISTINCT; range
+execution does not reconstruct path selection. Bounds cover complete equal-value
+classes, including all trailing components and primary-owner suffixes. With the
+owned self-delimiting component codec, a byte-prefix successor skips that whole
+class; primary exact-key bounds keep their existing inclusive/exclusive rules.
+Optional less-than ranges add a present-tag lower bound so absent values remain
+excluded. Mandatory comparisons on later components and OR alternatives remain
+residual. A derived bound over the 512-byte complete-key cap also remains residual:
+an optimization must not reject an otherwise admitted comparison operand.
+The existing scanner receives the resulting bounds for rows, projections and all
+aggregate terminals. No extra executor, query representation or durable state is
+added. Query/cursor/job identities stay unchanged because the selected path and
+matching sequence are unchanged. A cursor from an older full scan, or a valid
+caller-selected position, intersects rather than widens the interval; ascending,
+descending and inclusive byte retries use the same bound rules. Candidate counts
+can fall and previously budget-exhausted queries can complete. Integrity checks
+cover examined rows, not records outside the selected range.
+
+This adapts the endpoint-tightening algorithm and equal-exclusive/contradictory
+interval lessons from frozen IcyDB `6d421e3`, specifically
+`query/plan/planner/range/bounds.rs` and the primary-range regressions in
+`query/plan/planner/compare/prefix_tests.rs`. Secondary-class boundary lessons come
+from `index/key/codec/mod.rs` (`RangeBoundSide` and component-range lowering) and
+`index/range/tests.rs`. IC DB's concatenated ordered components use byte successors
+instead of IcyDB's framed suffix/owner sentinels. Exact admitted component bytes replace
+its general value/coercion comparison and construction-budget interfaces. The
+bounded eight-term request supplies the preparation envelope. Native witnesses
+compare inclusive/exclusive combinations with integer predicates, cover signed
+extremes and variable-width Principal keys, clamp out-of-range cursors, retain byte
+retries and reopen aggregate progress. Secondary witnesses add duplicate classes,
+optional Text with NUL/Unicode bytes, terminal integer values, exact-cap/oversized
+bounds and old-style logical positions outside the narrowed interval. Wasm
+qualification covers both directions, fixed prefixes, duplicate classes, empty
+ranges and upgrade continuation. These are correctness and candidate-work
+observations, not comparative IC instruction or Wasm-size measurements.
+
+`Eq(Absent)` and `Ne(Absent)` also accept optional blobs, lists, named records,
+payload enums, sets and maps. Empty values and unit variants are present. Required
+fields reject absent operands; unknown fields refuse rather than implying absence.
+Other comparisons on non-orderable types remain unsupported. Admission marks these
+fields in one transient presence mask instead of requesting scalar key slots;
+the existing full-row decoder supplies validated byte spans. Execution reads the
+optional tag and shares comparison absence semantics. It still validates the
+entire present value before filtering, without materializing a generic value tree.
+This retains IcyDB `6d421e3`'s structural null/presence distinction from
+`db/predicate/runtime` and missing-path regression lessons, without its separate
+scalar/value predicate dispatch, nested-path rules or SQL null nodes. Existing
+cursor/job bindings, projection, DISTINCT admission and aggregate scanning remain
+the owners of their respective rules. Native probes cover all these type families,
+empty values, malformed tags/rows, paging and retained-job reopen; Wasm checks
+optional-list filtering and projection across upgrades. No durable representation
+or schema grammar changes are needed.
 
 The bounded flat term list carries clause boundaries into the same scanner.
 All operands are admitted before execution, even when another alternative would
@@ -1699,21 +1763,53 @@ comparison variant, negation executor or retained representation. Native oracles
 cover optional values, duplicate exclusions, both page directions, bounds and
 continuation through ordinary inequalities, including retained counts.
 
-`Comparison::StartsWith` admits present Text operands under the declared byte
+`Comparison::StartsWith`, `EndsWith` and `Contains` admit present Text operands under the declared byte
 limit, for row filters and completed text min/max group selection. Matching is
-literal, case-sensitive UTF-8 with no normalization; the empty prefix matches
+literal, case-sensitive UTF-8 with no normalization; an empty operand matches
 every present text value, including empty text, but not absence. Nontext fields
 refuse. Shared admission and comparison reuse existing terminated text keys,
-removing only the operand's final terminator while preserving escaped NUL bytes
-and optional-presence framing. No codec, schema or job-format change is needed;
+stripping presence and terminator framing only when matching, while preserving
+escaped NUL bytes. This prevents optional empty text from matching suffix U+0001.
+Encoded operands stay unchanged. No codec, schema or job-format change is needed;
 existing comparison discriminants and continuation bindings remain unchanged.
-Prefix matching remains a residual predicate under ordinary scan budgets.
-This retains frozen IcyDB `6d421e3`'s strict text-prefix semantics from
-`db/predicate/runtime/mod.rs`, without its case-fold/coercion machinery or a
-prefix-index lowering path. Independent Rust string oracles cover Unicode,
-embedded NUL, absence, DISTINCT and completed groups; retained jobs bind both
-input and group prefixes across reopen. The Wasm witness checks sparse pages,
+`EndsWith` and `Contains` remain residual predicates under ordinary scan budgets.
+This retains frozen IcyDB `6d421e3`'s strict text-prefix/suffix semantics from
+`db/predicate/runtime/mod.rs`, without its case-fold/coercion machinery.
+Independent Rust string oracles cover Unicode,
+embedded NUL, presence framing, absence, DISTINCT and completed groups; retained jobs bind both
+input and group text comparisons across reopen. Group operand admission and key
+encoding share one path across counts, extrema and numeric results; the comparator
+receives transient framing metadata, without another durable representation.
+The Wasm witness checks sparse pages,
 byte refusal, cursor binding and upgrade without changing backing bytes.
+
+Mandatory `StartsWith` on the first index field after the admitted fixed prefix
+now narrows that same scan interval. Remove only the encoded Text terminator,
+retain optional presence and escaped UTF-8 bytes, and use the existing byte-prefix
+successor for the exclusive upper bound. Empty prefixes span present text,
+including empty text, without admitting absence. The derived bound is checked
+after removing the terminator; oversized bounds stay residual. OR alternatives,
+later fields and completed-group selection do not become seek predicates.
+This carries forward the empty/NUL/Unicode-boundary cases in frozen IcyDB
+`index/range/tests.rs`, using the owned component codec instead of its semantic
+Unicode-successor construction or lower-only mode. Even a prefix ending at the
+maximum Unicode scalar has a bounded byte successor under the index namespace.
+Native string oracles cover both directions, DISTINCT, exact-cap/fallback bounds,
+existence/counts and retained-count reopen. Wasm qualifies a fixed-prefix compound
+index, empty/nonmatching/NUL/terminal-Unicode prefixes and byte retries across
+upgrade. Stored formats, selected paths and cursor/job bindings do not change.
+
+`Contains` means literal substring search, distinct from collection membership.
+It retains IcyDB `6d421e3`'s `TextContains` behavior and null/empty/Unicode lessons
+from `db/predicate/runtime`, without adding its separate executable node,
+case-folded mode or generic value evaluator. Feature-free `memchr` 2.8.3 owns
+the byte-search algorithm with [linear time and constant extra space](https://docs.rs/memchr/2.8.3/memchr/memmem/fn.find.html).
+This avoids a custom matcher and quadratic repeated-window comparisons.
+A valid UTF-8 needle cannot start inside an escaped NUL's FF byte or a UTF-8
+continuation byte, so searching the unframed comparison keys preserves literal
+substring semantics. Native tests compare with Rust strings, including long
+repetitive inputs and escaped NULs. Existing row/operand limits bound each search;
+no search cache, compiled pattern or persisted search state is introduced.
 
 This retains frozen IcyDB `6d421e3`'s full-child admission from
 `db/query/predicate/validate.rs` and OR short-circuit semantics from
@@ -1727,9 +1823,11 @@ backing; an explicitly selected predecessor also checks older conjunction cursor
 Primary-key order is the default. `using_index(name, prefix)` adds exact leading
 component constraints and uses the complete physical index order, including the
 primary-key suffix on nonunique indexes. `descending()` reverses that whole order.
-Sparse indexes require present prefix operands for every optional indexed field;
-an incomplete sparse path refuses rather than silently losing otherwise matching
-rows. Prefix admission and complete-key bounds share the direct-read implementation.
+Sparse indexes require presence proof for every optional indexed field: either
+a present prefix operand or a mandatory filter clause whose every alternative
+targets that field and rejects absence. An incomplete sparse path refuses rather
+than silently losing matching rows. Prefix admission and complete-key bounds
+share the direct-read implementation.
 `order_by(&[...])` accepts 1–4 distinct ordered top-level fields and appends the
 primary key unless explicitly listed last. It selects a complete ordered path;
 `descending` reverses every component together. Unknown/unorderable fields,
@@ -1742,14 +1840,27 @@ supply exact leading index operands; all predicates remain residual checks.
 An equality inside a multi-alternative OR clause cannot establish a fixed field
 or an index prefix, even when several alternatives happen to be identical.
 Ordering compares requested and physical field sequences after removing constant
-components, ending at the unique primary key. Sparse indexes retain the same
-conservative present-prefix requirement. Compatible indexes rank by longest
+components, ending at the unique primary key. Presence proof does not fix a field
+to one value or create an equality prefix. Compatible indexes rank by longest
 equality prefix, then fewest fields, then logical name. Prefer direct primary
 traversal when it supplies the order and no compatible index has a restrictive
 prefix. This is deterministic bounded metadata inspection (at most eight indexes
 of four components), without statistics, catalog state, plan caching or sorting.
 No supported path means `InvalidQuery`, never a sorted bounded subset.
-Optimized range seeks, mixed directions, bounded sorting, OR, broader grouping and
+Sparse membership and execution share one absence rule: `Ne(Absent)`, present
+equality, ranges and text comparisons exclude absence; `Ne(present)` does not.
+An OR containing an absent member or a different field cannot prove presence.
+Each component of a compound sparse index is checked independently. This adapts
+IcyDB `6d421e3`'s nullable-guard lessons from
+`db/query/plan/planner/index_select` and its implication regression tests to the
+existing flat eight-comparison contract. It adds no recursive implication engine,
+predicate normalization, copied proof objects or durable metadata. Native checks
+cover compound membership, ordering, DISTINCT and retained-count reopen; the Wasm
+witness covers absence refusal, byte limits and both page directions across upgrade.
+Newly eligible paths participate in the existing deterministic selection. If a
+physical path changes, old cursor/job bindings refuse and callers must restart;
+unchanged selected paths retain their identities and cleanup remains available.
+Mixed directions, bounded sorting, broader grouping and
 general DISTINCT remain work; this is not a general cost-based planner.
 
 `limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
@@ -1770,15 +1881,15 @@ not become output-record policies. No aliasing, coercion, nested path selection
 or computed projection is implied. An output type is not registered in the stored
 schema and changing its Rust name alone does not change query meaning.
 
-The first product `.distinct()` slice admits complete entities and projections
-containing the primary key as inherently unique. Other projections must form the
+Product `.distinct()` admits complete entities and projections
+containing the primary key as inherently unique. Other live projections must form the
 leading tuple of a selected index after fixed prefix components. Predicates may
 read only projected fields or fields fixed by that actual selected prefix.
 Ordering supplies the admitted prefix count for both automatic and explicit paths;
 DISTINCT does not independently infer it from equality terms. All operands and
 residual predicates remain validated, including contradictions.
 Projection field order need not match index order; equality
-covers the complete selected tuple. Unsupported shapes refuse before traversal.
+covers the complete selected tuple.
 The existing key codec supplies equality, including optional absence. One bounded
 previous-key buffer suppresses adjacent duplicates; examined duplicates still
 undergo whole-row/index validation and consume work. An exclusive cursor's last
@@ -1786,8 +1897,8 @@ processed physical key supplies the previous equivalence class even if its row
 has been deleted. An inclusive byte-retry cursor starts at an unreturned class.
 Every duplicate class is either wholly rejected or emitted before continuation
 advances through it. Thus a cursor inside a rejected class cannot hide a later
-match in that same class. Filters varying within a class still refuse: an early
-nonmatch followed by a matching duplicate needs additional progress semantics.
+match in that same class. Filters varying within a class use complete collection
+instead of a live cursor: an early nonmatch cannot hide a later matching duplicate.
 Cursor binding includes DISTINCT but
 its frame, stored schema and durable state do not change. Live updates retain
 live-enumeration limitations, never an exact aggregate input guarantee.
@@ -1795,11 +1906,55 @@ live-enumeration limitations, never an exact aggregate input guarantee.
 This retains IcyDB's ordered-adjacent proof and cross-page equality invariants
 from `db/executor/projection/materialize/distinct` and
 `db/executor/pipeline/operators/distinct/tests` at frozen revision
-`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`. It does not copy IcyDB's global replay
-or projected-value cache: this admitted path needs neither. General noncontiguous
-DISTINCT remains product work, not an omitted capability.
+`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`.
 
-The first aggregate terminals are synchronous `count()` and
+For ordered scalar/unit-enum projections without the adjacency proof, the same
+scanner collects all matching input in one synchronous operation. A bounded
+comparison-key set detects nonadjacent duplicates using the same exact tuple
+encoding as grouping and DISTINCT counts. Keep only the first matching projected
+record per key, in physical traversal order (reversed for descending queries).
+Every examined row/index is validated, even when its projected key was seen.
+Optional absence is a value; Decimal equality uses declared-scale semantics.
+Unsupported comparison types refuse before traversal.
+
+Complete collection admits no input cursor and returns one page with `next: None`.
+Cap distinct tuples at 32, comparison keys at 4096 bytes and combined retained
+key/projected-row buffer capacities at 128 KiB; collection metadata is separately
+bounded by the tuple cap. The query's output count and bytes must fit the complete
+result. Work exhaustion, including a boundary where exhaustion is not yet observed,
+returns `Limit`, as do cardinality/state/combined-output exhaustion. A single
+projected row larger than the output budget returns `RowTooLarge`. No partial
+success is exposed. Preparation, traversal and result conversion remain in one
+call; no stored seen-set, revision record or job payload is introduced.
+
+This carries forward IcyDB's nonadjacent equality, first representative and hard
+budget refusal invariants from `db/executor/projection/materialize/distinct`
+and its tests at the same frozen revision. It does not copy global replay/window
+pagination, canonical universal values or hashing machinery. Existing comparison
+keys suffice for the admitted type surface; direct adjacent execution still needs
+no set. Larger paginated/resumable DISTINCT remains product work. Native witnesses
+cover result/work/byte/cardinality/state/key bounds, optional text, Decimal equality,
+varying predicates and corruption in a later duplicate; Wasm/CLI witnesses cover
+complete results and refusals across upgrade. Durable state and existing adjacent
+cursor identities remain unchanged.
+
+Synchronous `exists()` returns `Aggregate<bool>` using the same admitted path and
+scanner. It validates each examined row/index and stops at the first match,
+including a match on the final allowed candidate. False requires observed input
+exhaustion; work exhaustion without a match returns `Limit`, including an exact
+boundary whose end has not been observed. It does not materialize an entity or
+inspect later rows after a match. The result occupies one logical byte. Output
+`limit` does not truncate input; cursors, DISTINCT, input ordering and group
+modifiers refuse under the scalar admission rules. Explicit index paths remain
+available. The transient existence accumulator has no admitted job checkpoint.
+This retains frozen IcyDB `6d421e3`'s false-initial/true-on-match reducer semantics
+from `aggregate/contracts/state/reducer` and `grouped`; early completion is a
+small scanner branch instead of a copied expression/reducer framework. Native
+tests cover budgets, empty/no-match input, presence filters, index paths and
+corruption before versus after the first match. Wasm and the installed-layout
+CLI qualify `db query --select exists` through the same terminal across upgrades.
+
+The first counting terminals are synchronous `count()` and
 `group_count::<Record>()`, returning `Aggregate<u64>` or
 `Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
 include every matching row; an absent group key is a group, not a discarded
@@ -1925,9 +2080,12 @@ absence/zero, overlap, independent result oracles, shrinking/growing text winner
 and work/state/output refusals. Retained grouped extrema use the completed-output
 pagination contract above; synchronous terminals return their bounded result at once.
 
-Completed grouped counts/extrema/sums now accept `filter_groups(comparison, operand)`
-and `order_groups(GroupOrder)`. Up to eight group predicates are ANDed independently
-of the eight input predicates. Counts admit exact Nat64 operands; extrema admit
+Completed grouped aggregates accept `filter_groups(comparison, operand)`,
+`filter_groups_any(&[(comparison, operand), ...])` and `order_groups(GroupOrder)`.
+Ordinary terms and nonempty OR clauses are ANDed. Up to eight group comparisons
+are admitted independently of the eight input comparisons. Every alternative is
+validated, including branches whose earlier sibling would match. Counts admit
+exact Nat64 operands; extrema admit
 the exact source field type, including declared scale/enum identity. Grouped
 extrema are nullable even for required inputs: absence supports Eq/Ne, while
 range comparisons require present operands/results. Invalid operands refuse even
@@ -1940,10 +2098,24 @@ stages. Default `GroupOrder::Key` uses canonical keys. AggregateAscending and
 AggregateDescending compare completed values and always break ties with ascending
 keys; absent extrema sort first ascending, last descending. The last order call
 wins. Input work and retained group/state caps still apply to groups later excluded;
-only selected output records consume output bytes. No cursor or implicit retry is
-added. At most 32 groups reach finalization, allowing one bounded in-memory sort.
+only selected output records consume output bytes. Synchronous terminals add no
+cursor or implicit retry; retained jobs keep their completed-output pagination.
+At most 32 groups reach finalization, allowing one bounded in-memory sort.
 Admitted predicate keys are separately bounded to eight keys of at most 4096
 logical bytes; source literals also retain the row-byte bound before encoding.
+
+OR uses the same flat clause boundaries as row selection, within the existing
+completed-group selector. Retained jobs hash a clause mask only for actual OR;
+conjunction-only and singleton-clause identities remain unchanged. Resuming the
+same leaves under different grouping refuses before checkpoint mutation. No
+predicate AST is persisted. IcyDB `6d421e3`'s
+`query/plan/semantics/group_having/tests` rejects OR on its restricted streaming
+route and checks nested eligibility even for short-circuited branches. IC DB
+retains the completion and full-admission lessons without adding streaming HAVING
+or a general expression compiler: every group finishes before OR selection.
+Native tests cover composition, absence/text/numeric results, overflow, clause
+identity and completed pages after reopen. Wasm checks trap rollback and upgrade,
+including a recorded predecessor's conjunction-only grouped checkpoint.
 
 This preserves IcyDB `6d421e3`'s completion-before-HAVING and
 HAVING-before-pagination behavior from

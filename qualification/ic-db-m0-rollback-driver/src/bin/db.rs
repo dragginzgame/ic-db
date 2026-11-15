@@ -79,7 +79,7 @@ enum Command {
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow"])]
@@ -111,6 +111,7 @@ enum Command {
         /// category,count or category,count:FIELD. Field counts exclude absence.
         /// category,distinct-count:amount or category,distinct-count:category for Entry;
         /// entry_id,distinct-count:note for Document. Distinct tuples include absence.
+        /// exists for any entity: one boolean, stopping at the first match.
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
@@ -122,7 +123,7 @@ enum Command {
         /// to group results; all-absent groups display an absent value.
         #[arg(long, default_value = "full")]
         select: String,
-        /// Deduplicate a leading-index projection; filters must be constant per tuple.
+        /// Deduplicate projections using live indexed pages or a bounded complete result.
         #[arg(long)]
         distinct: bool,
         /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
