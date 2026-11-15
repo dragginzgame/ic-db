@@ -19,11 +19,15 @@ thread_local! {
 
 #[cfg(feature = "aggregate-jobs")]
 pub(super) fn arm_job_write(stop_after: u64) {
+    arm(stop_after, false, false);
+}
+
+pub(super) fn arm(stop_after: u64, deny_growth: bool, exhaust_instructions: bool) {
     INJECTION.with(|slot| {
         slot.set(Some(Injection {
             stop_after,
-            deny_growth: false,
-            exhaust_instructions: false,
+            deny_growth,
+            exhaust_instructions,
             writes: 0,
             grows: 0,
         }))
@@ -32,7 +36,12 @@ pub(super) fn arm_job_write(stop_after: u64) {
 
 #[cfg(feature = "aggregate-jobs")]
 pub(super) fn finish_job_write() -> u64 {
-    INJECTION.with(|slot| slot.take().unwrap().writes)
+    finish().0
+}
+
+pub(super) fn finish() -> (u64, u64) {
+    let state = INJECTION.with(|slot| slot.take().unwrap());
+    (state.writes, state.grows)
 }
 
 #[derive(Default)]
@@ -126,17 +135,8 @@ fn fault_batch(
                 .unwrap();
         }
     }
-    INJECTION.with(|slot| {
-        slot.set(Some(Injection {
-            stop_after,
-            deny_growth,
-            exhaust_instructions,
-            writes: 0,
-            grows: 0,
-        }))
-    });
+    arm(stop_after, deny_growth, exhaust_instructions);
     db.commit(batch)
         .expect("product commit must complete or trap after mutation");
-    let state = INJECTION.with(|slot| slot.take().unwrap());
-    (state.writes, state.grows)
+    finish()
 }

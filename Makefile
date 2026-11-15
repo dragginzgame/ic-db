@@ -183,12 +183,12 @@ m3-maintenance:
 
 m3-maintenance-wasm:
 	@mkdir -p qualification/target/evidence/m3
-	@set -eu; for feature in maintenance maintenance-v2; do \
+	@set -eu; for feature in maintenance maintenance-v2 maintenance-faults; do \
 	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features "$$feature" --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "qualification/target/evidence/m3/$$feature-build.jsonl"; \
 	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
 	  cp "$$artifact" "qualification/target/evidence/m3/$$feature.wasm"; \
 	done
-	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy -- --nocapture
+	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy --test product_capacity -- --nocapture
 
 .PHONY: m2-cli m2-cli-artifact
 m2-cli-artifact:
@@ -237,3 +237,4 @@ release-lint:
 	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --all-targets -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings

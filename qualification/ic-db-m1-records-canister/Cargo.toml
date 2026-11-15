@@ -23,6 +23,7 @@ retained-console = []
 fault-injection = []
 maintenance = []
 maintenance-v2 = ["maintenance"]
+maintenance-faults = ["maintenance", "fault-injection"]
 
 [dependencies]
 ic-db.workspace = true

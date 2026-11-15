@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod maintenance;
 mod query;
-pub use maintenance::{CopyStep, Maintenance, SchemaCopy, SchemaTransition};
+pub use maintenance::{CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition};
 pub use query::{
     Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage,
@@ -20,6 +20,63 @@ const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
 type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
+
+// Both ordinary batches and complete-target migration validation derive present
+// references from the same admitted reverse-index components.
+fn collect_references(
+    entity: &EntitySchema,
+    info: &RowInfo,
+    required: &mut BTreeSet<(u32, RowKey)>,
+) -> Result<(), Error> {
+    for field in entity.fields {
+        if let Some(reference) = field.reference {
+            let position = entity
+                .indexes
+                .iter()
+                .position(|index| index.id == reference.index)
+                .ok_or(Error::Corrupt)?;
+            let mut bytes = info
+                .indexes
+                .get(position)
+                .and_then(Option::as_ref)
+                .map(Vec::as_slice)
+                .ok_or(Error::Corrupt)?;
+            if field.optional {
+                // Absence has no target; zero remains an ordinary target key.
+                match bytes.split_first() {
+                    Some((0, _)) => continue,
+                    Some((1, rest)) => bytes = rest,
+                    _ => return Err(Error::Corrupt),
+                }
+            }
+            let mut remaining = bytes;
+            key::consume(&mut remaining, field.value)?;
+            let target = RowKey::decode(&bytes[..bytes.len() - remaining.len()], field.value)?;
+            required.insert((reference.entity, target));
+        }
+    }
+    Ok(())
+}
+
+fn validate_reference_target<M: Memory>(
+    map: &Map<M>,
+    schema: &Schema,
+    entity: u32,
+    id: RowKey,
+) -> Result<(), Error> {
+    let bytes = map
+        .get(&row_key(entity, id))
+        .ok_or(Error::ReferenceViolation)?;
+    let entity = schema
+        .entities()
+        .iter()
+        .find(|value| value.id == entity)
+        .ok_or(Error::Corrupt)?;
+    if entity.inspect_row(&bytes)?.key != id {
+        return Err(Error::Corrupt);
+    }
+    Ok(())
+}
 
 fn manifest_key() -> StoreKey {
     StoreKey::new(vec![0]).expect("manifest key fits")
@@ -45,6 +102,8 @@ struct Mutation {
 }
 enum Kind {
     Insert(Vec<u8>, RowInfo),
+    // Only maintenance can construct this; ordinary insert policies stay intact.
+    CopyInsert(Vec<u8>, RowInfo, [Option<crate::Timestamp>; 2]),
     Replace(Vec<u8>, RowInfo),
     Delete,
 }
@@ -71,7 +130,7 @@ impl Batch {
         if E::SCHEMA.has_managed() {
             return Err(Error::ManagedField);
         }
-        self.put(row, false)
+        self.put(row, Kind::Insert)
     }
     /// Resolve a typed insert input, append it to this batch and return its full row.
     /// This is preparation, not a commit; the returned row is not yet persistent.
@@ -82,7 +141,7 @@ impl Batch {
     /// A refused input appends no mutation to the batch.
     pub fn insert_input<I: crate::InsertInput>(&mut self, input: I) -> Result<I::Entity, Error> {
         let row = input.__into_entity(self.operation_time)?;
-        self.put(&row, false)?;
+        self.put(&row, Kind::Insert)?;
         Ok(row)
     }
     /// Replace an existing typed record, retaining its primary key.
@@ -91,7 +150,7 @@ impl Batch {
     /// # Errors
     /// Refuses missing operation time, encoding or batch capacity before mutation.
     pub fn replace<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
-        self.put(row, true)
+        self.put(row, Kind::Replace)
     }
     /// Delete an existing primary key; no recursive cascades are implied.
     /// # Errors
@@ -106,10 +165,11 @@ impl Batch {
             0,
         )
     }
-    fn put<E: Entity>(&mut self, row: &E, replace: bool) -> Result<(), Error> {
-        if E::SCHEMA.has_managed() && self.operation_time.is_none() {
-            return Err(Error::MissingOperationTime);
-        }
+    fn put<E: Entity>(
+        &mut self,
+        row: &E,
+        kind: impl FnOnce(Vec<u8>, RowInfo) -> Kind,
+    ) -> Result<(), Error> {
         let bytes = row.encode()?;
         if bytes.len() > crate::__private::MAX_ROW_BYTES {
             return Err(Error::Limit);
@@ -117,16 +177,20 @@ impl Batch {
         // encode() admitted field/row bounds. Keys come from that same typed
         // value; decoding freshly encoded bytes would duplicate codec work.
         let info = row.__row_info();
+        let key = info.key;
         let len = bytes.len();
+        let kind = kind(bytes, info);
+        if E::SCHEMA.has_managed()
+            && self.operation_time.is_none()
+            && !matches!(kind, Kind::CopyInsert(..))
+        {
+            return Err(Error::MissingOperationTime);
+        }
         self.push(
             Mutation {
                 entity: E::SCHEMA,
-                key: info.key,
-                kind: if replace {
-                    Kind::Replace(bytes, info)
-                } else {
-                    Kind::Insert(bytes, info)
-                },
+                key,
+                kind,
             },
             len,
         )
@@ -362,7 +426,7 @@ impl<M: Memory> Database<M> {
             }
             let old = self.map.get(&key);
             match (&mutation.kind, &old) {
-                (Kind::Insert(..), Some(_)) => return Err(Error::Exists),
+                (Kind::Insert(..) | Kind::CopyInsert(..), Some(_)) => return Err(Error::Exists),
                 (Kind::Replace(..) | Kind::Delete, None) => return Err(Error::Missing),
                 _ => {}
             }
@@ -383,13 +447,18 @@ impl<M: Memory> Database<M> {
                             *info = mutation.entity.inspect_row(bytes)?;
                         }
                     }
+                    Kind::CopyInsert(bytes, _, expected) => {
+                        if crate::managed::values(mutation.entity, bytes)? != *expected {
+                            return Err(Error::ManagedField);
+                        }
+                    }
                     Kind::Delete => {}
                 }
             }
             // Admit complete after-image keys even when the row is a no-op.
             // Retain these buffers for publication instead of encoding twice.
             let after_indexes = match &mutation.kind {
-                Kind::Insert(_, info) | Kind::Replace(_, info) => {
+                Kind::Insert(_, info) | Kind::CopyInsert(_, info, _) | Kind::Replace(_, info) => {
                     index_entries(mutation.entity, info)?
                 }
                 Kind::Delete => Vec::new(),
@@ -418,12 +487,17 @@ impl<M: Memory> Database<M> {
                 }
             }
             *changed = true;
+            // Private migration inserts may precede their targets. The frozen
+            // complete target validates references before it can be published.
+            let copy_insert = matches!(&mutation.kind, Kind::CopyInsert(..));
             match mutation.kind {
                 Kind::Delete => {
                     deleted.push((mutation.entity.id, mutation.key));
                     removes.insert(key);
                 }
-                Kind::Insert(bytes, info) | Kind::Replace(bytes, info) => {
+                Kind::Insert(bytes, info)
+                | Kind::CopyInsert(bytes, info, _)
+                | Kind::Replace(bytes, info) => {
                     writes.insert(key, bytes);
                     for (key, is_unique) in after_indexes {
                         if is_unique && !unique.insert(key.clone()) {
@@ -431,37 +505,8 @@ impl<M: Memory> Database<M> {
                         }
                         writes.insert(key, info.key.encode());
                     }
-                    for field in mutation.entity.fields {
-                        if let Some(reference) = field.reference {
-                            let position = mutation
-                                .entity
-                                .indexes
-                                .iter()
-                                .position(|index| index.id == reference.index)
-                                .ok_or(Error::Corrupt)?;
-                            let mut bytes = info
-                                .indexes
-                                .get(position)
-                                .and_then(Option::as_ref)
-                                .map(Vec::as_slice)
-                                .ok_or(Error::Corrupt)?;
-                            if field.optional {
-                                // index_entries already validated the complete key.
-                                // Absence creates no relationship, including to key zero.
-                                match bytes.split_first() {
-                                    Some((0, _)) => continue,
-                                    Some((1, rest)) => bytes = rest,
-                                    _ => return Err(Error::Corrupt),
-                                }
-                            }
-                            let mut remaining = bytes;
-                            key::consume(&mut remaining, field.value)?;
-                            let target = RowKey::decode(
-                                &bytes[..bytes.len() - remaining.len()],
-                                field.value,
-                            )?;
-                            required.insert((reference.entity, target));
-                        }
+                    if !copy_insert {
+                        collect_references(mutation.entity, &info, &mut required)?;
                     }
                 }
             }
@@ -506,16 +551,7 @@ impl<M: Memory> Database<M> {
             if removes.contains(&key) {
                 return Err(Error::ReferenceViolation);
             }
-            let bytes = self.map.get(&key).ok_or(Error::ReferenceViolation)?;
-            let schema = self
-                .schema
-                .entities
-                .iter()
-                .find(|value| value.id == entity)
-                .ok_or(Error::Corrupt)?;
-            if schema.inspect_row(&bytes)?.key != id {
-                return Err(Error::Corrupt);
-            }
+            validate_reference_target(&self.map, &self.schema, entity, id)?;
         }
         for &(target, id) in deleted {
             for entity in &self.schema.entities {

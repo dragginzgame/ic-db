@@ -1,19 +1,20 @@
-//! One-entity copy with private target admission and message-atomic checkpoints.
+//! Whole-database copy with private target admission and message-atomic checkpoints.
 use super::{Maintenance, SchemaTransition, decode as decode_source};
 use crate::codec::{Decoder, Encoder};
 use crate::store::{
-    Map, index_entries, live_manifest, manifest_key, read_revision, revision_key, row_key,
-    validate_index_entry,
+    Map, collect_references, index_entries, live_manifest, manifest_key, read_revision,
+    revision_key, row_key, validate_index_entry, validate_reference_target,
 };
 use crate::{
     Batch, Database, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema, primary::RowKey,
     store_key::StoreKey,
 };
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+use std::collections::BTreeSet;
 use std::ops::Bound;
 
 pub(super) const MAGIC: &[u8; 8] = b"ICDBCP01";
-const MAX_FRAME: usize = 8 + 4 + super::MAX_FRAME + 20 + 1 + 4 + QueryCursor::MAX_ENCODED_BYTES;
+const MAX_FRAME: usize = 8 + 4 + super::MAX_FRAME + 20 + 2 + 4 + QueryCursor::MAX_ENCODED_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Identity {
@@ -23,7 +24,7 @@ pub(super) struct Identity {
 }
 pub(super) enum Phase {
     Source,
-    Copying(Option<QueryCursor>),
+    Copying(u8, Option<QueryCursor>),
     Copied,
     Cancelling,
     Cancelled,
@@ -39,7 +40,8 @@ impl Identity {
         writer.bytes(&self.target)?;
         writer.nat8(match phase {
             Phase::Source => 0,
-            Phase::Copying(_) => 1,
+            Phase::Copying(0, _) => 1,
+            Phase::Copying(_, _) => 9,
             Phase::Copied => 2,
             Phase::Cancelling => 3,
             Phase::Cancelled => 4,
@@ -48,7 +50,10 @@ impl Identity {
             Phase::Ready => 7,
             Phase::Retired => 8,
         })?;
-        if let Phase::Copying(cursor) = phase {
+        if let Phase::Copying(entity, cursor) = phase {
+            if *entity != 0 {
+                writer.nat8(*entity)?;
+            }
             writer.bytes(&cursor.as_ref().map_or_else(Vec::new, QueryCursor::to_bytes))?;
         }
         if let Phase::ValidatingSource(cursor) | Phase::ValidatingTarget(cursor) = phase {
@@ -75,13 +80,25 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
     }
     let phase = match reader.nat8()? {
         0 => Phase::Source,
-        1 => {
-            let cursor = reader.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?;
-            Phase::Copying(if cursor.is_empty() {
-                None
+        tag @ (1 | 9) => {
+            let entity = if tag == 1 {
+                0
             } else {
-                Some(QueryCursor::from_bytes(cursor)?)
-            })
+                let entity = reader.nat8()?;
+                if !(1..32).contains(&entity) {
+                    return Err(Error::Corrupt);
+                }
+                entity
+            };
+            let cursor = reader.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?;
+            Phase::Copying(
+                entity,
+                if cursor.is_empty() {
+                    None
+                } else {
+                    Some(QueryCursor::from_bytes(cursor)?)
+                },
+            )
         }
         2 => Phase::Copied,
         3 => Phase::Cancelling,
@@ -118,22 +135,27 @@ fn admit(source: &Schema, target: &Schema, transition: &SchemaTransition) -> Res
     if source.fingerprint() != transition.source || target.fingerprint() != transition.target {
         return Err(Error::IncompatibleSchema);
     }
-    let ([source], [target]) = (source.entities(), target.entities()) else {
-        return Err(Error::InvalidTransition);
-    };
-    if source.name != target.name
-        || source.primary_key != target.primary_key
-        || source.key_type()? != target.key_type()?
-        || [source, target].iter().any(|entity| {
-            entity
-                .fields
-                .iter()
-                .any(|field| field.reference.is_some() || field.managed.is_some())
-        })
-    {
+    if source.entities().len() != target.entities().len() {
         return Err(Error::InvalidTransition);
     }
+    for (source, target) in source.entities().iter().zip(target.entities()) {
+        if source.name != target.name
+            || source.primary_key != target.primary_key
+            || source.key_type()? != target.key_type()?
+            || managed_roles(source) != managed_roles(target)
+        {
+            return Err(Error::InvalidTransition);
+        }
+    }
     Ok(())
+}
+
+fn managed_roles(entity: &EntitySchema) -> [bool; 2] {
+    let mut roles = [false; 2];
+    for policy in entity.fields.iter().filter_map(|field| field.managed) {
+        roles[policy.slot()] = true;
+    }
+    roles
 }
 
 /// A bounded copy result. Completion means all source rows were copied, not
@@ -142,11 +164,11 @@ fn admit(source: &Schema, target: &Schema, transition: &SchemaTransition) -> Res
 pub struct CopyStep {
     /// Rows transformed and inserted by this call.
     pub rows: usize,
-    /// End of the frozen source was observed.
+    /// Every entity in the frozen source has been copied.
     pub complete: bool,
 }
 
-/// Exclusive source/target custody for one key-preserving entity transformation.
+/// Exclusive source/target custody for a key-preserving whole-database transformation.
 /// Both allocations remain closed to ordinary access. Dropping preserves progress.
 /// Publication requires completed validation. Allocation reuse remains unsupported.
 pub struct SchemaCopy<M: Memory = DefaultMemoryImpl> {
@@ -160,9 +182,10 @@ pub struct SchemaCopy<M: Memory = DefaultMemoryImpl> {
 impl<M: Memory> Maintenance<M> {
     /// Bind a fresh target allocation to this frozen source and initialize copying.
     /// The host supplies a fresh nonzero target incarnation, distinct from the source.
-    /// The schemas must each contain one same-named entity with the same primary
-    /// key declaration, without references or managed timestamps. All values and
-    /// target indexes use ordinary codec and batch validation.
+    /// The schemas must contain the same named entities, each retaining its primary
+    /// key declaration and managed timestamp roles. References validate only after
+    /// all entities are copied, including unchanged entities. All values
+    /// and target indexes use ordinary codecs and shared batch validation.
     /// # Errors
     /// Refuses unsupported shapes, wrong schemas/identity or nonempty target memory
     /// before mutation. Initial supplier growth may also refuse.
@@ -185,12 +208,18 @@ impl<M: Memory> Maintenance<M> {
             target: incarnation,
         };
         let source_gate = identity.encode(&Phase::Source)?;
-        let phase = Phase::Copying(None);
+        let phase = Phase::Copying(0, None);
         let target_gate = identity.encode(&phase)?;
-        let revision = revision_key(target.entities()[0].id);
+        let revisions: Vec<_> = target
+            .entities()
+            .iter()
+            .map(|entity| revision_key(entity.id))
+            .collect();
         let mut map = Map::create(memory).map_err(Error::Storage)?;
         map.insert(manifest_key(), target_gate);
-        map.insert(revision, 0_u64.to_le_bytes().to_vec());
+        for revision in revisions {
+            map.insert(revision, 0_u64.to_le_bytes().to_vec());
+        }
         self.map.insert(manifest_key(), source_gate);
         Ok(SchemaCopy {
             source: self,
@@ -231,6 +260,10 @@ impl<M: Memory> SchemaCopy<M> {
         {
             return Err(Error::InvalidTransition);
         }
+        if matches!(&phase, Phase::Copying(entity, _) if usize::from(*entity) >= source_schema.entities().len())
+        {
+            return Err(Error::Corrupt);
+        }
         Ok(Self {
             source: Maintenance {
                 map: source,
@@ -248,11 +281,40 @@ impl<M: Memory> SchemaCopy<M> {
         })
     }
 
+    /// Name of the next entity to copy, in canonical schema-name order.
+    /// Returns `None` after copying or once cancellation/validation has started.
+    #[must_use]
+    pub fn next_entity(&self) -> Option<&'static str> {
+        if let Phase::Copying(entity, _) = &self.phase {
+            Some(self.source_schema.entities()[usize::from(*entity)].name)
+        } else {
+            None
+        }
+    }
+
+    /// Explicitly preserve an unchanged entity through the same bounded copy path.
+    /// The entity's complete declaration must be admitted by both schemas.
+    /// # Errors
+    /// Refuses changed declarations, wrong copy order, bounds or corrupt source rows.
+    /// # Panics
+    /// Supplier mutation failures trap and roll back the whole IC message.
+    pub fn copy_unchanged<E: Entity>(
+        &mut self,
+        limit: usize,
+        bytes: usize,
+    ) -> Result<CopyStep, Error> {
+        self.copy_next::<E, E>(limit, bytes, |row, _| Ok(row))
+    }
+
     /// Transform the next bounded source page and checkpoint its target inserts.
     /// The function must be deterministic for the declared version/fixed inputs,
     /// synchronous and free of external effects or reentrant database mutations.
     /// Limits match source paging: 1..=32 candidates, 1 byte..=128 KiB source output.
     /// Target preparation additionally enforces the ordinary batch/index envelope.
+    /// Managed timestamp roles and their values must be preserved; field renames
+    /// are allowed through the explicit transformation. No insertion clock runs.
+    /// Call for `next_entity()` only. Completion advances to the next schema entity;
+    /// `complete` becomes true only after all entities have been copied.
     /// Repeated calls after completion return zero rows and `complete = true`.
     /// # Errors
     /// Refusals (including transform errors, changed keys and cross-page uniqueness
@@ -268,8 +330,8 @@ impl<M: Memory> SchemaCopy<M> {
     ) -> Result<CopyStep, Error> {
         self.source_schema.admits(S::SCHEMA)?;
         self.target.schema.admits(T::SCHEMA)?;
-        let cursor = match &self.phase {
-            Phase::Copying(cursor) => cursor.as_ref(),
+        let (entity, cursor) = match &self.phase {
+            Phase::Copying(entity, cursor) => (*entity, cursor.as_ref()),
             Phase::Copied => {
                 return Ok(CopyStep {
                     rows: 0,
@@ -278,25 +340,41 @@ impl<M: Memory> SchemaCopy<M> {
             }
             _ => return Err(Error::InvalidTransition),
         };
+        if S::SCHEMA.name != self.source_schema.entities()[usize::from(entity)].name
+            || S::SCHEMA.name != T::SCHEMA.name
+        {
+            return Err(Error::InvalidTransition);
+        }
         let page = self
             .source
             .source_page::<S>(&self.source_schema, cursor, limit, bytes)?;
         let rows = page.rows.len();
-        let complete = page.next.is_none();
-        let phase = if complete {
-            Phase::Copied
+        let phase = if page.next.is_none() {
+            if usize::from(entity) + 1 == self.source_schema.entities().len() {
+                Phase::Copied
+            } else {
+                Phase::Copying(entity + 1, None)
+            }
         } else {
-            Phase::Copying(page.next)
+            Phase::Copying(entity, page.next)
         };
+        let complete = matches!(phase, Phase::Copied);
         let checkpoint = self.identity.encode(&phase)?;
         let mut batch = Batch::new();
         for row in page.rows {
             let key = row.key().into_row_key();
+            let times = if S::SCHEMA.has_managed() {
+                crate::managed::values(S::SCHEMA, &row.encode()?)?
+            } else {
+                [None; 2]
+            };
             let result = transform(row, self.identity.transition.inputs())?;
             if result.key().into_row_key() != key {
                 return Err(Error::InvalidTransition);
             }
-            batch.insert(&result)?;
+            batch.put(&result, |bytes, info| {
+                crate::store::Kind::CopyInsert(bytes, info, times)
+            })?;
         }
         self.target.commit(batch)?;
         // No recoverable refusal after commit begins. The IC message owns rollback.
@@ -314,20 +392,10 @@ impl<M: Memory> SchemaCopy<M> {
     /// # Panics
     /// Supplier mutation failures trap and roll back the entire IC message.
     pub fn cancel_step(&mut self, limit: usize) -> Result<bool, Error> {
-        if !(1..=32).contains(&limit) {
-            return Err(Error::Limit);
-        }
+        let (keys, complete) = cleanup_keys(&self.target.map, limit)?;
         if matches!(self.phase, Phase::Cancelled) {
             return Ok(true);
         }
-        let keys: Vec<_> = self
-            .target
-            .map
-            .keys()
-            .filter(|key| *key != manifest_key())
-            .take(limit + 1)
-            .collect();
-        let complete = keys.len() <= limit;
         let phase = if complete {
             Phase::Cancelled
         } else {
@@ -335,7 +403,7 @@ impl<M: Memory> SchemaCopy<M> {
         };
         let checkpoint = self.identity.encode(&phase)?;
         let live = live_manifest(self.identity.transition.source, self.identity.source);
-        for key in keys.iter().take(limit) {
+        for key in &keys {
             self.target.map.remove_discard(key);
         }
         self.target.map.insert(manifest_key(), checkpoint);
@@ -349,7 +417,8 @@ impl<M: Memory> SchemaCopy<M> {
     /// Validate at most 1..=32 physical source or target entries in one call.
     /// Checks complete row framing, exact key coverage in both directions, revision
     /// metadata, expected index membership and every stored index's owner/key.
-    /// Each row has at most eight indexes under the admitted schema. No writes to
+    /// Each row has at most eight indexes and sixteen references. Each pass first
+    /// checks all declared revisions (at most 32), including empty entities. No writes to
     /// rows/indexes occur; only successful bounded progress is checkpointed.
     /// Return true only after both passes finish. Copying cannot resume afterward.
     /// # Errors
@@ -361,8 +430,6 @@ impl<M: Memory> SchemaCopy<M> {
         if !(1..=32).contains(&limit) {
             return Err(Error::Limit);
         }
-        let source_entity = self.source_schema.entities()[0];
-        let target_entity = self.target.schema.entities()[0];
         let phase = match &self.phase {
             Phase::Copied | Phase::ValidatingSource(_) => {
                 let cursor = if let Phase::ValidatingSource(cursor) = &self.phase {
@@ -372,8 +439,8 @@ impl<M: Memory> SchemaCopy<M> {
                 };
                 let next = validate_page(
                     &self.source.map,
-                    source_entity,
-                    (&self.target.map, target_entity),
+                    &self.source_schema,
+                    (&self.target.map, &self.target.schema),
                     cursor,
                     limit,
                 )?;
@@ -385,8 +452,8 @@ impl<M: Memory> SchemaCopy<M> {
             Phase::ValidatingTarget(cursor) => {
                 let next = validate_page(
                     &self.target.map,
-                    target_entity,
-                    (&self.source.map, source_entity),
+                    &self.target.schema,
+                    (&self.source.map, &self.source_schema),
                     cursor.as_ref(),
                     limit,
                 )?;
@@ -408,7 +475,7 @@ impl<M: Memory> SchemaCopy<M> {
     /// Atomically retire source admission and publish the fully validated target.
     /// The host selects the target allocation for subsequent ordinary opens.
     /// Source rows remain preserved but closed: this is not an operational rollback
-    /// promise after target writes. Retired-source cleanup is not yet implemented.
+    /// promise after target writes. Explicit `RetiredSource` cleanup may remove them.
     /// # Errors
     /// Refuses unless both validation passes have completed.
     /// # Panics
@@ -425,16 +492,90 @@ impl<M: Memory> SchemaCopy<M> {
     }
 }
 
+/// Exclusive cleanup authority for an entire source collection retired by cutover.
+/// Admission binds the exact transition and both database incarnations. Cleanup
+/// never opens the target and never clears the source's retired manifest.
+pub struct RetiredSource<M: Memory = DefaultMemoryImpl> {
+    map: Map<M>,
+}
+
+impl<M: Memory> RetiredSource<M> {
+    /// Admit only the expected retired allocation, without decoding historical rows.
+    /// The host decides when preservation/recovery obligations permit deletion.
+    /// # Errors
+    /// Refuses live, copying, cancelled, foreign or malformed allocations intact.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn resume(
+        memory: RuntimeMemory<M>,
+        expected: &SchemaTransition,
+        source_incarnation: [u8; 16],
+        target_incarnation: [u8; 16],
+    ) -> Result<Self, Error> {
+        let map = Map::load(memory).map_err(Error::Storage)?;
+        let (identity, phase) = decode(&map.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
+        if !matches!(phase, Phase::Retired)
+            || identity.transition != *expected
+            || identity.source != source_incarnation
+            || identity.target != target_incarnation
+        {
+            return Err(Error::InvalidTransition);
+        }
+        Ok(Self { map })
+    }
+
+    /// Delete at most 1..=32 retired entries, preserving the ownership manifest.
+    /// Return true when only that manifest remains. Repeated completion is a no-op.
+    /// Deletion itself records progress; no additional cursor or phase is stored.
+    /// This does not shrink physical memory, reset the allocation or reopen source.
+    /// # Errors
+    /// Refuses invalid limits before mutation.
+    /// # Panics
+    /// Supplier mutation failures trap; the IC rolls back the whole cleanup chunk.
+    pub fn cleanup_step(&mut self, limit: usize) -> Result<bool, Error> {
+        let (keys, complete) = cleanup_keys(&self.map, limit)?;
+        for key in &keys {
+            self.map.remove_discard(key);
+        }
+        Ok(complete)
+    }
+}
+
+// Cancellation and retired cleanup share bounded selection, keeping their
+// different authority changes at the caller. Values are not decoded for deletion.
+fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> Result<(Vec<StoreKey>, bool), Error> {
+    if !(1..=32).contains(&limit) {
+        return Err(Error::Limit);
+    }
+    let manifest = manifest_key();
+    let mut keys: Vec<_> = map
+        .keys()
+        .filter(|key| *key != manifest)
+        .take(limit + 1)
+        .collect();
+    let complete = keys.len() <= limit;
+    if !complete {
+        keys.pop();
+    }
+    Ok((keys, complete))
+}
+
 // Validate the physical collection in both directions. Forward row checks find
 // missing/wrong-owner indexes; reverse index checks find stale/extra entries.
 fn validate_page<M: Memory>(
     map: &Map<M>,
-    entity: &EntitySchema,
-    peer: (&Map<M>, &EntitySchema),
+    schema: &Schema,
+    peer: (&Map<M>, &Schema),
     after: Option<&StoreKey>,
     limit: usize,
 ) -> Result<Option<StoreKey>, Error> {
-    read_revision(map, entity.id)?;
+    // At most 32 declared entities; also find missing revision entries, which a
+    // physical scan alone cannot observe. Frozen allocations cannot change mid-pass.
+    if after.is_none() {
+        for entity in schema.entities() {
+            read_revision(map, entity.id)?;
+        }
+    }
     let lower = after.map_or(Bound::Unbounded, |key| Bound::Excluded(key.clone()));
     let mut last = None;
     let mut examined = 0;
@@ -442,23 +583,56 @@ fn validate_page<M: Memory>(
         let key = entry.key();
         if *key != manifest_key() {
             let bytes = entry.value();
+            let id = u32::from_be_bytes(
+                key.get(1..5)
+                    .ok_or(Error::Corrupt)?
+                    .try_into()
+                    .map_err(|_| Error::Corrupt)?,
+            );
+            let entity = schema
+                .entities()
+                .iter()
+                .find(|entity| entity.id == id)
+                .ok_or(Error::Corrupt)?;
             match key.first() {
                 Some(1) if *key == revision_key(entity.id) => {
                     if bytes.len() != 8 {
                         return Err(Error::Corrupt);
                     }
                 }
-                Some(2) if key.get(1..5) == Some(entity.id.to_be_bytes().as_slice()) => {
+                Some(2) => {
+                    let peer_entity = peer
+                        .1
+                        .entities()
+                        .iter()
+                        .find(|entity| entity.id == id)
+                        .ok_or(Error::Corrupt)?;
                     let info = entity.inspect_row(&bytes)?;
                     let owner = RowKey::decode(&key[5..], entity.key_type()?)?;
-                    if info.key != owner || !peer.0.contains_key(&row_key(peer.1.id, owner)) {
+                    if info.key != owner || !peer.0.contains_key(&row_key(peer_entity.id, owner)) {
                         return Err(Error::Corrupt);
+                    }
+                    if entity.has_managed() {
+                        let other = peer
+                            .0
+                            .get(&row_key(peer_entity.id, owner))
+                            .ok_or(Error::Corrupt)?;
+                        if crate::managed::values(entity, &bytes)?
+                            != crate::managed::values(peer_entity, &other)?
+                        {
+                            return Err(Error::ManagedField);
+                        }
                     }
                     for (index, _) in index_entries(entity, &info)? {
                         let stored = map.get(&index).ok_or(Error::Corrupt)?;
                         if RowKey::decode(&stored, entity.key_type()?)? != owner {
                             return Err(Error::Corrupt);
                         }
+                    }
+                    let mut required = BTreeSet::new();
+                    collect_references(entity, &info, &mut required)?;
+                    for (target, id) in required {
+                        validate_reference_target(map, schema, target, id)?;
                     }
                 }
                 Some(3) => {

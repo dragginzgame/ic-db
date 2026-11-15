@@ -1,13 +1,15 @@
 //! Private maintenance controls; production authorization/endpoints belong to Canic.
-use crate::{Entry, KEY, compiled, runtime};
+use crate::{Entry, KEY, compiled, runtime, schema::ManagedRow};
 use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, QueryCursor, Schema, SchemaCopy, SchemaTransition,
+    Batch, Database, Entity, Error, Maintenance, QueryCursor, RetiredSource, Schema, SchemaCopy,
+    SchemaTransition, Timestamp,
 };
 use ic_platform_runtime::cdk;
 use ic_storage::StableKey;
 
 pub const COPY_SOURCE: &str = "m1.copy.source.v1";
 pub const COPY_TARGET: &str = "m1.copy.target.v1";
+pub const COPY_NEXT: &str = "m1.copy.next.v1";
 
 #[ic_db::entity(name = "Entry", pk(field = "id", source = "external"),
     index(fields = ["category", "id"]), fields(
@@ -135,6 +137,10 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
         db.begin_maintenance(&transition)?;
         return Ok((0, false));
     }
+    if operation == 7 {
+        let mut retired = RetiredSource::resume(source_memory, &transition, [3; 16], [4; 16])?;
+        return Ok((0, retired.cleanup_step(usize::from(limit))?));
+    }
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
         .unwrap();
@@ -222,4 +228,406 @@ fn maintenance_copy_entries(target: bool) -> CopyEntries {
             .map(|entry| (entry.key().clone(), entry.value()))
             .collect(),
     )
+}
+
+#[ic_db::entity(
+    name = "ManagedRow",
+    pk(field = "id"),
+    index(field = "body", unique),
+    index(field = "changed"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "body", value(item(prim = "Text", max_bytes = 64))),
+        field(name = "born", managed = "created_at", value(item(prim = "Timestamp"))),
+        field(
+            name = "changed",
+            managed = "updated_at",
+            value(item(prim = "Timestamp"))
+        )
+    )
+)]
+struct ManagedV2 {}
+
+type ManagedCopyReply = (bool, Vec<(u64, String, i64, i64)>);
+
+fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
+    let source = Schema::new(&[ManagedRow::SCHEMA])?;
+    let target = Schema::new(&[ManagedV2::SCHEMA])?;
+    let version = if cfg!(feature = "maintenance-v2") {
+        2
+    } else {
+        1
+    };
+    let transition = SchemaTransition::new(&source, &target, "preserve-times", version, &[])?;
+    let host = runtime();
+    let source_memory = host
+        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+        .unwrap();
+    let target_memory = host
+        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .unwrap();
+    if operation == 0 {
+        let mut db = Database::create(source_memory, source.clone(), [5; 16])?;
+        let mut batch = Batch::at(Timestamp::from_millis(-10));
+        batch.insert_input(ManagedRow::insert().id(1).body("first".into()))?;
+        batch.insert_input(ManagedRow::insert().id(2).body("second".into()))?;
+        db.commit(batch)?;
+        let mut row = db.get::<ManagedRow>(2)?.ok_or(Error::Missing)?;
+        row.body = "updated".into();
+        let mut batch = Batch::at(Timestamp::from_millis(20));
+        batch.replace(&row)?;
+        db.commit(batch)?;
+        db.begin_maintenance(&transition)?
+            .begin_copy(target_memory, source, target, [6; 16])?;
+        return Ok((false, vec![]));
+    }
+    if operation == 5 || operation == 6 {
+        let mut db = Database::open(target_memory, target)?;
+        let millis = if operation == 6 {
+            let mut row = db.get::<ManagedV2>(2)?.ok_or(Error::Missing)?;
+            row.body = "after cutover".into();
+            let mut batch = Batch::at(Timestamp::from_millis(30));
+            batch.replace(&row)?;
+            db.commit(batch)?;
+            30
+        } else {
+            20
+        };
+        let rows =
+            db.index_prefix::<ManagedV2>("changed", &[Timestamp::from_millis(millis).into()], 32)?;
+        return Ok((
+            true,
+            rows.into_iter()
+                .map(|row| {
+                    (
+                        row.id,
+                        row.body,
+                        row.born.as_millis(),
+                        row.changed.as_millis(),
+                    )
+                })
+                .collect(),
+        ));
+    }
+    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+    let complete = match operation {
+        1 => {
+            copy.copy_next::<ManagedRow, ManagedV2>(1, 128 * 1024, |row, _| {
+                Ok(ManagedV2 {
+                    id: row.id,
+                    body: row.body,
+                    born: row.created,
+                    changed: row.updated,
+                })
+            })?
+            .complete
+        }
+        2 => {
+            copy.copy_next::<ManagedRow, ManagedV2>(2, 128 * 1024, |row, _| {
+                Ok(ManagedV2 {
+                    id: row.id,
+                    body: row.body,
+                    born: row.created,
+                    changed: if row.id == 2 {
+                        Timestamp::from_millis(21)
+                    } else {
+                        row.updated
+                    },
+                })
+            })?
+            .complete
+        }
+        3 => copy.validate_next(2)?,
+        4 => {
+            copy.publish()?;
+            true
+        }
+        _ => return Err(Error::InvalidTransition),
+    };
+    Ok((complete, vec![]))
+}
+
+#[cdk::update(
+    guard = "crate::transport::admit::<137>",
+    decode_with = "crate::transport::decode::<_, 137>",
+    encode_with = "crate::transport::encode::<_, 137>"
+)]
+fn maintenance_managed_copy((operation, trap): (u8, bool)) -> Result<ManagedCopyReply, String> {
+    let result = managed_copy_control(operation).map_err(|error| format!("{error:?}"))?;
+    if trap {
+        cdk::api::trap("managed copy fixture trap");
+    }
+    Ok(result)
+}
+
+#[ic_db::entity(
+    name = "A_Mapping",
+    pk(field = "id"),
+    index(field = "entry"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "entry",
+            value(item(prim = "Nat64")),
+            references(entity = "Entry")
+        )
+    )
+)]
+struct CopyMapping {}
+#[ic_db::entity(
+    name = "Z_Empty",
+    pk(field = "id"),
+    fields(field(name = "id", value(item(prim = "Nat64"))))
+)]
+struct CopyEmpty {}
+
+type WholeCopyReply = (bool, Option<String>, Vec<(u64, u64, u128)>);
+
+fn whole_declaration() -> Result<(Schema, Schema, SchemaTransition), Error> {
+    let source = Schema::new(&[Entry::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
+    let target = Schema::new(&[EntryV2::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
+    let version = if cfg!(feature = "maintenance-v2") {
+        2
+    } else {
+        1
+    };
+    let transition = SchemaTransition::new(&source, &target, "whole-database", version, &[])?;
+    Ok((source, target, transition))
+}
+
+fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
+    let (source, target, transition) = whole_declaration()?;
+    let host = runtime();
+    let source_memory = host
+        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+        .unwrap();
+    let target_memory = host
+        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .unwrap();
+    if operation == 0 {
+        let mut db = Database::create(source_memory, source.clone(), [7; 16])?;
+        let mut batch = Batch::new();
+        for id in 0..2 {
+            batch.insert(&CopyMapping {
+                id: id + 1,
+                entry: id,
+            })?;
+            batch.insert(&Entry {
+                id,
+                category: 1,
+                amount: id * 10,
+            })?;
+        }
+        db.commit(batch)?;
+        let copy = db.begin_maintenance(&transition)?.begin_copy(
+            target_memory,
+            source,
+            target,
+            [8; 16],
+        )?;
+        return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
+    }
+    if operation == 6 {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        batch.delete::<EntryV2>(0)?;
+        // A real ordinary-write refusal, projected as the response's boolean.
+        let restricted = matches!(db.commit(batch), Err(Error::ReferenceViolation));
+        let rows = db.index_prefix::<EntryV2>("category,id", &[1_u64.into()], 32)?;
+        return Ok((
+            restricted,
+            None,
+            rows.into_iter()
+                .map(|row| (row.id, row.category, row.amount))
+                .collect(),
+        ));
+    }
+    if operation == 9 {
+        let db = Database::open(source_memory, source)?;
+        let rows = db
+            .page::<Entry>(None, 32)?
+            .rows
+            .into_iter()
+            .map(|row| (row.id, row.category, u128::from(row.amount)))
+            .collect();
+        return Ok((true, None, rows));
+    }
+    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+    let complete = match operation {
+        1 => copy.copy_unchanged::<CopyMapping>(2, 4096)?.complete,
+        2 => {
+            copy.copy_next::<Entry, EntryV2>(2, 4096, |row, _| {
+                Ok(EntryV2 {
+                    id: row.id,
+                    category: row.category,
+                    amount: u128::from(row.amount) + 100,
+                })
+            })?
+            .complete
+        }
+        3 => copy.copy_unchanged::<CopyEmpty>(2, 4096)?.complete,
+        4 => copy.validate_next(2)?,
+        5 => {
+            copy.publish()?;
+            return Ok((true, None, vec![]));
+        }
+        7 => copy.cancel_step(2)?,
+        8 => {
+            copy.copy_next::<CopyMapping, CopyMapping>(2, 4096, |mut row, _| {
+                if row.id == 2 {
+                    row.entry = 99;
+                }
+                Ok(row)
+            })?
+            .complete
+        }
+        _ => return Err(Error::InvalidTransition),
+    };
+    Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
+}
+
+#[cdk::update(
+    guard = "crate::transport::admit::<138>",
+    decode_with = "crate::transport::decode::<_, 138>",
+    encode_with = "crate::transport::encode::<_, 138>"
+)]
+fn maintenance_whole_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
+    let result = whole_copy_control(operation).map_err(|error| format!("{error:?}"))?;
+    if trap {
+        cdk::api::trap("whole database copy fixture trap");
+    }
+    Ok(result)
+}
+
+#[ic_db::entity(name = "Entry", pk(field = "id", source = "external"),
+    index(fields = ["category", "id"]), index(field = "note"), fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat64"))),
+        field(name = "amount", value(item(prim = "Nat128"))),
+        field(name = "note", value(item(prim = "Text", max_bytes = 32)))
+))]
+struct EntryV3 {}
+
+// The third allocation is fresh fixture memory, not a reset/reuse mechanism.
+fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
+    let (_, source, previous) = whole_declaration()?;
+    let target = Schema::new(&[EntryV3::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
+    let version = if cfg!(feature = "maintenance-v2") {
+        2
+    } else {
+        1
+    };
+    let transition = SchemaTransition::new(&source, &target, "whole-database-note", version, &[])?;
+    let host = runtime();
+    if operation == 7 {
+        let memory = host
+            .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+            .unwrap();
+        let mut retired = RetiredSource::resume(memory, &previous, [7; 16], [8; 16])?;
+        return Ok((retired.cleanup_step(2)?, None, vec![]));
+    }
+    let source_memory = host
+        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .unwrap();
+    if operation == 0 {
+        let mut db = Database::open(source_memory, source)?;
+        let mut batch = Batch::new();
+        batch.replace(&EntryV2 {
+            id: 0,
+            category: 1,
+            amount: 999,
+        })?;
+        batch.insert(&EntryV2 {
+            id: 2,
+            category: 1,
+            amount: 222,
+        })?;
+        batch.insert(&CopyMapping { id: 3, entry: 2 })?;
+        db.commit(batch)?;
+        return Ok((true, None, vec![]));
+    }
+    if operation == 1 {
+        Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+        return Ok((false, None, vec![]));
+    }
+    if operation == 8 {
+        let mut retired = RetiredSource::resume(source_memory, &transition, [8; 16], [9; 16])?;
+        return Ok((retired.cleanup_step(2)?, None, vec![]));
+    }
+    if operation == 10 {
+        let db = Database::open(source_memory, source)?;
+        let rows = db
+            .page::<EntryV2>(None, 32)?
+            .rows
+            .into_iter()
+            .map(|row| (row.id, row.category, row.amount))
+            .collect();
+        return Ok((true, None, rows));
+    }
+    let target_memory = host
+        .open_memory(&StableKey::parse(COPY_NEXT).unwrap())
+        .unwrap();
+    if operation == 2 {
+        let copy = Maintenance::resume(source_memory, &transition)?.begin_copy(
+            target_memory,
+            source,
+            target,
+            [9; 16],
+        )?;
+        return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
+    }
+    if operation == 6 {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        batch.delete::<EntryV3>(2)?;
+        let restricted = matches!(db.commit(batch), Err(Error::ReferenceViolation));
+        let rows = db.index_prefix::<EntryV3>("note", &["v3".into()], 32)?;
+        return Ok((
+            restricted,
+            None,
+            rows.into_iter()
+                .map(|row| (row.id, row.category, row.amount))
+                .collect(),
+        ));
+    }
+    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+    let complete = match operation {
+        3 => match copy.next_entity() {
+            Some("A_Mapping") => copy.copy_unchanged::<CopyMapping>(2, 4096)?.complete,
+            Some("Entry") => {
+                copy.copy_next::<EntryV2, EntryV3>(2, 4096, |row, _| {
+                    Ok(EntryV3 {
+                        id: row.id,
+                        category: row.category,
+                        amount: row.amount + 1000,
+                        note: "v3".into(),
+                    })
+                })?
+                .complete
+            }
+            Some("Z_Empty") => copy.copy_unchanged::<CopyEmpty>(2, 4096)?.complete,
+            _ => return Err(Error::InvalidTransition),
+        },
+        4 => copy.validate_next(2)?,
+        5 => {
+            copy.publish()?;
+            return Ok((true, None, vec![]));
+        }
+        9 => copy.cancel_step(2)?,
+        _ => return Err(Error::InvalidTransition),
+    };
+    Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
+}
+
+#[cdk::update(
+    guard = "crate::transport::admit::<139>",
+    decode_with = "crate::transport::decode::<_, 139>",
+    encode_with = "crate::transport::encode::<_, 139>"
+)]
+fn maintenance_next_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
+    let result = next_copy_control(operation).map_err(|error| format!("{error:?}"))?;
+    if trap {
+        cdk::api::trap("successive database copy fixture trap");
+    }
+    Ok(result)
 }

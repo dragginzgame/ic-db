@@ -919,7 +919,7 @@ The preferred transformation is bounded copy/validation followed by cutover:
    ordinary result mapping and does not introduce general query callback hooks.
 2. Establish the durable maintenance gate before copying; ordinary reads and
    writes close and source data stays frozen.
-3. Copy affected data into new collections and build its indexes in bounded
+3. Copy the whole database into a fresh target allocation and build its indexes in bounded
    chunks. Commit each chunk's rows, indexes, allocator changes and progress in
    one message; a trap must revert the whole chunk, including progress.
 4. Complete validation over all affected dependencies before publication.
@@ -930,7 +930,9 @@ The preferred transformation is bounded copy/validation followed by cutover:
 
 For example, adding an index changes the declaration, deploys an admitted
 transition, builds and validates the index during maintenance, then publishes
-the target. Unaffected collections need not be copied. Retain source until
+the target. The initial product deliberately copies unchanged entities too;
+selective copying or compatible collection reuse needs measured justification
+and a separate ownership/publication contract. Retain source until
 cutover is committed and recovery obligations are settled. Prove peak space and
 bounded cleanup; reject this candidate if it exceeds the declared capacity envelope.
 In-place rewriting is not an automatic fallback.
@@ -1035,20 +1037,59 @@ than copying IcyDB's migration executor or journal. Native and Wasm witnesses
 cover byte retries, source decoder admission, cursor invalidation and paging
 across executable upgrades while ordinary access remains closed.
 
-**Bounded copy increment (0.16).** `Maintenance::begin_copy` accepts fresh
-host-provided governed memory and a fresh nonzero target incarnation. The first
-supported shape is one same-named entity with the same primary-key declaration,
-preserving every key and producing exactly one target row per source row.
-References, managed timestamps and multi-entity schemas explicitly refuse; those
-capabilities remain required later work. In particular, ordinary insertion-time
-policies must not silently rewrite historical timestamps during transformation.
+**Whole-database copy (0.17).** `Maintenance::begin_copy` accepts fresh host-provided
+governed memory and a fresh nonzero target incarnation. Source and target preserve
+the same named entity set and primary-key declarations, producing exactly one
+target row per source row with unchanged keys. This extends 0.16's one-entity
+mechanism without a planner or a second executor. Whole-database copying is the
+selected initial product contract; selective reuse is deferred, not prebuilt.
+
+The caller selects the next typed operation using `next_entity()`, in canonical
+schema-name order. `copy_next::<Source, Target>` applies the explicitly versioned
+Rust transformation; `copy_unchanged::<E>` uses the same path and requires the
+entity's complete declaration to be admitted by both schemas. A changed declaration
+cannot use the unchanged shortcut. Empty entities must also be visited. Progress
+records one entity ordinal plus its bounded cursor, not a persisted program or
+dependency graph. Every entity is copied and every target index rebuilt.
+`CopyStep.complete` means all entities are copied; a completed entity alone does
+not authorize validation or publication. Wrong entity order/pairing refuses intact.
+
+Private copy inserts defer reference existence checks until complete validation.
+Ordinary inserts/replacements/deletes still enforce final-batch references. Shared
+reference extraction and target decoding keep absence, zero keys and key-type
+semantics identical. Final validation checks references within each complete
+collection, allowing cycles and referencing rows copied before their targets.
+Missing targets prevent publication and leave cancellation available. Adding or
+removing entities, deleting source rows, changing keys and split/merge transforms
+remain explicitly unsupported; these need deliberate future contracts.
+
+**Managed timestamp preservation (0.17).** Source and target must retain the same
+managed roles. The explicit transformation may rename their fields but must preserve
+each role's value. Adding/removing roles and changing timestamps refuse; deliberate
+time-policy transformations remain later work. The private copy-insert mutation
+carries expected source times into shared batch preparation, which checks them
+before persistent mutation. Ordinary inserts and replacements retain their existing
+time policies. No host clock runs during copying. Final validation also compares
+managed values across the two allocations. Codecs enforce creation/update ordering;
+rebuilt timestamp indexes use the normal index codec. No persisted format, phase,
+authoring attribute or public import bypass is added.
+
+Frozen IcyDB's `migration_planner/tests.rs` at `6d421e3` exercises managed/generated/
+indexed entities through field renames and checked casts. We retain that coverage
+obligation using an explicit typed transform and shared commit preparation, without
+its runtime planner or accepted-source lineage catalog. Native and Wasm witnesses
+preserve distinct creation/update times through renaming, index reconstruction,
+interruption and cutover, then check ordinary update policy on the published target.
 
 `SchemaCopy` retains both exclusive leases. Its bounded `ICDBCP01` envelopes carry
 the existing exact transition/source identity frame, target incarnation and role.
 The source role is immutable during copying; the target records copying plus a
-bounded cursor, copied, validation progress, ready, cancelling or cancelled;
+bounded entity position/cursor, copied, validation progress, ready, cancelling or cancelled;
 cutover records the retired source role. These operation records are at
-most 1004 bytes and reuse existing strict identity/cursor codecs. Ordinary open
+most 1005 bytes and reuse existing strict identity/cursor codecs. Entity zero keeps
+the original copying tag/layout; later entities use tag 9 plus a bounded ordinal.
+Older readers refuse that tag intact. Resume also checks the ordinal against the
+exact compiled schema. Original one-entity checkpoints remain supported. Ordinary open
 validates the envelope and refuses all these roles. Pre-copy `Maintenance::resume`
 cannot reopen them and therefore cannot bypass target cleanup. Resume compares
 both identities/roles and the supported executable before exposing operations.
@@ -1060,7 +1101,8 @@ builds indexes and detects uniqueness conflicts even with earlier chunks. The
 next checkpoint is encoded before mutation and installed after the batch within
 the same message, with no recoverable refusal after mutation begins. A refused
 chunk leaves progress and target entries unchanged; an IC trap rolls back both.
-Observing source exhaustion records copied, without authorizing publication.
+Exhausting an entity advances to the next; exhausting the whole source records
+copied, without authorizing publication.
 
 `cancel_step` removes at most 32 target entries per call. Once cleanup starts,
 copying refuses. Only after all entries except the ownership manifest are removed
@@ -1082,7 +1124,9 @@ decoded row. It rejects unknown namespaces/entities, missing rows/indexes, orpha
 or stale indexes and conflicting unique ownership. The two passes establish exact
 key coverage; neither source-only nor target-only traversal suffices. Existing
 row/index codecs and ownership checks remain authoritative. Each validated row
-has at most eight index lookups under the admitted schema. No transform is rerun
+has at most eight index and sixteen reference checks under the admitted schema.
+At each pass's start, all declared revisions (at most 32) are checked, including
+those of empty entities. No transform is rerun
 or arbitrary callback executed during validation.
 
 Only after both passes reach exhaustion does the target record ready.
@@ -1094,7 +1138,28 @@ allocation-routing catalog. Any durable host routing change must share the same
 synchronous message if it is to be atomic with publication. Source bytes stay
 preserved but every ordinary open, maintenance resume and cancellation path
 refuses retired source admission. Target writes do not revive a rollback path.
-Retired-source cleanup remains later work. Publication traps revert both roles.
+Publication traps revert both roles. Retired-source cleanup follows the separate
+explicit host retention decision below.
+
+**Retired-source cleanup (0.17).** `RetiredSource::resume` requires the exact
+transition, source incarnation, target incarnation and retired source role before
+exposing deletion. Live, copying, cancelled or mismatched allocations refuse intact.
+The handle owns only source's exclusive lease; it cannot open or mutate target.
+`cleanup_step` removes at most 32 entries using the same bounded key-selection
+helper as cancellation, without decoding historical values. Every removal shares
+the current IC message's rollback boundary. Removed entries are progress, so
+interruptions need neither a stored cursor nor another phase. The unchanged retired
+manifest remains after completion, keeping source closed and identifying ownership.
+Repeated completion performs no mutation. Cleanup cannot reset or reuse the
+allocation and makes no physical-shrink promise.
+
+This retains IcyDB's requirement to resolve cleanup ownership before mutation
+(`migration_execution::cleanup_migration_staging_page` at `6d421e3`). Its physical
+generation/domain discovery is unnecessary for this narrower contract: the whole
+identified source allocation is retired. Partial/shared-allocation retirement is
+not implied. Native and Wasm probes cover identity refusal, bounded progress,
+trap rollback, upgrades, idempotence and preservation of target data. A recorded
+0.16 executable additionally checks admission with partially cleaned source.
 
 This retains IcyDB's private-candidate and atomic row/index/progress obligations
 from `schema/migration_execution`, replacing its page journal with the proven
@@ -1104,8 +1169,12 @@ Native witnesses independently inspect rebuilt row/index bytes and cover
 cross-chunk collisions, mismatched custody and cleanup progress. Wasm probes trap
 after target initialization, copying, validation checkpoints, publication and
 cleanup, compare complete backing bytes, and resume across upgrades. Copied data
-is served only after validation and publication; broader dependency validation
-for multi-entity/reference transforms and retired-source cleanup remain later work.
+is served only after validation and publication. Whole-database native/Wasm
+witnesses cover unchanged and empty entities, interrupted entity progress,
+complete-target reference refusal/cancellation, index reconstruction and atomic
+publication. Native cases additionally cover cycles and missing empty-entity revisions.
+This retains IcyDB's bounded final-validation obligation (`final_validate_migration_page`
+at `6d421e3`) without its planned-program traversal or maintenance budget framework.
 
 This retains frozen IcyDB `6d421e3`'s exact migration-identity and closed-phase
 invariants from `schema/migration_record` and its tests, plus its refusal of
@@ -1119,9 +1188,52 @@ frame the gate. Wasm probes freeze, reopen, reject a different executable's
 transition version, and roll back freeze/cancel traps against raw stable backing.
 A recorded 0.15 executable additionally refuses reads and writes while frozen,
 then resumes ordinary service after cancellation. `make m3-maintenance` selects
-these checks; the predecessor input is documented in qualification. Multi-entity
-dependency validation, retired-source cleanup and allocation reuse remain
-unimplemented M3 obligations, not implied by this single-entity cutover.
+these checks; the predecessor input is documented in qualification.
+
+**Successive migration witness (0.17).** The same Wasm host now runs A → B,
+ordinary B replacements/inserts, then B → C using a third fresh allocation. C adds
+a field and index while retaining the complete entity set. B → C resumes across
+upgrades; changed transformation versions and stale A → B operations refuse intact.
+Cancelling the second migration restores B with its intervening writes, never A.
+After publication, the new index returns transformed old and newly inserted rows,
+and ordinary restricted deletion remains active. A's independently bound cleanup
+can run while B is frozen; B cleanup after C publication preserves C. Traps compare
+complete backing at initialization, copying, publication and cleanup boundaries.
+Physical backing is recorded separately from logical cleanup.
+
+This retains the exact-identity/fresh-progress obligation in frozen IcyDB's
+`terminal_handoff_record_rejects_active_reset_wrong_database_and_carried_progress`
+(`schema/migration_record/tests.rs`, `6d421e3`). IC DB needs no terminal-handoff
+record or commit-marker journal: the existing manifests bind each pair and fresh
+target checkpoints. The witness adds no product state or execution mechanism.
+The separate capacity witness below qualifies a larger selected shape. Allocation
+reuse and broader production resource envelopes remain outstanding M3 obligations;
+these witnesses do not establish capacity for arbitrary repeated upgrades.
+
+**Migration capacity witness (0.17).** A qualification-only `maintenance-faults`
+variant copies 128 source rows into the existing eight-index envelope schema.
+Rows are 4096 bytes and physical index keys 512 bytes. Copy calls admit at most
+32 rows/128 KiB of source bytes; oversized row-count and undersized output budgets
+must refuse normally without mutation. The existing backing-fault wrapper rejects
+real supplier `grow` requests during copying. Whole-backing comparison covers
+rows, indexes, allocator metadata and checkpoints; the same chunk must complete
+after upgrade with growth allowed. Both runtime allocation and database errors
+remain observable normal refusals where returned, rather than forced host traps.
+
+The existing independent write-envelope byte oracle checks every copied row and
+index. Validation and cleanup must finish within explicit call bounds, with IC
+instruction counts recorded for each phase. This preserves frozen IcyDB's
+indivisible-row/index-work obligation from
+`migration_page_limits_qualify_every_indivisible_rewrite_resource` (`6d421e3`),
+without its journal-specific resource accounting or a new product budget tracker.
+Qualification owns the additional executable and fault controls. Larger tree
+shapes, reference-heavy workloads, heap peaks and supplier changes still require
+separate evidence; no allocator optimization or reuse guarantee is inferred.
+The selected Storage 0.74.1 run completed at maxima of 118,030,506 copy,
+61,016,055 validation and 3,366,626 cleanup instructions per chunk. These include
+host admission and supplier work under the qualification fault wrapper, excluding
+transport. Qualification records the exact workload and bounds; these are measured
+samples, not universal budgets or comparable IcyDB performance claims.
 
 ## 5. Reads and query semantics
 

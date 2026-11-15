@@ -111,9 +111,23 @@ installer. Do not edit vendor files or copy upstream reference documents.
   incarnation, entity and revision; they are not trusted copy checkpoints.
   Keep ordinary access closed and target copying/publication separate from this
   read-only prerequisite. No new durable cursor state or historical runtime reader.
-  `SchemaCopy` now adds a separate one-entity, key-preserving copy into fresh
-  host-supplied memory. Refuse references, managed timestamps and multi-entity
-  shapes in this increment. Keep the target private; reuse ordinary batch/index
+  `SchemaCopy` copies the whole database into fresh host-supplied memory. Preserve
+  the named entity set, primary-key declarations and every record key, producing
+  one target row per source row. Copy in canonical entity-name order, exposed by
+  `next_entity`; `copy_unchanged` explicitly copies retained declarations through
+  the same path. Copy progress stores only the entity ordinal and bounded cursor.
+  No inferred schema diff, dependency scheduler, partial collection reuse or DDL.
+  Private copy inserts defer reference existence until complete-target validation;
+  ordinary writes retain immediate final-batch checks. Share reference extraction
+  and target decoding. Validate every declared revision (including empty entities),
+  rows, indexes, key coverage and references in both complete collections before
+  publication. Cyclic references need no copy ordering by dependency.
+  Preserve managed timestamps by role, including explicit field renames; refuse
+  added/removed roles or changed values. The private copy-insert variant carries
+  expected source times into shared batch preparation; ordinary callers cannot
+  bypass insertion/update policies. Final validation compares both collections'
+  managed values. No clock, new persisted policy or macro change is implied.
+  Keep the target private; reuse ordinary batch/index
   preparation and commit its checkpoint in the same synchronous message. Bind
   both allocations to source/target incarnations and the exact transformation.
   Cancellation removes bounded target entries before reopening source; retain a
@@ -123,6 +137,24 @@ installer. Do not edit vendor files or copy upstream reference documents.
   completion, atomically retires source and opens target, then returns its ordinary
   database handle. The host selects the target allocation afterward; source stays
   closed even after target writes. No reset/reuse or generic migration planner.
+  `RetiredSource::resume` requires the retired role, exact transition and both
+  incarnations. Its bounded cleanup shares entry selection with cancellation,
+  but preserves source's retired manifest and never opens target. Deletion is
+  progress; add no cleanup cursor or accounting-only phase. Host retention policy
+  owns when to discard the preserved source. Empty logical storage does not
+  authorize reset/reuse or imply physical shrink.
+  The repeated-migration witness runs A → B, ordinary B writes, then B → C with
+  a new field/index. Cancellation restores B, never A; old transition operations
+  cannot act on the new migration. Cleanup of A may run while B is frozen for the
+  second transition. Keep this in the existing qualification host with fresh
+  allocations; it does not authorize a reset/reuse mechanism or a public endpoint.
+  `maintenance-faults` reuses the existing qualification-only backing wrapper to
+  test actual growth refusal inside migration. Keep database and runtime refusals
+  as normal results; do not manufacture a trap to conceal partial state. Compare
+  complete backing on failure, then require the identical chunk to progress with
+  growth enabled after upgrade. The 4 KiB-row/eight-index fixture shares the
+  independent write-envelope byte oracle, never product codecs. Capacity evidence
+  is workload/supplier-specific, not a universal instruction or allocator guarantee.
 - Accepted 2026-11-14: exact aggregates use conservative per-entity revision
   invalidation and bounded server-retained jobs; completion during continuous
   writes is not promised. Jobs may expire; incompatible upgrades must refuse their

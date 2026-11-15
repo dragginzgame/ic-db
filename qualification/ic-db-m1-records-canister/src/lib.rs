@@ -17,6 +17,8 @@ mod jobs;
 #[cfg(feature = "maintenance")]
 mod maintenance;
 mod managed;
+#[cfg(feature = "maintenance-faults")]
+mod migration_capacity;
 mod principal_keys;
 mod queries;
 
@@ -61,8 +63,12 @@ fn new_runtime() -> MemoryRuntime<Backing> {
     let requests = {
         let mut requests = requests;
         requests.extend(
-            [maintenance::COPY_SOURCE, maintenance::COPY_TARGET]
-                .map(|key| MemoryRequest::new("m1", key).unwrap()),
+            [
+                maintenance::COPY_SOURCE,
+                maintenance::COPY_TARGET,
+                maintenance::COPY_NEXT,
+            ]
+            .map(|key| MemoryRequest::new("m1", key).unwrap()),
         );
         requests
     };

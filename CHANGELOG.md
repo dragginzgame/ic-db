@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.17.0] - Unreleased
+
+### ➕ Added
+
+- Extend maintenance to whole-database copy and cutover. Preserve the named entity
+  set and primary keys; select typed transforms through `next_entity()` and copy
+  unchanged entities explicitly with `copy_unchanged::<E>`. Checkpoint progress
+  across entities, rebuild all indexes and validate references against the complete
+  target before publication, including cycles. Ordinary writes retain their
+  reference checks. Entity additions/removals, key remapping and selective copying
+  remain unsupported. No DDL or runtime migration planner; no new CLI command.
+- Preserve managed creation/update timestamps during bounded schema copying,
+  including explicit field renames and rebuilt timestamp indexes. Refuse changed
+  values or added/removed managed roles before mutation; final validation also
+  checks preservation. Normal write policies remain active after publication.
+  No new schema attributes, persisted format or CLI command.
+- Add bounded `RetiredSource` cleanup after cutover, admitted against the exact
+  transition and source/target incarnations. Preserve the retired manifest and
+  keep source access closed; cleanup never opens or modifies the live target.
+  Interrupted deletion resumes without a new cursor, phase or stored format.
+  Completed cleanup is a no-op on retry; physical shrink and allocation reuse
+  remain outside this contract. No new CLI command yet.
+
+### 🔧 Qualification
+
+- Add a migration capacity probe with 128 four-KiB rows, eight target indexes and
+  512-byte index keys. Reject actual supplier growth, compare complete backing and
+  retry the identical chunk after upgrade with growth enabled. Check structural
+  refusals, independent row/index bytes and completion of bounded validation and
+  cleanup. Reuse the existing fault wrapper and write-envelope oracle; no product
+  fault controls or resource framework. Included in `make m3-maintenance`.
+- Exercise two successive whole-database migrations in Wasm, with ordinary writes
+  between them and a new field/index in the second target. Check interruption,
+  changed-executable refusal, stale migration operations, cancellation back to the
+  latest source and cleanup of both retired sources. Record physical backing at
+  publication and cleanup. This uses fresh allocations and adds no product state,
+  allocation reuse or migration planner.
+
 ## [0.16.0] - 2026-11-15
 
 ### ➕ Added

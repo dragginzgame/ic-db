@@ -89,7 +89,7 @@ pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSch
 pub use store::{
     Aggregate, AggregateJobs, Batch, Comparison, CopyStep, Database, GroupCount, GroupCursor,
     GroupOrder, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Maintenance, Page, Query,
-    QueryCursor, QueryPage, SchemaCopy, SchemaTransition,
+    QueryCursor, QueryPage, RetiredSource, SchemaCopy, SchemaTransition,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 

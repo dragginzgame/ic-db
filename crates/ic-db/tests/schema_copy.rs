@@ -1,6 +1,7 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
 use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, Schema, SchemaCopy, SchemaTransition, entity,
+    Batch, Database, Entity, Error, Maintenance, RetiredSource, Schema, SchemaCopy,
+    SchemaTransition, Timestamp, entity,
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -40,6 +41,43 @@ struct Target {}
     )
 )]
 struct ManagedSource {}
+
+#[entity(
+    name = "Timed",
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "value", value(item(prim = "Nat8"))),
+        field(
+            name = "created",
+            managed = "created_at",
+            value(item(prim = "Timestamp"))
+        ),
+        field(
+            name = "updated",
+            managed = "updated_at",
+            value(item(prim = "Timestamp"))
+        )
+    )
+)]
+struct TimedSource {}
+
+#[entity(
+    name = "Timed",
+    pk(field = "id"),
+    index(field = "changed"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "value", value(item(prim = "Nat16"))),
+        field(name = "born", managed = "created_at", value(item(prim = "Timestamp"))),
+        field(
+            name = "changed",
+            managed = "updated_at",
+            value(item(prim = "Timestamp"))
+        )
+    )
+)]
+struct TimedTarget {}
 
 #[entity(
     pk(field = "id"),
@@ -331,9 +369,14 @@ fn unsupported_shapes_refuse_before_target_initialization() {
     for (source_schema, target_schema) in [
         (
             Schema::new(&[Source::SCHEMA, Other::SCHEMA]).unwrap(),
+            Schema::new(&[Target::SCHEMA]).unwrap(),
+        ),
+        (
+            source(),
             Schema::new(&[Target::SCHEMA, Other::SCHEMA]).unwrap(),
         ),
         (Schema::new(&[ManagedSource::SCHEMA]).unwrap(), target()),
+        (source(), Schema::new(&[ManagedSource::SCHEMA]).unwrap()),
     ] {
         let memory = VectorMemory::default();
         let runtime = host(memory.clone());
@@ -632,5 +675,587 @@ fn incomplete_or_inconsistent_collections_never_validate_or_publish() {
             }
             assert!(call < 31);
         }
+    }
+}
+
+#[test]
+fn retired_cleanup_binds_ownership_preserves_target_and_keeps_source_closed() {
+    let memory = VectorMemory::default();
+    let runtime = host(memory.clone());
+    let copy = begin(&runtime);
+    drop(copy);
+    let before = memory.borrow().clone();
+    assert!(
+        RetiredSource::resume(
+            runtime.open_memory(&key("copy.source.v1")).unwrap(),
+            &transition(1),
+            [1; 16],
+            [2; 16]
+        )
+        .is_err()
+    );
+    assert_eq!(*memory.borrow(), before);
+    let mut copy = resume(&runtime);
+    finish_copy(&mut copy);
+    for call in 0..32 {
+        if copy.validate_next(2).unwrap() {
+            break;
+        }
+        assert!(call < 31);
+    }
+    drop(copy.publish().unwrap());
+    let target_entries = entries(&runtime, "copy.target.v1");
+    let retired_manifest = entries(&runtime, "copy.source.v1")[0].clone();
+    for (name, version, source_inc, target_inc) in [
+        ("copy.target.v1", 1, [1; 16], [2; 16]),
+        ("copy.source.v1", 2, [1; 16], [2; 16]),
+        ("copy.source.v1", 1, [9; 16], [2; 16]),
+        ("copy.source.v1", 1, [1; 16], [9; 16]),
+    ] {
+        let before = memory.borrow().clone();
+        assert!(
+            RetiredSource::resume(
+                runtime.open_memory(&key(name)).unwrap(),
+                &transition(version),
+                source_inc,
+                target_inc
+            )
+            .is_err()
+        );
+        assert_eq!(*memory.borrow(), before);
+    }
+    let mut remaining = entries(&runtime, "copy.source.v1").len();
+    for call in 0..16 {
+        let mut retired = RetiredSource::resume(
+            runtime.open_memory(&key("copy.source.v1")).unwrap(),
+            &transition(1),
+            [1; 16],
+            [2; 16],
+        )
+        .unwrap();
+        let before = memory.borrow().clone();
+        for limit in [0, 33] {
+            assert!(matches!(retired.cleanup_step(limit), Err(Error::Limit)));
+        }
+        assert_eq!(*memory.borrow(), before);
+        let complete = retired.cleanup_step(1).unwrap(); // first chunk removes revision only
+        drop(retired);
+        let now = entries(&runtime, "copy.source.v1");
+        assert_eq!(now[0], retired_manifest);
+        assert_eq!(now.len(), remaining - 1);
+        remaining = now.len();
+        assert_eq!(entries(&runtime, "copy.target.v1"), target_entries);
+        assert!(
+            Database::open(
+                runtime.open_memory(&key("copy.source.v1")).unwrap(),
+                source()
+            )
+            .is_err()
+        );
+        if complete {
+            assert_eq!(remaining, 1);
+            break;
+        }
+        assert!(call < 15);
+    }
+    let mut retired = RetiredSource::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        &transition(1),
+        [1; 16],
+        [2; 16],
+    )
+    .unwrap();
+    let before = memory.borrow().clone();
+    assert!(retired.cleanup_step(32).unwrap());
+    assert_eq!(*memory.borrow(), before);
+    drop(retired);
+    assert!(
+        Maintenance::resume(
+            runtime.open_memory(&key("copy.source.v1")).unwrap(),
+            &transition(1)
+        )
+        .is_err()
+    );
+    assert!(
+        Database::create(
+            runtime.open_memory(&key("copy.source.v1")).unwrap(),
+            source(),
+            [9; 16]
+        )
+        .is_err()
+    );
+    let mut db = Database::open(
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        target(),
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    batch.replace(&Target { id: 1, value: 100 }).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.get::<Target>(1).unwrap().unwrap().value, 100);
+}
+
+#[test]
+fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
+    let memory = VectorMemory::default();
+    let runtime = host(memory.clone());
+    let source = Schema::new(&[TimedSource::SCHEMA]).unwrap();
+    let target = Schema::new(&[TimedTarget::SCHEMA]).unwrap();
+    let transition = SchemaTransition::new(&source, &target, "timed", 1, &[]).unwrap();
+    let mut db = Database::create(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        source.clone(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::at(Timestamp::from_millis(-10));
+    for id in 1..=2 {
+        batch
+            .insert_input(TimedSource::insert().id(id).value(3))
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let mut row = db.get::<TimedSource>(2).unwrap().unwrap();
+    row.value = 4;
+    let mut batch = Batch::at(Timestamp::from_millis(20));
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    let mut copy = db
+        .begin_maintenance(&transition)
+        .unwrap()
+        .begin_copy(
+            runtime.open_memory(&key("copy.target.v1")).unwrap(),
+            source.clone(),
+            target.clone(),
+            [2; 16],
+        )
+        .unwrap();
+    // A changed timestamp on the second row must refuse the entire prepared chunk.
+    for role in 0..2 {
+        let before = memory.borrow().clone();
+        let transform: fn(TimedSource, &[u8]) -> Result<TimedTarget, Error> = if role == 0 {
+            |row, _| {
+                let mut result = timed_transform(row, &[])?;
+                if result.id == 2 {
+                    result.born = Timestamp::from_millis(0);
+                }
+                Ok(result)
+            }
+        } else {
+            |row, _| {
+                let mut result = timed_transform(row, &[])?;
+                if result.id == 2 {
+                    result.changed = Timestamp::from_millis(21);
+                }
+                Ok(result)
+            }
+        };
+        assert!(matches!(
+            copy.copy_next(2, 128 * 1024, transform),
+            Err(Error::ManagedField)
+        ));
+        assert_eq!(*memory.borrow(), before);
+    }
+    assert_eq!(
+        copy.copy_next(1, 128 * 1024, timed_transform).unwrap().rows,
+        1
+    );
+    drop(copy);
+    let mut copy = SchemaCopy::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        source.clone(),
+        target.clone(),
+        &transition,
+    )
+    .unwrap();
+    while !copy
+        .copy_next(1, 128 * 1024, timed_transform)
+        .unwrap()
+        .complete
+    {}
+    drop(copy);
+    // Independently inspect the exact target encoding, including renamed fields.
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+    )
+    .unwrap();
+    let rows: Vec<_> = raw
+        .iter()
+        .filter(|entry| entry.key()[0] == 2)
+        .map(|entry| (entry.key().clone(), entry.value()))
+        .collect();
+    for (index, (_, bytes)) in rows.iter().enumerate() {
+        // Stored field order is canonical by name: born, changed, id, value.
+        let mut expected = (-10_i64).to_le_bytes().to_vec();
+        expected.extend((if index == 0 { -10_i64 } else { 20_i64 }).to_le_bytes());
+        expected.extend(((index + 1) as u64).to_le_bytes());
+        expected.extend((13 + index as u16).to_le_bytes());
+        assert_eq!(*bytes, expected);
+    }
+    // A well-formed but changed creation time must also fail final validation.
+    let mut damaged = rows[1].1.clone();
+    damaged[..8].copy_from_slice(&0_i64.to_le_bytes());
+    raw.insert(rows[1].0.clone(), damaged);
+    drop(raw);
+    let mut copy = SchemaCopy::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        source.clone(),
+        target.clone(),
+        &transition,
+    )
+    .unwrap();
+    let before = memory.borrow().clone();
+    assert!(matches!(copy.validate_next(32), Err(Error::ManagedField)));
+    assert_eq!(*memory.borrow(), before);
+    drop(copy);
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+    )
+    .unwrap();
+    raw.insert(rows[1].0.clone(), rows[1].1.clone());
+    drop(raw);
+    let mut copy = SchemaCopy::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        source,
+        target.clone(),
+        &transition,
+    )
+    .unwrap();
+    while !copy.validate_next(1).unwrap() {}
+    let mut db = copy.publish().unwrap();
+    let mut row = db.get::<TimedTarget>(2).unwrap().unwrap();
+    assert!(matches!(
+        Batch::new().insert(&row),
+        Err(Error::ManagedField)
+    ));
+    row.value = 99;
+    let mut batch = Batch::at(Timestamp::from_millis(30));
+    batch.replace(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = Database::open(runtime.open_memory(&key("copy.target.v1")).unwrap(), target).unwrap();
+    let row = db.get::<TimedTarget>(2).unwrap().unwrap();
+    assert_eq!(
+        (row.born.as_millis(), row.changed.as_millis(), row.value),
+        (-10, 30, 99)
+    );
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "matches the consuming migration callback"
+)]
+fn timed_transform(row: TimedSource, _: &[u8]) -> Result<TimedTarget, Error> {
+    Ok(TimedTarget {
+        id: row.id,
+        value: u16::from(row.value) + 10,
+        born: row.created,
+        changed: row.updated,
+    })
+}
+
+#[entity(
+    name = "A_Link",
+    pk(field = "id"),
+    index(field = "user"),
+    index(field = "next"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "user",
+            value(item(prim = "Nat64")),
+            references(entity = "UserOld")
+        ),
+        field(
+            name = "next",
+            value(opt, item(prim = "Nat64")),
+            references(entity = "Self")
+        )
+    )
+)]
+struct Link {}
+#[entity(
+    name = "Z_User",
+    pk(field = "id"),
+    index(field = "link"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "link",
+            value(opt, item(prim = "Nat64")),
+            references(entity = "Link")
+        ),
+        field(name = "value", value(item(prim = "Nat8")))
+    )
+)]
+struct UserOld {}
+#[entity(
+    name = "Z_User",
+    pk(field = "id"),
+    index(field = "link"),
+    index(field = "value", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(
+            name = "link",
+            value(opt, item(prim = "Nat64")),
+            references(entity = "Link")
+        ),
+        field(name = "value", value(item(prim = "Nat16")))
+    )
+)]
+struct UserNew {}
+
+fn multi_schemas() -> (Schema, Schema, SchemaTransition) {
+    // Deliberately supply schemas in different orders; canonical names own progress.
+    let source = Schema::new(&[UserOld::SCHEMA, Link::SCHEMA, Other::SCHEMA]).unwrap();
+    let target = Schema::new(&[Other::SCHEMA, Link::SCHEMA, UserNew::SCHEMA]).unwrap();
+    let transition = SchemaTransition::new(&source, &target, "whole-db", 1, &[]).unwrap();
+    (source, target, transition)
+}
+fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+    let (source, target, transition) = multi_schemas();
+    let mut db = Database::create(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        source.clone(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Link {
+            id: 1,
+            user: 0,
+            next: None,
+        })
+        .unwrap();
+    batch
+        .insert(&UserOld {
+            id: 0,
+            link: Some(1),
+            value: 7,
+        })
+        .unwrap();
+    db.commit(batch).unwrap(); // final-state cycle, with zero as a real target key
+    db.begin_maintenance(&transition)
+        .unwrap()
+        .begin_copy(
+            runtime.open_memory(&key("copy.target.v1")).unwrap(),
+            source,
+            target,
+            [2; 16],
+        )
+        .unwrap()
+}
+fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+    let (source, target, transition) = multi_schemas();
+    SchemaCopy::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        source,
+        target,
+        &transition,
+    )
+    .unwrap()
+}
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "matches consuming transform API"
+)]
+fn widen_user(row: UserOld, _: &[u8]) -> Result<UserNew, Error> {
+    Ok(UserNew {
+        id: row.id,
+        link: row.link,
+        value: u16::from(row.value) + 100,
+    })
+}
+
+#[test]
+fn whole_database_copy_resumes_across_entities_and_validates_cycles() {
+    let memory = VectorMemory::default();
+    let runtime = host(memory.clone());
+    let mut copy = multi_begin(&runtime);
+    assert_eq!(copy.next_entity(), Some("A_Link"));
+    let before = memory.borrow().clone();
+    assert!(matches!(
+        copy.copy_next(2, 4096, widen_user),
+        Err(Error::InvalidTransition)
+    ));
+    assert!(matches!(
+        copy.copy_next::<Link, UserNew>(2, 4096, |row, _| Ok(UserNew {
+            id: row.id,
+            link: None,
+            value: 0,
+        })),
+        Err(Error::InvalidTransition)
+    ));
+    assert!(matches!(
+        copy.validate_next(32),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(*memory.borrow(), before);
+    // The referenced user has not been copied yet. Target stays private.
+    assert!(!copy.copy_unchanged::<Link>(2, 4096).unwrap().complete);
+    assert_eq!(copy.next_entity(), Some("Other"));
+    drop(copy);
+    let (_, target, _) = multi_schemas();
+    assert!(matches!(
+        Database::open(runtime.open_memory(&key("copy.target.v1")).unwrap(), target),
+        Err(Error::Maintenance)
+    ));
+    let mut copy = multi_resume(&runtime);
+    assert_eq!(copy.next_entity(), Some("Other"));
+    assert_eq!(copy.copy_unchanged::<Other>(1, 4096).unwrap().rows, 0);
+    assert_eq!(copy.next_entity(), Some("Z_User"));
+    let before = memory.borrow().clone();
+    assert!(copy.copy_unchanged::<UserOld>(2, 4096).is_err());
+    assert_eq!(*memory.borrow(), before);
+    assert!(copy.copy_next(2, 4096, widen_user).unwrap().complete);
+    assert_eq!(copy.next_entity(), None);
+    drop(copy);
+    // Independent raw counts: manifest, all three revisions, two rows, four indexes.
+    let raw = entries(&runtime, "copy.target.v1");
+    assert_eq!(raw.iter().filter(|(key, _)| key[0] == 1).count(), 3);
+    assert_eq!(raw.iter().filter(|(key, _)| key[0] == 2).count(), 2);
+    let mut copy = multi_resume(&runtime);
+    for _ in 0..40 {
+        if copy.validate_next(1).unwrap() {
+            break;
+        }
+        drop(copy);
+        copy = multi_resume(&runtime);
+    }
+    let mut db = copy.publish().unwrap();
+    assert_eq!(db.get::<Link>(1).unwrap().unwrap().user, 0);
+    assert_eq!(db.get::<UserNew>(0).unwrap().unwrap().value, 107);
+    assert!(db.page::<Other>(None, 1).unwrap().rows.is_empty());
+    let (_, _, transition) = multi_schemas();
+    let mut retired = RetiredSource::resume(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        &transition,
+        [1; 16],
+        [2; 16],
+    )
+    .unwrap();
+    let mut cleaned = false;
+    for _ in 0..32 {
+        if retired.cleanup_step(1).unwrap() {
+            cleaned = true;
+            break;
+        }
+    }
+    assert!(cleaned);
+    drop(retired);
+    assert_eq!(entries(&runtime, "copy.source.v1").len(), 1);
+    assert_eq!(
+        db.index_prefix::<UserNew>("value", &[107_u16.into()], 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    // Ordinary inserts/deletes still enforce references after cutover.
+    let mut batch = Batch::new();
+    batch
+        .insert(&Link {
+            id: 2,
+            user: 99,
+            next: None,
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    let mut batch = Batch::new();
+    batch.delete::<UserNew>(0).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    let mut batch = Batch::new();
+    batch.delete::<Link>(1).unwrap();
+    batch.delete::<UserNew>(0).unwrap();
+    db.commit(batch).unwrap();
+}
+
+#[test]
+fn invalid_completed_reference_refuses_publication_and_cancels_to_original_source() {
+    let memory = VectorMemory::default();
+    let runtime = host(memory.clone());
+    let mut copy = multi_begin(&runtime);
+    copy.copy_unchanged::<Link>(2, 4096).unwrap();
+    copy.copy_unchanged::<Other>(2, 4096).unwrap();
+    copy.copy_next::<UserOld, UserNew>(2, 4096, |row, inputs| {
+        let mut row = widen_user(row, inputs)?;
+        row.link = Some(999);
+        Ok(row)
+    })
+    .unwrap();
+    assert!(!copy.validate_next(32).unwrap()); // source validates independently
+    let before = memory.borrow().clone();
+    assert!(matches!(
+        copy.validate_next(32),
+        Err(Error::ReferenceViolation)
+    ));
+    assert_eq!(*memory.borrow(), before);
+    assert!(matches!(copy.publish(), Err(Error::InvalidTransition)));
+    let mut copy = multi_resume(&runtime);
+    for _ in 0..32 {
+        if copy.cancel_step(1).unwrap() {
+            break;
+        }
+    }
+    drop(copy);
+    let (source, _, _) = multi_schemas();
+    let db = Database::open(runtime.open_memory(&key("copy.source.v1")).unwrap(), source).unwrap();
+    assert_eq!(db.get::<UserOld>(0).unwrap().unwrap().link, Some(1));
+}
+
+#[test]
+fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
+    for malformed_position in [false, true] {
+        let memory = VectorMemory::default();
+        let runtime = host(memory.clone());
+        let mut copy = multi_begin(&runtime);
+        copy.copy_unchanged::<Link>(2, 4096).unwrap();
+        if !malformed_position {
+            copy.copy_unchanged::<Other>(2, 4096).unwrap();
+            copy.copy_next(2, 4096, widen_user).unwrap();
+        }
+        drop(copy);
+        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+            runtime.open_memory(&key("copy.target.v1")).unwrap(),
+        )
+        .unwrap();
+        if malformed_position {
+            let mut frame = raw.get(&vec![0]).unwrap();
+            let entity = frame.len() - 5;
+            frame[entity] = 31; // valid envelope ordinal, outside this three-entity schema
+            raw.insert(vec![0], frame);
+        } else {
+            let mut revision = vec![1];
+            revision.extend(Other::ID.to_be_bytes());
+            raw.remove(&revision);
+        }
+        drop(raw);
+        let before = memory.borrow().clone();
+        if malformed_position {
+            let (source, target, transition) = multi_schemas();
+            assert!(matches!(
+                SchemaCopy::resume(
+                    runtime.open_memory(&key("copy.source.v1")).unwrap(),
+                    runtime.open_memory(&key("copy.target.v1")).unwrap(),
+                    source,
+                    target,
+                    &transition
+                ),
+                Err(Error::Corrupt)
+            ));
+        } else {
+            let mut copy = multi_resume(&runtime);
+            assert!(!copy.validate_next(32).unwrap());
+            let before_validation = memory.borrow().clone();
+            assert!(copy.validate_next(32).is_err());
+            assert_eq!(*memory.borrow(), before_validation);
+            continue;
+        }
+        assert_eq!(*memory.borrow(), before);
     }
 }

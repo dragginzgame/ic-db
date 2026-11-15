@@ -42,14 +42,23 @@ changed transitions or source revisions; they are read positions, not copy check
 `begin_copy` now binds a fresh host-provided target allocation and returns
 `SchemaCopy`. Its `copy_next::<Source, Target>` transforms bounded pages, rebuilds
 indexes through batch commits and saves progress atomically with each chunk.
-The first copy shape is one same-named entity with preserved primary keys, without
-references or managed timestamps. Both allocations stay closed to ordinary access.
+Copy the whole database, preserving the named entity set and every primary key.
+Use `next_entity()` to select the next typed transform in schema-name order;
+`copy_unchanged::<E>` explicitly preserves an unchanged entity. Even empty entities
+must be visited. `CopyStep.complete` means every entity is copied. References,
+including cycles, validate against the complete target before publication; ordinary
+writes retain their existing checks. Managed timestamps retain their values by
+role, including explicit field renames; adding/removing roles or changing their
+values refuses. Both allocations stay closed to ordinary access.
 `cancel_step` removes bounded target entries before reopening source.
 `validate_next` checks both collections in bounded passes; only after it completes
 can `publish` atomically open target and retire source. It returns the target
 database handle, and the host selects that allocation for subsequent opens.
-Source rows, indexes and revisions stay intact but cannot reopen after publication.
-Retired-source cleanup and allocation reuse remain subsequent work.
+Publication preserves source rows, indexes and revisions while closing its admission.
+Once host retention obligations permit deletion, `RetiredSource::resume` requires
+the exact transition and both incarnations; `cleanup_step` removes at most 32
+retired entries per call and preserves the retired manifest. It never opens target.
+Allocation reuse and physical shrink are not provided by cleanup.
 Host adapters own access control. Run
 `make m3-maintenance` for the focused native/Wasm probe.
 

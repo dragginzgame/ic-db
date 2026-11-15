@@ -51,6 +51,11 @@ fn positions(
     Ok(values)
 }
 
+// Migration preserves role values even when their declared field names change.
+pub(crate) fn values(schema: &EntitySchema, bytes: &[u8]) -> Result<[Option<Timestamp>; 2], Error> {
+    Ok(positions(schema, bytes)?.map(|entry| entry.map(|(_, value)| value)))
+}
+
 pub(crate) fn validate_insert(
     schema: &EntitySchema,
     bytes: &[u8],

@@ -1347,12 +1347,26 @@ Native probes compare complete row/index/revision entries, exact manifest bytes,
 identity bounds, malformed records and source-compatible cancellation/reopen.
 Wasm probes test message rollback of freeze/cancellation, immutable identity
 admission across upgrades, read refusal while frozen and restored writes after
-cancellation. The separate single-entity copy witness now exercises the actual
+cancellation. The copy witnesses exercise the actual
 product `SchemaCopy` against fresh source/target allocations. It checks chunk
 checkpointing, key preservation, rebuilt indexes, unique collisions across chunks,
 wrong allocation pairs, bounded validation, publication and cancellation. Native
 corruption probes remove rows/indexes/revisions and introduce stale indexes,
 wrong owners, extra rows and malformed payloads. None may reach publication.
+Whole-database cases additionally copy unchanged, changed and empty entities,
+resume at entity boundaries, reject wrong entity order/pairing, validate cyclic
+references and detect missing empty-entity revisions. Wasm probes copy references
+before their targets, compare backing after chunk/validation/publication traps,
+reject changed code and a recorded 0.16 executable, then publish and enforce
+ordinary restricted deletion. A second journey constructs a dangling target
+reference, refuses publication and resumes bounded cancellation to the original
+source. Entity additions/removals and key remapping remain unsupported.
+The managed-time witness renames timestamp fields and rebuilds their indexes,
+preserving distinct creation/update times. Native checks reject role changes,
+changed timestamps in a prepared chunk and validly encoded timestamp corruption
+before publication. Wasm checks compare whole backing after refusal/traps, resume
+across upgrades, reject a changed transformation version and query the rebuilt
+timestamp index before/after an ordinary target update.
 The maintenance-only source-page endpoint also checks byte-limit retry, oversized
 rows, exact typed contents and continuation across upgrades. Native checks cover
 source schema admission, corrupt rows/revisions, cursor separation from ordinary
@@ -1381,6 +1395,83 @@ until validation and publication, and remains closed after cancellation. The
 publication journey writes/reopens target after upgrades and verifies that source
 stays retired and cannot be cancelled back into service. The predecessor artifact check
 applies to the original freeze gate, not the new copy fixture allocations.
+
+The publication journey also runs bounded retired-source cleanup: traps restore
+the entire chunk, mismatched transformation versions refuse, interrupted deletion
+resumes, and repeated completion leaves backing unchanged. The retired manifest
+survives and target entries remain identical. Set
+`IC_DB_M3_RETIRED_PREDECESSOR_WASM` to a recorded 0.16 maintenance-feature artifact
+to additionally check that older executable with partially cleaned source and
+the live target. The first run used release-qualified source `92f3228` (released
+as `v0.16.0`); without this optional artifact, only current executable versions
+are covered. Neither probe claims physical shrink or allocation reuse.
+
+The successive whole-database journey runs A → B, replaces/inserts records and
+references in B, then runs B → C into a third fresh allocation. C adds a note field
+and index; expected results are checked through that new index after upgrade.
+Second-migration cancellation restores the exact B data, including intervening
+writes. Stale A → B commands, changed transformation versions and cleanup of an
+active source refuse without changing backing. A cleanup runs safely while B is
+frozen; B cleanup after C publication preserves target queries and reference checks.
+Initialization/copy/publication/cleanup traps restore complete backing. Bounded
+loops require progress; repeated cleanup is a no-op. The driver reports physical
+backing bytes after each publication and cleanup. These are fresh-allocation
+measurements, not evidence of reclamation/reuse or a production migration envelope.
+
+The 0.17 run with Storage 0.74.1 recorded the following whole-canister backing
+(including fixture data and supplier overhead, not just migrated rows):
+
+| Checkpoint | Bytes | 64 KiB pages |
+| --- | ---: | ---: |
+| A → B published | 2,752,512 | 42 |
+| C initialized/partly copied; A cleaned | 3,276,800 | 50 |
+| B → C published | 3,276,800 | 50 |
+| B cleaned | 3,276,800 | 50 |
+
+The third fresh allocation grew backing by 524,288 bytes. Logical source cleanup
+did not shrink that allocation. These tiny datasets establish lifecycle behavior;
+the selected larger envelope and failed-growth probe follows below. Repeated
+allocation reuse needs separate evidence. Do not optimize product structure
+around this supplier layout.
+
+`make m3-maintenance-wasm` also builds `maintenance-faults` and runs
+`product_capacity`. This variant reuses the ordinary commit-failure backing
+wrapper. It copies 128 rows of 4096 bytes into eight indexes with 512-byte physical
+keys, in at most 32-row/128 KiB chunks. It checks normal structural refusals and a
+trap after the first backing write, then denies real physical growth. Failure must
+leave complete backing unchanged. Retrying the same chunk after upgrade with growth
+allowed must both grow and make progress. The independent envelope oracle (shared
+with `write_envelope`) checks all 128 rows and 1024 index entries through bounded
+raw pages. Validation and retired-source cleanup must finish within explicit call
+bounds; maximum observed IC instructions are reported per phase.
+
+The fault flag is heap-local, set within the tested message and cleared on a
+normal return; traps roll it back with that message. The probe does not turn a
+recoverable database/runtime error into a trap. It adds no product testing hook,
+allocator or execution-budget machinery. Claims apply to this selected shape and
+supplier version, not all combinations of references, types, heap sizes and tree
+histories. Normal measurement/console builds do not enable this feature.
+
+With Storage 0.74.1, the 0.17 probe denied one initialization growth request and
+one growth request in each of four 32-row copy chunks. Each failure preserved
+backing; the same operation then succeeded with growth enabled. Copy retries
+performed 4,671–5,969 backing writes per chunk. After publication and source
+cleanup, all 128 rows and 1,024 index entries matched the independent oracle.
+
+| Phase | Per-call bound | Maximum observed IC instructions |
+| --- | --- | ---: |
+| Target initialization | One fresh target | 1,497,721 |
+| Copy | 32 rows / 128 KiB source bytes | 118,030,506 |
+| Validation | 32 physical entries, plus bounded admission | 61,016,055 |
+| Retired-source cleanup | 32 entries | 3,366,626 |
+
+The measured interval includes host reopen/allocation admission, product work and
+supplier calls, excluding transport decoding/encoding. These fault-enabled fixture
+measurements establish completion for this workload; they are not an IcyDB
+comparison, universal maximum or production heap/capacity proof. The selected
+tests also reject a 33-row request and a 4,095-byte source-page budget without any
+backing write or growth. The original ordinary-write and write-envelope probes
+exercise the shared fault wrapper and byte oracle independently.
 
 Run `make m0-maintenance` after setup. Cargo builds four executable variants from
 one small fixture: source A, target B, B-prime with a different transformation
