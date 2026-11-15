@@ -8,7 +8,9 @@ use crate::{
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod maintenance;
 mod query;
+pub use maintenance::{CopyStep, Maintenance, SchemaCopy, SchemaTransition};
 pub use query::{
     Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage,
@@ -18,6 +20,16 @@ const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
 type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
+
+fn manifest_key() -> StoreKey {
+    StoreKey::new(vec![0]).expect("manifest key fits")
+}
+fn live_manifest(schema: [u8; 32], incarnation: [u8; 16]) -> Vec<u8> {
+    let mut bytes = MANIFEST.to_vec();
+    bytes.extend(schema);
+    bytes.extend(incarnation);
+    bytes
+}
 
 /// A bounded synchronous batch; preparation is internal to `Database::commit`.
 #[derive(Default)]
@@ -159,10 +171,10 @@ impl<M: Memory> Database<M> {
             return Err(Error::InvalidSchema);
         }
         let mut map = Map::create(memory).map_err(Error::Storage)?;
-        let mut manifest = MANIFEST.to_vec();
-        manifest.extend(schema.fingerprint);
-        manifest.extend(incarnation);
-        map.insert(StoreKey::new(vec![0]).expect("manifest key fits"), manifest);
+        map.insert(
+            manifest_key(),
+            live_manifest(schema.fingerprint, incarnation),
+        );
         for entity in &schema.entities {
             map.insert(revision_key(entity.id), 0_u64.to_le_bytes().to_vec());
         }
@@ -176,14 +188,15 @@ impl<M: Memory> Database<M> {
     /// This is not a whole-database integrity scan. Entity revisions are checked
     /// when read explicitly or when preparing a write to that entity.
     /// # Errors
-    /// Refuses missing/corrupt manifests, foreign contracts or supplier formats.
+    /// Refuses active maintenance, missing/corrupt manifests, foreign contracts or supplier formats.
     /// # Panics
     /// Supplier corruption, including overlong stored keys, traps without repair.
     pub fn open(memory: RuntimeMemory<M>, schema: Schema) -> Result<Self, Error> {
         let map = Map::load(memory).map_err(Error::Storage)?;
-        let manifest = map
-            .get(&StoreKey::new(vec![0]).expect("manifest key fits"))
-            .ok_or(Error::Corrupt)?;
+        let manifest = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
+        if maintenance::admits_gate(&manifest)? {
+            return Err(Error::Maintenance);
+        }
         if manifest.len() != 56 {
             return Err(Error::Corrupt);
         }
@@ -221,10 +234,7 @@ impl<M: Memory> Database<M> {
         if !self.schema.entities.iter().any(|value| value.id == entity) {
             return Err(Error::UnknownEntity);
         }
-        let bytes = self.map.get(&revision_key(entity)).ok_or(Error::Corrupt)?;
-        Ok(u64::from_le_bytes(
-            bytes.as_slice().try_into().map_err(|_| Error::Corrupt)?,
-        ))
+        read_revision(&self.map, entity)
     }
     /// Read a typed primary key without planning a scan.
     /// # Errors
@@ -556,6 +566,12 @@ fn prefix(tag: u8, entity: u32) -> Vec<u8> {
 }
 fn revision_key(entity: u32) -> StoreKey {
     StoreKey::new(prefix(1, entity)).expect("revision key fits")
+}
+fn read_revision<M: Memory>(map: &Map<M>, entity: u32) -> Result<u64, Error> {
+    let bytes = map.get(&revision_key(entity)).ok_or(Error::Corrupt)?;
+    Ok(u64::from_le_bytes(
+        bytes.as_slice().try_into().map_err(|_| Error::Corrupt)?,
+    ))
 }
 fn row_key(entity: u32, id: RowKey) -> StoreKey {
     let mut key = prefix(2, entity);

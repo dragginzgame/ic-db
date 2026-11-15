@@ -28,6 +28,31 @@ Account/Subaccount and bounded Text/Blob with optional
 values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required/optional integer, Ulid, Principal, Account or Subaccount references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
+
+M3 now has a first product maintenance boundary. Construct a
+`SchemaTransition::new(&source, &target, "widen-amount", 1, fixed_inputs)`, then
+consume the live handle with `db.begin_maintenance(&transition)`. Ordinary access
+closes durably. `Maintenance::resume(memory, &transition)` requires the exact
+identity; dropping its handle leaves the source frozen. Its pre-copy `cancel()`
+restores the original manifest so source-compatible code can reopen.
+`maintenance.source_page::<Source>(&source, after, 32, 128 * 1024)` reads frozen
+entities through their explicit source decoder, in primary-key order. Continue
+until `next` is absent. Its bounded cursors survive compatible resume but refuse
+changed transitions or source revisions; they are read positions, not copy checkpoints.
+`begin_copy` now binds a fresh host-provided target allocation and returns
+`SchemaCopy`. Its `copy_next::<Source, Target>` transforms bounded pages, rebuilds
+indexes through batch commits and saves progress atomically with each chunk.
+The first copy shape is one same-named entity with preserved primary keys, without
+references or managed timestamps. Both allocations stay closed to ordinary access.
+`cancel_step` removes bounded target entries before reopening source.
+`validate_next` checks both collections in bounded passes; only after it completes
+can `publish` atomically open target and retire source. It returns the target
+database handle, and the host selects that allocation for subsequent opens.
+Source rows, indexes and revisions stay intact but cannot reopen after publication.
+Retired-source cleanup and allocation reuse remain subsequent work.
+Host adapters own access control. Run
+`make m3-maintenance` for the focused native/Wasm probe.
+
 The first bounded fluent read slice is also available:
 
 ```rust

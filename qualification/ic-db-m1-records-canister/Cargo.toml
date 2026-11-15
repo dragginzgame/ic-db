@@ -21,6 +21,8 @@ crate-type = ["cdylib"]
 aggregate-jobs = ["fault-injection"]
 retained-console = []
 fault-injection = []
+maintenance = []
+maintenance-v2 = ["maintenance"]
 
 [dependencies]
 ic-db.workspace = true

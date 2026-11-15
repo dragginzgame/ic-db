@@ -1340,6 +1340,48 @@ checks. `make db` installs this console fixture without starting the program.
 
 ## Identified maintenance and the local console
 
+The product gate is now separately qualified with `make m3-maintenance`.
+It uses the actual runtime and record fixture, with executable variants that
+support transformation versions one and two for the same source/target schemas.
+Native probes compare complete row/index/revision entries, exact manifest bytes,
+identity bounds, malformed records and source-compatible cancellation/reopen.
+Wasm probes test message rollback of freeze/cancellation, immutable identity
+admission across upgrades, read refusal while frozen and restored writes after
+cancellation. The separate single-entity copy witness now exercises the actual
+product `SchemaCopy` against fresh source/target allocations. It checks chunk
+checkpointing, key preservation, rebuilt indexes, unique collisions across chunks,
+wrong allocation pairs, bounded validation, publication and cancellation. Native
+corruption probes remove rows/indexes/revisions and introduce stale indexes,
+wrong owners, extra rows and malformed payloads. None may reach publication.
+The maintenance-only source-page endpoint also checks byte-limit retry, oversized
+rows, exact typed contents and continuation across upgrades. Native checks cover
+source schema admission, corrupt rows/revisions, cursor separation from ordinary
+queries and cancellation/edit/refreeze invalidation (including edits restored to
+the old value). Raw backing comparisons prove reads/refusals do not repair data.
+
+Set `IC_DB_M3_PREDECESSOR_WASM` to a recorded 0.15 record-fixture artifact to also
+prove old-executable read/write refusal while frozen and reopening after cancel:
+
+```sh
+IC_DB_M3_PREDECESSOR_WASM=/absolute/path/to/0.15-records.wasm make m3-maintenance
+```
+
+The first run used the artifact built from release-qualified source `057fa51`
+(the implementation released as `v0.15.0`). Without this optional artifact, the
+probe still tests current ordinary admission and the two distinct executable
+transition versions; it does not claim older-executable coverage. Production
+endpoints and authorization remain Canic-owned. The controls in this probe are
+private fixture endpoints, not additions to `db` or a public dynamic API.
+The copy probe traps after target initialization, row/index copying, validation,
+publication and cleanup,
+compares complete stable memory, then resumes across upgrades. Changed executable
+transformation identities refuse both copying and cancellation. Raw supplier
+inspection verifies transformed row bytes; ordinary target admission stays closed
+until validation and publication, and remains closed after cancellation. The
+publication journey writes/reopens target after upgrades and verifies that source
+stays retired and cannot be cancelled back into service. The predecessor artifact check
+applies to the original freeze gate, not the new copy fixture allocations.
+
 Run `make m0-maintenance` after setup. Cargo builds four executable variants from
 one small fixture: source A, target B, B-prime with a different transformation
 identity, and a target whose upgrade hook deliberately traps. Artifact messages

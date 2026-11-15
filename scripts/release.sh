@@ -50,7 +50,7 @@ case "${1:-}" in
           bash "$shared/run-validation-targets.sh" --fail-fast \
           tools-check release-lint fmt-check test doc docs-check m0-contracts \
           m0-endpoints m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance \
-          m1-records-wasm m1-commit-failures
+          m1-records-wasm m1-commit-failures m3-maintenance-wasm
         bash "$shared/check-release-source.sh"
         [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]]
         receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"

@@ -95,6 +95,34 @@ installer. Do not edit vendor files or copy upstream reference documents.
 - Retain broad schema types, reference checks/restricted deletion and constrained
   resumable aggregation. Ordinary result mapping uses Rust iterators, not engine
   callback hooks. Hours-long maintenance and source-plus-target space are accepted.
+- M3 begins with `SchemaTransition` and the consumed live-handle maintenance gate.
+  Bind source/target fingerprints, exact transformation name/version and fixed
+  input bytes. The `ICDBMT01` manifest replaces live admission and must also close
+  ordinary access under older executables. Share its bounded decoder between
+  ordinary open and resume; unknown phases refuse intact. Dropping a handle does
+  not cancel. Only the pre-copy handle can cancel immediately, restoring the original
+  source manifest without changing rows/indexes/revisions. No target allocations,
+  source-slot reuse, publication, schema planner or ordinary-write WAL is implied.
+  Keep IC Storage's exclusive lease in the maintenance handle; do not add a
+  redundant gate read to every operation. `make m3-maintenance` qualifies real
+  product freeze/cancel rollback and different executable transformation versions.
+  `Maintenance::source_page` admits an explicit compiled source schema/decoder
+  and reuses bounded primary traversal. Its read cursors bind the transition,
+  incarnation, entity and revision; they are not trusted copy checkpoints.
+  Keep ordinary access closed and target copying/publication separate from this
+  read-only prerequisite. No new durable cursor state or historical runtime reader.
+  `SchemaCopy` now adds a separate one-entity, key-preserving copy into fresh
+  host-supplied memory. Refuse references, managed timestamps and multi-entity
+  shapes in this increment. Keep the target private; reuse ordinary batch/index
+  preparation and commit its checkpoint in the same synchronous message. Bind
+  both allocations to source/target incarnations and the exact transformation.
+  Cancellation removes bounded target entries before reopening source; retain a
+  closed target tombstone. `validate_next` scans source and target in bounded
+  passes, checking key coverage, rows, revisions and index membership in both
+  directions through existing codecs/index rules. `publish` requires validation
+  completion, atomically retires source and opens target, then returns its ordinary
+  database handle. The host selects the target allocation afterward; source stays
+  closed even after target writes. No reset/reuse or generic migration planner.
 - Accepted 2026-11-14: exact aggregates use conservative per-entity revision
   invalidation and bounded server-retained jobs; completion during continuous
   writes is not promised. Jobs may expire; incompatible upgrades must refuse their

@@ -87,14 +87,19 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{
-    Aggregate, AggregateJobs, Batch, Comparison, Database, GroupCount, GroupCursor, GroupOrder,
-    GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, Query, QueryCursor, QueryPage,
+    Aggregate, AggregateJobs, Batch, Comparison, CopyStep, Database, GroupCount, GroupCursor,
+    GroupOrder, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Maintenance, Page, Query,
+    QueryCursor, QueryPage, SchemaCopy, SchemaTransition,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// Ordinary access is closed by an admitted durable maintenance gate.
+    Maintenance,
+    /// A maintenance identity is invalid or does not match this source/active transition.
+    InvalidTransition,
     /// The retained job handle, query, result shape or requested sequence does not match.
     InvalidJob,
     /// All retained job slots are occupied; cancel or clean up expired jobs explicitly.

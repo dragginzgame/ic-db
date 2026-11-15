@@ -14,6 +14,8 @@ mod envelope;
 mod generation;
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
+#[cfg(feature = "maintenance")]
+mod maintenance;
 mod managed;
 mod principal_keys;
 mod queries;
@@ -55,6 +57,15 @@ fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
 fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
     let requests = vec![MemoryRequest::new("m1", KEY).unwrap()];
+    #[cfg(feature = "maintenance")]
+    let requests = {
+        let mut requests = requests;
+        requests.extend(
+            [maintenance::COPY_SOURCE, maintenance::COPY_TARGET]
+                .map(|key| MemoryRequest::new("m1", key).unwrap()),
+        );
+        requests
+    };
     #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
     let requests = {
         let mut requests = requests;

@@ -117,7 +117,7 @@ pub struct QueryCursor {
     inclusive: bool,
 }
 impl QueryCursor {
-    const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
+    pub(super) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
 
     /// Encode the bounded continuation for an application's transport.
     #[must_use]
@@ -142,7 +142,8 @@ impl QueryCursor {
     }
 }
 
-/// A live bounded page. Empty rows do not mean completion when `next` is present.
+/// A bounded page. Empty rows do not mean completion when `next` is present.
+/// Ordinary queries are live; maintenance source pages read frozen input.
 #[derive(Debug)]
 pub struct QueryPage<T> {
     /// Matching results in the selected total order.
@@ -155,6 +156,22 @@ pub struct QueryPage<T> {
     pub fetched: usize,
     /// Sum of returned encoded entity/projected-record bytes, excluding transport overhead.
     pub output_bytes: usize,
+}
+
+impl QueryPage<Vec<u8>> {
+    pub(super) fn decode_entities<E: Entity>(self) -> Result<QueryPage<E>, Error> {
+        Ok(QueryPage {
+            rows: self
+                .rows
+                .iter()
+                .map(|bytes| E::decode(bytes))
+                .collect::<Result<_, _>>()?,
+            next: self.next,
+            examined: self.examined,
+            fetched: self.fetched,
+            output_bytes: self.output_bytes,
+        })
+    }
 }
 
 struct Predicate<'a> {
@@ -178,6 +195,45 @@ struct Request<'a> {
     over_limit: bool,
 }
 
+impl Default for Request<'_> {
+    fn default() -> Self {
+        Self {
+            groups: aggregate::GroupRequest::default(),
+            predicates: Vec::new(),
+            index: None,
+            order: None,
+            descending: false,
+            distinct: false,
+            rows: 32,
+            work: 128,
+            bytes: MAX_OUTPUT,
+            cursor: None,
+            over_limit: false,
+        }
+    }
+}
+
+// Maintenance gets only bounded primary traversal, not a second query frontend.
+pub(super) fn source_page<M: Memory>(
+    map: &Map<M>,
+    entity: &EntitySchema,
+    binding: [u8; 32],
+    incarnation: [u8; 16],
+    cursor: Option<&QueryCursor>,
+    rows: usize,
+    bytes: usize,
+) -> Result<QueryPage<Vec<u8>>, Error> {
+    let request = Request {
+        rows,
+        work: rows,
+        bytes,
+        cursor,
+        ..Request::default()
+    };
+    let plan = Plan::admit(entity, &request, binding, incarnation, None, false)?;
+    execute(map, entity, &request, &plan, None)
+}
+
 /// Fluent exact predicates over one entity. No callback executor is generated.
 /// Ordering uses primary order, an explicit index or a proven automatic path.
 /// Arbitrary sorting is not supported.
@@ -193,19 +249,7 @@ impl<M: Memory> Database<M> {
         Query {
             db: self,
             entity: PhantomData,
-            request: Request {
-                groups: aggregate::GroupRequest::default(),
-                predicates: Vec::new(),
-                index: None,
-                order: None,
-                descending: false,
-                distinct: false,
-                rows: 32,
-                work: 128,
-                bytes: MAX_OUTPUT,
-                cursor: None,
-                over_limit: false,
-            },
+            request: Request::default(),
         }
     }
 }
@@ -391,17 +435,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             false,
         )?;
         let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
-        Ok(QueryPage {
-            rows: raw
-                .rows
-                .iter()
-                .map(|bytes| E::decode(bytes))
-                .collect::<Result<_, _>>()?,
-            next: raw.next,
-            examined: raw.examined,
-            fetched: raw.fetched,
-            output_bytes: raw.output_bytes,
-        })
+        raw.decode_entities()
     }
     /// Project matching top-level fields into an existing `#[record]` type.
     /// Names, optionality and complete value definitions must match exactly.

@@ -27,6 +27,7 @@ help:
 	  'make m2-queries                 Check bounded fluent query pages' \
 	  'make m2-jobs                    Check retained aggregates and rollback' \
 	  'make m2-cli                     Check the fluent CLI and migrated query caller' \
+	  'make m3-maintenance             Check product migration, cutover and rollback' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
 	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
@@ -175,6 +176,20 @@ m2-jobs:
 	  cp "$$artifact" qualification/target/evidence/m2/jobs.wasm
 	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs -- --nocapture
 
+.PHONY: m3-maintenance m3-maintenance-wasm
+m3-maintenance:
+	cargo test --locked -p ic-db --test maintenance --test schema_copy
+	$(MAKE) m3-maintenance-wasm
+
+m3-maintenance-wasm:
+	@mkdir -p qualification/target/evidence/m3
+	@set -eu; for feature in maintenance maintenance-v2; do \
+	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features "$$feature" --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "qualification/target/evidence/m3/$$feature-build.jsonl"; \
+	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
+	  cp "$$artifact" "qualification/target/evidence/m3/$$feature.wasm"; \
+	done
+	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy -- --nocapture
+
 .PHONY: m2-cli m2-cli-artifact
 m2-cli-artifact:
 	@mkdir -p qualification/target/evidence/m2
@@ -221,3 +236,4 @@ release-lint:
 	$(MAKE) clippy
 	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --all-targets -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings

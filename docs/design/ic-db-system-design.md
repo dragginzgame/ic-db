@@ -987,6 +987,142 @@ Failed validation never publishes the target. Supported code may resume or cance
 the recorded transformation while preserving source. Canic exposes authorized
 maintenance controls; it does not own progress or implement another recovery path.
 
+**First M3 product increment (0.16).** `SchemaTransition` identifies the source
+and target fingerprints, a nonempty semantic name of at most 64 UTF-8 bytes,
+nonzero u32 transformation version and at most 256 fixed input bytes. The
+constructor admits two different compiled contracts; this does not provide a
+decoder for an otherwise unsupported historical codec. Name and inputs retain
+their exact bytes. Transformation behavior/version discipline remains explicit.
+
+`Database::begin_maintenance` consumes the live database and replaces its sole
+manifest with a bounded `ICDBMT01` record after preparation. The source-frozen
+record is at most 421 bytes: magic, source/target fingerprints, original incarnation,
+phase zero, transformation version, name and inputs. Variable fields reuse the
+owned codec's fixed-u32 framing and strict bounded decoding. The live `ICDBMF01`
+format is unchanged. The longer frozen record is refused even by 0.15's ordinary
+manifest reader; adding a separate marker that old code would ignore is insufficient.
+Current ordinary open validates the gate and returns `Maintenance`. No normal
+read/write API is exposed on the maintenance handle, which retains the supplier's
+exclusive non-cloneable lease. Opening a second live handle cannot bypass it.
+
+`Maintenance::resume` shares gate decoding and requires every identity component
+to match the supported executable declaration. Wrong identities, malformed bytes
+and unknown future phases refuse without repair. Dropping the handle keeps the
+source frozen. This increment admits only the phase before target allocation or
+copying, so `cancel` can restore the original live manifest in one synchronous
+replacement. Source-compatible code can then reopen; target-only code still
+refuses. Both freeze and cancellation roll back if the enclosing IC message traps.
+Rows, indexes, revisions and incarnation are preserved; physical allocation is
+not promised to shrink. Resuming and refusing do not mutate backing.
+
+`Maintenance::source_page::<E>` accepts the exact compiled source schema and an
+admitted source entity decoder. It reuses primary query traversal with 1–32
+candidates and 1 byte–128 KiB encoded output per call, including whole-row validation,
+primary-key consistency and retrying an unreturned byte-limited row. An individually
+oversized row refuses; only absent continuation establishes completion. It does
+not expose ordinary fluent queries or target writes through the frozen handle.
+The existing bounded cursor framing binds a maintenance-specific domain, the
+complete transition, incarnation, entity and its atomic source revision. Thus
+cancel/edit/refreeze cannot silently continue an old scan, even if edits restore
+old values; a no-op leaves the sequence unchanged. Reading adds no durable state.
+These caller-controlled positions establish neither complete migration coverage
+nor durable copy progress. Target writes and their progress must eventually commit
+together under a separate proven ownership/publication protocol.
+
+The bounded traversal retains the indivisible-row refusal lesson from frozen
+IcyDB's `schema/migration_execution/tests.rs`; it reuses IC DB's scanner rather
+than copying IcyDB's migration executor or journal. Native and Wasm witnesses
+cover byte retries, source decoder admission, cursor invalidation and paging
+across executable upgrades while ordinary access remains closed.
+
+**Bounded copy increment (0.16).** `Maintenance::begin_copy` accepts fresh
+host-provided governed memory and a fresh nonzero target incarnation. The first
+supported shape is one same-named entity with the same primary-key declaration,
+preserving every key and producing exactly one target row per source row.
+References, managed timestamps and multi-entity schemas explicitly refuse; those
+capabilities remain required later work. In particular, ordinary insertion-time
+policies must not silently rewrite historical timestamps during transformation.
+
+`SchemaCopy` retains both exclusive leases. Its bounded `ICDBCP01` envelopes carry
+the existing exact transition/source identity frame, target incarnation and role.
+The source role is immutable during copying; the target records copying plus a
+bounded cursor, copied, validation progress, ready, cancelling or cancelled;
+cutover records the retired source role. These operation records are at
+most 1004 bytes and reuse existing strict identity/cursor codecs. Ordinary open
+validates the envelope and refuses all these roles. Pre-copy `Maintenance::resume`
+cannot reopen them and therefore cannot bypass target cleanup. Resume compares
+both identities/roles and the supported executable before exposing operations.
+
+`copy_next` reads only its durable continuation, prepares a bounded source page,
+invokes the versioned synchronous Rust function with fixed inputs, checks unchanged
+keys, and builds ordinary target inserts. The ordinary commit path validates rows,
+builds indexes and detects uniqueness conflicts even with earlier chunks. The
+next checkpoint is encoded before mutation and installed after the batch within
+the same message, with no recoverable refusal after mutation begins. A refused
+chunk leaves progress and target entries unchanged; an IC trap rolls back both.
+Observing source exhaustion records copied, without authorizing publication.
+
+`cancel_step` removes at most 32 target entries per call. Once cleanup starts,
+copying refuses. Only after all entries except the ownership manifest are removed
+does the same message mark the target cancelled and restore the source live
+manifest. Interrupted cleanup resumes against the identified target; unknown
+phases and changed executable identities refuse intact. The target retains a
+closed tombstone and physical allocation. No resetting or allocation reuse is
+implemented. Fresh allocation admission uses the supplier's existing
+empty-memory proof, not heuristics about empty logical collections.
+
+`validate_next` requires completed copying, then scans all physical source entries
+followed by all target entries, at most 32 per call. A successful chunk checkpoints
+its bounded physical key; failed chunks leave progress unchanged. Both collections
+remain frozen across calls/upgrades, and copying refuses once validation starts.
+The shared validation function checks each admitted revision, complete row framing
+and primary-key agreement, corresponding row existence in the other collection,
+every expected index's owner, and every stored index's membership in its owner's
+decoded row. It rejects unknown namespaces/entities, missing rows/indexes, orphan
+or stale indexes and conflicting unique ownership. The two passes establish exact
+key coverage; neither source-only nor target-only traversal suffices. Existing
+row/index codecs and ownership checks remain authoritative. Each validated row
+has at most eight index lookups under the admitted schema. No transform is rerun
+or arbitrary callback executed during validation.
+
+Only after both passes reach exhaustion does the target record ready.
+`publish` consumes the handle, prepares both manifests, then marks source retired
+and replaces the target gate with its ordinary live manifest in the same message.
+It returns the target database. The host owns allocation selection for future
+opens and must select the target after publication; this API does not add an
+allocation-routing catalog. Any durable host routing change must share the same
+synchronous message if it is to be atomic with publication. Source bytes stay
+preserved but every ordinary open, maintenance resume and cancellation path
+refuses retired source admission. Target writes do not revive a rollback path.
+Retired-source cleanup remains later work. Publication traps revert both roles.
+
+This retains IcyDB's private-candidate and atomic row/index/progress obligations
+from `schema/migration_execution`, replacing its page journal with the proven
+synchronous IC rollback boundary. It introduces two bound operation manifests,
+not a second row/index representation, migration planner or ordinary-write WAL.
+Native witnesses independently inspect rebuilt row/index bytes and cover
+cross-chunk collisions, mismatched custody and cleanup progress. Wasm probes trap
+after target initialization, copying, validation checkpoints, publication and
+cleanup, compare complete backing bytes, and resume across upgrades. Copied data
+is served only after validation and publication; broader dependency validation
+for multi-entity/reference transforms and retired-source cleanup remain later work.
+
+This retains frozen IcyDB `6d421e3`'s exact migration-identity and closed-phase
+invariants from `schema/migration_record` and its tests, plus its refusal of
+unsupported migration recovery in `startup/tests/migration_failures.rs`. It does
+not copy the runtime schema planner, accepted-head reconciliation or commit-marker
+journal. Freeze/copy use bounded operation-specific manifests and exclusive
+maintenance handles, without a new crate or generic job executor.
+
+Native probes compare every source row/index/revision entry and independently
+frame the gate. Wasm probes freeze, reopen, reject a different executable's
+transition version, and roll back freeze/cancel traps against raw stable backing.
+A recorded 0.15 executable additionally refuses reads and writes while frozen,
+then resumes ordinary service after cancellation. `make m3-maintenance` selects
+these checks; the predecessor input is documented in qualification. Multi-entity
+dependency validation, retired-source cleanup and allocation reuse remain
+unimplemented M3 obligations, not implied by this single-entity cutover.
+
 ## 5. Reads and query semantics
 
 Fluent Rust builders construct one admitted operation representation. There is

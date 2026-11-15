@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.16.0] - Unreleased
+
+### ➕ Added
+
+- Begin M3 with a durable source freeze: `SchemaTransition` binds source/target
+  contracts, transformation name/version and fixed inputs. `begin_maintenance`
+  consumes the live handle; `Maintenance::resume` requires the exact identity;
+  pre-copy `cancel` restores source admission. A bounded manifest record closes
+  ordinary access under current and 0.15 executables. Rows, indexes and revisions
+  stay intact; message traps roll back freeze and cancellation.
+- Add bounded typed `Maintenance::source_page` reads through an explicit compiled
+  source schema. Reuse query traversal and byte-limit retries; bind continuations
+  to the transition, database, entity and revision. Upgrades can resume paging,
+  while cancellation followed by source edits invalidates old cursors. No new
+  durable state or copy checkpoint is introduced.
+- Add `make m3-maintenance` with two executable transition versions and optional
+  recorded-predecessor qualification. No new CLI command yet.
+- Add `SchemaCopy` for a single key-preserving entity transformation into a fresh
+  host allocation. Bind source and target ownership, rebuild indexes through ordinary
+  batch commits and checkpoint each bounded chunk in the same IC message. Refuse
+  changed transformations and cross-chunk uniqueness collisions without advancing.
+  Bounded cancellation removes target entries before restoring source service;
+  keep a closed ownership tombstone. Multi-entity/reference/managed-time transforms
+  and allocation reuse remain later work.
+- Add resumable validation of source/target key coverage, complete rows, revisions
+  and both expected and stored index entries. `SchemaCopy::publish` requires both
+  passes to finish, then atomically opens the target and retires source admission.
+  Target writes and reopen work normally afterward; cancellation cannot revive the
+  old source. Retired-source cleanup remains later work.
+
+### 🧹 Cleanup
+
+- Reconcile six directory-owning modules with the adopted `name/mod.rs` layout.
+  Preserve their Rust paths, public APIs and stored contracts.
+
+### 🔧 Qualification
+
+- Add the actual M3 migration, validation, cutover and rollback probes to the
+  source-release gate. Keep all crates unpublished.
+- Registry review confirms the selected Platform, Storage, Host, Testkit, Wire
+  and Toko Tooling versions remain current. Keep the frozen IcyDB comparison
+  unchanged. Reconfirm the optional IC Build 0.84.1 → 0.86.0 editor refresh for
+  the next dependency-maintenance batch; it is not required by this release.
+
 ## [0.15.0] - 2026-11-15
 
 ### ▶️ Try it
