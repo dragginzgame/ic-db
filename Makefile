@@ -175,10 +175,16 @@ m2-jobs:
 	  cp "$$artifact" qualification/target/evidence/m2/jobs.wasm
 	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs -- --nocapture
 
-.PHONY: m2-cli
-m2-cli: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
+.PHONY: m2-cli m2-cli-artifact
+m2-cli-artifact:
+	@mkdir -p qualification/target/evidence/m2
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features retained-console --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/console-build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/console-build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/m2/console.wasm
+
+m2-cli: m2-cli-artifact
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" IC_DB_CLI_RETAINED=1 cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
 
 .PHONY: m1-write-envelope
 m1-write-envelope: m1-records-artifact
@@ -190,9 +196,10 @@ m1-commit-failures:
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/fault-build.jsonl)" && \
 	  IC_DB_M1_FAULT_WASM="$$artifact" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture
 
-db: m1-records-artifact
+db: m2-cli-artifact
 	@set -eu; out=qualification/target/evidence/m1; \
-	  fixture="$$out/records.wasm"; \
+	  mkdir -p "$$out"; \
+	  fixture=qualification/target/evidence/m2/console.wasm; \
 	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --bin db --release --message-format=json-render-diagnostics > "$$out/db-build.jsonl"; \
 	  binary="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "db") | .executable | select(. != null)] | if length == 1 then .[0] else error("expected one db binary") end' "$$out/db-build.jsonl")"; \
 	  mkdir -p "$(DB_INSTALL_PREFIX)/bin" "$(DB_INSTALL_PREFIX)/share/ic-db/m1"; \

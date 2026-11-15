@@ -9,6 +9,48 @@ use std::{
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 
+fn result_table_rows(text: &str) -> Vec<Vec<&str>> {
+    text.lines()
+        .filter(|line| line.contains(['│', '|']))
+        .map(|line| {
+            line.split(['│', '|'])
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|row| {
+            row.first().is_some_and(|v| {
+                matches!(*v, "true" | "false")
+                    || v.chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit() || c == '-')
+            })
+        })
+        .collect()
+}
+
+fn run_console(binary: &std::path::Path, commands: &str) -> String {
+    let mut child = Command::new(binary)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(commands.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[test]
 fn console_inspects_and_queries() {
     let prefix = std::env::temp_dir().join(format!("ic-db-console-{}", std::process::id()));
@@ -327,6 +369,231 @@ fn console_inspects_and_queries() {
             .output()
             .unwrap();
         assert!(!output.status.success());
+    }
+    if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
+        // One console session exercises every retained selector. More than 16 jobs
+        // proves successful commands release slots instead of leaking capacity.
+        let cases: [(&str, &[&[&str]]); 14] = [
+            ("count", &[&["6"]]),
+            ("count:amount", &[&["6"]]),
+            ("distinct-count:amount", &[&["6"]]),
+            ("sum:amount", &[&["213"]]),
+            ("avg:amount", &[&["35.5"]]),
+            ("min:amount", &[&["11"]]),
+            ("max:amount", &[&["60"]]),
+            ("category,count", &[&["0", "3"], &["1", "3"]]),
+            ("category,count:amount", &[&["0", "3"], &["1", "3"]]),
+            (
+                "category,distinct-count:amount",
+                &[&["0", "3"], &["1", "3"]],
+            ),
+            ("category,sum:amount", &[&["0", "120"], &["1", "93"]]),
+            ("category,avg:amount", &[&["0", "40"], &["1", "31"]]),
+            ("category,min:amount", &[&["0", "20"], &["1", "11"]]),
+            ("category,max:amount", &[&["0", "60"], &["1", "51"]]),
+        ];
+        let mut commands = cases
+            .iter()
+            .map(|(select, _)| {
+                format!("aggregate Entry --select {select} --work 2 --page-size 1\n")
+            })
+            .collect::<String>();
+        commands.push_str("aggregate Entry\naggregate Entry\naggregate Entry\n");
+        let controls: [(&str, &[&[&str]]); 12] = [
+            ("count --min 40", &[&["3"]]),
+            ("sum:amount --min 40 --limit 1", &[&["151"]]),
+            ("distinct-count:amount --category 1 --min 30", &[&["2"]]),
+            (
+                "category,sum:amount --min 30 --group-min 50 --group-order asc --limit 1",
+                &[&["1", "82"]],
+            ),
+            (
+                "category,avg:amount --min 30 --group-min 45 --group-order desc",
+                &[&["0", "50"]],
+            ),
+            (
+                "category,min:amount --min 30 --group-order asc",
+                &[&["1", "31"], &["0", "40"]],
+            ),
+            ("category,max:amount --category 1", &[&["1", "51"]]),
+            ("category,count --min 40 --group-min 2", &[&["0", "2"]]),
+            (
+                "category,count --group-order desc --limit 1",
+                &[&["0", "3"]],
+            ),
+            ("count --min 100", &[&["0"]]),
+            ("min:amount --min 100", &[]),
+            ("category,count --group-min 4", &[]),
+        ];
+        for (options, _) in controls {
+            commands.push_str(&format!(
+                "aggregate Entry --select {options} --work 1 --page-size 1\n"
+            ));
+        }
+        commands.push_str("quit\n");
+        let stdout = run_console(&binary, &commands);
+        let sections = stdout.split("Entry — ").skip(1).collect::<Vec<_>>();
+        assert_eq!(sections.len(), 17 + controls.len());
+        for ((select, expected), section) in cases.iter().zip(&sections) {
+            assert!(section.starts_with(&format!("{select}\n")));
+            assert!(section.contains("Running; sequence 1; 2 examined"));
+            let complete = section.find("Complete;").unwrap();
+            assert!(
+                !section[..complete].contains(['│', '|']),
+                "running progress must not contain a result table"
+            );
+            let actual = result_table_rows(section);
+            assert_eq!(&actual, expected, "{select}: {section}");
+            assert_eq!(
+                section.matches("Complete;").count(),
+                if select.starts_with("category,") {
+                    2
+                } else {
+                    1
+                }
+            );
+        }
+        for ((options, expected), section) in controls.iter().zip(&sections[17..]) {
+            assert_eq!(
+                &result_table_rows(section),
+                expected,
+                "{options}: {section}"
+            );
+            assert!(
+                section.contains("Running; sequence 1; 1 examined"),
+                "{options}: {section}"
+            );
+            let complete = section.find("Complete;").unwrap();
+            assert!(!section[..complete].contains(['│', '|']));
+            assert_eq!(section.matches("Complete;").count(), expected.len().max(1));
+        }
+        for command in [
+            "aggregate Missing",
+            "aggregate Entry --select invalid",
+            "aggregate Entry --work 0",
+            "aggregate Entry --page-size 33",
+            "aggregate Entry --select min:amount --bytes 1",
+            "aggregate Entry --limit 0",
+            "aggregate Entry --limit 33",
+            "aggregate Entry --select count --group-min 1",
+            "aggregate Entry --select count --group-order key",
+            "aggregate Entry --group-order unsupported",
+            "aggregate Entry --entry-id 1",
+            "aggregate Entry --select count:note",
+            "aggregate DecimalRow --min 0",
+            "aggregate DecimalRow --category 1",
+            "aggregate DecimalRow --entry-id 1",
+            "aggregate DecimalRow --select sum:amount",
+            "aggregate Document --min 0",
+            "aggregate Document --category 1",
+            "aggregate Document --select min:amount",
+            "aggregate Document --select entry_id,min:note --group-min 0",
+        ] {
+            assert!(
+                !Command::new(&binary)
+                    .args(command.split_whitespace())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "{command}"
+            );
+        }
+        let documents: [(&str, &[&[&str]]); 26] = [
+            ("count", &[&["1"]]),
+            ("count:note", &[&["0"]]),
+            ("count:priority", &[&["1"]]),
+            ("distinct-count:note", &[&["1"]]),
+            ("min:note", &[]),
+            ("max:note", &[]),
+            ("min:priority", &[&["0"]]),
+            ("max:priority", &[&["0"]]),
+            ("sum:priority", &[&["0"]]),
+            ("sum:score", &[&["-10"]]),
+            ("entry_id,count", &[&["1", "1"]]),
+            ("entry_id,count:note", &[&["1", "0"]]),
+            ("entry_id,count:priority", &[&["1", "1"]]),
+            ("entry_id,distinct-count:note", &[&["1", "1"]]),
+            ("entry_id,min:note", &[&["1", "—"]]),
+            ("entry_id,max:note", &[&["1", "—"]]),
+            ("entry_id,min:priority", &[&["1", "0"]]),
+            ("entry_id,max:priority", &[&["1", "0"]]),
+            ("entry_id,sum:priority", &[&["1", "0"]]),
+            ("entry_id,sum:score", &[&["1", "-10"]]),
+            ("count --entry-id 2", &[&["0"]]),
+            ("distinct-count:note --entry-id 2", &[&["0"]]),
+            ("entry_id,count --entry-id 2", &[]),
+            (
+                "entry_id,count:priority --entry-id 1 --group-min 1 --group-order desc --limit 1",
+                &[&["1", "1"]],
+            ),
+            ("entry_id,sum:score --group-min 0", &[]),
+            (
+                "entry_id,min:priority --group-min 0 --group-order asc",
+                &[&["1", "0"]],
+            ),
+        ];
+        let mut commands = documents
+            .iter()
+            .map(|(options, _)| {
+                format!("aggregate Document --select {options} --work 1 --page-size 1\n")
+            })
+            .collect::<String>();
+        commands.push_str("quit\n");
+        let stdout = run_console(&binary, &commands);
+        let sections = stdout.split("Document — ").skip(1).collect::<Vec<_>>();
+        assert_eq!(sections.len(), documents.len());
+        for ((options, expected), section) in documents.iter().zip(sections) {
+            let actual = result_table_rows(section);
+            assert_eq!(&actual, expected, "{options}: {section}");
+            assert_eq!(section.matches("Complete;").count(), 1);
+            let complete = section.find("Complete;").unwrap();
+            assert!(!section[..complete].contains(['│', '|']));
+            if !options.contains("--entry-id 2") {
+                assert!(section.contains("Running; sequence 1; 1 examined"));
+            }
+        }
+        let decimals: [(&str, &[&[&str]]); 14] = [
+            ("count", &[&["3"]]),
+            ("zone,count", &[&["true", "3"]]),
+            ("sum:value", &[&["3"]]),
+            ("avg:value", &[&["1"]]),
+            ("sum:maybe", &[]),
+            ("avg:maybe", &[]),
+            ("zone,sum:value", &[&["true", "3"]]),
+            ("zone,avg:value", &[&["true", "1"]]),
+            ("zone,sum:maybe", &[&["true", "—"]]),
+            ("zone,avg:maybe", &[&["true", "—"]]),
+            ("zone,sum:value --group-min 3", &[&["true", "3"]]),
+            ("zone,sum:value --group-min 4", &[]),
+            (
+                "zone,avg:value --group-order desc --limit 1",
+                &[&["true", "1"]],
+            ),
+            ("zone,avg:maybe --group-min 0", &[]),
+        ];
+        let mut commands = decimals
+            .iter()
+            .map(|(options, _)| {
+                format!("aggregate DecimalRow --select {options} --work 1 --page-size 1\n")
+            })
+            .collect::<String>();
+        commands.push_str("quit\n");
+        let stdout = run_console(&binary, &commands);
+        let sections = stdout.split("DecimalRow — ").skip(1).collect::<Vec<_>>();
+        assert_eq!(sections.len(), decimals.len());
+        for ((options, expected), section) in decimals.iter().zip(sections) {
+            assert_eq!(
+                &result_table_rows(section),
+                expected,
+                "{options}: {section}"
+            );
+            assert_eq!(section.matches("Complete;").count(), 1);
+            assert!(section.contains("Running; sequence 1; 1 examined"));
+            assert!(section.contains("Running; sequence 3; 3 examined"));
+            let complete = section.find("Complete;").unwrap();
+            assert!(!section[..complete].contains(['│', '|']));
+        }
     }
     std::fs::remove_dir_all(prefix).unwrap();
     // Help must work even for the uninstalled build artifact with no adjacent fixture.

@@ -1390,8 +1390,24 @@ precedent. Frozen IcyDB `6d421e3`'s `grouped_fold/count/window` and
 from accumulation; keep that distinction without copying their `Value`, projection
 or route machinery. The product reuses its existing scanner and exact reducers.
 `make m2-jobs` qualifies completed-group pagination and
-scalar/grouped count, DISTINCT count, sum and average jobs;
-the CLI's existing aggregate selectors remain synchronous.
+scalar/grouped count, DISTINCT count, sum, average and extrema jobs.
+The CLI's `query` selectors remain synchronous. `db aggregate Entry` demonstrates
+retained counts, present-field/DISTINCT counts and min/max/sum/avg of amount,
+optionally grouped by category. Document adds row/note/priority counts, DISTINCT
+notes, note/priority extrema and priority/score sums, optionally grouped by
+`entry_id`, with `--entry-id` filtering source rows. DecimalRow exposes counts
+and required/optional Decimal sums and averages, optionally grouped by `zone`,
+using the synchronous console's scale-2 result records. These adapters reconstruct typed fluent queries on
+each update call, displays explicit progress and follows completed-page cursors.
+`--min`/`--category` filter source records; `--group-min`/`--group-order` and the
+total `--limit` select complete results. The response-only `--page-size` cannot
+truncate input or change the bound total selection. Synchronous and retained
+console paths share entity-specific filters and exact integer/Decimal threshold conversion.
+The fixture uses a 60-second expiry and a 32-call host bound, then explicitly
+cancels on success or refusal. It computes no aggregate locally and never silently
+restarts. The `retained-console` feature shares host job-store custody with the
+rollback witness while excluding fault controls; normal record/performance builds
+retain their independent feature selection. Production endpoints remain Canic-owned.
 
 ## 6. Writes, commit and recovery
 

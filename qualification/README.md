@@ -1146,8 +1146,8 @@ These limits do not reduce the accepted product capabilities.
 
 `make m2-jobs` selects the native job tests and a feature-selected records-canister
 build using the actual product `AggregateJobs`, query scanner, exact reducers and
-IC Storage allocation. The normal CLI fixture has neither these controls nor the
-additional job allocation. Testkit owns the PocketIC instance. Private endpoints
+IC Storage allocation. The CLI's optional `retained-console` build shares the job
+allocation without rollback fault controls. Testkit owns the PocketIC instance. Private endpoints
 are test controls; production authorization and endpoint generation remain Canic's.
 
 Sixty-two native tests qualify counts beyond the synchronous 512-candidate budget,
@@ -1260,7 +1260,23 @@ It also pages a job completed by the prior executable, selected with
 `3fe0851839f25583ff1ac2277123fd0770f36c53c49f637e4478ff87e8604e6a`, retained at
 `qualification/target/evidence/m2/group-distinct-before-pages.wasm`. Omitting this
 artifact checks same-code upgrades. The API now returns GroupPage rows/continuation;
-job bytes remain unchanged. The normal CLI keeps its synchronous terminals.
+job bytes remain unchanged. The CLI keeps its synchronous `query` terminals and
+adds `aggregate Entry`, `aggregate Document` and `aggregate DecimalRow` to demonstrate retained progress
+and completed pages. `make m2-cli` selects the console feature and tests fourteen
+Entry selectors against
+independent fixture results, a twenty-nine-job session that proves slot cleanup,
+bounded partial progress, one-group pages, invalid commands and byte refusal.
+Twelve query-control cases distinguish input filters from completed-group
+threshold/order/total limits, cover Decimal/widened-integer operands, ordering
+ties, sparse/empty input, empty selected output and scalar totals under `--limit 1`.
+Twenty-six Document cases cover twenty scalar/grouped selectors plus input and
+group controls: absent notes, present zero priority, signed score sums, empty
+input and empty selected output. Invalid entity/filter/selector combinations
+refuse. Fourteen DecimalRow cases cover ten count/sum/average selectors and
+completed-group controls over signed fractional inputs and all-absent optional
+inputs. Every supported entity reuses synchronous query input-filter validation.
+It also preserves the existing installed-layout query/schema and product-record
+checks. `make db` installs this console fixture without starting the program.
 
 ## Identified maintenance and the local console
 

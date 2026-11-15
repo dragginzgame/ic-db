@@ -187,8 +187,22 @@ Output bytes bound the completed result. Expired jobs still occupy a slot until
 `cleanup_expired(now, limit)` (1–16 removals) or `cancel(&handle)` releases it;
 neither promises that underlying stable memory shrinks. These operations run
 synchronously in an update message. A later trap rolls back job changes too.
-`make m2-jobs` checks the native and Wasm contract. The installed CLI still exposes
-synchronous aggregates.
+`make m2-jobs` checks the native and Wasm contract. `db query` uses synchronous
+aggregates. `db aggregate Entry --select category,min:amount --work 2 --page-size 1`
+uses retained jobs, displays each call's progress and completed result pages, then
+cancels the temporary job. Count, field/DISTINCT count and min/max/sum/avg of amount
+are supported, optionally grouped by category. Document supports row/note/priority
+counts, DISTINCT notes, note/priority min/max and priority/score sums, optionally
+grouped by `entry_id`. DecimalRow supports counts and sum/average of `value` or
+optional `maybe`, optionally grouped by `zone`, using the existing scale-2 result
+records. All-absent scalar sums/averages return no value; grouped results retain
+the group with `—`. `--min` and `--category` filter Entry rows; `--entry-id`
+filters Document rows. `--group-min` and `--group-order` select completed groups. `--limit`
+caps the total selected groups across pages, independently of `--page-size`;
+it never truncates aggregate input. The CLI follows server cursors
+without accumulating values itself. Each invocation uses the local disposable
+fixture; this command does not connect to a deployed database. See `db aggregate
+--help` for work, response-byte and group-page bounds.
 
 `start_count_distinct::<Record>`/`resume_count_distinct::<Record>` retain an exact
 count of projected tuples using the same equality as synchronous `count_distinct`.

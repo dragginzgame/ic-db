@@ -66,6 +66,21 @@ installer. Do not edit vendor files or copy upstream reference documents.
   footers or command tutorials. Put usage guidance and semantic explanations in
   `--help`; retain result data, continuation information and clear errors.
   The installed `db` command provides schema inspection and bounded queries.
+  `db aggregate Entry` demonstrates retained scalar/category-grouped counts,
+  DISTINCT counts and min/max/sum/avg through typed fluent terminals. Document
+  adds optional note/priority counts and extrema, DISTINCT notes and priority/score
+  sums, optionally grouped by entry_id. DecimalRow exposes counts and required/
+  optional Decimal sums/averages, optionally grouped by zone, through the same
+  fixed-scale result records as synchronous queries. Show progress
+  and completed pages, follow server continuations, then cancel the temporary job
+  on success or refusal. Keep its 32-call fixture bound and 60-second job expiry;
+  no hidden restart or client reducer. `retained-console` enables its host store
+  with the same entity-specific filters and exact group-threshold conversion as synchronous
+  query. Reconstruct/bind input filters, group selection and total limit on every
+  call; keep total limit separate from response page size. Do not filter or sort
+  returned groups in the CLI. This feature runs
+  without qualification fault controls. Keep normal product/measurement builds
+  independent of this optional fixture feature.
   It currently opens an explicitly labelled local M1 record fixture. Future product
   access uses the same admitted fluent semantics through Canic-owned endpoints;
   the CLI must not introduce SQL or a second query engine.

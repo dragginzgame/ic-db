@@ -5,6 +5,8 @@
 use ic_db_qualification_transport as transport;
 
 mod account_keys;
+#[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
+mod aggregate_store;
 mod console;
 mod defaults;
 mod enum_collections;
@@ -53,10 +55,10 @@ fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
 fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
     let requests = vec![MemoryRequest::new("m1", KEY).unwrap()];
-    #[cfg(feature = "aggregate-jobs")]
+    #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
     let requests = {
         let mut requests = requests;
-        requests.push(MemoryRequest::new("m1", jobs::KEY).unwrap());
+        requests.push(MemoryRequest::new("m1", aggregate_store::KEY).unwrap());
         requests
     };
     let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
@@ -145,8 +147,8 @@ fn initialize() {
         })
         .unwrap();
     db.commit(batch).unwrap();
-    #[cfg(feature = "aggregate-jobs")]
-    jobs::initialize(&host);
+    #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
+    aggregate_store::initialize(&host);
 }
 fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
     (

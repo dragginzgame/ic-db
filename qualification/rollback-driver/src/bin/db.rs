@@ -30,6 +30,46 @@ enum Command {
     },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
+    /// Run a retained aggregate, displaying progress and each completed result page.
+    #[command(
+        after_help = "Runs bounded update calls against this temporary fixture, then cancels the job. No partial aggregate is presented as a result.\n--min and --category filter Entry rows; --entry-id filters Document rows. --group-min, --group-order and --limit select completed groups. --limit never truncates input.\n--work bounds input candidates per call; --page-size bounds completed groups per response. The fixture and jobs are discarded on exit."
+    )]
+    Aggregate {
+        #[arg(value_parser=["Entry", "Document", "DecimalRow"])]
+        entity: String,
+        /// Entry: count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
+        /// prefix with category, for groups. Document: count/count:note/count:priority,
+        /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
+        /// prefix with entry_id, for groups. DecimalRow: count, sum/avg:value or
+        /// sum/avg:maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
+        #[arg(long, default_value = "count")]
+        select: String,
+        /// Entry.amount >= VALUE.
+        #[arg(long = "min")]
+        minimum: Option<u64>,
+        /// Entry.category == VALUE.
+        #[arg(long)]
+        category: Option<u64>,
+        /// Document.entry_id == VALUE.
+        #[arg(long)]
+        entry_id: Option<u64>,
+        /// Maximum completed groups across all pages, not an input-row limit.
+        #[arg(long, default_value_t=32, value_parser=clap::value_parser!(u32).range(1..=32))]
+        limit: u32,
+        /// Keep completed aggregate values >= VALUE (nonnegative u64 input).
+        /// Convert the threshold exactly to the aggregate result type.
+        #[arg(long)]
+        group_min: Option<u64>,
+        /// Order completed groups; aggregate ties use ascending keys.
+        #[arg(long, value_parser=["key", "asc", "desc"])]
+        group_order: Option<String>,
+        #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=512))]
+        work: u32,
+        #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=32))]
+        page_size: u32,
+        #[arg(long, default_value_t=4096, value_parser=clap::value_parser!(u32).range(1..=131072))]
+        bytes: u32,
+    },
     /// Read one fluent page from a local fixture entity.
     #[command(
         after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
@@ -290,6 +330,96 @@ async fn main() -> Result<(), String> {
         match command {
             Command::Help => help(),
             Command::Quit => {}
+            Command::Aggregate {
+                entity,
+                select,
+                minimum,
+                category,
+                entry_id,
+                limit,
+                group_min,
+                group_order,
+                work,
+                page_size,
+                bytes,
+            } => {
+                let selection = (
+                    entity.as_str(),
+                    select.as_str(),
+                    (minimum, category, entry_id),
+                    limit,
+                    group_min,
+                    group_order.as_deref(),
+                );
+                let reply = pic
+                    .update_call(
+                        canister,
+                        canister,
+                        "aggregate_start",
+                        native::encode_request(120, &selection, LIMITS)
+                            .map_err(|e| e.to_string())?,
+                    )
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                let handle: Result<Vec<u8>, String> =
+                    native::decode_response(120, &reply, LIMITS).map_err(|e| e.to_string())?;
+                let handle = handle?;
+                println!("\n{entity} — {select}");
+                let run = async {
+                    let mut sequence = 0;
+                    let mut after: Option<Vec<u8>> = None;
+                    // At most six rows per entity and two groups. A finite host bound
+                    // prevents transport/progress regressions from looping forever.
+                    for call in 1..=32 {
+                        let reply = pic.update_call(canister, canister, "aggregate_resume",
+                            native::encode_request(121, &(&selection, &handle, sequence, work, bytes, page_size, &after), LIMITS).map_err(|e| e.to_string())?)
+                            .await.map_err(|e| format!("{e:?}"))?;
+                        type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
+                        type Progress = (u64, String, u64, u64, u64, Output);
+                        let result: Result<Progress, String> = native::decode_response(121, &reply, LIMITS).map_err(|e| e.to_string())?;
+                        let (saved, phase, examined, input_bytes, output_bytes, (columns, rows, next)) = result?;
+                        println!("Call {call}: {phase}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
+                        sequence = saved;
+                        match phase.as_str() {
+                            "Running" => {},
+                            "Complete" => {
+                                let rows = rows.into_iter().map(|r| r.into_iter().map(|v| terminal_text(&v).into_owned()).collect()).collect::<Vec<Vec<String>>>();
+                                let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();
+                                println!("{}", render_bordered(&columns, &rows));
+                                if next.is_none() { return Ok(()); }
+                                after = next;
+                            }
+                            "Expired" | "Invalidated" => return Err(format!("aggregate {phase}")),
+                            _ => return Err("unsupported aggregate progress".into()),
+                        }
+                    }
+                    Err("aggregate exceeded the fixture's 32-call bound".into())
+                }.await;
+                // Cleanup also runs after an output/resource refusal. No automatic
+                // restart, lost cursor, or client-side aggregation is hidden here.
+                let cleanup = async {
+                    let reply = pic
+                        .update_call(
+                            canister,
+                            canister,
+                            "aggregate_cancel",
+                            native::encode_request(122, &handle, LIMITS)
+                                .map_err(|e| e.to_string())?,
+                        )
+                        .await
+                        .map_err(|e| format!("{e:?}"))?;
+                    native::decode_response::<Result<(), String>>(122, &reply, LIMITS)
+                        .map_err(|e| e.to_string())?
+                }
+                .await;
+                match (run, cleanup) {
+                    (Ok(()), Ok(())) => {}
+                    (Err(error), Ok(())) | (Ok(()), Err(error)) => return Err(error),
+                    (Err(error), Err(cleanup)) => {
+                        return Err(format!("{error}; cleanup: {cleanup}"));
+                    }
+                }
+            }
             Command::Schema { .. } | Command::Status => {
                 let (id, selected) = match command {
                     Command::Schema { entity } => (2, entity),

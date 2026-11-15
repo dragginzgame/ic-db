@@ -1,4 +1,6 @@
 //! Private console adapter: fixed typed entities, fluent execution, display-only mapping.
+#[cfg(feature = "retained-console")]
+mod retained;
 use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
@@ -80,13 +82,7 @@ fn query(
         (distinct, group_min, group_order),
     ): Request,
 ) -> Result<Page, String> {
-    let group_order = match group_order.as_deref() {
-        None => None,
-        Some("key") => Some(GroupOrder::Key),
-        Some("asc") => Some(GroupOrder::AggregateAscending),
-        Some("desc") => Some(GroupOrder::AggregateDescending),
-        _ => return Err("unsupported group order".into()),
-    };
+    let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = cursor
         .as_deref()
         .map(QueryCursor::from_bytes)
@@ -97,16 +93,7 @@ fn query(
     let db = open(&host);
     match entity.as_str() {
         "Entry" => {
-            if entry_id.is_some() {
-                return Err("--entry-id applies to Document".into());
-            }
-            let mut query = db.query::<Entry>();
-            if let Some(value) = minimum {
-                query = query.filter("amount", Comparison::Ge, value);
-            }
-            if let Some(value) = category {
-                query = query.filter("category", Comparison::Eq, value);
-            }
+            let query = entry_query(&db, minimum, category, entry_id)?;
             execute(
                 configure(
                     query,
@@ -130,13 +117,7 @@ fn query(
             )
         }
         "Document" => {
-            if minimum.is_some() || category.is_some() {
-                return Err("--min and --category apply to Entry".into());
-            }
-            let mut query = db.query::<Document>();
-            if let Some(value) = entry_id {
-                query = query.filter("entry_id", Comparison::Eq, value);
-            }
+            let query = document_query(&db, minimum, category, entry_id)?;
             execute(
                 configure(
                     query,
@@ -173,33 +154,28 @@ fn query(
                 },
             )
         }
-        "DecimalRow" => {
-            if minimum.is_some() || category.is_some() || entry_id.is_some() {
-                return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
-            }
-            execute(
-                configure(
-                    db.query::<DecimalRow>(),
-                    cursor.as_ref(),
-                    &order,
-                    descending,
-                    limit,
-                    work,
-                    bytes,
-                ),
-                &select,
-                (distinct, group_min, group_order),
-                &["id", "zone", "value", "maybe"],
-                |r| {
-                    vec![
-                        r.id.to_string(),
-                        r.zone.to_string(),
-                        r.value.to_string(),
-                        optional(r.maybe),
-                    ]
-                },
-            )
-        }
+        "DecimalRow" => execute(
+            configure(
+                decimal_query(&db, minimum, category, entry_id)?,
+                cursor.as_ref(),
+                &order,
+                descending,
+                limit,
+                work,
+                bytes,
+            ),
+            &select,
+            (distinct, group_min, group_order),
+            &["id", "zone", "value", "maybe"],
+            |r| {
+                vec![
+                    r.id.to_string(),
+                    r.zone.to_string(),
+                    r.value.to_string(),
+                    optional(r.maybe),
+                ]
+            },
+        ),
         _ => Err("query supports Entry, Document and DecimalRow in this fixture".into()),
     }
 }
@@ -229,16 +205,69 @@ fn configure<'a, E: Entity>(
     query
 }
 
-fn execute<E: Entity>(
-    mut query: Query<'_, E, Backing>,
-    select: &str,
-    (distinct, group_min, group_order): (bool, Option<u64>, Option<GroupOrder>),
-    columns: &[&str],
-    render: fn(E) -> Vec<String>,
-) -> Result<Page, String> {
-    if distinct {
-        query = query.distinct();
+fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> {
+    match order {
+        None => Ok(None),
+        Some("key") => Ok(Some(GroupOrder::Key)),
+        Some("asc") => Ok(Some(GroupOrder::AggregateAscending)),
+        Some("desc") => Ok(Some(GroupOrder::AggregateDescending)),
+        _ => Err("unsupported group order".into()),
     }
+}
+
+fn entry_query(
+    db: &ic_db::Database<Backing>,
+    minimum: Option<u64>,
+    category: Option<u64>,
+    entry_id: Option<u64>,
+) -> Result<Query<'_, Entry, Backing>, String> {
+    if entry_id.is_some() {
+        return Err("--entry-id applies to Document".into());
+    }
+    let mut query = db.query::<Entry>();
+    if let Some(value) = minimum {
+        query = query.filter("amount", Comparison::Ge, value);
+    }
+    if let Some(value) = category {
+        query = query.filter("category", Comparison::Eq, value);
+    }
+    Ok(query)
+}
+
+fn document_query(
+    db: &ic_db::Database<Backing>,
+    minimum: Option<u64>,
+    category: Option<u64>,
+    entry_id: Option<u64>,
+) -> Result<Query<'_, Document, Backing>, String> {
+    if minimum.is_some() || category.is_some() {
+        return Err("--min and --category apply to Entry".into());
+    }
+    let mut query = db.query::<Document>();
+    if let Some(value) = entry_id {
+        query = query.filter("entry_id", Comparison::Eq, value);
+    }
+    Ok(query)
+}
+
+fn decimal_query(
+    db: &ic_db::Database<Backing>,
+    minimum: Option<u64>,
+    category: Option<u64>,
+    entry_id: Option<u64>,
+) -> Result<Query<'_, DecimalRow, Backing>, String> {
+    if minimum.is_some() || category.is_some() || entry_id.is_some() {
+        return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
+    }
+    Ok(db.query::<DecimalRow>())
+}
+
+fn select_groups<'a, E: Entity>(
+    mut query: Query<'a, E, Backing>,
+    select: &str,
+    group_min: Option<u64>,
+    group_order: Option<GroupOrder>,
+) -> Result<Query<'a, E, Backing>, String> {
     if let Some(value) = group_min {
         query = match select {
             "category,sum:amount" | "entry_id,sum:priority" => {
@@ -261,6 +290,20 @@ fn execute<E: Entity>(
     if let Some(order) = group_order {
         query = query.order_groups(order);
     }
+    Ok(query)
+}
+
+fn execute<E: Entity>(
+    mut query: Query<'_, E, Backing>,
+    select: &str,
+    (distinct, group_min, group_order): (bool, Option<u64>, Option<GroupOrder>),
+    columns: &[&str],
+    render: fn(E) -> Vec<String>,
+) -> Result<Page, String> {
+    if distinct {
+        query = query.distinct();
+    }
+    let query = select_groups(query, select, group_min, group_order)?;
     match select {
         "avg:amount" => query
             .avg::<AverageAmount>()

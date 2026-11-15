@@ -1,14 +1,14 @@
 //! Feature-selected product-job witness, sharing the ordinary records and supplier.
 use super::{
-    Backing, MemoryRuntime, StableKey, faults, open, runtime,
+    Backing,
+    aggregate_store::open_jobs,
+    faults, open, runtime,
     schema::{Document, Entry},
 };
 use ic_db::{
-    AggregateJobs, Batch, Comparison, Database, GroupOrder, JobHandle, JobOutcome, JobStep, Query,
-    Timestamp,
+    Batch, Comparison, Database, GroupOrder, JobHandle, JobOutcome, JobStep, Query, Timestamp,
 };
 
-pub(super) const KEY: &str = "m1.aggregate_jobs.v1";
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct Amount {}
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
@@ -31,16 +31,6 @@ fn query(db: &Database<Backing>, operation: u8) -> Query<'_, Entry, Backing> {
     }
 }
 
-pub(super) fn initialize(host: &MemoryRuntime<Backing>) {
-    AggregateJobs::create(
-        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-        [3; 16],
-    )
-    .unwrap();
-}
-fn open_jobs(host: &MemoryRuntime<Backing>) -> AggregateJobs<Backing> {
-    AggregateJobs::open(host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap()).unwrap()
-}
 type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
 type Progress = (u64, u64, u64, u64, u8, Option<String>);
 fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {

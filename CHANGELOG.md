@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.12.0] - 2026-11-15 (development checkpoint)
+
+### ▶️ Try it
+
+```sh
+make db
+db aggregate Entry --select category,min:amount --work 2 --page-size 1
+db aggregate Entry --select category,max:amount --work 2 --page-size 1
+db aggregate Entry --select avg:amount --work 2
+db aggregate Entry --select category,sum:amount --min 30 --group-order asc --limit 1 --page-size 1
+db aggregate Entry --select category,avg:amount --group-min 35 --group-order desc
+db aggregate Document --select count:note --work 1
+db aggregate Document --select distinct-count:note --work 1
+db aggregate Document --select entry_id,min:note --work 1
+db aggregate Document --select entry_id,sum:score --entry-id 1 --work 1
+db aggregate DecimalRow --select sum:value --work 1
+db aggregate DecimalRow --select zone,avg:value --work 1 --page-size 1
+db aggregate DecimalRow --select zone,avg:maybe --work 1
+```
+
+### 🛠️ Changes
+
+- Add a local retained-aggregate CLI journey: show progress and completed pages,
+  then cancel the temporary job. The fixture uses fluent product jobs; no client
+  reducer, fault controls or production endpoint generation is added.
+- Add retained CLI input filters (`--min`, `--category`) and completed-group
+  filtering/order/total limits (`--group-min`, `--group-order`, `--limit`). Keep
+  total selection separate from per-response `--page-size`. Reconstruct the same
+  admitted query on every advance and reuse synchronous CLI type conversion;
+  no client filtering, sorting or partial aggregation.
+- Extend retained CLI queries to Document: row/present-field counts, DISTINCT
+  notes, note/priority extrema and priority/score sums, optionally grouped by
+  `entry_id`. Share input-filter validation with synchronous queries. The fixture's
+  absent note counts as zero present values and one DISTINCT value; grouped
+  extrema display absence as `—`, while present zero remains `0`. Reuse existing
+  product terminals and result records without changing engine or stored formats.
+- Add retained DecimalRow counts and sum/average selectors for `value` and
+  optional `maybe`, optionally grouped by `zone`. Reuse fixed-scale Decimal
+  result records, exact product arithmetic and completed-group selection. The
+  fixture contains 1.25, 2.50 and -0.75, with all `maybe` values absent. No new
+  codec, accumulator or job format is introduced.
+
 ## [0.11.0] - 2026-11-15 (development checkpoint)
 
 ### 📝 Summary
