@@ -2,7 +2,7 @@
 mod aggregate;
 mod distinct;
 mod order;
-pub use aggregate::jobs::{AggregateJobs, JobHandle, JobOutcome, JobStep};
+pub use aggregate::jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep};
 pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
@@ -214,6 +214,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
     /// Return at most 1..=32 matching rows in this page.
+    /// For grouped aggregates, cap the complete selected result instead; use
+    /// `group_page` to set a retained grouped response's page size separately.
     #[must_use]
     pub fn limit(mut self, rows: usize) -> Self {
         self.request.rows = rows;

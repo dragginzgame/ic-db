@@ -9,7 +9,7 @@ use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeM
 pub(super) const SLOTS: u8 = 16;
 const MAGIC: &[u8; 8] = b"ICDBAJ01";
 
-/// Durable scalar/grouped counts, sums and averages in a host-governed allocation.
+/// Durable bounded aggregates in a host-governed allocation.
 /// Holds at most 16 jobs, each at most 4096 encoded bytes. Creation requires a
 /// fresh nonzero incarnation. Handles identify jobs; they do not authorize access.
 /// All mutation must run synchronously within one IC message, without awaits.

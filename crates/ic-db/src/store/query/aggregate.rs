@@ -32,13 +32,20 @@ pub enum GroupOrder {
 pub(super) struct GroupRequest<'a> {
     predicates: Vec<(Comparison, IndexValue<'a>)>,
     order: Option<GroupOrder>,
+    page: Option<jobs::pages::PageRequest<'a>>,
 }
 impl GroupRequest<'_> {
     pub(super) fn is_empty(&self) -> bool {
-        self.predicates.is_empty() && self.order.is_none()
+        self.predicates.is_empty() && self.order.is_none() && self.page.is_none()
     }
 
     fn admit(&self, entity: &EntitySchema, reducer: &Reducer) -> Result<Selection, Error> {
+        if self
+            .page
+            .is_some_and(|page| !(1..=MAX_GROUPS).contains(&page.size))
+        {
+            return Err(Error::Limit);
+        }
         let predicates = self.predicates.iter().map(|&(comparison, value)| {
             if matches!(value, IndexValue::Text(text) if text.len() > crate::codec::MAX_ROW_BYTES) {
                 return Err(Error::Limit);
@@ -118,6 +125,16 @@ pub struct GroupValue<K, R> {
 }
 
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
+    /// Page completed retained groups, returning at most 1..=32 rows per response.
+    /// `limit` still caps the complete selected result and binds the job. Page size
+    /// and byte allowance may change. Supply None for the first page; continuation
+    /// is valid only for a completed job. Only grouped resume terminals accept this.
+    #[must_use]
+    pub fn group_page(mut self, size: usize, after: Option<&'a jobs::GroupCursor>) -> Self {
+        self.request.groups.page = Some(jobs::pages::PageRequest { size, after });
+        self
+    }
+
     /// Add an AND predicate on the completed aggregate value, before group ordering
     /// and output limits. At most eight terms. Counts require Nat64 operands;
     /// extrema require the source type; sums require the declared result type.
@@ -175,13 +192,18 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     fn extremum<R: Value>(self, maximum: bool) -> Result<Aggregate<Option<R>>, Error> {
+        let (plan, reducer) = self.extremum_plan::<R>(maximum)?;
+        self.scalar_value(&plan, reducer)
+    }
+
+    fn extremum_plan<R: Value>(&self, maximum: bool) -> Result<(Plan<'a>, Reducer), Error> {
         let plan = self.aggregate_plan(Some(R::definition()), false)?;
         let reducer = Reducer::extremum(
             E::SCHEMA,
             plan.projection.ok_or(Error::InvalidQuery)?,
             maximum,
         )?;
-        self.scalar_value(&plan, reducer)
+        Ok((plan, reducer))
     }
 
     fn scalar_value<R: Value>(
@@ -246,11 +268,19 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
         maximum: bool,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
+        let (plan, initial) = self.group_extremum_plan::<K, R>(maximum)?;
+        self.group_values(&plan, initial)
+    }
+
+    fn group_extremum_plan<K: Value, R: Value>(
+        &self,
+        maximum: bool,
+    ) -> Result<(Plan<'a>, Reducer), Error> {
         let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
         let operand = admit_projection(E::SCHEMA, R::definition())?;
         let initial = Reducer::extremum(E::SCHEMA, operand, maximum)?;
         plan.selected |= operand;
-        self.group_values(&plan, initial)
+        Ok((plan, initial))
     }
 
     fn group_values<K: Value, R: Value>(
@@ -305,9 +335,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
+        let (plan, reducer) = self.distinct_plan::<K>()?;
+        self.scalar_count_value(&plan, reducer)
+    }
+
+    fn distinct_plan<K: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
         let plan = self.aggregate_plan(Some(K::definition()), false)?;
         let reducer = Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?);
-        self.scalar_count_value(&plan, reducer)
+        Ok((plan, reducer))
     }
 
     fn scalar_count(self, field: Option<&str>) -> Result<Aggregate<u64>, Error> {
@@ -389,11 +424,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn group_count_distinct<K: Value, R: Value>(
         self,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
+        let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+        self.group_count_values(&plan, reducer)
+    }
+
+    fn group_distinct_plan<K: Value, R: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
         let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
         let operand = admit_projection(E::SCHEMA, R::definition())?;
         admit_ordered_fields(E::SCHEMA, operand)?;
         plan.selected |= operand;
-        self.group_count_values(&plan, Reducer::distinct(operand))
+        Ok((plan, Reducer::distinct(operand)))
     }
 
     fn group_counts<K: Value>(
@@ -442,6 +482,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         plan: &Plan<'_>,
         initial: Reducer,
     ) -> Result<(Groups, QueryPage<Vec<u8>>), Error> {
+        if self.request.groups.page.is_some() {
+            return Err(Error::InvalidQuery);
+        }
         let mut groups = self.admit_groups(plan, initial)?;
         let page = execute(
             &self.db.map,
@@ -529,16 +572,8 @@ fn value_output<K: Value, R: Value>(
         .into_iter()
         .take(rows)
         .map(|(key, reducer)| {
-            let value = reducer.into_value()?;
-            admit_output(
-                key.len() + value.as_ref().map_or(0, Vec::len),
-                bytes,
-                &mut output_bytes,
-            )?;
-            Ok(GroupValue {
-                key: decode_record(&key)?,
-                value: value.as_deref().map(decode_record).transpose()?,
-            })
+            admit_output(key.len() + reducer.encoded_len(), bytes, &mut output_bytes)?;
+            decode_group_value(&key, reducer)
         })
         .collect::<Result<_, Error>>()?;
     Ok((value, output_bytes))
@@ -556,13 +591,28 @@ fn count_output<K: Value>(
         .take(rows)
         .map(|(key, reducer)| {
             admit_output(key.len() + 8, bytes, &mut output_bytes)?;
-            Ok(GroupCount {
-                key: decode_record(&key)?,
-                count: reducer.into_count()?,
-            })
+            decode_group_count(&key, reducer)
         })
         .collect::<Result<_, Error>>()?;
     Ok((value, output_bytes))
+}
+
+fn decode_group_count<K: Value>(key: &[u8], result: Completed) -> Result<GroupCount<K>, Error> {
+    Ok(GroupCount {
+        key: decode_record(key)?,
+        count: result.into_count()?,
+    })
+}
+
+fn decode_group_value<K: Value, R: Value>(
+    key: &[u8],
+    result: Completed,
+) -> Result<GroupValue<K, R>, Error> {
+    let value = result.into_value()?;
+    Ok(GroupValue {
+        key: decode_record(key)?,
+        value: value.as_deref().map(decode_record).transpose()?,
+    })
 }
 
 fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
@@ -740,6 +790,12 @@ enum Completed {
     Value(Option<(Vec<u8>, Vec<u8>)>),
 }
 impl Completed {
+    fn encoded_len(&self) -> usize {
+        match self {
+            Self::Count(_) => 8,
+            Self::Value(value) => value.as_ref().map_or(0, |(_, bytes)| bytes.len()),
+        }
+    }
     // Counts need only eight stack bytes; extrema borrow their retained ordered key.
     fn result_key<'a>(&'a self, scratch: &'a mut [u8; 8]) -> Option<&'a [u8]> {
         match self {

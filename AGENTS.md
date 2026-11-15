@@ -125,17 +125,27 @@ installer. Do not edit vendor files or copy upstream reference documents.
   including zero for all-absent groups; validate every completed group before selection.
   Group predicates, order and output row limit bind the job. Keep the existing
   job-frame cap: resource refusal must preserve the checkpoint even when output
-  filters hide the oversized state. Resumable DISTINCT operations
-  and completed-group paging remain required. Keep detailed limits in the design
+  filters hide the oversized state. Retained grouped resumes return GroupPage;
+  retain its continuation when mapping rows. `group_page` changes only response
+  budgets/position, never the bound total limit or input semantics. Finalize all
+  groups before paging, retry byte-limited unreturned groups, and validate positions
+  against the completed job. Keep cursors client-owned, without a durable output cache.
+  Keep detailed limits in the design
   and public API documentation.
   `count_field` counts presence for any top-level stored type; empty values count.
-  `group_count_field` retains zero-count groups. Scalar `count_distinct::<Record>`
+  `group_count_field` retains zero-count groups. Their retained start/resume
+  terminals share count checkpoints and bind the selected field, even when required.
+  No field-specific job state or second presence rule. Scalar `count_distinct::<Record>`
   and `group_count_distinct::<Key, Record>` share a bounded comparison-key set and
   include absent tuples; an all-absent group therefore has distinct count one.
   Cap distinct tuples at 32 per set, independently of the 32-group cap, and charge
   all retained key capacities to the shared byte budget before output selection.
   Scalar distinct counts retain no projected records. Keep these semantics
   distinct from present-field counts, row counts and output limits.
+  Retained scalar/grouped DISTINCT counts persist the same canonical key sets within
+  one job frame; restore shares full key-framing and strict-order validation.
+  Each group has its own bounded set; group/operand projections bind the job.
+  Preserve absent tuples and refuse oversized state without losing progress.
   `min`/`max` use exact single-field record projections and the same scanner.
   Ignore absent operands, preserve stored types and retain only the winning
   key/value. Finish input before applying the output-byte budget; no prefix
@@ -143,6 +153,15 @@ installer. Do not edit vendor files or copy upstream reference documents.
   and single-field operand records, retaining all-absent groups as `None`.
   Counts and extrema share one bounded grouping table. Charge changing winners
   and release replaced allocations; an output limit never relaxes group/state caps.
+  Retained scalar min/max reuse that comparator and the existing job lifecycle.
+  Store only winner record bytes; validate presence and full framing, then rebuild
+  the comparison key on resume. Operation/projection identities remain distinct.
+  Keep whole-job state limits separate from completed output limits; no prefix
+  winner is an exact result. Retained grouped min/max store key records and optional
+  winners under the same 32-group/4096-byte job bounds. Scalar/grouped winner
+  restoration shares presence/framing validation. Keep all-absent groups, bind
+  key/operand/operation/selection, and reuse completed group pagination. Output
+  selection cannot relax state bounds; no separate extrema executor or job store.
   `filter_groups` and `order_groups` act only on completed grouped values before
   output limits. Exact count operands are Nat64; extrema retain source types.
   Aggregate ties use ascending canonical keys; absent extrema sort first ascending

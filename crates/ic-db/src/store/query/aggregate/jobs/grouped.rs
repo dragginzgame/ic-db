@@ -1,10 +1,9 @@
-//! Retained grouped counts and numeric totals with bounded complete finalization.
+//! Retained grouped aggregates with bounded complete finalization.
 use super::super::super::Plan;
 use super::super::{
-    Accumulator, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer, count_output,
-    numeric::Operation, value_output,
+    Accumulator, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer, numeric::Operation,
 };
-use super::{AggregateJobs, JobHandle, JobStep, count, prepare, start};
+use super::{AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start};
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
@@ -25,11 +24,41 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
+        self.start_group_count_job::<K>(jobs, now, expires, None)
+    }
+
+    /// Retain present-field counts per exact key record. Any top-level stored field
+    /// is accepted; empty values count. Groups containing only absent values remain
+    /// with count zero. Uses `start_group_count`'s bounds and selection binding.
+    /// # Errors
+    /// Refuses unknown fields and ordinary grouped-count admission failures.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn start_group_count_field<K: Value>(
+        self,
+        field: &str,
+        jobs: &mut AggregateJobs<impl Memory>,
+        now: Timestamp,
+        expires: Timestamp,
+    ) -> Result<JobHandle, Error> {
+        self.start_group_count_job::<K>(jobs, now, expires, Some(field))
+    }
+
+    fn start_group_count_job<K: Value>(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        now: Timestamp,
+        expires: Timestamp,
+        field: Option<&str>,
+    ) -> Result<JobHandle, Error> {
+        if self.request.groups.page.is_some() {
+            return Err(Error::InvalidQuery);
+        }
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let groups = self.admit_groups(&plan, count())?;
+        let groups = self.admit_groups(&plan, self.count_reducer(field)?)?;
         start(
             jobs,
-            group_binding(&plan, &groups, self.request.rows)?,
+            field_binding(group_binding(&plan, &groups, self.request.rows)?, field),
             self.db.revision_by_id(E::ID)?,
             now,
             expires,
@@ -40,7 +69,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Advance grouped counts with scalar jobs' revision/retry/work/expiry contract.
     /// Empty input completes as an empty vector; absent keys form their own group.
     /// Finalize all input before filtering, ordering and selecting completed groups.
-    /// Output is bounded to 32 groups; this terminal does not paginate finished output.
+    /// Use `group_page` to page completed output; otherwise all selected groups must fit.
     /// # Errors
     /// Refuses mismatched queries/keys/selection, cardinality or the 4096-byte job
     /// frame. Group/output bounds apply before saving; a refusal preserves prior
@@ -53,11 +82,42 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
-    ) -> Result<JobStep<Vec<GroupCount<K>>>, Error> {
+    ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
+        self.resume_group_count_job::<K>(jobs, handle, sequence, now, None)
+    }
+
+    /// Advance grouped present-field counts with `resume_group_count`'s lifecycle.
+    /// Finish all input before selection; zero-count groups are retained. The field
+    /// binds the job, including required fields whose count equals the row count.
+    /// # Errors
+    /// Refuses changed fields, row-count jobs and ordinary grouped-count failures.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn resume_group_count_field<K: Value>(
+        self,
+        field: &str,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+    ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
+        self.resume_group_count_job::<K>(jobs, handle, sequence, now, Some(field))
+    }
+
+    fn resume_group_count_job<K: Value>(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+        field: Option<&str>,
+    ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let mut groups = self.admit_groups(&plan, count())?;
-        let expected = group_binding(&plan, &groups, self.request.rows)?;
+        let mut groups = self.admit_groups(&plan, self.count_reducer(field)?)?;
+        let expected = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
         let mut record = jobs.load(handle)?;
+        let page = self.request.groups.page;
+        pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
         let step = prepare(
             self.db,
@@ -70,7 +130,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             sequence,
             now,
         )?
-        .finish(bytes, || count_output(groups, rows, bytes))?;
+        .finish(bytes, || {
+            pages::count_page(groups, rows, bytes, page, handle)
+        })?;
         jobs.save(handle, &record)?;
         Ok(step)
     }
@@ -94,7 +156,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Advance grouped sums; all-absent groups have `None`, present zero is a value.
     /// Finish every group before filtering/order/limit. Overflow in an excluded
     /// group still refuses. Output and frame refusals preserve the saved checkpoint.
-    /// Returns only complete selected groups, without finished-output pagination.
+    /// Returns a GroupPage; use `group_page` to page the completed selected groups.
     /// # Errors
     /// Grouped-count resume failures and `group_sum` arithmetic/result errors apply.
     /// # Panics
@@ -105,7 +167,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
-    ) -> Result<JobStep<Vec<GroupValue<K, R>>>, Error> {
+    ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Sum)
     }
 
@@ -138,7 +200,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
-    ) -> Result<JobStep<Vec<GroupValue<K, R>>>, Error> {
+    ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Average)
     }
 
@@ -149,7 +211,21 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
         operation: Operation,
     ) -> Result<JobHandle, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+        let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+        self.start_group_value(jobs, now, expires, admitted)
+    }
+
+    pub(super) fn start_group_value(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        now: Timestamp,
+        expires: Timestamp,
+        admitted: (Plan<'_>, Reducer),
+    ) -> Result<JobHandle, Error> {
+        if self.request.groups.page.is_some() {
+            return Err(Error::InvalidQuery);
+        }
+        let (plan, reducer) = admitted;
         let groups = self.admit_groups(&plan, reducer)?;
         start(
             jobs,
@@ -168,11 +244,25 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
         operation: Operation,
-    ) -> Result<JobStep<Vec<GroupValue<K, R>>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+    ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
+        let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+        self.resume_group_value(jobs, handle, sequence, now, admitted)
+    }
+
+    pub(super) fn resume_group_value<K: Value, R: Value>(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+        admitted: (Plan<'_>, Reducer),
+    ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
+        let (plan, reducer) = admitted;
         let mut groups = self.admit_groups(&plan, reducer)?;
         let expected = group_binding(&plan, &groups, self.request.rows)?;
         let mut record = jobs.load(handle)?;
+        let page = self.request.groups.page;
+        pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
         let step = prepare(
             self.db,
@@ -185,17 +275,29 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             sequence,
             now,
         )?
-        .finish(bytes, || value_output(groups, rows, bytes))?;
+        .finish(bytes, || {
+            pages::value_page(groups, rows, bytes, page, handle)
+        })?;
         jobs.save(handle, &record)?;
         Ok(step)
     }
 }
-fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 32], Error> {
+pub(super) fn group_binding(
+    plan: &Plan<'_>,
+    groups: &Groups,
+    rows: usize,
+) -> Result<[u8; 32], Error> {
     let mut hash = Sha256::new();
     if matches!(groups.initial, Reducer::Numeric(_)) {
         hash.update(b"ic-db:group-numeric-job:v1\0");
         // Reuse the scalar numeric identity for operand, operation and result scale.
         hash.update(super::binding(plan, &groups.initial)?);
+    } else if matches!(groups.initial, Reducer::Extremum { .. }) {
+        hash.update(b"ic-db:group-extremum-job:v1\0");
+        hash.update(super::binding(plan, &groups.initial)?);
+    } else if let Reducer::Distinct { mask, .. } = groups.initial {
+        hash.update(b"ic-db:group-distinct-count-job:v1\0");
+        hash.update(mask.to_le_bytes());
     } else {
         // Preserve existing grouped-count identities and payloads.
         hash.update(b"ic-db:group-count-job:v1\0");

@@ -87,8 +87,8 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{
-    Aggregate, AggregateJobs, Batch, Comparison, Database, GroupCount, GroupOrder, GroupValue,
-    JobHandle, JobOutcome, JobStep, Page, Query, QueryCursor, QueryPage,
+    Aggregate, AggregateJobs, Batch, Comparison, Database, GroupCount, GroupCursor, GroupOrder,
+    GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, Query, QueryCursor, QueryPage,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 

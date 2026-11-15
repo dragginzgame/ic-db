@@ -166,6 +166,20 @@ work; completed results retain their original revision. Same-code reopen/upgrade
 preserves jobs. Database/schema/query/algorithm/result mismatches refuse intact.
 Handles carry identity, not authorization; the host owns caller checks and time.
 
+`start_min::<Record>`/`resume_min::<Record>` and
+`start_max::<Record>`/`resume_max::<Record>` retain scalar extrema using the same
+exact single-field projection and ordering as synchronous `min`/`max`. Absent
+operands are ignored; empty/all-absent input completes with `None`. Persist only
+the winning record, reconstructing its comparison key on resume. Minimum and
+maximum have separate identities. A provisional winner must fit the whole-job
+state bound, but output bytes apply only to the completed winner.
+`start_group_min::<KeyRecord, Record>`/`resume_group_min::<KeyRecord, Record>`
+and the matching `group_max` start/resume methods retain one optional winner per
+group. All-absent groups remain present with `None`; grouping and operand fields
+may overlap. Finish all input before group filtering, ordering and the total
+limit. These terminals return `GroupPage` and support `group_page` below, within
+the same 32-group and 4096-byte whole-job limits.
+
 Initial limits are 16 jobs per store, 4096 encoded bytes per job, a one-hour
 maximum lifetime and one million examined candidates per job. Each advance uses
 the query's 1–512 candidate limit and at most 64 KiB of source row/key bytes.
@@ -174,23 +188,60 @@ Output bytes bound the completed result. Expired jobs still occupy a slot until
 neither promises that underlying stable memory shrinks. These operations run
 synchronously in an update message. A later trap rolls back job changes too.
 `make m2-jobs` checks the native and Wasm contract. The installed CLI still exposes
-synchronous aggregates; retained DISTINCT operations remain a later slice.
+synchronous aggregates.
+
+`start_count_distinct::<Record>`/`resume_count_distinct::<Record>` retain an exact
+count of projected tuples using the same equality as synchronous `count_distinct`.
+Duplicates across steps count once, including an absent tuple; empty input counts
+zero. At most 32 distinct comparison keys fit inside the existing 4096-byte whole
+job frame. Saved keys are validated on resume. Cardinality/frame/output refusal
+preserves progress; `limit` never truncates input or relaxes the retained-set bounds.
+
+`start_group_count_distinct::<KeyRecord, Record>` and
+`resume_group_count_distinct::<KeyRecord, Record>` retain those sets per group,
+returning `Complete(GroupPage<GroupCount<K>>)`. The projections may overlap, and an
+all-absent tuple contributes one to its group. Admit at most 32 groups and 32 keys
+per group, with all sets and progress fitting the same 4096-byte job frame.
+Group/operand projections and completed-group selection bind the job. Finish
+input before filtering/order/limit; output selection never relaxes state bounds.
 
 `start_group_count::<KeyRecord>`/`resume_group_count::<KeyRecord>` retain row counts
 per exact grouping key, including absent keys. They share synchronous grouping's
 equality, group predicates and ordering. `limit` selects completed groups and is
 bound to the job along with `filter_groups` and `order_groups`; work and output-byte
-allowances can change. Finish all input before returning `Complete(Vec<GroupCount<K>>)`.
-Empty input completes with an empty vector. There is no completed-group paging yet.
+allowances can change. Finish all input before returning `Complete(GroupPage<GroupCount<K>>)`.
+Empty input completes with empty `rows` and no `next` cursor.
+
+`start_count_field`/`resume_count_field` and
+`start_group_count_field::<KeyRecord>`/`resume_group_count_field::<KeyRecord>`
+take a field name before the job-store argument. They count present values of
+any top-level stored type, including empty text, blobs and collections. All-absent
+groups retain count zero. The field name binds the job even when required; switching
+fields or using a row-count terminal refuses. Limits and checkpoint formats are
+shared with row counts.
 
 `start_group_sum::<KeyRecord, Record>`/`resume_group_sum::<KeyRecord, Record>` and
 `start_group_avg::<KeyRecord, Record>`/`resume_group_avg::<KeyRecord, Record>` use
-the same lifecycle and return `Complete(Vec<GroupValue<K, R>>)`. Each group keeps
+the same lifecycle and return `Complete(GroupPage<GroupValue<K, R>>)`. Each group keeps
 an exact total and present count; absent operands do not enter either. All-absent
 groups return `None`, distinct from a present zero. Averages round once at the
 declared result scale. Finalize every group before filtering/order/limit, so an
 overflow in an excluded group still refuses. Key/result types, operation and
 result scale bind the job; output/state refusal preserves the saved checkpoint.
+
+All retained grouped resume methods now return `GroupPage { rows, next }` rather
+than a vector. Use `.rows` for ordinary Rust mapping while keeping `.next`.
+Without `group_page`, the complete selected result must still fit the response.
+On resume, `.group_page(size, after)` returns at most 1–32 groups; use `None` first
+and then `page.next.as_ref()`. This setting is separate from the query's bound
+total `limit`, and applies only to retained grouped resume terminals.
+
+Pages enumerate the immutable completed result, so later source writes cannot
+move groups across pages. Page size and byte allowance may change. Byte exhaustion
+leaves the unreturned group for the next page; an oversized first group returns
+`RowTooLarge`. The 28-byte `GroupCursor` is bound to the job handle and a validated
+result position. Retrying it reads the same position, until expiry/cancellation.
+It is a logical position, not an authorization token or proof of prior enumeration.
 
 Retain at most 32 groups inside the existing 4096-byte **whole job frame**, including
 progress, key-record bytes and reducer state. This is a tighter retained-state envelope than the

@@ -1150,7 +1150,7 @@ IC Storage allocation. The normal CLI fixture has neither these controls nor the
 additional job allocation. Testkit owns the PocketIC instance. Private endpoints
 are test controls; production authorization and endpoint generation remain Canic's.
 
-Twenty-eight native tests qualify counts beyond the synchronous 512-candidate budget,
+Sixty-two native tests qualify counts beyond the synchronous 512-candidate budget,
 sparse indexed filters, independent 64-KiB source-byte steps, exact signed/Decimal
 cancellation across checkpoints, U256 preservation, all-absent results, query/
 result/database/store binding, sequence refusals, same-code reopen, backwards
@@ -1171,6 +1171,33 @@ rounding ties and selection on rounded values, reopened cancelling totals and
 denominators, Decimal/U256 preservation, operation/key/scale mismatches, excluded
 overflow and output/frame refusals. A malformed nonzero total with zero present
 count refuses intact and remains explicitly cancellable.
+Field-count cases distinguish 520 rows from 260 present operands, count empty
+blobs/text/collections, reopen zero-count groups and bind required as well as
+optional fields. Unknown/mismatched fields and output refusals preserve progress.
+Retained DISTINCT cases use an independent tuple-set oracle over 521 rows and
+reopen across varied work bounds. They cover empty/all-absent input, zero values,
+UTF-8/embedded-NUL keys, duplicate suppression across steps, cardinality/frame
+refusals, changed projection/terminal, output refusal, revision invalidation and
+malformed/duplicate saved keys. Corrupt payloads refuse intact and remain cancellable.
+Grouped DISTINCT cases compare 521 rows with an independent map of sets, including
+overlapping projections, absent tuples and completed selection. Reopen/binding/output
+checks preserve exact sets; separate probes exercise group cardinality, per-group
+cardinality and the combined frame bound. Two independent full 32-key sets succeed.
+Sparse/empty input and malformed inner keys have explicit results/refusals.
+Completed-page cases cover aggregate ordering/ties and total limits, cursor retry,
+reopen, later source writes, expiry, foreign/pending/reused jobs, malformed and
+out-of-range positions, byte-budget retries and oversized first groups. Count,
+field/DISTINCT count, sum and average pages share selection and conversion. Paging
+cannot hide an excluded overflow; non-resume terminals refuse the modifier.
+Scalar extrema additionally cover cross-chunk winners, retries/reopen, historical
+completed results, empty/absent/zero/extreme integers, UTF-8 and embedded-NUL text,
+operation/field/query binding, invalidation and exact output/frame refusals.
+Malformed presence markers/optional tags refuse intact and remain cancellable.
+Provisional winner size is independent of completed output allowance.
+Grouped extrema compare independently calculated winners across 521 rows, reopen
+and completed pages. Cases cover empty/all-absent and overlapping projections,
+selection bindings, ordering ties, byte retries, historical results, UTF-8/NUL
+winner ordering, group/frame caps despite excluded output and malformed winners.
 
 The Wasm witness injects traps during creation and each measured checkpoint
 backing-write position, then after a successful advance returns to application
@@ -1183,7 +1210,12 @@ stale handles cannot cancel later occupants. Average checkpoint and later
 application traps also restore complete backing bytes, as do grouped checkpoint
 and later application traps. Grouped sums/averages receive both trap probes and
 same-code upgrade/retry/completion checks. This qualifies scalar/grouped
-count/sum/average, not retained DISTINCT jobs, physical-memory shrink or completion
+count/sum/average and scalar/grouped DISTINCT count. A separate scalar min/max
+witness checks checkpoint/application traps, upgrade, retry, invalidation and
+completed historical winners. Grouped min/max additionally qualify checkpoint and
+application traps, unfinished upgrade recovery, completed paging across a second
+upgrade/source write, retry, invalidation and expiry. It does not establish
+physical-memory shrink or completion
 under sustained writes. Initial quotas are design bounds, not peak-memory or
 performance claims. The earlier fixed M0 grouped probe remains separate evidence.
 
@@ -1201,6 +1233,34 @@ intermediate grouped-count predecessor, SHA-256
 `qualification/target/evidence/m2/count-groups-before-numeric.wasm`. Its unfinished
 grouped counts resume under the numeric grouping implementation without migration.
 Omitting either predecessor uses the current executable for that upgrade step.
+
+The 0.11 field-count run selected the pushed 0.10.0 checkpoint artifact for both
+predecessor steps, SHA-256
+`fcc68105c9b20de36584ad8a7a53e8886a2424ac949bbeffc4947dd2d7640ea4`, retained at
+`qualification/target/evidence/m2/v0.10.0-jobs.wasm`. A second Wasm test saves
+scalar/grouped counts of an absent Document note, verifies backing-write and
+later-application rollback, then upgrades and completes with zero counts.
+The DISTINCT run additionally supplied `IC_DB_M2_FIELD_COUNT_JOBS_WASM` to this
+second test, using the prior verified field-count artifact with SHA-256
+`988ede03d5722dc39dbf064f0b1e393c88ffc1c1823ebd56ca242b4cccf01275`, retained at
+`qualification/target/evidence/m2/field-count-before-distinct.wasm`. The first
+test also checks DISTINCT backing-write/later-application traps, upgrades an
+unfinished set, retries and completes with two categories across six rows.
+Grouped DISTINCT adds both trap probes and same-code upgrade/retry, completing
+two groups with one distinct category each. The grouped run supplies
+`IC_DB_M2_DISTINCT_JOBS_WASM` for the intermediate scalar-DISTINCT predecessor,
+SHA-256 `664aaa344ecb77b2454b72365d23ab82e6c2ec4b70935e671333a2ba9ad58080`, retained at
+`qualification/target/evidence/m2/scalar-distinct-before-grouped.wasm`. Its saved
+scalar DISTINCT set resumes under the grouped implementation without migration.
+
+A third Wasm test qualifies completed-group pages, final-progress/first-page and
+later-application rollback, and continuation across source changes and upgrade.
+It also pages a job completed by the prior executable, selected with
+`IC_DB_M2_GROUP_PAGES_PREDECESSOR_WASM`: SHA-256
+`3fe0851839f25583ff1ac2277123fd0770f36c53c49f637e4478ff87e8604e6a`, retained at
+`qualification/target/evidence/m2/group-distinct-before-pages.wasm`. Omitting this
+artifact checks same-code upgrades. The API now returns GroupPage rows/continuation;
+job bytes remain unchanged. The normal CLI keeps its synchronous terminals.
 
 ## Identified maintenance and the local console
 

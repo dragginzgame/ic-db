@@ -1,7 +1,11 @@
 //! Retained aggregates: exact input revision, atomic progress, explicit retry.
 mod checkpoint;
+mod distinct;
+mod extrema;
 mod grouped;
+pub(super) mod pages;
 mod storage;
+pub use pages::{GroupCursor, GroupPage};
 pub use storage::AggregateJobs;
 
 use super::super::{Database, Plan, Query, QueryCursor, Request, execute_inner};
@@ -73,7 +77,7 @@ pub struct JobStep<T> {
     pub examined: u64,
     /// Cumulative source row/key bytes, excluding supplier traversal/allocator overhead.
     pub input_bytes: u64,
-    /// Encoded completed result size; zero while no result is available.
+    /// Encoded returned result/page size; zero while no result is available.
     pub output_bytes: usize,
     /// Explicit progress, completion, invalidation or expiry.
     pub outcome: JobOutcome<T>,
@@ -132,13 +136,41 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
+        self.start_count_job(jobs, now, expires, None)
+    }
+
+    /// Retain the count of present values in a named top-level field, of any stored
+    /// type. Empty values count; absent values do not. The field binds the job,
+    /// even for a required field. Uses `start_count`'s limits and expiry contract.
+    /// # Errors
+    /// Refuses unknown fields and ordinary count-job admission failures.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn start_count_field(
+        self,
+        field: &str,
+        jobs: &mut AggregateJobs<impl Memory>,
+        now: Timestamp,
+        expires: Timestamp,
+    ) -> Result<JobHandle, Error> {
+        self.start_count_job(jobs, now, expires, Some(field))
+    }
+
+    fn start_count_job(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        now: Timestamp,
+        expires: Timestamp,
+        field: Option<&str>,
+    ) -> Result<JobHandle, Error> {
         let plan = self.aggregate_plan(None, false)?;
+        let reducer = self.count_reducer(field)?;
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
         start(
             jobs,
-            binding(&plan, &count())?,
+            field_binding(binding(&plan, &reducer)?, field),
             self.db.revision_by_id(E::ID)?,
             now,
             expires,
@@ -164,10 +196,38 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
+        self.resume_count_job(jobs, handle, sequence, now, None)
+    }
+
+    /// Advance the present-field count with `resume_count`'s bounds, revision,
+    /// retry and expiry rules. Empty/all-absent input completes with zero.
+    /// # Errors
+    /// Refuses changed fields, row-count jobs and ordinary count resume failures.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn resume_count_field(
+        self,
+        field: &str,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+    ) -> Result<JobStep<u64>, Error> {
+        self.resume_count_job(jobs, handle, sequence, now, Some(field))
+    }
+
+    fn resume_count_job(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+        field: Option<&str>,
+    ) -> Result<JobStep<u64>, Error> {
         let plan = self.aggregate_plan(None, false)?;
         let mut record = jobs.load(handle)?;
-        let mut reducer = count();
-        let expected = binding(&plan, &reducer)?;
+        let mut reducer = self.count_reducer(field)?;
+        let expected = field_binding(binding(&plan, &reducer)?, field);
         let bytes = self.request.bytes;
         let step = prepare(
             self.db,
@@ -280,7 +340,19 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         operation: Operation,
     ) -> Result<JobStep<Option<R>>, Error> {
-        let (plan, mut reducer) = self.numeric_plan::<R>(None, operation)?;
+        let (plan, reducer) = self.numeric_plan::<R>(None, operation)?;
+        self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+    }
+
+    fn resume_value<R: Value>(
+        self,
+        jobs: &mut AggregateJobs<impl Memory>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+        admitted: (Plan<'_>, Reducer),
+    ) -> Result<JobStep<Option<R>>, Error> {
+        let (plan, mut reducer) = admitted;
         let mut record = jobs.load(handle)?;
         let expected = binding(&plan, &reducer)?;
         let limit = self.request.bytes;
@@ -305,11 +377,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         Ok(step)
     }
 }
-fn count() -> Reducer {
-    Reducer::Count {
-        presence: None,
-        total: 0,
-    }
+fn field_binding(binding: [u8; 32], field: Option<&str>) -> [u8; 32] {
+    let Some(field) = field else { return binding };
+    let mut hash = Sha256::new();
+    hash.update(b"ic-db:field-count-job:v1\0");
+    hash.update(binding);
+    hash.update((field.len() as u32).to_le_bytes());
+    hash.update(field.as_bytes());
+    hash.finalize().into()
 }
 
 fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
@@ -319,13 +394,20 @@ fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
     hash.update(b"ic-db:scalar-job:v1\0");
     hash.update(plan.binding);
     match reducer {
-        Reducer::Count { presence: None, .. } => hash.update([0]),
+        // A field-count terminal adds its admitted field identity with field_binding.
+        Reducer::Count { .. } => hash.update([0]),
         Reducer::Numeric(state) => {
             hash.update([state.operation as u8, state.position as u8]);
             let output = state.output();
             let mut bytes = Vec::new();
             crate::schema::encode_type(&mut bytes, output.value, output.optional, false)?;
             hash.update(bytes);
+        }
+        // New payload identities; existing count/sum/average bindings stay stable.
+        Reducer::Extremum {
+            position, maximum, ..
+        } => {
+            hash.update([if *maximum { 4 } else { 3 }, *position as u8]);
         }
         _ => return Err(Error::InvalidQuery),
     }

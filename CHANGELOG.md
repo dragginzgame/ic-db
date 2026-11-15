@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.11.0] - 2026-11-15 (development checkpoint)
+
+### 📝 Summary
+
+Complete retained field/DISTINCT counts and scalar/grouped extrema, with bounded
+pagination over completed grouped results. Share checkpoint validation, reducers
+and finalization; retain existing schema/row formats and earlier job identities.
+
+### ▶️ Try it
+
+```sh
+db query Document --select count:note
+db query Entry --select category,distinct-count:category
+db query Entry --select min:amount
+db query Entry --select max:amount
+db query Entry --select category,min:amount
+db query Entry --select category,max:amount
+make m2-jobs
+```
+
+The CLI demonstrates the existing synchronous count and extrema semantics; the
+qualification command exercises the new retained APIs and upgrade recovery.
+
+### 🛠️ Changes
+
+- Add retained grouped `start_group_min`/`resume_group_min` and matching maximum
+  terminals. Preserve all-absent groups, exact types and overlapping key/operand
+  projections. Share winner validation with scalar extrema and start/resume/output
+  paging with grouped numeric queries. Apply filtering/order/limit only after full
+  accumulation; group/frame refusals preserve progress even for excluded output.
+  Qualify rollback, upgrade, invalidation and historical completed-page retries.
+- Add `start_min::<Record>`/`resume_min::<Record>` and matching maximum terminals.
+  Retain one exact scalar winner with the existing comparator, scanner, revision
+  invalidation and retry lifecycle. Persist only winner bytes; validate them and
+  reconstruct comparison keys on resume. Empty/all-absent input returns `None`.
+  State/output refusals preserve progress; qualify Wasm rollback and upgrade.
+  Existing job identities/payloads and row/schema formats stay unchanged.
+- Add retained scalar/grouped present-field counts through the existing job
+  lifecycle. Count present values of any stored top-level type, including empty
+  values, and retain groups whose field count is zero. Bind the selected field
+  without changing existing row-count or numeric job identities and payloads.
+- Add `start_count_distinct::<Record>`/`resume_count_distinct::<Record>` with
+  exact tuple equality across calls, including absent tuples. Persist at most 32
+  comparison keys within the existing 4-KiB job frame; validate saved keys and
+  reject duplicates/malformed frames intact. Reuse DISTINCT admission, reducer,
+  scanner and job lifecycle. Oversized state refuses without losing progress.
+  CLI selectors remain synchronous.
+- Add `start_group_count_distinct::<KeyRecord, Record>` and its resume terminal.
+  Keep distinct tuples per group across calls, with absent-tuple inclusion and
+  overlapping projections. Finish input before group selection. Enforce 32 groups,
+  32 keys per group and the shared 4-KiB job frame independently. Scalar/grouped
+  checkpoints share key-set validation; existing payloads and identities remain
+  valid. Qualify independent-set results, refusal preservation and Wasm recovery.
+- Return `GroupPage { rows, next }` from retained grouped resume terminals, replacing
+  their vector result. Add `.group_page(size, after)` for bounded pages over completed
+  counts, field/DISTINCT counts, sums, averages and extrema. Keep total `limit` and group
+  selection bound to the job; page budgets may change. Retry unreturned groups on
+  byte exhaustion. Validate cursors against job identity and completed output;
+  expiry/cancellation still apply. No new durable fields, collections or formats.
+
 ## [0.10.0] - 2026-11-15 (development checkpoint)
 
 ### 📝 Summary
