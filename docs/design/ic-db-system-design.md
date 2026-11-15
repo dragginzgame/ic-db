@@ -1098,11 +1098,12 @@ ordering, work/byte limits and continuation semantics as application callers.
 No separate CLI planner or executor is permitted. Canic owns remote endpoints,
 authentication and authorization; the database owns semantics. Surface partial
 pages and refusal reasons explicitly and return nonzero status for failed scripts.
-The current M1 console reads only a labelled local synthetic fixture. Its `query`
-command targets Entry implicitly because that is its sole queryable entity.
-When multiple entities become queryable, require explicit entity selection;
-do not infer a default from schema order. Connecting to real deployments and
-exposing broad fluent operations remain implementation work.
+The current console reads only a labelled local synthetic fixture. Its `query`
+command accepts Entry, Document or DecimalRow; omitting the entity retains the
+explicit Entry default for existing demos, never a default inferred from schema
+order. `aggregate` requires an entity and runs retained jobs. Each command's help
+lists its supported fixture selectors; neither is a generic runtime query frontend.
+Connecting to real deployments remains implementation work.
 
 For the first query subset, support primary-key lookup, required index equality
 or range lookup, composable bounded filters, projection, deterministic order,
@@ -1405,9 +1406,13 @@ each update call, displays explicit progress and follows completed-page cursors.
 `--min`/`--category` filter source records; `--group-min`/`--group-max`/`--group-order` and the
 total `--limit` select complete results. The response-only `--page-size` cannot
 truncate input or change the bound total selection. Synchronous and retained
-console paths share entity-specific filters and exact integer/Decimal threshold
-parsing. Each bound's text is limited to 64 bytes and parsed directly into the
+console paths share entity-specific filters and exact typed threshold admission.
+Each bound is limited to 64 UTF-8 bytes. Numeric bounds parse directly into the
 selected result type; engine admission enforces range and declared Decimal scale.
+Grouped note extrema accept literal Text, including empty strings, with the
+product's exact byte ordering. No normalization or absence sentinel is introduced;
+range predicates exclude absent results. Text bounds bind retained jobs just as
+numeric bounds do, and changing either bound refuses resumption intact.
 Signed and fractional inputs never pass through floating point or rounding.
 The optional lower/upper bounds compose inclusive engine predicates before
 ordering, limiting or paging. Both operands are validated; an otherwise valid
@@ -1652,12 +1657,60 @@ collection keys, composite primary keys and additional authoring policies remain
 explicit gaps, not silently removed capabilities. M3 transformation recovery and
 M4 Canic integration/full-workload comparisons remain separate gates.
 
-The first M2 slice now delivers `Database::query::<E>()` with up to eight AND
-comparisons over top-level ordered scalar/unit-enum fields. Runtime field names
+The M2 slice delivers `Database::query::<E>()` with up to eight comparisons over
+top-level ordered scalar/unit-enum fields. `filter` adds an AND term; `filter_any`
+adds a nonempty OR clause, ANDed with other terms/clauses. All alternatives count
+toward the same eight-term budget; empty or oversized clauses refuse with `Limit`.
+Runtime field names
 resolve against the admitted entity, and operand widths/types must match exactly.
 Equality includes absence; inequality is its complement. Range predicates require
 a present operand and do not match absent fields. No numeric coercion, callbacks,
 arbitrary expression language or separate public dynamic frontend is added.
+
+The bounded flat term list carries clause boundaries into the same scanner.
+All operands are admitted before execution, even when another alternative would
+match. One traversal supplies rows and aggregates without union scans or repeated
+results from overlapping branches. DISTINCT retains its whole-class predicate
+proof, now applied to every alternative. OR clauses do not introduce nested trees,
+boolean normalization, multiple access paths or persisted query models.
+Clause boundaries enter cursor/job identity only when a clause has multiple
+alternatives, preserving existing conjunction-only bindings and singleton-clause
+equivalence with `filter`. Changed structure or operands refuse continuation.
+
+`filter_in(field, values)` lowers directly to that same OR clause of exact
+equalities. It accepts a nonempty list under the shared eight-comparison budget;
+duplicates consume budget but never duplicate rows. Optional absence matches an
+explicit absent member, with no SQL null rules or implicit conversion. The same
+ordered equality clause shares cursor/job identity; reordering members refuses
+continuation. This retains IcyDB `6d421e3`'s equality and duplicate-result lessons
+from `db/predicate/normalize/tests/owned_membership.rs`, without its sorting,
+deduplication or canonical membership representation. Both fluent methods share
+clause construction; no temporary member collection or new execution path is needed.
+
+`Comparison::StartsWith` admits present Text operands under the declared byte
+limit, for row filters and completed text min/max group selection. Matching is
+literal, case-sensitive UTF-8 with no normalization; the empty prefix matches
+every present text value, including empty text, but not absence. Nontext fields
+refuse. Shared admission and comparison reuse existing terminated text keys,
+removing only the operand's final terminator while preserving escaped NUL bytes
+and optional-presence framing. No codec, schema or job-format change is needed;
+existing comparison discriminants and continuation bindings remain unchanged.
+Prefix matching remains a residual predicate under ordinary scan budgets.
+This retains frozen IcyDB `6d421e3`'s strict text-prefix semantics from
+`db/predicate/runtime/mod.rs`, without its case-fold/coercion machinery or a
+prefix-index lowering path. Independent Rust string oracles cover Unicode,
+embedded NUL, absence, DISTINCT and completed groups; retained jobs bind both
+input and group prefixes across reopen. The Wasm witness checks sparse pages,
+byte refusal, cursor binding and upgrade without changing backing bytes.
+
+This retains frozen IcyDB `6d421e3`'s full-child admission from
+`db/query/predicate/validate.rs` and OR short-circuit semantics from
+`db/predicate/runtime/mod.rs`. Its recursive predicate copying, normalization and
+multi-path planning are not copied: this slice has a flat eight-comparison bound
+and one proven access path. Native qualification covers independent boolean
+oracles, bounds, optional absence, planner safety, DISTINCT and retained reopen.
+The Wasm witness covers bounded pages, exact query identity, upgrade and unchanged
+backing; an explicitly selected predecessor also checks older conjunction cursors.
 
 Primary-key order is the default. `using_index(name, prefix)` adds exact leading
 component constraints and uses the complete physical index order, including the
@@ -1672,8 +1725,10 @@ duplicates and a nonfinal primary key refuse. With an explicit index the same
 order proof checks that requested path. Without `order_by`, existing primary or
 explicit-index semantics and cursor bindings remain unchanged.
 
-Selection first admits all predicates, including contradictions. Equality terms
+Selection first admits all predicates, including contradictions. Singleton equality terms
 supply exact leading index operands; all predicates remain residual checks.
+An equality inside a multi-alternative OR clause cannot establish a fixed field
+or an index prefix, even when several alternatives happen to be identical.
 Ordering compares requested and physical field sequences after removing constant
 components, ending at the unique primary key. Sparse indexes retain the same
 conservative present-prefix requirement. Compatible indexes rank by longest
@@ -1751,7 +1806,8 @@ ordered component codec for tuple equality and order. Output keys follow canonic
 field-name order, independent of the source declaration or traversal order.
 
 All matching input is counted before `limit` selects the first completed groups.
-This output selection has no continuation yet. Cursors, DISTINCT, explicit
+Synchronous output has no continuation; retained grouped terminals provide
+completed-output pagination under the job contract above. Input cursors, DISTINCT, explicit
 `order_by` and `descending` refuse rather than acquiring ambiguous aggregate
 meaning. Explicit index prefixes and ordinary row filters retain their meaning.
 Each operation uses the existing scan work bound; completion must be observed
@@ -1854,7 +1910,8 @@ IcyDB `6d421e3`'s independent group state, winner ownership and memory-admission
 lessons from `aggregate/contracts/state/grouped/tests` and
 `aggregate/runtime/grouped_fold/bundle`. Qualification covers interleaved groups,
 absence/zero, overlap, independent result oracles, shrinking/growing text winners
-and work/state/output refusals. Completed-output pagination remains implementation work.
+and work/state/output refusals. Retained grouped extrema use the completed-output
+pagination contract above; synchronous terminals return their bounded result at once.
 
 Completed grouped counts/extrema/sums now accept `filter_groups(comparison, operand)`
 and `order_groups(GroupOrder)`. Up to eight group predicates are ANDed independently
@@ -1913,8 +1970,8 @@ not at the narrower running-result boundary. Native witnesses cover every intege
 width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow,
 absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
-backing during queries. Float arithmetic and resumable grouped execution remain
-required implementation work.
+backing during queries. Retained scalar/grouped sums reuse this arithmetic under
+the job contract above. Float arithmetic remains implementation work.
 
 Decimal sums now use the same accumulator at the field's declared scale (0–28).
 The result record must preserve scale and optionality. Each borrowed value supplies
@@ -1989,9 +2046,9 @@ neither a general numeric conversion layer nor fitting-scale retries are copied.
 Native witnesses cover every integer width, signed ties, repeating fractions at
 28 places, absence, rounded group comparisons and final overflow. Wasm checks
 rounding, upgrade/reopen, an overflowing sum with a fitting average and unchanged
-stable bytes. The CLI's average selectors choose scale 2. Floating arithmetic and
-resumable grouped execution remain required subsequent work; scalar average jobs
-reuse this arithmetic and are described above.
+stable bytes. The CLI's average selectors choose scale 2. Scalar and grouped
+average jobs reuse this arithmetic and are described above. Floating arithmetic
+remains subsequent work.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed
@@ -2183,7 +2240,7 @@ neither the absence of slots nor the absence of runtime values is a product goal
 | --- | --- |
 | Owned scalar codecs | Adapted for the current scalar types, with independent bytes and malformed-input checks. Start remaining rich types from their relevant owned IcyDB codecs and domain-validation cases. |
 | Borrowed field access | Shared stored-key inspection in writes, references and fluent predicates validates values without constructing a complete entity. Field/row validation and physical key/index checks remain. |
-| Selective query reads | M2 predicates borrow selected scalars; typed record projection copies validated selected field ranges and decodes only output. The 1024-byte blob witness measures full versus ID-only materialization. Aggregation and broader compositions remain work. |
+| Selective query reads | M2 predicates and aggregates borrow validated fields; typed record projection copies selected field ranges and decodes only output. The 1024-byte blob witness measures full versus ID-only materialization. It does not measure aggregate or broader query compositions. |
 | Equality, ordering and hashing | Inspect and adapt IcyDB's type-specific rules together before adding predicates, uniqueness, grouping or DISTINCT for each type. Do not let different facilities invent incompatible meanings. |
 | Offset tables | Conditional on measured selected-field workloads. Sequential rows remain the current format; fixed compiled offsets or bounded skipping may suffice. A durable directory needs an explicit format decision. |
 | Decoded-field caches | Conditional on demonstrated repeated field decoding in one operation; no eager general value cache. |
@@ -2223,8 +2280,9 @@ Bool and bounded Text components, including optional values; primary keys requir
 non-optional signed/unsigned 8–128-bit integers, U256, Ulid, Principal, Account or Subaccount. Required/optional
 references match the target key type exactly.
 Storage support does not imply arbitrary indexing, predicates or arithmetic.
-Richer types, broader references, generated identities and fluent queries remain work;
-no retained capability or product attribute has been retired.
+Named structured types and the current fluent terminals are described in their
+sections below and in §5. Nested references and schema-owned identity generation
+remain work; no retained capability or product attribute has been retired.
 
 Date fields use `value(item(prim="Date"))`, including optional/list forms and
 scalar set/map keys. `ic_db::Date` adapts frozen IcyDB `6d421e3`'s
@@ -2417,8 +2475,8 @@ floats keep their identities. This adds two small scalar types and extends share
 codec/key traversal, with no new dependency, durable metadata or numeric engine.
 Native/Wasm witnesses cover independently framed schema/row bytes, extreme and
 subnormal ordering, malformed payloads, zero no-ops/unique refusals, final-state
-swaps, complete-message rollback and unchanged upgrade/reopen. Aggregate
-accumulation/rounding and fluent grouping/DISTINCT remain M2 work.
+swaps, complete-message rollback and unchanged upgrade/reopen. Float arithmetic
+remains M2 work; ordered grouping/DISTINCT use the shared component semantics.
 
 U256 fields use `value(item(prim="U256"))`, optionally with `opt`; the public
 Rust type is `ic_db::U256`, re-exported from feature-free ethnum 1.5.3. The owned
@@ -2802,8 +2860,8 @@ bound and field lengths before allocating owned values; total variable payload
 cannot exceed the row envelope. Nested traversal additionally shares depth,
 structured-value and collection-item bounds. Nat64-only records are smaller than that envelope; these are
 structural limits, not proof that every supplier growth path fits an IC message.
-Index-prefix reads return only a bounded first result collection; general index
-continuation and fluent semantics remain M2 work. Native tests and the Wasm host
+The low-level index-prefix method returns only a bounded first result collection;
+fluent query continuation follows the separate §5 contract. Native tests and the Wasm host
 prove final-state refusals, index maintenance, unchanged reopen and late-message
 rollback. The separate `make m1-commit-failures` host now traps after every observed
 backing write in a three-row replacement with dependent repointing and refuses an actual growth request

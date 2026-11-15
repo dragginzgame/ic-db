@@ -47,6 +47,31 @@ unchanged-schema upgrade. Native tests additionally cover duplicate secondary ke
 live key updates, deleted cursor rows and corruption hidden behind rejecting filters.
 The Wasm probe advances virtual time before upgrade because its preceding query
 calls do not drain the IC install-code rate limit. No production setting is changed.
+Bounded `filter_any` clauses add OR alternatives within the same eight-comparison
+budget, with AND between clauses. Native boolean oracles cover overlapping matches,
+absence, all-operand admission, safe ordering/index choice, DISTINCT and aggregate
+composition. Retained counts reject changed boolean structure without altering
+progress and resume after reopen. The `fluent_any` Wasm witness covers sparse and
+byte-limited pages in both directions, an explicit category prefix, query binding
+and unchanged backing across upgrades. Set `IC_DB_QUERY_PREDECESSOR_WASM` to an
+older compatible fixture to check conjunction cursors from that executable;
+without it, the test checks same-code upgrades. The 0.14 probe used the pre-OR
+console artifact SHA-256
+`6fa69b9b9cec75a36b7825d54754539a8686fa5d96bbe1e5d7621c63b69c62b2`,
+retained at `target/evidence/0.14/query-conjunction-predecessor.wasm` from the
+repository root. No stored format or conjunction binding changed.
+Membership qualification checks exact optional equality, duplicate members,
+empty/oversized lists, hidden invalid operands and cross-method cursor/job identity.
+The Wasm witness pages duplicate-containing membership lists in both directions,
+applies an explicit index prefix, refuses changed members, and resumes unchanged
+cursors after upgrade without changing stable bytes.
+Text-prefix qualification compares `Comparison::StartsWith` against Rust's
+`str::starts_with`, including empty/absent text, embedded NUL, case differences
+and canonically different Unicode strings. Native cases cover ordered pages,
+DISTINCT, OR composition, completed text groups and retained input/group bindings
+across reopen. The Wasm witness checks sparse pages, byte refusal, operand bounds,
+cursor identity and upgrade with unchanged stable bytes. It qualifies residual
+matching, not prefix-based index seeks.
 Projection checks reuse named records, cover optional/nested output, exact
 transitive type admission, unselected corruption and projected-byte retries. The
 Wasm probe resumes a projected cursor after upgrade, rejects it for entity output,
@@ -1276,7 +1301,7 @@ input and empty selected output. Invalid entity/filter/selector combinations
 refuse. Fourteen DecimalRow cases cover ten count/sum/average selectors and
 completed-group controls over signed fractional inputs and all-absent optional
 inputs. Every supported entity reuses synchronous query input-filter validation.
-Ninety-six paired synchronous/retained CLI cases cover signed, fractional and
+Paired synchronous/retained CLI cases cover text, signed, fractional and
 full-width integer group thresholds, inclusive bounds, absent results, inverted
 ranges and filter/order/limit/page composition, plus required/optional Decimal
 extrema and their exact fractional bounds, plus field/DISTINCT counts that
@@ -1290,6 +1315,14 @@ syntax, integer fractions, numeric overflow, excess Decimal precision and the
 refusals cover integer fractions, signed overflow and excess Decimal precision.
 Upper-bound refusals include invalid operands even when the lower bound would
 exclude every group, and group modifiers on scalar aggregates.
+The focused `console_text` Wasm test changes stored notes to distinguish absent
+from empty, lexical from numeric order, and literal `None` from absence. It checks
+64-byte UTF-8 bounds, invalid upper bounds even after an excluding lower bound,
+unchanged query bytes, and retained resumption across upgrade. Changed text bounds
+refuse without changing the saved checkpoint. Both min and max use the existing
+product comparator; no adapter-side text normalization is introduced.
+Empty or whitespace-containing CLI bounds use one-shot shell arguments; the
+interactive console's whitespace splitting does not interpret quotes.
 It also preserves the existing installed-layout query/schema and product-record
 checks. `make db` installs this console fixture without starting the program.
 
@@ -1346,7 +1379,8 @@ built for the console. Cargo artifact records select both
 build outputs. Keep the installation's `bin` directory on `PATH`.
 
 Run `db` to open a fresh temporary local record database. Commands are `schema`,
-`status`, `query [Entry|Document|DecimalRow]`, `help` and `quit`. Entry is the default.
+`status`, `query [Entry|Document|DecimalRow]`, `aggregate ENTITY`, `help` and `quit`.
+Entry is the default for `query`; `aggregate` requires an explicit entity.
 Queries use the fluent product engine. Entry supports `--min` and `--category`;
 Document supports `--entry-id`. `--order-by FIELD[,FIELD]` selects a proven complete
 order, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
@@ -1374,11 +1408,13 @@ scale-2 operands for group bounds in both synchronous and retained CLI modes.
 while `zone,sum:maybe` retains the all-absent group. Decimal sums preserve scale 2.
 These are fixed typed projections and direct fluent terminals in the private
 adapter; field presence uses the ordinary schema admission.
-For aggregates, `--limit` selects completed groups and no continuation is returned.
+For synchronous `query` aggregates, `--limit` selects completed groups and no
+continuation is returned.
 They refuse `--after`, `--distinct`, explicit ordering and execution that reaches
 `--work` before observing completion; an exact-boundary scan can also refuse.
-These synchronous operations do not represent resumable aggregate support.
-`--limit` bounds output rows, `--work` bounds candidates and `--bytes` bounds encoded
+The separate `aggregate` command follows retained progress and completed-page
+continuations as described in the retained CLI qualification above.
+For `query`, `--limit` bounds output rows, `--work` bounds candidates and `--bytes` bounds encoded
 output. Their defaults are 3, 128 and 4096. An empty page may still continue.
 The CLI prints a hexadecimal next cursor or `none`; copy it to `--after` with the
 same entity, filters, order and projection. Numeric after-ID syntax is retired.
@@ -1389,10 +1425,11 @@ and renders bordered tables. Full storage identities live in `db status`.
 
 Use `db query Entry --category 1 --order-by id --desc` for one command, or pipe
 newline commands to `db`. `make m2-cli` checks piped/one-shot use, cursor reuse and
-query-shape refusals, projected bytes, work-exhausted pages, both entities and help.
+query-shape refusals, projected bytes, work-exhausted pages, all three entities and help.
 The old post-page-filter fixture endpoint is removed; mutation/growth probes now
-read through the fluent witness. CLI qualification uses the concurrently selected
-Wire 0.22.3 transport lock; product dependencies and persisted bytes are unchanged.
+read through the fluent witness. CLI qualification uses the transport version
+selected in `qualification/Cargo.lock`; product dependencies and persisted bytes
+remain independent of Wire.
 `db --help` needs no running server. The installed binary locates the fixture
 relative to itself and works outside the repository directory. Testkit's prepared
 server is still tied to the build checkout; run `make m0-setup` there before use.

@@ -58,6 +58,7 @@ enum Command {
         limit: u32,
         /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
         /// Signed sums accept negatives; Decimal results accept fractions at their scale.
+        /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
         /// Integer results reject fractions; threshold text is bounded to 64 bytes.
         #[arg(long, allow_hyphen_values = true)]
         group_min: Option<String>,
@@ -125,6 +126,7 @@ enum Command {
         distinct: bool,
         /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
         /// Signed sums accept negatives; Decimal results accept fractions at their scale.
+        /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
         /// Integer results reject fractions; threshold text is bounded to 64 bytes.
         #[arg(long, allow_hyphen_values = true)]
         group_min: Option<String>,

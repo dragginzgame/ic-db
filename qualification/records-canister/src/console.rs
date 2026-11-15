@@ -17,7 +17,7 @@ struct CategoryOnly {}
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct AmountOnly {}
 #[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
-struct NoteOnly {}
+pub(super) struct NoteOnly {}
 #[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
 struct PriorityOnly {}
 #[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
@@ -277,7 +277,7 @@ fn decimal_query(
 fn select_groups<'a, E: Entity>(
     mut query: Query<'a, E, Backing>,
     select: &str,
-    (group_min, group_max): (Option<&str>, Option<&str>),
+    (group_min, group_max): (Option<&'a str>, Option<&'a str>),
     group_order: Option<GroupOrder>,
 ) -> Result<Query<'a, E, Backing>, String> {
     for (comparison, value) in [(Comparison::Ge, group_min), (Comparison::Le, group_max)] {
@@ -288,6 +288,7 @@ fn select_groups<'a, E: Entity>(
             return Err(message(Error::InvalidOperand));
         }
         query = match select {
+            "entry_id,min:note" | "entry_id,max:note" => query.filter_groups(comparison, value),
             "category,sum:amount" | "entry_id,sum:priority" => query.filter_groups(
                 comparison,
                 value
@@ -328,10 +329,10 @@ fn select_groups<'a, E: Entity>(
     Ok(query)
 }
 
-fn execute<E: Entity>(
-    mut query: Query<'_, E, Backing>,
+fn execute<'a, E: Entity>(
+    mut query: Query<'a, E, Backing>,
     select: &str,
-    (distinct, bounds, group_order): (bool, (Option<&str>, Option<&str>), Option<GroupOrder>),
+    (distinct, bounds, group_order): (bool, (Option<&'a str>, Option<&'a str>), Option<GroupOrder>),
     columns: &[&str],
     render: fn(E) -> Vec<String>,
 ) -> Result<Page, String> {

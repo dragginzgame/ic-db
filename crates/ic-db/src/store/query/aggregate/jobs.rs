@@ -446,7 +446,10 @@ fn start<M: Memory>(
 
 // One shared concrete execution path. Type conversion happens before save, outside
 // this function. Preparation errors never persist a partial accumulator or cursor.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit admitted query and checkpoint inputs keep the shared resume boundary local"
+)]
 fn prepare<M: Memory>(
     db: &Database<M>,
     entity: &EntitySchema,

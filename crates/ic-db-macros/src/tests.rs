@@ -2,6 +2,59 @@ use super::expand;
 use quote::quote;
 
 #[test]
+fn declarations_never_discard_authored_where_constraints() {
+    let item = quote!(
+        struct Constrained
+        where
+            Self: Copy, {}
+    );
+    syn::parse2::<syn::ItemStruct>(item.clone()).expect("valid Rust declaration");
+    for (kind, result) in [
+        (
+            "entity",
+            expand(
+                quote!(
+                    pk(field = "id"),
+                    fields(field(name = "id", value(item(prim = "Nat64"))))
+                ),
+                item.clone(),
+            ),
+        ),
+        (
+            "record",
+            super::record::expand(
+                quote!(fields(field(name = "value", value(item(prim = "Nat64"))))),
+                item.clone(),
+            ),
+        ),
+        (
+            "enum_",
+            super::enumeration::expand(quote!(variant(name = "Only")), item.clone()),
+        ),
+        (
+            "set",
+            super::set::expand(quote!(item(prim = "Nat64"), max_items = 3), item.clone()),
+        ),
+        (
+            "map",
+            super::map::expand(
+                quote!(
+                    key(prim = "Nat64"),
+                    value(item(prim = "Nat64")),
+                    max_items = 3
+                ),
+                item,
+            ),
+        ),
+    ] {
+        assert!(
+            result.is_err(),
+            "{kind} must not erase an authored constraint"
+        );
+    }
+}
+
+#[test]
 fn managed_timestamps_reject_ambiguous_or_authored_policies() {
     for field in [
         quote!(field(

@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.14.0] - Unreleased
+
+### ▶️ Try it
+
+```sh
+make db
+db query Document --select entry_id,min:note
+db query Document --select entry_id,min:note --group-min alpha
+db aggregate Document --select entry_id,max:note --group-max zèbre --work 1
+```
+
+The local fixture's note is absent: the first command shows its group, while
+the text bounds exclude it. Each invocation opens a fresh disposable fixture.
+
+### ⚠️ Breaking
+
+- Schema declarations now consistently reject `where` clauses. Record, enum,
+  set and map macros previously discarded these constraints silently; entity
+  declarations already refused them. Remove such clauses from declarations
+  and enforce any intended constraint in ordinary Rust code. Supported empty
+  struct declarations and durable schema identities are unchanged.
+
+### ➕ Added
+
+- Add `Comparison::StartsWith` to fluent row filters and completed text min/max
+  group filters, including retained jobs. Matching is literal and case-sensitive;
+  empty prefixes match present text, while absent values never match. Reuse the
+  existing comparison keys and bounds without changing stored formats or adding
+  prefix index seeks. Consumers exhaustively matching `Comparison` must handle
+  the new variant. This increment is available through Rust, not a new CLI flag.
+- Add fluent `filter_any` for OR clauses and `filter_in` for exact-value membership,
+  combined with ordinary AND filters. Membership uses the same equality clause;
+  duplicate members consume budget but never duplicate rows, and optional absence
+  requires an explicit absent member. Lists must be nonempty.
+  All comparisons share the eight-term budget and exact type admission, including
+  alternatives that would otherwise short-circuit. Reads and aggregates use one
+  scan; existing conjunction cursors retain their identity. No nested expression
+  tree, index union or additional stored query state is introduced.
+- Both CLI query modes accept literal text bounds for grouped note min/max.
+  Comparisons preserve empty strings and UTF-8 byte order, without normalization
+  or special absence strings. Bounds remain limited to 64 bytes and use the
+  product's existing group selection and retained-job identity. Empty or
+  whitespace-containing bounds use one-shot shell commands.
+
+### 🧹 Cleanup
+
+- Reconcile the README, design and agent instructions with delivered retained
+  grouping, completed-output pagination and Decimal arithmetic. Clarify the
+  local console's entity selection and separate its fixture selectors from the
+  product's fluent capabilities. Preserve historical qualification limits.
+- Share declaration-shape validation across the five schema macros and correct
+  the qualification guide's installed-console command list and transport reference.
+
+### 🔧 Dependencies
+
+- Release review confirms the selected Platform Types 0.20.4, Platform Runtime
+  0.22.5, Storage 0.74.1, Host Artifacts 0.79.0, Host Text 0.76.0, Testkit 0.106.0
+  and Toko Tooling 0.44.3 are current stable selections. Defer optional Wire
+  0.22.4 → 0.24.0 and release-tool IC Build 0.84.1 → 0.86.0 updates to the next
+  dependency-maintenance pass. Wire remains confined to qualification transport;
+  the product dependency graph and durable codecs do not use it.
+
 ## [0.13.0] - 2026-11-15 (development checkpoint)
 
 ### ▶️ Try it

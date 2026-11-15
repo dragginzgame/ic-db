@@ -82,8 +82,10 @@ installer. Do not edit vendor files or copy upstream reference documents.
   without qualification fault controls. Keep normal product/measurement builds
   independent of this optional fixture feature.
   Parse bounded CLI group-threshold text (at most 64 bytes per bound) directly into the
-  selected result type: u64 counts/extrema, u128 unsigned sums, i128 signed sums
-  or Decimal. Reuse existing parsers and engine scale/range admission; never
+  selected result type: u64 counts/integer extrema, u128 unsigned sums, i128 signed sums,
+  Decimal or literal Text for grouped note extrema. Text bounds preserve empty
+  strings and exact UTF-8 bytes; no normalization or absence sentinel. Reuse
+  existing parsers and engine scale/range admission; never
   round thresholds or convert through floating point. `--group-min` and
   `--group-max` compose inclusive engine predicates before output selection;
   validate both operands even when the range would select no groups.
@@ -107,6 +109,23 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Fluent reads use exact top-level comparisons and proven ordered paths;
   no predicate callbacks. `order_by` adds a primary-key tie-breaker, uses one
   direction and selects bounded equality-prefix paths from compiled metadata.
+  `filter_any` adds nonempty OR clauses, ANDed with other filters under the same
+  eight-comparison budget. Admit all alternatives before reading, and keep one
+  traversal. Only singleton equality clauses establish fixed fields/index prefixes;
+  alternatives must not narrow membership or justify an incomplete order.
+  Clause boundaries bind cursors/jobs; conjunction-only identities stay unchanged.
+  `filter_in` is the same OR clause of exact equalities in supplied order. Share
+  clause construction without a temporary operand list or membership executor.
+  Empty lists refuse; duplicates consume the comparison budget but never repeat
+  rows. Optional absence requires an explicit absent member. Do not sort, deduplicate
+  or coerce operands before admission or silently change continuation identity.
+  `Comparison::StartsWith` accepts present Text operands only, including for
+  completed text min/max groups. Match exact UTF-8 without case folding or
+  normalization; an empty prefix matches present empty text, never absence.
+  Reuse the terminated comparison-key codec and shared comparison admission.
+  Prefix matching is residual filtering, not a new index-seek or collation path.
+  Preserve DISTINCT's whole-class predicate proof. No predicate tree, normalization,
+  union executor or durable query representation is implied.
   Explicit paths undergo the same order proof. Refuse incomplete order rather
   than sorting a bounded input prefix. Keep work limits separate from result limits.
   Empty pages may continue; byte exhaustion must retry the unreturned candidate.
@@ -125,7 +144,8 @@ installer. Do not edit vendor files or copy upstream reference documents.
   Reuse physical-key equality and bounded logical cursors; do not substitute
   page-local deduplication or trust cursor claims about emitted groups. Filters
   varying within a duplicate class need a separate progress proof and currently
-  refuse. Broader DISTINCT and aggregation remain required implementation work.
+  refuse. General noncontiguous DISTINCT output remains required implementation
+  work; bounded distinct counts and the aggregate terminals below are implemented.
   Synchronous `count`/`group_count::<Record>` reuse the scanner and exact ordered
   scalar keys. Absent keys form a group; row counts include those rows. Scan all
   matching input before applying output limits; never return prefix counts after
@@ -259,7 +279,7 @@ installer. Do not edit vendor files or copy upstream reference documents.
   preparation, including no-ops; advance only entities with real changes.
   Missing/malformed unrelated counters do not block ordinary row reads or other
   entities' writes. Never retain revision values or durable admission across calls.
-  Non-indexed row values and future grouping/DISTINCT retain separate bounds.
+  Non-indexed row values and grouping/DISTINCT retain separate bounds.
   U256 uses the re-exported feature-free `ethnum::U256` with an explicitly owned
   32-byte big-endian row/index codec, adapted from IcyDB. Do not introduce Wire
   serialization or a numeric conversion engine for that storage boundary.

@@ -1,20 +1,15 @@
 //! Named record boundary; field codecs and type rules stay in `field`.
 use super::{
+    declaration,
     field::{Field, Kind},
     list, metas, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::ItemStruct;
 
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
-    let item: ItemStruct = syn::parse2(item)?;
+    let item = declaration(item, "record")?;
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
-    if !item.generics.params.is_empty()
-        || !matches!(&item.fields,syn::Fields::Named(f) if f.named.is_empty())
-    {
-        return Err(fail("record requires an empty, nongeneric struct body"));
-    }
     let mut name = None;
     let mut fields = None;
     for meta in metas(args)? {

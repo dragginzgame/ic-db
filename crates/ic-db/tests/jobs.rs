@@ -31,6 +31,108 @@ struct Id {}
 fn time(ms: i64) -> Timestamp {
     Timestamp::from_millis(ms)
 }
+
+#[test]
+fn membership_jobs_share_equality_clause_identity_and_exact_counts() {
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(10)], 0);
+    let values = [ic_db::IndexValue::Absent, 10_i128.into(), 10_i128.into()];
+    let handle = db
+        .query::<Row>()
+        .filter_in("amount", &values)
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let alternatives = values.map(|value| ("amount", Comparison::Eq, value));
+    let mut sequence = 0;
+    for _ in 0..4 {
+        let step = db
+            .query::<Row>()
+            .filter_any(&alternatives)
+            .work_limit(2)
+            .resume_count(&mut jobs, &handle, sequence, time(1))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {}
+            JobOutcome::Complete(value) => {
+                assert_eq!(value, 3);
+                assert_eq!(step.examined, 4);
+                return;
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    panic!("bounded membership must complete");
+}
+
+#[test]
+fn any_clauses_resume_exact_counts_and_refuse_changed_boolean_structure() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(40)], 0);
+    let alternatives = [
+        ("id", Comparison::Lt, 2_u64.into()),
+        ("amount", Comparison::Ge, 30_i128.into()),
+    ];
+    let query = || db.query::<Row>().filter_any(&alternatives).work_limit(1);
+    let handle = query().start_count(&mut jobs, time(0), time(100)).unwrap();
+    let first = query()
+        .resume_count(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    let saved = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Row>()
+            .filter("id", Comparison::Lt, 2_u64)
+            .filter("amount", Comparison::Ge, 30_i128)
+            .resume_count(&mut jobs, &handle, first.sequence, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), saved);
+    let retry = query()
+        .resume_count(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert_eq!(retry.sequence, first.sequence);
+    assert_eq!(retry.examined, first.examined);
+    drop(jobs);
+    drop(db);
+    drop(runtime);
+
+    let runtime = host(backing);
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema(),
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let mut sequence = first.sequence;
+    for _ in 0..5 {
+        let step = db
+            .query::<Row>()
+            .filter_any(&alternatives)
+            .work_limit(1)
+            .resume_count(&mut jobs, &handle, sequence, time(2))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {}
+            JobOutcome::Complete(value) => {
+                assert_eq!(value, 4);
+                assert_eq!(step.examined, 4);
+                return;
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    panic!("bounded input must complete");
+}
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let declarations = SealedDeclarationSnapshot::new(vec![
@@ -1811,6 +1913,108 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
     )
 )]
 struct PresenceRow {}
+
+#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 12)))))]
+struct PresenceNote {}
+
+#[test]
+fn text_prefix_jobs_bind_input_and_completed_group_selection_across_reopen() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let schema = Schema::new(&[PresenceRow::SCHEMA]).unwrap();
+    let (mut db, mut jobs) = create_stores(&runtime, schema.clone());
+    let mut batch = Batch::new();
+    for (id, note) in [None, Some(""), Some("a\0b"), Some("a\0c"), Some("é")]
+        .into_iter()
+        .enumerate()
+    {
+        batch
+            .insert(&PresenceRow {
+                id: id as u64,
+                flag: (id % 2) as u8,
+                note: note.map(str::to_owned),
+                items: None,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let count = db
+        .query::<PresenceRow>()
+        .filter("note", Comparison::StartsWith, "a\0")
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let groups = db
+        .query::<PresenceRow>()
+        .filter_groups(Comparison::StartsWith, "a\0")
+        .start_group_max::<Flag, PresenceNote>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = db
+        .query::<PresenceRow>()
+        .filter_groups(Comparison::StartsWith, "a\0")
+        .work_limit(1)
+        .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    let saved = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<PresenceRow>()
+            .filter_groups(Comparison::StartsWith, "a")
+            .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, first.sequence, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    assert!(matches!(
+        db.query::<PresenceRow>()
+            .filter("note", Comparison::Eq, "a\0")
+            .resume_count(&mut jobs, &count, 0, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), saved);
+    drop((db, jobs, runtime));
+    let runtime = host(backing);
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema,
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let count = db
+        .query::<PresenceRow>()
+        .filter("note", Comparison::StartsWith, "a\0")
+        .resume_count(&mut jobs, &count, 0, time(2))
+        .unwrap();
+    assert_eq!(count.outcome, JobOutcome::Complete(2));
+    let mut sequence = first.sequence;
+    for _ in 0..8 {
+        let step = db
+            .query::<PresenceRow>()
+            .filter_groups(Comparison::StartsWith, "a\0")
+            .work_limit(1)
+            .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, sequence, time(2))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {}
+            JobOutcome::Complete(page) => {
+                assert_eq!(page.rows.len(), 1);
+                assert_eq!(page.rows[0].key.flag, 1);
+                assert_eq!(
+                    page.rows[0].value.as_ref().unwrap().note.as_deref(),
+                    Some("a\0c")
+                );
+                return;
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    panic!("bounded text groups must complete");
+}
 
 #[test]
 fn retained_presence_counts_empty_text_and_collections_and_reopens_zero_groups() {

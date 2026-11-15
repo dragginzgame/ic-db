@@ -7,18 +7,18 @@ pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{
-    Entity, EntitySchema, Error, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
+    Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
     codec::Decoder, key, primary::RowKey, store_key::StoreKey, types::TypeGraph,
 };
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
-use std::{cmp::Ordering, marker::PhantomData, ops::Bound};
+use std::{marker::PhantomData, ops::Bound};
 
 const MAX_TERMS: usize = 8;
 const MAX_WORK: usize = 512;
 const MAX_OUTPUT: usize = 128 * 1024;
 
-/// Exact comparison. Equality distinguishes absent values; ranges require presence.
+/// Exact comparison. Equality distinguishes absent values; ranges and text prefixes require presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Comparison {
@@ -34,18 +34,39 @@ pub enum Comparison {
     Gt = 4,
     /// Present and greater than or equal to the present operand.
     Ge = 5,
+    /// Present text starts with the exact UTF-8 operand, without normalization.
+    /// Empty prefixes match all present text, including empty text; other types refuse.
+    StartsWith = 6,
 }
 
 impl Comparison {
-    fn accepts(self, order: Ordering, absent: bool) -> bool {
+    fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
+        value.admit(field, optional)?;
+        if self == Self::StartsWith && !matches!(field, FieldType::Text { .. }) {
+            return Err(Error::InvalidQuery);
+        }
+        if value == IndexValue::Absent && !matches!(self, Self::Eq | Self::Ne) {
+            return Err(Error::InvalidOperand);
+        }
+        Ok(())
+    }
+
+    fn accepts(self, actual: Option<&[u8]>, operand: Option<&[u8]>) -> bool {
         match self {
-            Self::Eq => order == Ordering::Equal,
-            Self::Ne => order != Ordering::Equal,
-            _ if absent => false,
-            Self::Lt => order == Ordering::Less,
-            Self::Le => order != Ordering::Greater,
-            Self::Gt => order == Ordering::Greater,
-            Self::Ge => order != Ordering::Less,
+            Self::Eq => actual == operand,
+            Self::Ne => actual != operand,
+            Self::StartsWith => actual.zip(operand).is_some_and(|(actual, operand)| {
+                // Text components escape embedded NUL and terminate with 00 00.
+                // Drop only that terminator, retaining optional-presence framing.
+                operand
+                    .strip_suffix(&[0, 0])
+                    .is_some_and(|prefix| actual.starts_with(prefix))
+            }),
+            _ if actual.is_none() || operand.is_none() => false,
+            Self::Lt => actual < operand,
+            Self::Le => actual <= operand,
+            Self::Gt => actual > operand,
+            Self::Ge => actual >= operand,
         }
     }
 }
@@ -104,6 +125,8 @@ struct Predicate<'a> {
     field: &'a str,
     comparison: Comparison,
     value: IndexValue<'a>,
+    // Consecutive alternatives form one clause; clauses are ANDed.
+    or_next: bool,
 }
 struct Request<'a> {
     groups: aggregate::GroupRequest<'a>,
@@ -177,7 +200,54 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 field,
                 comparison,
                 value: value.into(),
+                or_next: false,
             });
+        }
+        self
+    }
+    /// Add an OR clause of exact top-level comparisons, ANDed with other filters.
+    /// Each clause must contain at least one comparison; all filters together
+    /// may contain at most eight. Empty/oversized clauses refuse with `Error::Limit`
+    /// at execution. Every operand is admitted, even if another alternative matches.
+    /// Uses one ordered traversal, without union scans or duplicate rows. Alternatives
+    /// do not establish fixed index prefixes; a one-term clause behaves like `filter`.
+    #[must_use]
+    pub fn filter_any(self, alternatives: &[(&'a str, Comparison, IndexValue<'a>)]) -> Self {
+        self.or_clause(alternatives.iter().copied())
+    }
+    /// Match a field against any supplied exact value, ANDed with other filters.
+    /// Equivalent to `filter_any` with equality comparisons in the supplied order.
+    /// Absence matches only an explicit `IndexValue::Absent` member on an optional field.
+    /// Repeated members never repeat rows, but each counts toward the shared
+    /// eight-comparison limit. Empty or oversized lists refuse with `Error::Limit`.
+    /// Every member is admitted before reading; there is no coercion, sorting or
+    /// deduplication of operands. Reordering members changes cursor/job identity.
+    #[must_use]
+    pub fn filter_in(self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
+        self.or_clause(
+            values
+                .iter()
+                .copied()
+                .map(|value| (field, Comparison::Eq, value)),
+        )
+    }
+
+    fn or_clause(
+        mut self,
+        alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, IndexValue<'a>)>,
+    ) -> Self {
+        let count = alternatives.len();
+        if count == 0 || count > MAX_TERMS - self.request.predicates.len() {
+            self.request.over_limit = true;
+        } else {
+            self.request.predicates.extend(alternatives.enumerate().map(
+                |(i, (field, comparison, value))| Predicate {
+                    field,
+                    comparison,
+                    value,
+                    or_next: i + 1 < count,
+                },
+            ));
         }
         self
     }
@@ -352,6 +422,8 @@ struct Term {
     position: usize,
     comparison: Comparison,
     operand: Vec<u8>,
+    absent: bool,
+    or_next: bool,
 }
 
 // One owner for copying already validated projection spans into a record codec.
@@ -429,11 +501,10 @@ impl<'a> Plan<'a> {
             if !key::supports(field.value) {
                 return Err(Error::InvalidQuery);
             }
-            predicate.value.admit(field.value, field.optional)?;
+            predicate
+                .comparison
+                .admit(field.value, field.optional, predicate.value)?;
             let absent = predicate.value == IndexValue::Absent;
-            if absent && !matches!(predicate.comparison, Comparison::Eq | Comparison::Ne) {
-                return Err(Error::InvalidOperand);
-            }
             let mut operand = Vec::new();
             predicate
                 .value
@@ -442,6 +513,8 @@ impl<'a> Plan<'a> {
                 position,
                 comparison: predicate.comparison,
                 operand,
+                absent,
+                or_next: predicate.or_next,
             });
             plan.selected |= 1 << position;
         }
@@ -470,6 +543,17 @@ impl<'a> Plan<'a> {
             hash.update([term.position as u8, term.comparison as u8]);
             hash.update((term.operand.len() as u32).to_le_bytes());
             hash.update(&term.operand);
+        }
+        // Keep existing conjunction identities unchanged. A bounded clause mask
+        // distinguishes OR grouping without persisting another predicate model.
+        let clauses = plan
+            .terms
+            .iter()
+            .enumerate()
+            .fold(0_u8, |mask, (i, term)| mask | (u8::from(term.or_next) << i));
+        if clauses != 0 {
+            hash.update(b"or-clauses\0");
+            hash.update([clauses]);
         }
         if let Some(order) = &request.order {
             hash.update(b"order\0");
@@ -679,13 +763,20 @@ fn execute_inner<M: Memory>(
         if plan.index.is_some() {
             validate_index_entry(entity, &entity.row_info(&values)?, owner, stored_key)?;
         }
-        let matches = plan.terms.iter().all(|term| {
-            let value = values[term.position];
-            component.clear();
-            value.append_component(entity.fields[term.position].optional, &mut component);
-            let order = component.cmp(&term.operand);
-            term.comparison.accepts(order, value == IndexValue::Absent)
-        });
+        let matches = plan
+            .terms
+            .split_inclusive(|term| !term.or_next)
+            .all(|clause| {
+                clause.iter().any(|term| {
+                    let value = values[term.position];
+                    component.clear();
+                    value.append_component(entity.fields[term.position].optional, &mut component);
+                    term.comparison.accepts(
+                        (value != IndexValue::Absent).then_some(component.as_slice()),
+                        (!term.absent).then_some(term.operand.as_slice()),
+                    )
+                })
+            });
         let boundary =
             distinct::boundary(entity, plan.index, plan.distinct_components, stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));

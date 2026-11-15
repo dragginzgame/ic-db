@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Small attribute authoring boundary for the first persistent-record slice.
 //! Generates typed records/codecs and metadata, never endpoints or executors.
+//! All declarations use empty, nongeneric struct bodies without `where` clauses;
+//! unsupported Rust constraints are rejected rather than discarded during expansion.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
@@ -149,7 +151,7 @@ fn fields(meta: &Meta) -> syn::Result<Vec<String>> {
     ))
 }
 
-fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
+fn declaration(item: Tokens, kind: &str) -> syn::Result<ItemStruct> {
     let item: ItemStruct = syn::parse2(item)?;
     if !matches!(&item.fields, syn::Fields::Named(fields) if fields.named.is_empty())
         || !item.generics.params.is_empty()
@@ -157,9 +159,14 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     {
         return Err(syn::Error::new_spanned(
             &item,
-            "entity requires an empty, nongeneric struct body",
+            format!("{kind} requires an empty, nongeneric struct body without a where clause"),
         ));
     }
+    Ok(item)
+}
+
+fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
+    let item = declaration(item, "entity")?;
     let mut logical_name = None;
     let mut primary = None;
     let mut authored = None;

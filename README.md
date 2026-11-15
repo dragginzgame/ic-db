@@ -45,8 +45,57 @@ Omit `using_index` for primary-key order. Filter operands must match the exact
 declared type. `page.next` resumes the same query through `.after(&cursor)`;
 an empty page can still carry a continuation. Output budgets count encoded row
 bytes; transport framing remains host-owned. This first slice supports AND
-comparisons over top-level ordered scalar/unit-enum fields. `make m2-queries` checks its native/Wasm
-boundaries. The local CLI now constructs these same fluent operations.
+clauses over top-level ordered scalar/unit-enum comparisons. `make m2-queries` checks its native/Wasm
+boundaries. The local CLI constructs its documented subset of fluent operations.
+
+Use `filter_any` for a bounded OR clause, combined with other filters using AND:
+
+```rust
+let page = db.query::<Entry>()
+    .filter("category", ic_db::Comparison::Eq, 1_u64)
+    .filter_any(&[
+        ("amount", ic_db::Comparison::Lt, 20_u64.into()),
+        ("amount", ic_db::Comparison::Ge, 50_u64.into()),
+    ])
+    .fetch()?;
+```
+
+Every comparison across `filter` and `filter_any` counts toward the same eight-term
+bound. Empty OR clauses and oversized requests return `Error::Limit` at execution.
+All operands are validated even when another alternative matches. One ordered scan
+returns each matching row once; OR alternatives cannot establish fixed index
+prefixes. Clauses also work with aggregates and with DISTINCT when its existing
+whole-class predicate proof holds. Clause boundaries and operands bind cursors and
+retained jobs. Nested boolean trees and index unions are not introduced by this API.
+
+For membership on one field, use the equivalent equality shorthand:
+
+```rust
+let page = db.query::<Entry>()
+    .filter_in("id", &[1_u64.into(), 3_u64.into()])
+    .fetch()?;
+```
+
+The list must be nonempty and shares the same eight-comparison budget. Duplicate
+members count toward that bound but never duplicate results. Optional absence
+matches only an explicit `IndexValue::Absent` member. No member is coerced or
+discarded before validation. The supplied order binds cursors/jobs, and the same
+ordered equality clause can resume work started through `filter_in`.
+
+Text fields also accept exact prefixes:
+
+```rust
+let page = db.query::<Document>()
+    .filter("note", ic_db::Comparison::StartsWith, "alpha")
+    .fetch()?;
+```
+
+`StartsWith` is case-sensitive and performs no Unicode normalization. An empty
+prefix matches every present text value, including empty text; absence never
+matches. The operand must fit the declared text byte limit. Other field types
+refuse. The same comparison works with `filter_any` and with `filter_groups` on
+completed text min/max results, including retained jobs. Matching uses the chosen
+scan's work budget; it does not add a prefix index seek.
 
 Request field ordering without naming an index:
 
@@ -140,8 +189,8 @@ before the work cap, so a scan examining exactly the allowed number can still
 return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
-are not yet aggregate compositions. Float arithmetic, resumable grouped operations
-and completed-output pagination remain required work.
+are not aggregate compositions. Retained grouped operations and completed-output
+pagination use the separate job contract below. Float arithmetic remains work.
 
 Count and integer/Decimal sum and average also have retained variants. The host creates or
 opens an `AggregateJobs` store in a separate governed allocation. For example,
@@ -203,7 +252,13 @@ filters Document rows. `--group-min`, `--group-max` and `--group-order` select
 completed groups. Either bound is optional; together they form an inclusive
 range applied before ordering, total output limits and pagination.
 Thresholds use the exact result type: signed sums accept negative values and
-Decimal results accept fractions at the declared scale. Integer fractions,
+Decimal results accept fractions at the declared scale. Grouped note min/max
+bounds are literal text, including empty strings, ordered by UTF-8 bytes without
+normalization. They exclude absent results; `None` is ordinary text, not an absence
+marker. Use a one-shot shell command for empty or whitespace-containing bounds
+(for example, `db query Document --select entry_id,min:note --group-min ''`);
+interactive commands currently split on whitespace without quote interpretation.
+Integer fractions,
 overflow and threshold text above 64 bytes per bound refuse. A valid inverted
 range selects no groups. `--limit`
 caps the total selected groups across pages, independently of `--page-size`;
@@ -380,8 +435,8 @@ per-row rounding or persisted job state is introduced.
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.
-Rich types, broader references and the broad fluent builder remain required
-implementation work; this increment does not complete M1. Secondary indexes now
+That workload does not qualify rich types or broader reference/query combinations,
+and does not complete M1. Secondary indexes now
 support Nat/Int8/16/32/64/128, U256, Ulid, Date, Timestamp, Duration, Decimal,
 finite Float32/Float64, Account/Subaccount,
 Principal, Bool, bounded Text and unit-enum fields, including
@@ -465,7 +520,7 @@ increments the preceding suffix; invalid time and exhaustion refuse unchanged.
 The host owns the stream and any upgrade checkpoint via `last()` / `resume_after()`.
 Resetting state can repeat IDs, and issuance before a normally refused batch can
 leave gaps. Schema-owned automatic identity generation
-remain separate work; no clock or RNG is introduced into the database.
+remains separate work; no clock or RNG is introduced into the database.
 
 Entity fields can now declare literal defaults, for example
 `field(name = "count", value(item(prim = "Nat16")), default = 7)`.
@@ -514,7 +569,8 @@ declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
 `Decimal::try_new(mantissa, scale)`. Equivalent values such as 1.0 and 1.00 have
 the same equality, hash and index key. Writes refuse excess precision or
 coefficient overflow; they never round. Inspect `DecimalRow` with `db schema`.
-Decimal aggregate arithmetic remains separate work.
+Decimal sums and averages use the exact arithmetic and result-scale contracts
+described above; storage admission never applies aggregate rounding.
 Unit enums also support `#[set(item(is = "Status"), max_items = 3)]` and
 `#[map(key(is = "Status"), value(item(prim = "Nat64")), max_items = 3)]`.
 Their canonical variant-name order agrees with secondary indexes. Stored duplicate,

@@ -6,7 +6,8 @@ use super::{
     Comparison, MAX_TERMS, Plan, Query, QueryPage, admit_projection, copy_projection, execute,
 };
 use crate::{
-    Entity, EntitySchema, Error, IndexValue, TypeSchema, Value, ValueSchema, codec::Decoder, key,
+    Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema,
+    codec::Decoder, key,
 };
 use ic_storage::Memory;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,9 +52,12 @@ impl GroupRequest<'_> {
                 return Err(Error::Limit);
             }
             let key = match reducer {
-                Reducer::Count { .. } | Reducer::Distinct { .. } => match value {
-                    IndexValue::Nat64(value) => Some(value.to_be_bytes().to_vec()),
-                    _ => return Err(Error::InvalidOperand),
+                Reducer::Count { .. } | Reducer::Distinct { .. } => {
+                    comparison.admit(FieldType::Nat64, false, value)?;
+                    match value {
+                        IndexValue::Nat64(value) => Some(value.to_be_bytes().to_vec()),
+                        _ => return Err(Error::InvalidOperand),
+                    }
                 },
                 _ => {
                     let field = match reducer {
@@ -65,11 +69,8 @@ impl GroupRequest<'_> {
                         Reducer::Count { .. } | Reducer::Distinct { .. } => return Err(Error::Corrupt),
                     };
                     // Even a required input field can have an absent aggregate result.
-                    value.admit(field.value, true)?;
+                    comparison.admit(field.value, true, value)?;
                     if value == IndexValue::Absent {
-                        if !matches!(comparison, Comparison::Eq | Comparison::Ne) {
-                            return Err(Error::InvalidOperand);
-                        }
                         None
                     } else {
                         let mut key = Vec::new();
@@ -138,7 +139,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Add an AND predicate on the completed aggregate value, before group ordering
     /// and output limits. At most eight terms. Counts require Nat64 operands;
     /// extrema require the source type; sums require the declared result type.
-    /// Absent values support Eq/Ne only.
+    /// Absent values support Eq/Ne only. Text extrema also accept StartsWith.
     /// Only grouped terminals accept this modifier, even for empty input.
     #[must_use]
     pub fn filter_groups(
@@ -860,9 +861,7 @@ impl Groups {
             self.selection
                 .predicates
                 .iter()
-                .all(|(comparison, operand)| {
-                    comparison.accepts(actual.cmp(&operand.as_deref()), actual.is_none())
-                })
+                .all(|(comparison, operand)| comparison.accepts(actual, operand.as_deref()))
         });
         if self.selection.order != GroupOrder::Key {
             rows.sort_unstable_by(|(ka, (_, a)), (kb, (_, b))| {

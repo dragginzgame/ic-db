@@ -30,7 +30,7 @@ type Selection = (
 );
 fn configured<'a, E: Entity>(
     query: Query<'a, E, Backing>,
-    selection: &Selection,
+    selection: &'a Selection,
 ) -> Result<Query<'a, E, Backing>, String> {
     let (_, select, _, limit, (group_min, group_max), group_order) = selection;
     select_groups(

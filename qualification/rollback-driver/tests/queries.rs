@@ -27,6 +27,245 @@ type DisplayPage = (
 );
 
 #[tokio::test]
+async fn text_prefix_uses_exact_utf8_and_resumes_across_upgrade() {
+    type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let call = async |prefix: &str, cursor: Option<Vec<u8>>, bytes: u32| {
+        let request = (prefix, cursor, 1_u32, bytes);
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_text_prefix",
+                native::encode_request(125, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<TextPage, u8>>(125, &reply, LIMITS).unwrap()
+    };
+    for note in [
+        None,
+        Some(""),
+        Some("a\0b"),
+        Some("éclair"),
+        Some("e\u{301}clair"),
+    ] {
+        let request = ("Document", note, false, Some(0_u64), -10_i64, None::<i64>);
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "replace_document",
+                native::encode_request(8, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            native::decode_response::<Result<(), u8>>(8, &reply, LIMITS).unwrap(),
+            Ok(())
+        );
+        let before = pic.get_stable_memory(canister).await;
+        for prefix in ["", "a", "a\0", "a\0c", "A", "é", "e\u{301}"] {
+            let page = call(prefix, None, 80).await.unwrap();
+            let expected: Vec<_> = note
+                .filter(|note| note.starts_with(prefix))
+                .map(|text| Some(text.to_owned()))
+                .into_iter()
+                .collect();
+            assert_eq!(page.0, expected);
+            assert_eq!(page.2, 1);
+            let cursor = page.1.unwrap();
+            assert!(call("different", Some(cursor.clone()), 80).await.is_err());
+            if note == Some("a\0b") && prefix == "a\0" {
+                assert_eq!(call(prefix, None, 1).await.unwrap_err(), 2);
+                pic.advance_time(std::time::Duration::from_secs(600)).await;
+                pic.tick().await;
+                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+            let finished = call(prefix, Some(cursor), 80).await.unwrap();
+            assert!(finished.0.is_empty());
+            assert!(finished.1.is_none());
+        }
+        assert!(call(&"x".repeat(65), None, 80).await.is_err());
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+}
+
+#[tokio::test]
+async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let before = pic.get_stable_memory(canister).await;
+    let call = async |request: Request| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "fluent_membership",
+                native::encode_request(124, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<Page, u8>>(124, &reply, LIMITS).unwrap()
+    };
+    for descending in [false, true] {
+        let mut cursor = None;
+        let mut rows = Vec::new();
+        for step in 0..10 {
+            let page = call((cursor, descending, None, 51, 1, 1, 16))
+                .await
+                .unwrap();
+            assert!(page.2 <= 1);
+            rows.extend(page.0);
+            cursor = page.1;
+            if cursor.is_none() {
+                break;
+            }
+            assert!(
+                step < 9,
+                "membership must progress over rejected candidates"
+            );
+            if step == 0 {
+                assert!(
+                    call((cursor.clone(), descending, None, 60, 1, 1, 16))
+                        .await
+                        .is_err()
+                );
+                pic.advance_time(std::time::Duration::from_secs(600)).await;
+                pic.tick().await;
+                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+        }
+        let mut expected = vec![(2, 20), (5, 51)];
+        if descending {
+            expected.reverse();
+        }
+        assert_eq!(rows, expected);
+    }
+    assert_eq!(
+        call((None, false, Some(1), 51, 32, 128, 4096))
+            .await
+            .unwrap()
+            .0,
+        [(5, 51)]
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
+
+#[tokio::test]
+async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
+            .unwrap();
+    let predecessor = std::env::var_os("IC_DB_QUERY_PREDECESSOR_WASM")
+        .map(|path| std::fs::read(path).unwrap())
+        .unwrap_or_else(|| wasm.clone());
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, predecessor, vec![], None)
+        .await;
+    let call = async |any: bool, request: Request| {
+        let (method, id) = if any {
+            ("fluent_any", 123)
+        } else {
+            ("fluent_query", 95)
+        };
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                method,
+                native::encode_request(id, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<Page, u8>>(id, &reply, LIMITS).unwrap()
+    };
+    let page = call(false, (None, false, None, 20, 1, 128, 4096))
+        .await
+        .unwrap();
+    assert_eq!(page.0, [(2, 20)]);
+    let before = pic.get_stable_memory(canister).await;
+    // Let the IC install-code rate allowance recover between synthetic upgrades.
+    pic.advance_time(std::time::Duration::from_secs(600)).await;
+    pic.tick().await;
+    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+        .await
+        .unwrap();
+    let resumed = call(false, (page.1, false, None, 20, 1, 128, 4096))
+        .await
+        .unwrap();
+    assert_eq!(resumed.0, [(3, 31)]);
+
+    for category in [None, Some(1)] {
+        for descending in [false, true] {
+            let mut cursor = None;
+            let mut rows = Vec::new();
+            for step in 0..16 {
+                let page = call(true, (cursor, descending, category, 50, 2, 2, 16))
+                    .await
+                    .unwrap();
+                assert!(page.2 <= 2);
+                assert!(page.4 <= 16);
+                rows.extend(page.0);
+                cursor = page.1;
+                if cursor.is_none() {
+                    break;
+                }
+                assert!(step < 15, "sparse/byte-limited pages must progress");
+                if step == 0 {
+                    assert!(
+                        call(false, (cursor.clone(), descending, category, 50, 2, 2, 16))
+                            .await
+                            .is_err()
+                    );
+                    assert!(
+                        call(true, (cursor.clone(), descending, category, 30, 2, 2, 16))
+                            .await
+                            .is_err()
+                    );
+                    pic.advance_time(std::time::Duration::from_secs(600)).await;
+                    pic.tick().await;
+                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                        .await
+                        .unwrap();
+                }
+            }
+            let mut expected = vec![(1, 11), (2, 20), (5, 51), (6, 60)];
+            if category.is_some() {
+                expected.retain(|(id, _)| id % 2 == 1);
+            }
+            if descending {
+                expected.reverse();
+            }
+            assert_eq!(rows, expected);
+        }
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
+
+#[tokio::test]
 async fn sparse_fluent_pages_retry_and_reopen() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))

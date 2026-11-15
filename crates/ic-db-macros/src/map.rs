@@ -1,5 +1,6 @@
 //! Named maps with scalar/unit-enum keys; field rules own value composition.
 use super::{
+    declaration,
     field::{Field, parse_value},
     list, metas, once,
     record::resolve_self,
@@ -7,16 +8,10 @@ use super::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::ItemStruct;
 
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
-    let item: ItemStruct = syn::parse2(item)?;
+    let item = declaration(item, "map")?;
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
-    if !item.generics.params.is_empty()
-        || !matches!(&item.fields, syn::Fields::Named(f) if f.named.is_empty())
-    {
-        return Err(fail("map requires an empty, nongeneric struct body"));
-    }
     let (mut name, mut key, mut value, mut max) = (None, None, None, None);
     for meta in metas(args)? {
         if meta.path().is_ident("name") {

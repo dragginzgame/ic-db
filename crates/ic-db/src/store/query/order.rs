@@ -63,13 +63,7 @@ pub(super) fn select<'a>(
         let values: Vec<_> = index
             .fields
             .iter()
-            .map_while(|name| {
-                request
-                    .predicates
-                    .iter()
-                    .find(|p| p.field == *name && p.comparison == Comparison::Eq)
-                    .map(|p| p.value)
-            })
+            .map_while(|name| equality(request, name))
             .collect();
         if !complete_membership(entity, index, &values)
             || !satisfies(entity, request, Some(index), values.len())
@@ -135,13 +129,8 @@ fn satisfies(
         return true;
     };
     let fields = index.map_or(&[][..], |i| i.fields);
-    let fixed = |name: &&str| {
-        fields[..prefix_len].contains(name)
-            || request
-                .predicates
-                .iter()
-                .any(|p| p.field == *name && p.comparison == Comparison::Eq)
-    };
+    let fixed =
+        |name: &&str| fields[..prefix_len].contains(name) || equality(request, name).is_some();
     // A fixed primary key admits at most one record, so every admitted order fits.
     if fixed(&entity.primary_key) {
         return true;
@@ -161,4 +150,22 @@ fn satisfies(
         .filter(|name| !fixed(name))
         .chain(std::iter::once(entity.primary_key));
     wanted.eq(supplied)
+}
+
+// Only singleton equality clauses are mandatory. An equality inside an OR
+// must not restrict an index prefix or prove that an ordering field is constant.
+fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
+    request
+        .predicates
+        .split_inclusive(|p| !p.or_next)
+        .find_map(|clause| {
+            if let [predicate] = clause
+                && predicate.field == field
+                && predicate.comparison == Comparison::Eq
+            {
+                Some(predicate.value)
+            } else {
+                None
+            }
+        })
 }

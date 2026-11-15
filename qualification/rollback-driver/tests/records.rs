@@ -363,14 +363,13 @@ fn console_inspects_and_queries() {
         "query Entry --select category,count --order-by category",
         "query Entry --group-order key",
         "query Entry --select count --group-min 0",
-        "query Document --select entry_id,min:note --group-min 0",
         "SELECT * FROM rows",
     ] {
         let output = Command::new(&binary)
             .args(command.split_whitespace())
             .output()
             .unwrap();
-        assert!(!output.status.success());
+        assert!(!output.status.success(), "{command}");
     }
     if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
         // One console session exercises every retained selector. More than 16 jobs
@@ -496,7 +495,6 @@ fn console_inspects_and_queries() {
             "aggregate Document --min 0",
             "aggregate Document --category 1",
             "aggregate Document --select min:amount",
-            "aggregate Document --select entry_id,min:note --group-min 0",
         ] {
             assert!(
                 !Command::new(&binary)
@@ -607,6 +605,10 @@ fn console_inspects_and_queries() {
             (
                 "Document",
                 &[
+                    ("entry_id,min:note --group-min 0", &[]),
+                    ("entry_id,min:note --group-min alpha", &[]),
+                    ("entry_id,max:note --group-max zèbre", &[]),
+                    ("entry_id,max:note --group-min alpha --group-max zèbre", &[]),
                     ("entry_id,sum:score --group-min -10", &[&["1", "-10"]]),
                     ("entry_id,sum:score --group-min -9", &[]),
                     ("entry_id,sum:score --group-max -10", &[&["1", "-10"]]),
