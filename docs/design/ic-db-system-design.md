@@ -1166,12 +1166,13 @@ on complete results unless a separately proved execution path can finalize group
 earlier. Page-local deduplication is not whole-query distinct. Completed output
 may itself need bounded pagination and cleanup.
 
-For an unfiltered projection whose access path orders by the distinct key, a
-small ordered-DISTINCT witness now suppresses adjacent equal keys across pages
-without a retained seen-set (section 12). Prefer that direct path when its proof
-holds; it does not remove the need for bounded retained keys or full collection
-for other admitted DISTINCT shapes. In particular, residual filters and ordering
-by another field need their own progress/equality proof. Live ordered enumeration
+For a projection whose access path orders by the distinct key, product
+`.distinct()` suppresses adjacent equal keys across pages without a retained
+seen-set, following the earlier M0 witness. Predicates must be constant within
+each duplicate class. Prefer that direct path when its proof holds; it does not
+remove the need for bounded retained keys or full collection for other admitted
+DISTINCT shapes. Predicates varying within a class and ordering by another field
+need their own progress/equality proof. Live ordered enumeration
 still does not establish a frozen input for an exact count or aggregate.
 
 Accepted 2026-11-14: use explicit source-change invalidation with a conservative
@@ -1471,8 +1472,8 @@ traversal when it supplies the order and no compatible index has a restrictive
 prefix. This is deterministic bounded metadata inspection (at most eight indexes
 of four components), without statistics, catalog state, plan caching or sorting.
 No supported path means `InvalidQuery`, never a sorted bounded subset.
-Optimized range seeks, mixed directions, bounded sorting, OR, grouping and DISTINCT
-remain work; this is not a general cost-based planner.
+Optimized range seeks, mixed directions, bounded sorting, OR, broader grouping and
+general DISTINCT remain work; this is not a general cost-based planner.
 
 `limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
 (1–512), and `byte_limit` bounds summed encoded output-row bytes (1–131072).
@@ -1491,6 +1492,87 @@ definitions. Entity defaults, managed-time policies and reference enforcement do
 not become output-record policies. No aliasing, coercion, nested path selection
 or computed projection is implied. An output type is not registered in the stored
 schema and changing its Rust name alone does not change query meaning.
+
+The first product `.distinct()` slice admits complete entities and projections
+containing the primary key as inherently unique. Other projections must form the
+leading tuple of a selected index after fixed prefix components. Predicates may
+read only projected fields or fields fixed by that actual selected prefix.
+Ordering supplies the admitted prefix count for both automatic and explicit paths;
+DISTINCT does not independently infer it from equality terms. All operands and
+residual predicates remain validated, including contradictions.
+Projection field order need not match index order; equality
+covers the complete selected tuple. Unsupported shapes refuse before traversal.
+The existing key codec supplies equality, including optional absence. One bounded
+previous-key buffer suppresses adjacent duplicates; examined duplicates still
+undergo whole-row/index validation and consume work. An exclusive cursor's last
+processed physical key supplies the previous equivalence class even if its row
+has been deleted. An inclusive byte-retry cursor starts at an unreturned class.
+Every duplicate class is either wholly rejected or emitted before continuation
+advances through it. Thus a cursor inside a rejected class cannot hide a later
+match in that same class. Filters varying within a class still refuse: an early
+nonmatch followed by a matching duplicate needs additional progress semantics.
+Cursor binding includes DISTINCT but
+its frame, stored schema and durable state do not change. Live updates retain
+live-enumeration limitations, never an exact aggregate input guarantee.
+
+This retains IcyDB's ordered-adjacent proof and cross-page equality invariants
+from `db/executor/projection/materialize/distinct` and
+`db/executor/pipeline/operators/distinct/tests` at frozen revision
+`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`. It does not copy IcyDB's global replay
+or projected-value cache: this admitted path needs neither. General noncontiguous
+DISTINCT remains product work, not an omitted capability.
+
+The first aggregate terminals are synchronous `count()` and
+`group_count::<Record>()`, returning `Aggregate<u64>` or
+`Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
+include every matching row; an absent group key is a group, not a discarded
+operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
+`count_field("field")` counts present values of any top-level stored type,
+including present empty blobs/collections. It reads validated presence tags from
+the existing row spans, without requiring ordered-value support or typed decoding.
+`group_count_field::<Record>("field")` applies that rule to each group and retains
+groups with zero present operands. `count_distinct::<Record>()` counts projected
+tuples, including absence, using the same bounded group map; output `limit` does
+not truncate this scalar count. Filtering out absence before distinct counting
+expresses distinct-present counting. Other reducers remain implementation work.
+Grouping uses exact top-level ordered scalar/unit-enum record fields. It does not
+require an index or contiguous groups: a bounded transient map uses the existing
+ordered component codec for tuple equality and order. Output keys follow canonical
+field-name order, independent of the source declaration or traversal order.
+
+All matching input is counted before `limit` selects the first completed groups.
+This output selection has no continuation yet. Cursors, DISTINCT, explicit
+`order_by` and `descending` refuse rather than acquiring ambiguous aggregate
+meaning. Explicit index prefixes and ordinary row filters retain their meaning.
+Each operation uses the existing scan work bound; completion must be observed
+before it is reached. An exact-boundary scan therefore conservatively refuses
+with `Limit`, as does input beyond that bound, without a partial answer. The
+existing scanner still validates every examined source row/index, including
+nonmatches, and count-only execution never materializes full typed entities.
+
+Initial synchronous group bounds are 32 retained groups, a 4096-byte encoded
+comparison key and 128 KiB retained key capacity/output payload/count bytes. Map
+nodes and fixed bookkeeping are separately bounded by group cardinality; the
+byte cap is not a measured total peak-memory claim. Group keys have their own
+bound, not the physical 512-byte index-key cap. The validated source-row bound
+limits transient key encoding; oversized keys refuse before retention. Finalization
+visits at most 32 groups and applies the output-byte allowance to key-record bytes
+plus eight count bytes. Work/state/cardinality/combined-output refusal returns
+`Limit`; an individually oversized output returns `RowTooLarge`.
+
+This follows IcyDB's exact grouping/equality and empty/null lessons, inspected at
+`6d421e3` under `db/executor/aggregate/value_reducer/tests` and
+`db/executor/aggregate/runtime/grouped_fold/utils/path_key`. Row count is explicitly
+distinct from IcyDB's present-value reducer count. Shared ordered codecs and named
+record conversion replace a universal owned value/reducer layer for this slice.
+The present-field terminal retains that reducer's tested null-exclusion behavior;
+it does not silently apply null exclusion to distinct projected tuples. The
+`[10, absent, 30, 10, absent, absent]` witness distinguishes row count 6,
+present-field count 3, distinct tuple count 3 and distinct-present count 2.
+No job records, revisions, journal, format or macro changes are added. These are
+the first aggregate semantics in M2, not a replacement for the accepted resumable
+aggregation contract. Numeric reducers, completed-group filters/order, retained
+jobs and completed-output pagination remain subsequent implementation work.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed

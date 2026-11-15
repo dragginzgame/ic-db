@@ -86,7 +86,9 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
-pub use store::{Batch, Comparison, Database, Page, Query, QueryCursor, QueryPage};
+pub use store::{
+    Aggregate, Batch, Comparison, Database, GroupCount, Page, Query, QueryCursor, QueryPage,
+};
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.

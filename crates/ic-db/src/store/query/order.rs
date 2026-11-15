@@ -2,10 +2,18 @@
 use super::{Comparison, Request};
 use crate::{EntitySchema, Error, IndexSchema, IndexValue, key, store::admit_index_prefix};
 
+// Carry the admitted prefix and its component count together; downstream proofs
+// must not reconstruct equality-prefix selection from the request independently.
+pub(super) struct IndexPath<'a> {
+    pub index: &'a IndexSchema,
+    pub prefix: Vec<u8>,
+    pub fixed: usize,
+}
+
 pub(super) fn select<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
-) -> Result<Option<(&'a IndexSchema, Vec<u8>)>, Error> {
+) -> Result<Option<IndexPath<'a>>, Error> {
     if let Some(order) = &request.order {
         if order.is_empty() {
             return Err(Error::InvalidQuery);
@@ -39,7 +47,11 @@ pub(super) fn select<'a>(
         {
             return Err(Error::InvalidQuery);
         }
-        return Ok(Some((index, prefix)));
+        return Ok(Some(IndexPath {
+            index,
+            prefix,
+            fixed: values.len(),
+        }));
     }
     // Keep the existing no-order contract and its cursors unchanged.
     if request.order.is_none() {
@@ -87,7 +99,11 @@ pub(super) fn select<'a>(
         return Ok(None);
     }
     let (index, values) = best.ok_or(Error::InvalidQuery)?;
-    Ok(Some((index, admit_index_prefix(entity, index, &values)?)))
+    Ok(Some(IndexPath {
+        index,
+        prefix: admit_index_prefix(entity, index, &values)?,
+        fixed: values.len(),
+    }))
 }
 
 // Sparse traversal must cover every possible match. Initially require a present

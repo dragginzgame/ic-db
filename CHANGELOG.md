@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.8.0] - 2026-11-15 (development checkpoint)
+
+### 📝 Summary
+
+Add ordered DISTINCT and exact bounded row/group counts through the shared fluent
+executor.
+
+### ▶️ Try it
+
+```sh
+make db
+db query Entry --order-by category --select category --distinct
+db query Entry --category 1 --order-by category --select category --distinct
+db query Entry --order-by category --select category --distinct --work 1 --limit 1
+db query Entry --select count
+db query Entry --select category,count
+db query Entry --select category,count --min 40 --limit 1
+db query Entry --select distinct-count:category --limit 1
+db query Document --select count:note
+db query Entry --select category,count:amount --min 40
+```
+
+The fixture has two category values. Work-limited continuation may return empty
+pages while passing duplicates; use the printed cursor with the same query.
+Counts complete in one execution or refuse; they do not have continuations.
+The distinct category count is 2; the fixture Document has no note, so its
+present-note count is 0.
+
+Source reports now default to crate rows; request module detail explicitly:
+
+```sh
+toko-cloc
+toko-cloc -d 1
+```
+
+### 🛠️ Changes
+
+- Adopt Toko Tooling 0.44.2 in both workspaces and the authenticated snapshot.
+  Default `toko-cloc` depth now matches `-d 0`; release timing reports reject
+  malformed finish records instead of treating missing status as success.
+  `make toko-tooling-check` now also admits the qualification workspace and
+  verifies that its selection matches the product workspace.
+- Add `.count()` and `.group_count::<Record>()`. Group keys use ordered scalar
+  semantics and include absent values; no index is required. Output limits select
+  completed groups only. Work, group or retained-state exhaustion refuses instead
+  of returning prefix counts. Resumable jobs and other aggregates remain planned.
+- Add `.count_field("field")`, `.count_distinct::<Record>()` and
+  `.group_count_field::<Record>("field")` through that same scanner and group map.
+  Field counts exclude absence but include present empty values of all stored
+  types. Distinct tuple counts include absence; all-absent operand groups survive
+  with count zero. No new durable state, codec or schema attributes.
+- Add `.distinct()` for complete entities, projections containing the primary
+  key, and projections forming a leading index tuple after any fixed prefix.
+  Filters on projected or fixed-prefix fields are supported: each duplicate group
+  is either wholly rejected or emitted once. Automatic and explicit paths share
+  the same proof. Filters varying within a group and other shapes refuse for now;
+  broader DISTINCT remains planned.
+- Suppress duplicates across pages in both directions, retry an unreturned value
+  after byte exhaustion, and continue after deletion of the cursor row or an
+  unchanged-schema upgrade. Every examined row still undergoes integrity checks.
+  This is live enumeration, not an exact aggregate snapshot.
+- Reuse index equality and cursor framing with one bounded previous-key buffer;
+  no durable seen-set, new cursor fields or additional executor. Native and Wasm
+  coverage is selected by `make m2-queries`; CLI coverage by `make m2-cli`.
+
 ## [0.7.0] - 2026-11-15 (development checkpoint)
 
 ### ⚠️ Breaking

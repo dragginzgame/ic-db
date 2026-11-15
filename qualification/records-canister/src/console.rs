@@ -5,7 +5,10 @@ use crate::{
     runtime,
     schema::{Document, Entry},
 };
-use ic_db::{Comparison, Entity, Error, Query, QueryCursor, QueryPage};
+use ic_db::{Aggregate, Comparison, Entity, Error, GroupCount, Query, QueryCursor, QueryPage};
+
+#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+struct CategoryOnly {}
 
 type Request = (
     String,
@@ -19,6 +22,7 @@ type Request = (
     u32,
     u32,
     String,
+    bool,
 );
 type Page = (
     Vec<String>,
@@ -35,7 +39,20 @@ type Page = (
     encode_with = "crate::transport::encode::<_, 3>"
 )]
 fn query(
-    (entity, cursor, limit, minimum, category, entry_id, order, descending, work, bytes, select): Request,
+    (
+        entity,
+        cursor,
+        limit,
+        minimum,
+        category,
+        entry_id,
+        order,
+        descending,
+        work,
+        bytes,
+        select,
+        distinct,
+    ): Request,
 ) -> Result<Page, String> {
     let cursor = cursor
         .as_deref()
@@ -68,6 +85,7 @@ fn query(
                     bytes,
                 ),
                 &select,
+                distinct,
                 &["id", "category", "amount"],
                 |r| {
                     vec![
@@ -97,6 +115,7 @@ fn query(
                     bytes,
                 ),
                 &select,
+                distinct,
                 &[
                     "id",
                     "entry_id",
@@ -151,12 +170,25 @@ fn configure<'a, E: Entity>(
 }
 
 fn execute<E: Entity>(
-    query: Query<'_, E, Backing>,
+    mut query: Query<'_, E, Backing>,
     select: &str,
+    distinct: bool,
     columns: &[&str],
     render: fn(E) -> Vec<String>,
 ) -> Result<Page, String> {
+    if distinct {
+        query = query.distinct();
+    }
     match select {
+        "count" => query.count().map(|r| display_count(&r)),
+        "distinct-count:category" => query
+            .count_distinct::<CategoryOnly>()
+            .map(|r| display_count(&r)),
+        "category,count" => query.group_count::<CategoryOnly>().map(display_groups),
+        s if s.starts_with("count:") => query.count_field(&s[6..]).map(|r| display_count(&r)),
+        s if s.starts_with("category,count:") => query
+            .group_count_field::<CategoryOnly>(&s[15..])
+            .map(display_groups),
         "full" => query.fetch().map(|p| display(p, columns, render)),
         "id" => query
             .fetch_as::<IdOnly>()
@@ -166,9 +198,35 @@ fn execute<E: Entity>(
                 vec![r.id.to_string(), r.amount.to_string()]
             })
         }),
-        _ => return Err("unsupported projection; use full, id or id,amount".into()),
+        "category" => query
+            .fetch_as::<CategoryOnly>()
+            .map(|p| display(p, &["category"], |r| vec![r.category.to_string()])),
+        _ => return Err("unsupported projection or aggregate".into()),
     }
     .map_err(message)
+}
+fn display_count(r: &Aggregate<u64>) -> Page {
+    (
+        vec!["count".into()],
+        vec![vec![r.value.to_string()]],
+        None,
+        r.examined as u32,
+        r.fetched as u32,
+        r.output_bytes as u32,
+    )
+}
+fn display_groups(r: Aggregate<Vec<GroupCount<CategoryOnly>>>) -> Page {
+    (
+        vec!["category".into(), "count".into()],
+        r.value
+            .into_iter()
+            .map(|g| vec![g.key.category.to_string(), g.count.to_string()])
+            .collect(),
+        None,
+        r.examined as u32,
+        r.fetched as u32,
+        r.output_bytes as u32,
+    )
 }
 fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>) -> Page {
     (
@@ -186,9 +244,12 @@ fn optional(value: Option<impl ToString>) -> String {
 fn message(error: Error) -> String {
     match error {
         Error::InvalidCursor => {
-            "invalid cursor or different entity, filters, order or projection".into()
+            "invalid cursor or different entity, filters, order, projection or DISTINCT setting"
+                .into()
         }
-        Error::InvalidQuery => "unsupported order or projection for this entity".into(),
+        Error::InvalidQuery => {
+            "unsupported order, projection, DISTINCT or aggregate shape for this entity".into()
+        }
         Error::RowTooLarge => "one matching result exceeds --bytes".into(),
         Error::Limit => "query exceeds a database limit".into(),
         other => format!("database refused query: {other:?}"),

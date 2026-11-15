@@ -8,6 +8,9 @@ publish.workspace = true
 [target.'cfg(any())'.dev-dependencies]
 toko-tooling.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["toko-tooling"]
+
 [package.metadata.toko-tooling.loc]
 category = "tests"
 

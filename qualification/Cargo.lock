@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ctor",
  "ethnum",
@@ -953,6 +953,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime",
  "ic-storage",
+ "toko-tooling",
 ]
 
 [[package]]
@@ -1043,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1137,9 +1138,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform"
-version = "0.33.6"
+version = "0.33.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24586654cc055365afd1c4bfb8dcd8f26f389bedba5cbee3dc722d99fce4a00a"
+checksum = "3e07e0565c70df9222016e93d6f488312176ef5e7036ded60db8b4bc3f61c05f"
 dependencies = [
  "ic-platform-types",
  "num-bigint 0.5.1",
@@ -2780,9 +2781,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.43.2"
+version = "0.44.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb81a5f9c13f50614af8468b599c3a05327f09f643aa954dc8e6878aa649263f"
+checksum = "d8a17b4fb7429edc446c06b1c50149102d17cf93e15dade9f53c187a1717c373"
 
 [[package]]
 name = "toml_datetime"

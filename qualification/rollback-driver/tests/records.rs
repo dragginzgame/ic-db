@@ -33,7 +33,7 @@ fn console_inspects_and_queries() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
+        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery Entry --select count\nquery Entry --select distinct-count:category --limit 1\nquery Document --select count:note\nquery Entry --select category,count:amount --min 40\nquery Entry --select category,count --min 40\nquery Entry --order-by category --select category --distinct\nquery Entry --category 1 --order-by category --select category --distinct\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
@@ -90,6 +90,11 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("All optional keys present"));
     assert!(stdout.contains("0 rows; 3 examined; 3 fetched; 0 encoded bytes."));
     assert!(stdout.contains("6 rows; 6 examined; 6 fetched; 144 encoded bytes."));
+    assert!(stdout.contains("2 rows; 6 examined; 6 fetched; 16 encoded bytes."));
+    assert!(stdout.contains("1 row; 3 examined; 3 fetched; 8 encoded bytes."));
+    assert!(stdout.contains("1 row; 6 examined; 6 fetched; 8 encoded bytes."));
+    assert!(stdout.contains("1 row; 1 examined; 1 fetched; 8 encoded bytes."));
+    assert!(stdout.contains("2 rows; 6 examined; 6 fetched; 32 encoded bytes."));
     assert!(!stdout.contains("Next page:"));
     let cursor = stdout
         .lines()
@@ -105,6 +110,8 @@ fn console_inspects_and_queries() {
                 .eq(expected.iter().copied())
         })
     };
+    assert!(contains_row(&stdout, &["0"]));
+    assert!(contains_row(&stdout, &["2"]));
     assert!(contains_row(
         &stdout,
         &[
@@ -276,6 +283,9 @@ fn console_inspects_and_queries() {
         "query Document --min 0",
         "query Entry --order-by amount",
         "query Entry --select id --bytes 7",
+        "query Entry --select category --distinct --min 0 --order-by category",
+        "query Entry --select count --work 6",
+        "query Entry --select category,count --order-by category",
         "SELECT * FROM rows",
     ] {
         let output = Command::new(&binary)

@@ -56,6 +56,17 @@ doc:
 docs-check:
 	perl vendor/toko-tooling/scripts/ci/check-documentation-links.pl --root . README.md AGENTS.md CHANGELOG.md docs/design/ic-db-system-design.md qualification/README.md
 
+.PHONY: qualification-tooling-check
+toko-tooling-check: qualification-tooling-check
+qualification-tooling-check:
+	@set -eu; export PATH="$(CURDIR)/.tools/host/bin:$$PATH"; \
+	  root_selection="$$(perl "$(TOKO_TOOLING_ROOT)/scripts/dev/tooling-lock.pl" "$(CURDIR)")"; \
+	  qualification_selection="$$(perl "$(TOKO_TOOLING_ROOT)/scripts/dev/tooling-lock.pl" "$(CURDIR)/qualification")"; \
+	  test "$$root_selection" = "$$qualification_selection" || { \
+	    printf '%s\n' 'Product and qualification tooling selections differ.' >&2; exit 1; \
+	  }; \
+	  printf '%s\n' 'Qualification tooling declarations and lock match the product selection.'
+
 m0-setup:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback prepare_server -- --ignored --nocapture
 

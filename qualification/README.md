@@ -59,6 +59,26 @@ The Wasm witness orders by category plus the implicit primary key, narrows a
 category equality to its index prefix and resumes that selected path after upgrade.
 No input-prefix sort or statistics-based planner is qualified.
 
+Ordered DISTINCT adds an independent tuple-set oracle, duplicate-only pages,
+optional values, fixed prefixes, reverse traversal, byte retries and deleted
+cursor rows. Filters on projected/fixed-prefix fields cover all six comparisons,
+absence, contradictory prefixes and empty pages. Non-leading projections and
+filters varying within a duplicate class refuse. The Wasm probe resumes filtered
+and unfiltered DISTINCT cursors after upgrade and scans duplicate pages to
+completion without changing backing bytes. There is no durable seen-set.
+
+Exact synchronous counts and grouped counts reuse this probe. Native cases cover
+independent tuple-count oracles, interleaved groups, absence, empty input, output
+limits after full counting, decimal equality across grouping/filter/index access,
+corruption and separate work/cardinality/key/state/output refusals. The Wasm probe
+checks counts and limited grouped output before and after upgrade, refuses
+incomplete work and undersized output, and verifies unchanged backing bytes.
+Present-field and distinct tuple counts share this coverage: absence versus
+present empty blobs/lists, zero-count groups, independent output limits, unknown
+fields on empty input and noncontiguous duplicate tuples. Wasm checks optional
+note and grouped field counts, then distinct category counts across reopen.
+This is not qualification of resumable jobs, arithmetic reducers or all type pairs.
+
 The blob witness returns identical IDs with 1,037 encoded bytes for full entities
 versus 8 for projected records. Its measured execution after opening is 74,795
 versus 74,464 instructions. This is selective materialization, not partial storage
@@ -1119,6 +1139,19 @@ Queries use the fluent product engine. Entry supports `--min` and `--category`;
 Document supports `--entry-id`. `--order-by FIELD[,FIELD]` selects a proven complete
 order, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
 projection (the latter is Entry-only). Full entities are the default result.
+Entry also supports `--select category`; combine it with
+`--order-by category --distinct` for the ordered-DISTINCT path. `--category` is
+supported; `--min` varies within a category and refuses with this projection.
+Full entities and ID projections are inherently unique.
+`--select count` counts matching rows; Entry also supports `--select category,count`.
+`--select count:FIELD` counts present field values (for example, Document's `note`).
+Entry supports `--select distinct-count:category` and `--select category,count:FIELD`.
+These are fixed typed projections and direct fluent terminals in the private
+adapter; field presence uses the ordinary schema admission.
+For aggregates, `--limit` selects completed groups and no continuation is returned.
+They refuse `--after`, `--distinct`, explicit ordering and execution that reaches
+`--work` before observing completion; an exact-boundary scan can also refuse.
+These synchronous operations do not represent resumable aggregate support.
 `--limit` bounds output rows, `--work` bounds candidates and `--bytes` bounds encoded
 output. Their defaults are 3, 128 and 4096. An empty page may still continue.
 The CLI prints a hexadecimal next cursor or `none`; copy it to `--after` with the

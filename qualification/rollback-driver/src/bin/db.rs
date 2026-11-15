@@ -32,7 +32,7 @@ enum Command {
     Status,
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order and projection. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount works for Entry. Filters use the fields' exact declared types."
+        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and explicit ordering, and never return partial counts. --limit selects completed groups, not input rows."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document"])]
@@ -60,8 +60,13 @@ enum Command {
         work: u32,
         #[arg(long, default_value_t=4096, value_parser=clap::value_parser!(u32).range(1..=131072))]
         bytes: u32,
-        #[arg(long, default_value="full", value_parser=["full", "id", "id,amount"])]
+        /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
+        /// category,count or category,count:FIELD. Field counts exclude absence.
+        #[arg(long, default_value = "full")]
         select: String,
+        /// Deduplicate a leading-index projection; filters must be constant per tuple.
+        #[arg(long)]
+        distinct: bool,
     },
     /// Display command help.
     Help,
@@ -295,6 +300,7 @@ async fn main() -> Result<(), String> {
                 work,
                 bytes,
                 select,
+                distinct,
             } => {
                 let reply = pic
                     .query_call(
@@ -315,6 +321,7 @@ async fn main() -> Result<(), String> {
                                 work,
                                 bytes,
                                 select,
+                                distinct,
                             ),
                             LIMITS,
                         )

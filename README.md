@@ -84,6 +84,58 @@ count the projected record, while the complete source row is still validated.
 Output records need no stored schema registration. Projection cursors require the
 same selected fields; aliases, coercions and nested field paths are not implemented.
 
+Add `.distinct()` to remove duplicate projected tuples across pages:
+
+```rust
+#[ic_db::record(fields(field(name="category", value(item(prim="Nat64")))))]
+struct CategoryOnly {}
+
+let page = db.query::<Entry>()
+    .order_by(&["category"])
+    .distinct()
+    .fetch_as::<CategoryOnly>()?;
+```
+
+This slice requires a leading index projection after any fixed index prefix.
+Filters may read projected fields or fields fixed by that prefix, so each duplicate
+group has one filter result. For example, add
+`.filter("category", ic_db::Comparison::Ge, 1_u64)` to the query above.
+Full entities and projections containing the primary
+key are already unique and allow ordinary filters. Filters varying within a
+duplicate group and other DISTINCT shapes refuse for now. Duplicate candidates
+consume work, so an empty page can still continue.
+Continuation preserves duplicate suppression; live pages do not provide a frozen
+input for exact aggregates.
+
+Exact bounded counts use the same scanner:
+
+```rust
+let count = db.query::<Entry>().filter("amount", ic_db::Comparison::Ge, 40_u64).count()?;
+let groups = db.query::<Entry>().limit(1).group_count::<CategoryOnly>()?;
+let categories = db.query::<Entry>().count_distinct::<CategoryOnly>()?;
+let notes = db.query::<Document>().count_field("note")?;
+```
+
+`count.value` is the number of matching rows. `groups.value` contains records with
+`key` and `count`; the limit selects completed groups, never input rows. Grouping
+supports ordered scalars/unit enums, including optional absence, in an exact named
+record. No index is required; output is ascending by the tuple's canonical field
+name order. Results include examined/fetched and encoded-byte counts.
+
+`count_field("field")` counts present values of any top-level stored type; present
+empty text, blobs and collections count. `group_count_field::<Record>("field")`
+applies that rule within each group and retains all-absent groups with count zero.
+`count_distinct::<Record>()` counts projected tuples, including absent values,
+using the same bounded group state. Its count is unaffected by `limit`.
+
+These operations finish synchronously or refuse. Completion must be observed
+before the work cap, so a scan examining exactly the allowed number can still
+return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
+comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
+refuses instead of returning partial counts. Cursors, DISTINCT and explicit order
+are not yet aggregate compositions. Other reducers, group
+filters/order, resumable jobs and completed-output pagination remain required work.
+
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
 for one 32-row workload; it does not establish full-product parity or savings.

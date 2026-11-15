@@ -3,6 +3,28 @@ use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::native;
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 type Request = (Option<Vec<u8>>, bool, Option<u64>, u64, u32, u32, u32);
+type ConsoleRequest<'a> = (
+    &'a str,
+    Option<Vec<u8>>,
+    u32,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Vec<&'a str>,
+    bool,
+    u32,
+    u32,
+    &'a str,
+    bool,
+);
+type DisplayPage = (
+    Vec<String>,
+    Vec<Vec<String>>,
+    Option<Vec<u8>>,
+    u32,
+    u32,
+    u32,
+);
 
 #[tokio::test]
 async fn sparse_fluent_pages_retry_and_reopen() {
@@ -28,6 +50,104 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         native::decode_response::<Result<Page, u8>>(95, &reply, LIMITS).unwrap()
     };
     let before = pic.get_stable_memory(canister).await;
+    let console = async |request: ConsoleRequest<'_>| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                native::encode_request(3, &request, LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<DisplayPage, String>>(3, &reply, LIMITS).unwrap()
+    };
+    let distinct = async |cursor: Option<Vec<u8>>,
+                          work: u32,
+                          bytes: u32,
+                          descending: bool,
+                          category: Option<u64>| {
+        console((
+            "Entry",
+            cursor,
+            1,
+            None,
+            category,
+            None,
+            vec!["category"],
+            descending,
+            work,
+            bytes,
+            "category",
+            true,
+        ))
+        .await
+        .unwrap()
+    };
+    let aggregate = async |select: &str, limit: u32, work: u32, bytes: u32| {
+        console((
+            "Entry",
+            None,
+            limit,
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            work,
+            bytes,
+            select,
+            false,
+        ))
+        .await
+    };
+    let count = aggregate("count", 1, 7, 8).await.unwrap();
+    assert_eq!(count.1, [vec!["6"]]);
+    assert_eq!((count.3, count.4, count.5), (6, 6, 8));
+    let grouped = aggregate("category,count", 1, 7, 16).await.unwrap();
+    assert_eq!(grouped.1, [vec!["0", "3"]]);
+    assert_eq!((grouped.3, grouped.5), (6, 16));
+    assert!(grouped.2.is_none());
+    assert!(aggregate("count", 1, 6, 8).await.is_err());
+    assert!(aggregate("category,count", 2, 7, 31).await.is_err());
+    let distinct_count = aggregate("distinct-count:category", 1, 7, 8).await.unwrap();
+    assert_eq!(distinct_count.1, [vec!["2"]]);
+    assert_eq!(
+        (distinct_count.3, distinct_count.4, distinct_count.5),
+        (6, 6, 8)
+    );
+    assert!(distinct_count.2.is_none());
+    assert_eq!(aggregate("count:amount", 1, 7, 8).await.unwrap(), count);
+    assert_eq!(
+        aggregate("category,count:amount", 1, 7, 16).await.unwrap(),
+        grouped
+    );
+    assert!(aggregate("distinct-count:category", 1, 6, 8).await.is_err());
+    assert!(aggregate("count:missing", 1, 7, 8).await.is_err());
+    let notes = console((
+        "Document",
+        None,
+        1,
+        None,
+        None,
+        None,
+        vec![],
+        false,
+        128,
+        8,
+        "count:note",
+        false,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(notes.1, [vec!["0"]]);
+    assert_eq!((notes.3, notes.4, notes.5), (1, 1, 8));
+    let unique_first = distinct(None, 1, 8, false, None).await;
+    assert_eq!(unique_first.1, [vec!["0"]]);
+    assert_eq!((unique_first.3, unique_first.5), (1, 8));
+    let filtered_unique = distinct(None, 1, 8, false, Some(1)).await;
+    assert_eq!(filtered_unique.1, [vec!["1"]]);
+    assert_eq!(filtered_unique.3, 1);
     let ordered = async |request: Request| {
         let reply = pic
             .query_call(
@@ -101,6 +221,28 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     pic.upgrade_canister(canister, wasm, vec![], None)
         .await
         .unwrap();
+    assert_eq!(
+        aggregate("category,count", 1, 7, 16).await.unwrap(),
+        grouped
+    );
+    assert_eq!(
+        aggregate("distinct-count:category", 1, 7, 8).await.unwrap(),
+        distinct_count
+    );
+    let filtered_done = distinct(filtered_unique.2, 4, 8, false, Some(1)).await;
+    assert!(filtered_done.1.is_empty());
+    assert!(filtered_done.2.is_none());
+    assert_eq!(filtered_done.3, 2);
+    let empty_unique = distinct(unique_first.2, 2, 8, false, None).await;
+    assert!(empty_unique.1.is_empty());
+    assert_eq!(empty_unique.3, 2);
+    assert!(empty_unique.2.is_some());
+    let second_unique = distinct(empty_unique.2, 4, 8, false, None).await;
+    assert_eq!(second_unique.1, [vec!["1"]]);
+    let done_unique = distinct(second_unique.2, 4, 8, false, None).await;
+    assert!(done_unique.1.is_empty());
+    assert!(done_unique.2.is_none());
+    assert_eq!(distinct(None, 4, 8, true, None).await.1, [vec!["1"]]);
     let after_upgrade = ordered((order_start.1.clone(), false, Some(1), 40, 2, 128, 4096))
         .await
         .unwrap();

@@ -1,5 +1,8 @@
 //! Bounded fluent traversal. Typed result construction stays outside shared execution.
+mod aggregate;
+mod distinct;
 mod order;
+pub use aggregate::{Aggregate, GroupCount};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{
@@ -93,6 +96,7 @@ struct Request<'a> {
     index: Option<(&'a str, Vec<IndexValue<'a>>)>,
     order: Option<Vec<&'a str>>,
     descending: bool,
+    distinct: bool,
     rows: usize,
     work: usize,
     bytes: usize,
@@ -120,6 +124,7 @@ impl<M: Memory> Database<M> {
                 index: None,
                 order: None,
                 descending: false,
+                distinct: false,
                 rows: 32,
                 work: 128,
                 bytes: MAX_OUTPUT,
@@ -130,6 +135,16 @@ impl<M: Memory> Database<M> {
     }
 }
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
+    /// Remove duplicate output records across pages. Identity projections are
+    /// already unique. Other projections require a leading index tuple after
+    /// fixed prefix components. Filters may reference only projected fields or
+    /// fixed prefix fields; unsupported shapes refuse. This is live enumeration,
+    /// not an exact aggregate snapshot.
+    #[must_use]
+    pub fn distinct(mut self) -> Self {
+        self.request.distinct = true;
+        self
+    }
     /// Add an AND term over an exact top-level ordered scalar/unit-enum field.
     /// All operands are admitted before storage reads, including contradictory terms.
     #[must_use]
@@ -221,7 +236,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.db.incarnation,
             None,
         )?;
-        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan)?;
+        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
         Ok(QueryPage {
             rows: raw
                 .rows
@@ -252,7 +267,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.db.incarnation,
             Some(R::definition()),
         )?;
-        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan)?;
+        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
         Ok(QueryPage {
             rows: raw
                 .rows
@@ -318,6 +333,17 @@ struct Term {
     comparison: Comparison,
     operand: Vec<u8>,
 }
+
+// One owner for copying already validated projection spans into a record codec.
+fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -> Vec<u8> {
+    let mut output = Vec::with_capacity(size);
+    for (i, &(start, end)) in spans.iter().enumerate() {
+        if mask & (1 << i) != 0 {
+            output.extend_from_slice(&bytes[usize::from(start)..usize::from(end)]);
+        }
+    }
+    output
+}
 struct Plan<'a> {
     index: Option<&'a IndexSchema>,
     prefix: Vec<u8>,
@@ -325,6 +351,7 @@ struct Plan<'a> {
     selected: u16,
     binding: [u8; 32],
     projection: Option<u16>,
+    distinct_components: Option<usize>,
 }
 impl<'a> Plan<'a> {
     fn admit(
@@ -366,6 +393,7 @@ impl<'a> Plan<'a> {
             projection: projection
                 .map(|output| admit_projection(entity, output))
                 .transpose()?,
+            distinct_components: None,
         };
         for predicate in &request.predicates {
             let position = entity
@@ -395,10 +423,17 @@ impl<'a> Plan<'a> {
         }
         // Admit every operand before selecting a path, even for empty or
         // contradictory queries. The scanner consumes this one proven choice.
-        if let Some((index, prefix)) = order::select(entity, request)? {
-            plan.index = Some(index);
-            plan.prefix = prefix;
+        let fixed = if let Some(path) = order::select(entity, request)? {
+            plan.index = Some(path.index);
+            plan.prefix = path.prefix;
             plan.selected |= entity.key_fields();
+            path.fixed
+        } else {
+            0
+        };
+        if request.distinct {
+            plan.distinct_components =
+                distinct::admit(entity, request, plan.projection, plan.index, fixed)?;
         }
         let mut hash = Sha256::new();
         hash.update(b"ic-db:query:v1\0");
@@ -430,6 +465,9 @@ impl<'a> Plan<'a> {
             hash.update(b"projection\0");
             hash.update(mask.to_le_bytes());
         }
+        if request.distinct {
+            hash.update(b"distinct\0");
+        }
         plan.binding = hash.finalize().into();
         if let Some(cursor) = request.cursor {
             if cursor.binding != plan.binding {
@@ -447,21 +485,7 @@ impl<'a> Plan<'a> {
         if let Some(index) = self.index {
             let mut remaining = bytes.get(9..).ok_or(Error::InvalidCursor)?;
             for name in index.fields {
-                let field = entity
-                    .fields
-                    .iter()
-                    .find(|f| f.name == *name)
-                    .ok_or(Error::InvalidQuery)?;
-                if field.optional {
-                    let (&presence, rest) = remaining.split_first().ok_or(Error::InvalidCursor)?;
-                    remaining = rest;
-                    match presence {
-                        0 if !index.present_only => continue,
-                        1 => {}
-                        _ => return Err(Error::InvalidCursor),
-                    }
-                }
-                key::consume(&mut remaining, field.value)?;
+                consume_index_component(entity, index, name, &mut remaining)?;
             }
             if !index.unique {
                 key::consume(&mut remaining, entity.key_type()?)?;
@@ -486,11 +510,36 @@ impl<'a> Plan<'a> {
     }
 }
 
+// Cursor framing and DISTINCT equivalence boundaries use the same key decoder.
+fn consume_index_component(
+    entity: &EntitySchema,
+    index: &IndexSchema,
+    name: &str,
+    remaining: &mut &[u8],
+) -> Result<(), Error> {
+    let field = entity
+        .fields
+        .iter()
+        .find(|f| f.name == name)
+        .ok_or(Error::InvalidQuery)?;
+    if field.optional {
+        let (&presence, rest) = remaining.split_first().ok_or(Error::InvalidCursor)?;
+        *remaining = rest;
+        match presence {
+            0 if !index.present_only => return Ok(()),
+            1 => {}
+            _ => return Err(Error::InvalidCursor),
+        }
+    }
+    key::consume(remaining, field.value)
+}
+
 fn execute<M: Memory>(
     map: &Map<M>,
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &Plan<'_>,
+    mut aggregate: Option<&mut aggregate::Counts>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
     let mut upper = plan.prefix.clone();
     // Namespace prefixes always have a successor; no unbounded reverse scan.
@@ -523,6 +572,19 @@ fn execute<M: Memory>(
         output_bytes: 0,
     };
     let mut component = Vec::new();
+    // Each processed equivalence class is either wholly rejected or already
+    // emitted. Inclusive byte retries point at an unreturned class instead.
+    let mut previous = if let Some(cursor) = request.cursor.filter(|c| !c.inclusive) {
+        distinct::boundary(
+            entity,
+            plan.index,
+            plan.distinct_components,
+            &cursor.position,
+        )?
+        .map(<[u8]>::to_vec)
+    } else {
+        None
+    };
     while let Some(entry) = if request.descending {
         entries.next_back()
     } else {
@@ -547,7 +609,8 @@ fn execute<M: Memory>(
             &bytes,
             plan.selected,
             &mut values,
-            plan.projection.map(|_| &mut spans),
+            (plan.projection.is_some() || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
+                .then_some(&mut spans),
         )?;
         let primary = entity
             .fields
@@ -575,7 +638,12 @@ fn execute<M: Memory>(
                 Comparison::Ge => order != Ordering::Less,
             }
         });
-        if matches {
+        let boundary =
+            distinct::boundary(entity, plan.index, plan.distinct_components, stored_key)?;
+        let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
+        if matches && let Some(counts) = aggregate.as_deref_mut() {
+            counts.push(entity, &values, &bytes, &spans)?;
+        } else if matches && !duplicate {
             let size = plan.projection.map_or(bytes.len(), |mask| {
                 spans
                     .iter()
@@ -593,18 +661,20 @@ fn execute<M: Memory>(
             }
             page.output_bytes += size;
             if let Some(mask) = plan.projection {
-                let mut output = Vec::with_capacity(size);
-                for (i, (start, end)) in spans.iter().enumerate() {
-                    if mask & (1 << i) != 0 {
-                        output.extend_from_slice(&bytes[usize::from(*start)..usize::from(*end)]);
-                    }
-                }
-                page.rows.push(output);
+                page.rows.push(copy_projection(&bytes, &spans, mask, size));
             } else {
                 page.rows.push(bytes);
             }
+            if let Some(boundary) = boundary {
+                previous = Some(boundary.to_vec());
+            }
         }
         if page.rows.len() == request.rows || page.examined == request.work {
+            if aggregate.is_some() {
+                // Completion has not been observed. Never expose prefix counts;
+                // an exact-boundary scan may conservatively require more budget.
+                return Err(Error::Limit);
+            }
             page.next = Some(plan.cursor(stored_key, false));
             return Ok(page);
         }

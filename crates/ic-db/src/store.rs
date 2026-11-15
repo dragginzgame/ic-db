@@ -9,7 +9,7 @@ use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeM
 use std::collections::{BTreeMap, BTreeSet};
 
 mod query;
-pub use query::{Comparison, Query, QueryCursor, QueryPage};
+pub use query::{Aggregate, Comparison, GroupCount, Query, QueryCursor, QueryPage};
 
 const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;

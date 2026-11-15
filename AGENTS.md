@@ -94,6 +94,25 @@ installer. Do not edit vendor files or copy upstream reference documents.
   `fetch_as::<Record>()` uses existing named-record metadata and codecs for exact
   top-level projection. Validate the full transitive named definitions, retain
   whole-source corruption checks and count projected bytes before materialization.
+  DISTINCT proves adjacent equality for a leading-index projection after fixed
+  prefix components, or identity through the primary key. Nonidentity filters
+  may read projected fields or fixed prefix fields: every duplicate class must
+  have one predicate result. Carry the actual selected prefix count from ordering;
+  do not reconstruct planner choices in DISTINCT admission.
+  Reuse physical-key equality and bounded logical cursors; do not substitute
+  page-local deduplication or trust cursor claims about emitted groups. Filters
+  varying within a duplicate class need a separate progress proof and currently
+  refuse. Broader DISTINCT and aggregation remain required implementation work.
+  Synchronous `count`/`group_count::<Record>` reuse the scanner and exact ordered
+  scalar keys. Absent keys form a group; row counts include those rows. Scan all
+  matching input before applying output limits; never return prefix counts after
+  work exhaustion. Keep group/state/output bounds separate. Grouped count output
+  uses canonical field-name tuple order, without a required index. No durable
+  jobs or extra cursor state are implied; resumable aggregation remains required.
+  `count_field` counts presence for any top-level stored type; empty values count.
+  `group_count_field` retains zero-count groups. `count_distinct::<Record>` uses
+  the same bounded group state and includes absent tuples. Keep these semantics
+  distinct from row count and from output limits.
   Output records are not durable schema additions. The local CLI constructs
   fluent queries for Entry/Document, uses opaque continuation and display-only
   result mapping; no client-side filtering or paging engine. `make m2-cli` checks
@@ -320,6 +339,7 @@ integration remain separate qualification.
 
 `make clippy`, `make check`, `make test` and `make doc` select the current library.
 These qualify the current native library slice. `make docs-check` checks local links;
-`make toko-tooling-check` verifies tooling selection. Tool preparation is explicit:
+`make toko-tooling-check` verifies the snapshot and matching tooling declarations
+and locks in both product and qualification workspaces. Tool preparation is explicit:
 `make install-tools`, then `make tools-check`. Hooks use `make install-hooks`.
 Use `toko-cloc` for source counts; `make cloc` and `CLOC_*` settings are retired.
