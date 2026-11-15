@@ -126,15 +126,78 @@ name order. Results include examined/fetched and encoded-byte counts.
 empty text, blobs and collections count. `group_count_field::<Record>("field")`
 applies that rule within each group and retains all-absent groups with count zero.
 `count_distinct::<Record>()` counts projected tuples, including absent values,
-using the same bounded group state. Its count is unaffected by `limit`.
+using a bounded set of comparison keys. Its count is unaffected by `limit`.
+`group_count_distinct::<KeyRecord, Record>()` applies the same rule within each
+group. An all-absent group has one distinct tuple; repeated tuples count once.
+Key and operand projections may overlap. Group filters/order apply to completed
+Nat64 counts, before output limits. Each set retains at most 32 distinct keys;
+all groups share the existing 128-KiB state allowance. Output filtering cannot
+hide cardinality or state exhaustion. Scalar distinct counts retain no projected
+records, and both forms use the same tuple codec and distinct reducer.
 
 These operations finish synchronously or refuse. Completion must be observed
 before the work cap, so a scan examining exactly the allowed number can still
 return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
-are not yet aggregate compositions. Float arithmetic, resumable jobs and
-completed-output pagination remain required work.
+are not yet aggregate compositions. Float arithmetic, resumable grouped operations
+and completed-output pagination remain required work.
+
+Count and integer/Decimal sum and average also have retained variants. The host creates or
+opens an `AggregateJobs` store in a separate governed allocation. For example,
+given that store and host-captured timestamps:
+
+```rust,ignore
+let handle = db.query::<Entry>().start_count(&mut jobs, now, expires)?;
+let step = db.query::<Entry>().work_limit(64)
+    .resume_count(&mut jobs, &handle, 0, now)?;
+// On the next call, reconstruct the query and supply step.sequence.
+```
+
+`start_sum::<Record>`/`resume_sum::<Record>` and
+`start_avg::<Record>`/`resume_avg::<Record>` use the same result shapes as their
+synchronous counterparts. Average retains the exact total and present count,
+then divides and rounds once at completion to the declared Decimal scale with
+ties to even. Both operation and result scale are bound to the job; a sum cannot
+resume as an average. `JobOutcome` is `Running`, `Complete(value)`, `Invalidated` or `Expired`;
+partial totals are never results. Older sequence numbers return saved progress
+without advancing again. Any real source-entity change invalidates unfinished
+work; completed results retain their original revision. Same-code reopen/upgrade
+preserves jobs. Database/schema/query/algorithm/result mismatches refuse intact.
+Handles carry identity, not authorization; the host owns caller checks and time.
+
+Initial limits are 16 jobs per store, 4096 encoded bytes per job, a one-hour
+maximum lifetime and one million examined candidates per job. Each advance uses
+the query's 1–512 candidate limit and at most 64 KiB of source row/key bytes.
+Output bytes bound the completed result. Expired jobs still occupy a slot until
+`cleanup_expired(now, limit)` (1–16 removals) or `cancel(&handle)` releases it;
+neither promises that underlying stable memory shrinks. These operations run
+synchronously in an update message. A later trap rolls back job changes too.
+`make m2-jobs` checks the native and Wasm contract. The installed CLI still exposes
+synchronous aggregates; retained DISTINCT operations remain a later slice.
+
+`start_group_count::<KeyRecord>`/`resume_group_count::<KeyRecord>` retain row counts
+per exact grouping key, including absent keys. They share synchronous grouping's
+equality, group predicates and ordering. `limit` selects completed groups and is
+bound to the job along with `filter_groups` and `order_groups`; work and output-byte
+allowances can change. Finish all input before returning `Complete(Vec<GroupCount<K>>)`.
+Empty input completes with an empty vector. There is no completed-group paging yet.
+
+`start_group_sum::<KeyRecord, Record>`/`resume_group_sum::<KeyRecord, Record>` and
+`start_group_avg::<KeyRecord, Record>`/`resume_group_avg::<KeyRecord, Record>` use
+the same lifecycle and return `Complete(Vec<GroupValue<K, R>>)`. Each group keeps
+an exact total and present count; absent operands do not enter either. All-absent
+groups return `None`, distinct from a present zero. Averages round once at the
+declared result scale. Finalize every group before filtering/order/limit, so an
+overflow in an excluded group still refuses. Key/result types, operation and
+result scale bind the job; output/state refusal preserves the saved checkpoint.
+
+Retain at most 32 groups inside the existing 4096-byte **whole job frame**, including
+progress, key-record bytes and reducer state. This is a tighter retained-state envelope than the
+synchronous grouping budget; large keys/groups can therefore refuse with `Limit`.
+Filtering or limiting output cannot relax it. Refused advancement leaves the prior
+checkpoint intact. Groups use the same job collection, revision gate and cleanup;
+comparison keys are reconstructed with the owned codec rather than stored twice.
 
 `.min::<Record>()` and `.max::<Record>()` accept an exact **single-field** record
 projection and return `Aggregate<Option<Record>>`. They preserve ordered scalar

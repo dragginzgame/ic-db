@@ -74,8 +74,9 @@ installer. Do not edit vendor files or copy upstream reference documents.
   callback hooks. Hours-long maintenance and source-plus-target space are accepted.
 - Accepted 2026-11-14: exact aggregates use conservative per-entity revision
   invalidation and bounded server-retained jobs; completion during continuous
-  writes is not promised. Jobs may expire and incompatible upgrades invalidate
-  them. Capacity exhaustion refuses with bounded cleanup, without automatic spill.
+  writes is not promised. Jobs may expire; incompatible upgrades must refuse their
+  resumption and preserve a supported cleanup path. Capacity exhaustion refuses
+  with bounded cleanup, without automatic spill.
   Accepted 2026-11-15: integer/Decimal averages use the result record's declared
   Decimal scale, rounding once to nearest with ties to even, with overflow errors.
   Earlier acceptance of explicit entity/index IDs is superseded by the
@@ -109,11 +110,32 @@ installer. Do not edit vendor files or copy upstream reference documents.
   matching input before applying output limits; never return prefix counts after
   work exhaustion. Keep group/state/output bounds separate. Grouped count output
   uses canonical field-name tuple order, without a required index. No durable
-  jobs or extra cursor state are implied; resumable aggregation remains required.
+  jobs or extra cursor state are implied by those synchronous terminals.
+  Follow the [retained aggregation contract](docs/design/ic-db-system-design.md#constrained-resumable-aggregation)
+  for job quotas, identities, revision invalidation, retry, expiry and cleanup.
+  Keep one host-governed job allocation and atomically save accumulator/cursor/
+  sequence. Re-admit fluent queries; persist no second query AST, scheduler,
+  snapshots, WAL or closures. Synchronous, grouped and retained numeric terminals
+  share numeric admission and exact reducers. Average retains total/present count
+  and rounds once at completion; keep operation/result-scale bindings explicit
+  and existing job identities stable. `make m2-jobs` selects native/Wasm recovery
+  qualification. Retained grouped counts/sums/averages share the grouping table and
+  complete output selection; persist key records, counts and numeric totals,
+  reconstructing comparison keys. Numeric groups retain their own present counts,
+  including zero for all-absent groups; validate every completed group before selection.
+  Group predicates, order and output row limit bind the job. Keep the existing
+  job-frame cap: resource refusal must preserve the checkpoint even when output
+  filters hide the oversized state. Resumable DISTINCT operations
+  and completed-group paging remain required. Keep detailed limits in the design
+  and public API documentation.
   `count_field` counts presence for any top-level stored type; empty values count.
-  `group_count_field` retains zero-count groups. `count_distinct::<Record>` uses
-  the same bounded group state and includes absent tuples. Keep these semantics
-  distinct from row count and from output limits.
+  `group_count_field` retains zero-count groups. Scalar `count_distinct::<Record>`
+  and `group_count_distinct::<Key, Record>` share a bounded comparison-key set and
+  include absent tuples; an all-absent group therefore has distinct count one.
+  Cap distinct tuples at 32 per set, independently of the 32-group cap, and charge
+  all retained key capacities to the shared byte budget before output selection.
+  Scalar distinct counts retain no projected records. Keep these semantics
+  distinct from present-field counts, row counts and output limits.
   `min`/`max` use exact single-field record projections and the same scanner.
   Ignore absent operands, preserve stored types and retain only the winning
   key/value. Finish input before applying the output-byte budget; no prefix

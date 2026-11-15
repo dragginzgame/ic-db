@@ -2,6 +2,7 @@
 mod aggregate;
 mod distinct;
 mod order;
+pub use aggregate::jobs::{AggregateJobs, JobHandle, JobOutcome, JobStep};
 pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
@@ -59,6 +60,8 @@ pub struct QueryCursor {
     inclusive: bool,
 }
 impl QueryCursor {
+    const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
+
     /// Encode the bounded continuation for an application's transport.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -71,10 +74,7 @@ impl QueryCursor {
     /// # Errors
     /// Refuses unsupported versions, flags and oversized or incomplete frames.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if !(35..=34 + crate::MAX_INDEX_KEY_BYTES).contains(&bytes.len())
-            || bytes[0] != 1
-            || bytes[1] > 1
-        {
+        if !(35..=Self::MAX_ENCODED_BYTES).contains(&bytes.len()) || bytes[0] != 1 || bytes[1] > 1 {
             return Err(Error::InvalidCursor);
         }
         Ok(Self {
@@ -563,6 +563,22 @@ fn execute<M: Memory>(
     plan: &Plan<'_>,
     mut aggregate: Option<aggregate::Accumulator<'_>>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
+    execute_inner(map, entity, request, plan, aggregate.as_mut(), None)
+}
+
+// Retained aggregates use the same traversal, but checkpoint at a work boundary.
+// Reserve a maximum candidate before the next fetch, including index/owner keys.
+const STEP_INPUT_BYTES: usize = 64 * 1024;
+const CANDIDATE_BYTES: usize = crate::codec::MAX_ROW_BYTES + 2 * crate::MAX_INDEX_KEY_BYTES;
+
+fn execute_inner<M: Memory>(
+    map: &Map<M>,
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    plan: &Plan<'_>,
+    mut aggregate: Option<&mut aggregate::Accumulator<'_>>,
+    mut input_bytes: Option<&mut usize>,
+) -> Result<QueryPage<Vec<u8>>, Error> {
     let mut upper = plan.prefix.clone();
     // Namespace prefixes always have a successor; no unbounded reverse scan.
     while upper.last() == Some(&255) {
@@ -612,10 +628,19 @@ fn execute<M: Memory>(
     } else {
         entries.next()
     } {
+        // Retained jobs may have consumed their lifetime candidate allowance.
+        // An empty range can still establish completion; refuse a next candidate
+        // before reading its value or touching the accumulator.
+        if request.work == 0 {
+            return Err(Error::Limit);
+        }
         page.examined += 1;
         let stored_key = entry.key();
+        let mut read_bytes = stored_key.len();
         let (owner, bytes) = if plan.index.is_some() {
-            let owner = RowKey::decode(&entry.value(), entity.key_type()?)?;
+            let owner_bytes = entry.value();
+            read_bytes += owner_bytes.len();
+            let owner = RowKey::decode(&owner_bytes, entity.key_type()?)?;
             let bytes = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
             (owner, bytes)
         } else {
@@ -624,6 +649,13 @@ fn execute<M: Memory>(
                 entry.value(),
             )
         };
+        if let Some(used) = input_bytes.as_deref_mut() {
+            read_bytes += bytes.len();
+            if read_bytes > CANDIDATE_BYTES {
+                return Err(Error::Corrupt);
+            }
+            *used += read_bytes;
+        }
         page.fetched += 1;
         let mut values = [IndexValue::Absent; crate::schema::MAX_FIELDS];
         let mut spans = [(0_u16, 0_u16); crate::schema::MAX_FIELDS];
@@ -683,8 +715,13 @@ fn execute<M: Memory>(
                 previous = Some(boundary.to_vec());
             }
         }
-        if page.rows.len() == request.rows || page.examined == request.work {
-            if aggregate.is_some() {
+        if page.rows.len() == request.rows
+            || page.examined == request.work
+            || input_bytes
+                .as_deref()
+                .is_some_and(|used| *used > STEP_INPUT_BYTES - CANDIDATE_BYTES)
+        {
+            if aggregate.is_some() && input_bytes.is_none() {
                 // Completion has not been observed. Never expose prefix aggregates;
                 // an exact-boundary scan may conservatively require more budget.
                 return Err(Error::Limit);

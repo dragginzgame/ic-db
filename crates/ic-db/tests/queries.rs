@@ -437,6 +437,11 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
         Err(Error::Corrupt)
     ));
     assert!(matches!(
+        db.query::<Entry>()
+            .group_count_distinct::<CategoryOnly, AmountOnly>(),
+        Err(Error::Corrupt)
+    ));
+    assert!(matches!(
         db.query::<Entry>().group_min::<CategoryOnly, AmountOnly>(),
         Err(Error::Corrupt)
     ));
@@ -1829,6 +1834,21 @@ fn grouping_decimal_equality_agrees_with_filters_and_index_order() {
             .unwrap(),
         100
     );
+    assert_eq!(
+        db.query::<Priced>()
+            .count_distinct::<PriceKey>()
+            .unwrap()
+            .value,
+        3
+    );
+    let distinct = db
+        .query::<Priced>()
+        .group_count_distinct::<PriceKey, PriceKey>()
+        .unwrap();
+    assert_eq!(
+        distinct.value.iter().map(|g| g.count).collect::<Vec<_>>(),
+        [1, 1, 1]
+    );
     let groups = db.query::<Priced>().group_count::<PriceKey>().unwrap();
     assert_eq!(
         groups
@@ -2027,6 +2047,11 @@ fn extrema_own_text_winners_and_bound_comparison_and_final_output_separately() {
 struct GroupedOptional {}
 #[ic_db::record(fields(field(name = "category", value(opt, item(prim = "Nat8")))))]
 struct OptionalCategory {}
+#[ic_db::record(fields(
+    field(name = "category", value(opt, item(prim = "Nat8"))),
+    field(name = "maybe", value(opt, item(prim = "Nat64")))
+))]
+struct OptionalGroupTuple {}
 
 #[test]
 fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
@@ -3722,5 +3747,249 @@ fn u256_average_divides_before_checked_decimal_conversion() {
     assert!(matches!(
         db.query::<HugeSum>().avg::<WholeNumberAverage>(),
         Err(Error::ArithmeticOverflow)
+    ));
+}
+
+#[test]
+fn grouped_distinct_counts_include_absent_tuples_and_filter_completed_counts() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[GroupedOptional::SCHEMA]).unwrap(),
+        [51; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, (category, maybe)) in [
+        (None, None),
+        (Some(1), None),
+        (None, Some(0)),
+        (Some(2), Some(9)),
+        (None, None),
+        (Some(1), None),
+        (Some(2), Some(9)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        batch
+            .insert(&GroupedOptional {
+                id: id as u64,
+                category,
+                maybe,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let groups = db
+        .query::<GroupedOptional>()
+        .group_count_distinct::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .iter()
+            .map(|g| (g.key.category, g.count))
+            .collect::<Vec<_>>(),
+        [(None, 2), (Some(1), 1), (Some(2), 1)]
+    );
+    let overlap = db
+        .query::<GroupedOptional>()
+        .group_count_distinct::<OptionalCategory, OptionalCategory>()
+        .unwrap();
+    assert!(overlap.value.iter().all(|g| g.count == 1));
+    let tuples = db
+        .query::<GroupedOptional>()
+        .group_count_distinct::<OptionalCategory, OptionalGroupTuple>()
+        .unwrap();
+    assert_eq!(
+        tuples.value.iter().map(|g| g.count).collect::<Vec<_>>(),
+        [2, 1, 1]
+    );
+    assert_eq!(
+        db.query::<GroupedOptional>()
+            .count_distinct::<OptionalGroupTuple>()
+            .unwrap()
+            .value,
+        4
+    );
+    let selected = db
+        .query::<GroupedOptional>()
+        .filter_groups(C::Ge, 2_u64)
+        .order_groups(ic_db::GroupOrder::AggregateDescending)
+        .limit(1)
+        .group_count_distinct::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    assert_eq!(selected.value.len(), 1);
+    assert_eq!(
+        (selected.value[0].key.category, selected.value[0].count),
+        (None, 2)
+    );
+    assert_eq!(selected.output_bytes, 9);
+    assert!(
+        db.query::<GroupedOptional>()
+            .filter("id", C::Eq, 99_u64)
+            .group_count_distinct::<OptionalCategory, OptionalOnly>()
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .work_limit(2)
+            .group_count_distinct::<OptionalCategory, OptionalOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .byte_limit(8)
+            .group_count_distinct::<OptionalCategory, OptionalOnly>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .filter_groups(C::Ge, 1_u128)
+            .group_count_distinct::<OptionalCategory, OptionalOnly>(),
+        Err(Error::InvalidOperand)
+    ));
+}
+
+#[test]
+fn distinct_count_caps_apply_per_group_before_output_selection() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Entry::SCHEMA]).unwrap(),
+        [52; 16],
+    )
+    .unwrap();
+    for id in 0..64 {
+        let mut batch = Batch::new();
+        batch
+            .insert(&Entry {
+                id,
+                category: (id / 32) as u8,
+                amount: id,
+                maybe: None,
+                payload: vec![],
+            })
+            .unwrap();
+        db.commit(batch).unwrap();
+    }
+    // Repeating a value is legal even after a group reaches its distinct cap.
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            id: 64,
+            category: 0,
+            amount: 0,
+            maybe: None,
+            payload: vec![],
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    let groups = db
+        .query::<Entry>()
+        .group_count_distinct::<CategoryOnly, AmountOnly>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .iter()
+            .map(|g| (g.key.category, g.count))
+            .collect::<Vec<_>>(),
+        [(0, 32), (1, 32)]
+    );
+    assert!(matches!(
+        db.query::<Entry>().count_distinct::<AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .group_count_distinct::<CategoryOnly, PayloadOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            id: 65,
+            category: 0,
+            amount: 99,
+            maybe: None,
+            payload: vec![],
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_groups(C::Eq, 0_u64)
+            .limit(1)
+            .group_count_distinct::<CategoryOnly, AmountOnly>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
+fn distinct_count_keys_share_the_query_byte_budget_and_key_bound() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[GroupedText::SCHEMA]).unwrap(),
+        [53; 16],
+    )
+    .unwrap();
+    for id in 0..48 {
+        let mut batch = Batch::new();
+        batch
+            .insert(&GroupedText {
+                id,
+                category: (id / 24) as u8,
+                label: format!("{id:03}{}", "x".repeat(2997)),
+            })
+            .unwrap();
+        db.commit(batch).unwrap();
+    }
+    let one = db
+        .query::<GroupedText>()
+        .filter("category", C::Eq, 0_u8)
+        .group_count_distinct::<CategoryOnly, TextKey>()
+        .unwrap();
+    assert_eq!(one.value[0].count, 24);
+    assert_eq!(
+        db.query::<GroupedText>()
+            .filter("category", C::Eq, 0_u8)
+            .count_distinct::<TextKey>()
+            .unwrap()
+            .value,
+        24
+    );
+    // Neither group exceeds 32 values, but their combined comparison keys exceed 128 KiB.
+    assert!(matches!(
+        db.query::<GroupedText>()
+            .filter_groups(C::Eq, 0_u64)
+            .limit(1)
+            .group_count_distinct::<CategoryOnly, TextKey>(),
+        Err(Error::Limit)
+    ));
+    let mut batch = Batch::new();
+    batch
+        .replace(&GroupedText {
+            id: 0,
+            category: 0,
+            label: "\0".repeat(2100),
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<GroupedText>()
+            .filter("id", C::Eq, 0_u64)
+            .count_distinct::<TextKey>(),
+        Err(Error::Limit)
     ));
 }

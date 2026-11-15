@@ -1203,12 +1203,109 @@ source boundary; advance accumulators and position atomically, and prove retries
 cannot double-count. Canic checks caller permissions. Jobs have quotas and explicit
 expiry; expired jobs cannot resume and cleanup is bounded. Resume after an upgrade
 only when the executable explicitly supports the job's schema/algorithm identity;
-otherwise invalidate and reclaim it. Capacity exhaustion returns an explicit
-failure with bounded cleanup, without automatic spill into more stable storage.
-Select actual quotas, expiry durations and cleanup work limits before exposing M2.
+otherwise refuse resumption and require explicit supported cleanup. Capacity
+exhaustion returns an explicit failure with bounded cleanup, without automatic
+spill into more stable storage.
+The M2 retained-aggregate slice below selects concrete quotas and cleanup limits.
 Persist no user closures. This is a focused
 aggregation mechanism, not a general resumable-job framework or ordinary-write WAL.
 Use application-neutral correctness/high-cardinality cases across varied write rates.
+
+The product now provides `start_count`/`resume_count`,
+`start_sum::<Record>`/`resume_sum::<Record>` and
+`start_avg::<Record>`/`resume_avg::<Record>`, plus
+`start_group_count::<KeyRecord>`/`resume_group_count::<KeyRecord>`,
+`start_group_sum::<KeyRecord, Record>`/`resume_group_sum::<KeyRecord, Record>` and
+`start_group_avg::<KeyRecord, Record>`/`resume_group_avg::<KeyRecord, Record>`.
+One `AggregateJobs` collection uses a
+separate host-governed allocation, leaving the row manifest and codec unchanged.
+Its versioned header admits the owned codec version and owns a fresh incarnation
+and monotonic slot generation.
+At most 16 slots retain 4096 encoded bytes each; expiry is fixed at creation and
+at most one hour after host-captured time. A job admits one million candidates;
+each advance examines at most the fluent work limit (1–512) and reads at most
+64 KiB of source row/key bytes. Candidate bounds reserve room before another
+fetch; neither this byte count nor the encoded-state cap claims total allocator
+or traversal memory. Finalization of one count/sum/average is fixed-size and
+output-bound. Job records use the cursor codec's own encoded-frame bound.
+
+Re-admit the caller's fluent query on each advance. Bind the exact database/schema,
+access path, predicates, source entity, numeric operation, operand/result type and
+algorithm version; resource budgets can change. Persist only this binding, captured revision,
+expiry, phase, sequence, progress position/counters and exact count/accumulator.
+Do not serialize another query AST or expose a prepared-write handle. Sequence
+zero begins advancement; an older sequence reads the current saved state and a
+future sequence refuses. Mutation of cursor and accumulator is one record write
+inside the enclosing message's rollback boundary. Decode/validate result output
+before persisting completion. Arithmetic/output refusal preserves the checkpoint.
+
+Average reuses the retained exact total and present count; divide and round once
+at completion to the result record's declared Decimal scale, nearest with ties
+to even. Never average page means or round a partial total. Sum and average have
+distinct operation tags even when their Decimal result shapes match; the original
+sum binding stays unchanged. The one-million-candidate cap still bounds signed
+128-bit totals plus 28 scale digits inside I256. An unsigned scale-up overflow
+cannot yield an i128-fitting result after division by at most one million.
+These arithmetic bounds extend the synchronous proof without adding another
+accumulator, schema representation or durable format. Synchronous scalar, grouped
+and retained numeric queries share one owner for result admission and selection
+of the source fields to inspect.
+
+Retained grouped row counts use the same grouping table, projection admission,
+comparison codec and completed-output selection as synchronous `group_count`.
+Their payload stores key-record bytes and counts in canonical comparison order;
+resume reconstructs and validates comparison keys, strict ordering and total count.
+No duplicate durable comparison keys or separate grouping executor are added.
+The job-frame codec owns bounded opaque accumulator bytes; each admitted operation
+owns its payload validation. Existing scalar payload bytes and bindings stay valid.
+New grouped payloads have an independent algorithm identity; executables without
+that algorithm cannot resume them. This is not a promise that older executables
+can interpret or clean up newly introduced payloads.
+
+Retained grouped sums/averages extend the same payload with each group's exact
+32-byte numeric total and present count. Reuse scalar numeric identity for operand,
+operation and result type/scale under a separate grouped-numeric algorithm identity;
+existing scalar and grouped-count identities/bytes stay unchanged. Reuse the same
+numeric restore validation and grouped result conversion as existing terminals.
+All-absent groups retain zero count/total and complete as `None`; empty input
+completes as an empty vector. Average divides by each group's present count and
+rounds only at completion. Finalize all groups before selection: an excluded
+overflow still refuses without saving partial progress. Retain IcyDB `6d421e3`'s
+null-exclusion and typed-overflow lessons from `value_reducer/tests`, with IC DB's
+already selected I256/U256 totals and declared-scale rounding rather than its
+universal `Value` coercion path. This adds no arithmetic engine or job collection.
+
+The first retained grouping envelope is 32 groups inside the existing 4096-byte
+whole job frame, including cursor and metadata. It is deliberately smaller than
+the synchronous 128-KiB group-state envelope. Large key/group combinations refuse
+instead of spilling; output filtering/limits cannot conceal that refusal. Per-step
+scanning still uses the shared bounded in-memory grouping allowance. Encoding the
+checkpoint, finalizing/filtering/sorting at most 32 groups and converting output
+must all succeed before persistence. Output refusal preserves previous progress.
+Group predicates, order and output row limit are mathematical result selections,
+so they bind the job; work/output-byte allowances remain adjustable. Return only
+complete selected groups, including an empty vector for empty input. Completed-
+group pagination and larger retained-state envelopes need separate evidence.
+
+Running jobs explicitly invalidate on a source revision change, including on a
+replayed request. A completed result keeps its captured boundary despite later
+writes, until expiry or cancellation. `cleanup_expired` examines at most 16 slots
+and removes at most its requested 1–16 jobs, preparing all refusals before deletion.
+There is no implicit cleanup on capacity refusal, and generation checks prevent
+stale handles from affecting reused slots. Unsupported store formats refuse intact;
+schema/algorithm/query mismatches refuse resumption. A known-format incompatible
+job remains cancellable/expirable independently of database admission. Future format
+changes need an explicit recovery/cleanup rule. Logical deletion does not imply
+physical shrink; no storage-supplier size-class optimization is introduced.
+
+The M0 fixed grouped-sum probe supplies the atomic revision/progress and retry
+precedent. Frozen IcyDB `6d421e3`'s `grouped_fold/count/window` and
+`grouped_fold/generic/page_finalize` distinguish completed-group filtering/paging
+from accumulation; keep that distinction without copying their `Value`, projection
+or route machinery. The product reuses its existing scanner and exact reducers.
+Resumable DISTINCT state and completed-group pagination remain
+separate required slices. `make m2-jobs` qualifies scalar/grouped count/sum/average jobs;
+the CLI's existing aggregate selectors remain synchronous.
 
 ## 6. Writes, commit and recovery
 
@@ -1534,9 +1631,9 @@ including present empty blobs/collections. It reads validated presence tags from
 the existing row spans, without requiring ordered-value support or typed decoding.
 `group_count_field::<Record>("field")` applies that rule to each group and retains
 groups with zero present operands. `count_distinct::<Record>()` counts projected
-tuples, including absence, using the same bounded group map; output `limit` does
+tuples, including absence, using a bounded comparison-key set; output `limit` does
 not truncate this scalar count. Filtering out absence before distinct counting
-expresses distinct-present counting. Other reducers remain implementation work.
+expresses distinct-present counting.
 Grouping uses exact top-level ordered scalar/unit-enum record fields. It does not
 require an index or contiguous groups: a bounded transient map uses the existing
 ordered component codec for tuple equality and order. Output keys follow canonical
@@ -1571,10 +1668,34 @@ The present-field terminal retains that reducer's tested null-exclusion behavior
 it does not silently apply null exclusion to distinct projected tuples. The
 `[10, absent, 30, 10, absent, absent]` witness distinguishes row count 6,
 present-field count 3, distinct tuple count 3 and distinct-present count 2.
-No job records, revisions, journal, format or macro changes are added. These are
-the first aggregate semantics in M2, not a replacement for the accepted resumable
-aggregation contract. Further arithmetic reducers, retained
-jobs and completed-output pagination remain subsequent implementation work.
+These synchronous terminals add no job records, revisions, journal, format or
+macro changes. They establish aggregate semantics independently of the retained
+count/sum/average and grouped-count jobs described above. Further numeric
+combinations, retained DISTINCT operations and completed-output
+pagination remain subsequent implementation work.
+
+`group_count_distinct::<KeyRecord, Record>()` now counts unique projected operand
+tuples inside each group, with overlap between the projections allowed. It shares
+one distinct reducer with scalar `count_distinct`: store comparison keys only,
+using the same tuple encoder as group keys. An absent tuple participates, so an
+all-absent group counts one. This remains separate from present-field counting.
+Scalar distinct counting no longer retains a group map and projected-record copies.
+
+Each set admits at most 32 distinct keys, independently of the 32-group cap. The
+128-KiB query state budget charges every retained key capacity, plus the existing
+group keys, output records and reducer payloads. Set/map node counts are bounded
+separately by those cardinalities. Duplicate values add no retained charge, even
+after reaching the set cap. New distinct values that exhaust a bound refuse before
+group filtering/order/output limits; final counts use the ordinary Nat64 selection
+and output path. No cursors, durable seen-set or new schema representation is added.
+
+This retains IcyDB `6d421e3`'s independent per-group distinct-state and cardinality
+lessons from `aggregate/runtime/grouped_fold/bundle`, without importing compiled
+expressions, aggregate bundles or a separate global-distinct execution route.
+Native witnesses cover nonadjacent duplicates, absent and overlapping tuples,
+Decimal equality, independent group/distinct caps, shared byte exhaustion and
+whole-row corruption. The Wasm/CLI probe covers unique amounts, repeated category
+values and an absent note; grouped results survive reopen through the same engine.
 
 The next synchronous terminals, `min::<Record>()` and `max::<Record>()`, accept
 one exact projected field and return `Aggregate<Option<Record>>`. Multi-field
@@ -1603,8 +1724,8 @@ its numeric-or-strict value comparison here; no universal value tree, coercion
 or generic reducer framework is imported. Native witnesses cover optional zero,
 empty input, decimal agreement, owned text, final-output limits and key/work
 refusals; the Wasm/CLI witness covers exact amounts, absent notes, present zero
-priority, upgrade/reopen and unchanged backing bytes. Broader arithmetic reducers and
-resumable aggregation remain subsequent work. Schema macros, stored
+priority, upgrade/reopen and unchanged backing bytes. These extrema remain
+synchronous; resumable extrema are subsequent work. Schema macros, stored
 contracts and cursor formats are unchanged.
 
 `group_min::<KeyRecord, ValueRecord>()` and `group_max::<KeyRecord, ValueRecord>()`
@@ -1681,7 +1802,7 @@ not at the narrower running-result boundary. Native witnesses cover every intege
 width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow,
 absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
-backing during queries. Float arithmetic and resumable execution remain
+backing during queries. Float arithmetic and resumable grouped execution remain
 required implementation work.
 
 Decimal sums now use the same accumulator at the field's declared scale (0–28).
@@ -1758,7 +1879,8 @@ Native witnesses cover every integer width, signed ties, repeating fractions at
 28 places, absence, rounded group comparisons and final overflow. Wasm checks
 rounding, upgrade/reopen, an overflowing sum with a fitting average and unchanged
 stable bytes. The CLI's average selectors choose scale 2. Floating arithmetic and
-resumable execution remain required subsequent work.
+resumable grouped execution remain required subsequent work; scalar average jobs
+reuse this arithmetic and are described above.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed

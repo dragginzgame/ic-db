@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.10.0] - 2026-11-15 (development checkpoint)
+
+### 📝 Summary
+
+Add bounded retained scalar/grouped counts, sums and averages with atomic progress,
+revision invalidation, retries and upgrade recovery. Extend synchronous grouped
+DISTINCT counts and CLI examples. Retain one scanner, exact reducers and grouped
+finalization; no schema, row-format or endpoint-generation changes.
+
+### ▶️ Try it
+
+```sh
+make db
+db query Entry --select category,distinct-count:amount
+db query Entry --select category,distinct-count:category
+db query Document --select entry_id,distinct-count:note
+make m2-jobs
+```
+
+Each category has three distinct amounts and one distinct category value. The
+document's absent note counts as one distinct tuple, unlike present-field count.
+`make m2-jobs` qualifies retained aggregate APIs; CLI selectors remain synchronous.
+
+### 🛠️ Changes
+
+- Add `.group_count_distinct::<KeyRecord, Record>()` with absent-tuple inclusion,
+  overlapping projections, completed-count filtering/order and independent bounds
+  on groups, distinct tuples and retained bytes. Scalar and grouped distinct
+  counts share one comparison-key set reducer; scalar counts no longer retain
+  duplicate projected-record bytes. No durable state or schema changes.
+- Add retained `start_count`/`resume_count` and `start_sum`/`resume_sum` with
+  explicit progress/completion, per-entity revision invalidation, sequence-safe
+  retries and same-code upgrade recovery. Reuse the existing scanner, exact
+  integer/Decimal reducers and owned codec. One separate host-owned allocation
+  holds at most 16 jobs; candidate, byte, lifetime and cleanup limits are explicit.
+  Add `make m2-jobs` for native and Wasm rollback qualification. This adds job
+  state without changing the database manifest, row codec or schema attributes;
+  retained jobs are not yet exposed by the CLI.
+- Add `start_avg::<Record>`/`resume_avg::<Record>` over the same retained total
+  and present count. Integer/Decimal averages round once at completion to the
+  declared Decimal scale with ties to even. Bind average separately from sum and
+  preserve existing count/sum job identities. Reuse numeric admission, job
+  preparation, result conversion and storage without a new format or allocation.
+  Qualify uneven chunks, absence, large cancelling totals, overflow, retry and
+  upgrade recovery. CLI average commands remain synchronous.
+- Consolidate numeric query admission across synchronous, grouped and retained
+  terminals. Reuse the cursor codec's frame bound for job records, remove repeated
+  test-store setup and consolidate duplicated job guidance. Public behavior and
+  stored formats are unchanged by this cleanup.
+- Add `start_group_count::<KeyRecord>`/`resume_group_count::<KeyRecord>` with
+  exact multi-field/absent keys, completed-group filtering/order and atomic retries.
+  Reuse the group table, scanner, output conversion and job lifecycle. Retain at
+  most 32 groups within the existing 4-KiB whole-job cap; oversized state refuses
+  without losing progress, regardless of output filters/limits. Store key records
+  and counts, reconstruct comparison keys, and preserve scalar checkpoint bytes.
+  Qualify prior-scalar-executable upgrades and grouped rollback/reopening.
+- Add `start_group_sum`/`resume_group_sum` and `start_group_avg`/`resume_group_avg`
+  with exact per-group totals/present counts and completed `GroupValue` results.
+  Preserve absent groups, round averages once, and refuse overflow even in groups
+  excluded by output selection. Share numeric checkpoints and grouped result
+  conversion; retain existing count-job bytes and identities. The same 32-group/
+  4-KiB frame limits apply, without new collections, dependencies or schema changes.
+  Qualify arithmetic, retries, refusal preservation and Wasm rollback/upgrades.
+  Retained DISTINCT jobs and completed-group paging remain later work.
+
 ## [0.9.0] - 2026-11-15 (development checkpoint)
 
 ### 📝 Summary

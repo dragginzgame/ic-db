@@ -391,11 +391,22 @@ fn execute<E: Entity>(
         "distinct-count:category" => query
             .count_distinct::<CategoryOnly>()
             .map(|r| display_count(&r)),
-        "category,count" => query.group_count::<CategoryOnly>().map(display_groups),
+        "category,distinct-count:amount" => query
+            .group_count_distinct::<CategoryOnly, AmountOnly>()
+            .map(|r| display_groups(r, "category", |k| k.category.to_string())),
+        "category,distinct-count:category" => query
+            .group_count_distinct::<CategoryOnly, CategoryOnly>()
+            .map(|r| display_groups(r, "category", |k| k.category.to_string())),
+        "entry_id,distinct-count:note" => query
+            .group_count_distinct::<EntryIdOnly, NoteOnly>()
+            .map(|r| display_groups(r, "entry_id", |k| k.entry_id.to_string())),
+        "category,count" => query
+            .group_count::<CategoryOnly>()
+            .map(|r| display_groups(r, "category", |k| k.category.to_string())),
         s if s.starts_with("count:") => query.count_field(&s[6..]).map(|r| display_count(&r)),
         s if s.starts_with("category,count:") => query
             .group_count_field::<CategoryOnly>(&s[15..])
-            .map(display_groups),
+            .map(|r| display_groups(r, "category", |k| k.category.to_string())),
         "full" => query.fetch().map(|p| display(p, columns, render)),
         "id" => query
             .fetch_as::<IdOnly>()
@@ -480,12 +491,12 @@ fn display_count(r: &Aggregate<u64>) -> Page {
         r.output_bytes as u32,
     )
 }
-fn display_groups(r: Aggregate<Vec<GroupCount<CategoryOnly>>>) -> Page {
+fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) -> String) -> Page {
     (
-        vec!["category".into(), "count".into()],
+        vec![column.into(), "count".into()],
         r.value
             .into_iter()
-            .map(|g| vec![g.key.category.to_string(), g.count.to_string()])
+            .map(|g| vec![key(g.key), g.count.to_string()])
             .collect(),
         None,
         r.examined as u32,

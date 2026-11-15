@@ -62,6 +62,8 @@ enum Command {
         bytes: u32,
         /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
         /// category,count or category,count:FIELD. Field counts exclude absence.
+        /// category,distinct-count:amount or category,distinct-count:category for Entry;
+        /// entry_id,distinct-count:note for Document. Distinct tuples include absence.
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).

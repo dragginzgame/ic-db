@@ -10,6 +10,8 @@ mod defaults;
 mod enum_collections;
 mod envelope;
 mod generation;
+#[cfg(feature = "aggregate-jobs")]
+mod jobs;
 mod managed;
 mod principal_keys;
 mod queries;
@@ -50,8 +52,14 @@ fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
 }
 fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
-    let declarations =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("m1", KEY).unwrap()]).unwrap();
+    let requests = vec![MemoryRequest::new("m1", KEY).unwrap()];
+    #[cfg(feature = "aggregate-jobs")]
+    let requests = {
+        let mut requests = requests;
+        requests.push(MemoryRequest::new("m1", jobs::KEY).unwrap());
+        requests
+    };
+    let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
     let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
         .unwrap();
@@ -137,6 +145,8 @@ fn initialize() {
         })
         .unwrap();
     db.commit(batch).unwrap();
+    #[cfg(feature = "aggregate-jobs")]
+    jobs::initialize(&host);
 }
 fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
     (

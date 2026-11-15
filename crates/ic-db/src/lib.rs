@@ -87,14 +87,18 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{
-    Aggregate, Batch, Comparison, Database, GroupCount, GroupOrder, GroupValue, Page, Query,
-    QueryCursor, QueryPage,
+    Aggregate, AggregateJobs, Batch, Comparison, Database, GroupCount, GroupOrder, GroupValue,
+    JobHandle, JobOutcome, JobStep, Page, Query, QueryCursor, QueryPage,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// The retained job handle, query, result shape or requested sequence does not match.
+    InvalidJob,
+    /// All retained job slots are occupied; cancel or clean up expired jobs explicitly.
+    JobCapacity,
     /// An arithmetic total exceeds its accumulator or explicitly selected result range.
     ArithmeticOverflow,
     /// Unsupported query field/shape or unavailable ordered access path.

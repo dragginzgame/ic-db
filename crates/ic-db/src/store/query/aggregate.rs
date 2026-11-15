@@ -1,4 +1,5 @@
-//! Complete bounded aggregates over the shared scanner, without durable jobs or row history.
+//! Bounded aggregates over the shared scanner and exact reducers, without row history.
+pub(super) mod jobs;
 mod numeric;
 
 use super::{
@@ -8,10 +9,11 @@ use crate::{
     Entity, EntitySchema, Error, IndexValue, TypeSchema, Value, ValueSchema, codec::Decoder, key,
 };
 use ic_storage::Memory;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_COMPARISON_KEY: usize = 4096;
 const MAX_GROUPS: usize = 32;
+const MAX_DISTINCT_VALUES: usize = 32;
 const MAX_STATE_BYTES: usize = 128 * 1024;
 
 /// Completed-group ordering. Aggregate ties always use ascending canonical keys.
@@ -42,7 +44,7 @@ impl GroupRequest<'_> {
                 return Err(Error::Limit);
             }
             let key = match reducer {
-                Reducer::Count { .. } => match value {
+                Reducer::Count { .. } | Reducer::Distinct { .. } => match value {
                     IndexValue::Nat64(value) => Some(value.to_be_bytes().to_vec()),
                     _ => return Err(Error::InvalidOperand),
                 },
@@ -53,7 +55,7 @@ impl GroupRequest<'_> {
                             ValueSchema { value: field.value, optional: field.optional }
                         }
                         Reducer::Numeric(state) => state.output(),
-                        Reducer::Count { .. } => return Err(Error::Corrupt),
+                        Reducer::Count { .. } | Reducer::Distinct { .. } => return Err(Error::Corrupt),
                     };
                     // Even a required input field can have an absent aggregate result.
                     value.admit(field.value, true)?;
@@ -257,24 +259,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         initial: Reducer,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (groups, page) = self.grouped(plan, initial)?;
-        let mut output_bytes = 0;
-        let value = groups
-            .into_output()?
-            .into_iter()
-            .take(self.request.rows)
-            .map(|(key, reducer)| {
-                let value = reducer.into_value()?;
-                admit_output(
-                    key.len() + value.as_ref().map_or(0, Vec::len),
-                    self.request.bytes,
-                    &mut output_bytes,
-                )?;
-                Ok(GroupValue {
-                    key: decode_record(&key)?,
-                    value: value.as_deref().map(decode_record).transpose()?,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
+        let (value, output_bytes) = value_output(groups, self.request.rows, self.request.bytes)?;
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -286,7 +271,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be observed before `work_limit` is reached; an exact-boundary
-    /// scan can conservatively refuse. Resumable aggregation is not implemented yet.
+    /// scan can conservatively refuse. Use `start_count`/`resume_count` for retained work.
     /// # Errors
     /// Refuses cursors, DISTINCT, explicit ordering and the ordinary query failures.
     /// Work exhaustion returns `Limit`, never a partial count. Too few output bytes
@@ -309,10 +294,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Count distinct projected tuples, including absent values, without an index.
-    /// Uses the key types and state bounds of [`Self::group_count`]. `limit` never
-    /// truncates this count. The scalar result occupies eight bytes.
+    /// Retain at most 32 distinct comparison keys, each at most 4096 bytes, within
+    /// the shared 128-KiB state bound. No projected records are retained. `limit`
+    /// never truncates this count. The scalar result occupies eight bytes.
     /// # Errors
-    /// Ordinary count/projection errors and group-state exhaustion refuse.
+    /// Ordinary count/projection errors and distinct-state exhaustion refuse.
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn count_distinct<K: Value>(self) -> Result<Aggregate<u64>, Error> {
@@ -320,13 +306,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Err(Error::RowTooLarge);
         }
         let plan = self.aggregate_plan(Some(K::definition()), false)?;
-        let (groups, page) = self.grouped(&plan, self.count_reducer(None)?)?;
-        Ok(Aggregate {
-            value: groups.rows.len() as u64,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes: 8,
-        })
+        let reducer = Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?);
+        self.scalar_count_value(&plan, reducer)
     }
 
     fn scalar_count(self, field: Option<&str>) -> Result<Aggregate<u64>, Error> {
@@ -334,12 +315,20 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Err(Error::RowTooLarge);
         }
         let plan = self.aggregate_plan(None, false)?;
-        let mut reducer = self.count_reducer(field)?;
+        let reducer = self.count_reducer(field)?;
+        self.scalar_count_value(&plan, reducer)
+    }
+
+    fn scalar_count_value(
+        self,
+        plan: &Plan<'_>,
+        mut reducer: Reducer,
+    ) -> Result<Aggregate<u64>, Error> {
         let page = execute(
             &self.db.map,
             E::SCHEMA,
             &self.request,
-            &plan,
+            plan,
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
         Ok(Aggregate {
@@ -385,25 +374,44 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.group_counts(Some(field))
     }
 
+    /// Count distinct projected `R` tuples within each projected `K` group.
+    /// Absence is a tuple component, as for [`Self::count_distinct`]; an all-absent
+    /// group has one distinct tuple, not zero. Projections may overlap. No index
+    /// is required. Complete input before group filtering/order and output limits.
+    /// Retain at most 32 groups and 32 distinct tuples per group, with one shared
+    /// 128-KiB state allowance and a 4096-byte cap per comparison key.
+    /// # Errors
+    /// Refuses unsupported projections, cursors, DISTINCT and explicit input order.
+    /// Work, cardinality or byte exhaustion returns `Limit`, never partial counts.
+    /// Ordinary grouped-count output and integrity errors apply.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn group_count_distinct<K: Value, R: Value>(
+        self,
+    ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
+        let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
+        let operand = admit_projection(E::SCHEMA, R::definition())?;
+        admit_ordered_fields(E::SCHEMA, operand)?;
+        plan.selected |= operand;
+        self.group_count_values(&plan, Reducer::distinct(operand))
+    }
+
     fn group_counts<K: Value>(
         self,
         field: Option<&str>,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let (groups, page) = self.grouped(&plan, self.count_reducer(field)?)?;
-        let mut output_bytes = 0;
-        let value = groups
-            .into_output()?
-            .into_iter()
-            .take(self.request.rows)
-            .map(|(bytes, reducer)| {
-                admit_output(bytes.len() + 8, self.request.bytes, &mut output_bytes)?;
-                Ok(GroupCount {
-                    key: decode_record(&bytes)?,
-                    count: reducer.into_count()?,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
+        let reducer = self.count_reducer(field)?;
+        self.group_count_values(&plan, reducer)
+    }
+
+    fn group_count_values<K: Value>(
+        self,
+        plan: &Plan<'_>,
+        reducer: Reducer,
+    ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
+        let (groups, page) = self.grouped(plan, reducer)?;
+        let (value, output_bytes) = count_output(groups, self.request.rows, self.request.bytes)?;
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -434,14 +442,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         plan: &Plan<'_>,
         initial: Reducer,
     ) -> Result<(Groups, QueryPage<Vec<u8>>), Error> {
-        let selection = self.request.groups.admit(E::SCHEMA, &initial)?;
-        let mut groups = Groups {
-            selection,
-            mask: plan.projection.ok_or(Error::InvalidQuery)?,
-            initial,
-            rows: BTreeMap::new(),
-            state_bytes: 0,
-        };
+        let mut groups = self.admit_groups(plan, initial)?;
         let page = execute(
             &self.db.map,
             E::SCHEMA,
@@ -450,6 +451,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             Some(Accumulator::Groups(&mut groups)),
         )?;
         Ok((groups, page))
+    }
+
+    fn admit_groups(&self, plan: &Plan<'_>, initial: Reducer) -> Result<Groups, Error> {
+        Ok(Groups {
+            selection: self.request.groups.admit(E::SCHEMA, &initial)?,
+            mask: plan.projection.ok_or(Error::InvalidQuery)?,
+            initial,
+            rows: BTreeMap::new(),
+            state_bytes: 0,
+        })
     }
 
     fn aggregate_plan(
@@ -474,15 +485,84 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             group_output,
         )?;
         if let Some(mask) = plan.projection {
-            for (i, field) in E::SCHEMA.fields.iter().enumerate() {
-                if mask & (1 << i) != 0 && !key::supports(field.value) {
-                    return Err(Error::InvalidQuery);
-                }
-            }
+            admit_ordered_fields(E::SCHEMA, mask)?;
             plan.selected |= mask;
         }
         Ok(plan)
     }
+}
+
+fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
+    for (i, field) in entity.fields.iter().enumerate() {
+        if mask & (1 << i) != 0 && !key::supports(field.value) {
+            return Err(Error::InvalidQuery);
+        }
+    }
+    Ok(())
+}
+
+fn comparison_key(
+    entity: &EntitySchema,
+    mask: u16,
+    values: &[IndexValue<'_>],
+) -> Result<Vec<u8>, Error> {
+    let mut key = Vec::new();
+    for (i, field) in entity.fields.iter().enumerate() {
+        if mask & (1 << i) != 0 {
+            values[i].append_component(field.optional, &mut key);
+            if key.len() > MAX_COMPARISON_KEY {
+                return Err(Error::Limit);
+            }
+        }
+    }
+    Ok(key)
+}
+
+fn value_output<K: Value, R: Value>(
+    groups: Groups,
+    rows: usize,
+    bytes: usize,
+) -> Result<(Vec<GroupValue<K, R>>, usize), Error> {
+    let mut output_bytes = 0;
+    let value = groups
+        .into_output()?
+        .into_iter()
+        .take(rows)
+        .map(|(key, reducer)| {
+            let value = reducer.into_value()?;
+            admit_output(
+                key.len() + value.as_ref().map_or(0, Vec::len),
+                bytes,
+                &mut output_bytes,
+            )?;
+            Ok(GroupValue {
+                key: decode_record(&key)?,
+                value: value.as_deref().map(decode_record).transpose()?,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok((value, output_bytes))
+}
+
+fn count_output<K: Value>(
+    groups: Groups,
+    rows: usize,
+    bytes: usize,
+) -> Result<(Vec<GroupCount<K>>, usize), Error> {
+    let mut output_bytes = 0;
+    let value = groups
+        .into_output()?
+        .into_iter()
+        .take(rows)
+        .map(|(key, reducer)| {
+            admit_output(key.len() + 8, bytes, &mut output_bytes)?;
+            Ok(GroupCount {
+                key: decode_record(&key)?,
+                count: reducer.into_count()?,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok((value, output_bytes))
 }
 
 fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
@@ -512,7 +592,11 @@ impl Accumulator<'_> {
     pub(super) fn needs_spans(&self) -> bool {
         !matches!(
             self,
-            Self::Scalar(Reducer::Numeric(_) | Reducer::Count { presence: None, .. })
+            Self::Scalar(
+                Reducer::Numeric(_)
+                    | Reducer::Count { presence: None, .. }
+                    | Reducer::Distinct { .. }
+            )
         )
     }
 
@@ -533,6 +617,10 @@ impl Accumulator<'_> {
 #[derive(Clone)]
 pub(super) enum Reducer {
     Numeric(numeric::NumericAggregate),
+    Distinct {
+        mask: u16,
+        seen: BTreeSet<Vec<u8>>,
+    },
     Count {
         presence: Option<usize>,
         total: u64,
@@ -544,6 +632,13 @@ pub(super) enum Reducer {
     },
 }
 impl Reducer {
+    fn distinct(mask: u16) -> Self {
+        Self::Distinct {
+            mask,
+            seen: BTreeSet::new(),
+        }
+    }
+
     fn extremum(entity: &EntitySchema, mask: u16, maximum: bool) -> Result<Self, Error> {
         if mask.count_ones() != 1 {
             return Err(Error::InvalidQuery);
@@ -563,6 +658,7 @@ impl Reducer {
         match self {
             Self::Numeric(state) => state.retained_bytes(),
             Self::Count { .. } => 8,
+            Self::Distinct { seen, .. } => 8 + seen.iter().map(Vec::capacity).sum::<usize>(),
             Self::Extremum { selected, .. } => selected
                 .as_ref()
                 .map_or(0, |(key, bytes)| key.capacity() + bytes.capacity()),
@@ -572,6 +668,7 @@ impl Reducer {
     fn finish(self) -> Result<Completed, Error> {
         match self {
             Self::Count { total, .. } => Ok(Completed::Count(total)),
+            Self::Distinct { seen, .. } => Ok(Completed::Count(seen.len() as u64)),
             Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
             Self::Numeric(state) => state.finish(),
         }
@@ -587,6 +684,18 @@ impl Reducer {
     ) -> Result<(), Error> {
         match self {
             Self::Numeric(state) => state.push(values)?,
+            Self::Distinct { mask, seen } => {
+                let key = comparison_key(entity, *mask, values)?;
+                if !seen.contains(&key) {
+                    if seen.len() == MAX_DISTINCT_VALUES
+                        || 8 + seen.iter().map(Vec::capacity).sum::<usize>() + key.capacity()
+                            > allowance
+                    {
+                        return Err(Error::Limit);
+                    }
+                    seen.insert(key);
+                }
+            }
             Self::Count { presence, total } => {
                 *total += u64::from(presence.is_none_or(|i| bytes[usize::from(spans[i].0)] != 0));
             }
@@ -721,15 +830,11 @@ impl Groups {
         bytes: &[u8],
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
-        let mut key = Vec::new();
+        let key = comparison_key(entity, self.mask, values)?;
         let mut size = 0;
-        for (i, field) in entity.fields.iter().enumerate() {
+        for (i, span) in spans.iter().enumerate() {
             if self.mask & (1 << i) != 0 {
-                values[i].append_component(field.optional, &mut key);
-                if key.len() > MAX_COMPARISON_KEY {
-                    return Err(Error::Limit);
-                }
-                size += usize::from(spans[i].1 - spans[i].0);
+                size += usize::from(span.1 - span.0);
             }
         }
         if let Some((_, reducer)) = self.rows.get_mut(&key) {
@@ -752,7 +857,8 @@ impl Groups {
         let mut reducer = self.initial.clone();
         reducer.push(entity, values, bytes, spans, available - base)?;
         let output = copy_projection(bytes, spans, self.mask, size);
-        // Map nodes and fixed bookkeeping are independently bounded by MAX_GROUPS.
+        // Map/set nodes and fixed bookkeeping are independently bounded by the
+        // group and per-group distinct cardinality caps.
         let retained = key.capacity() + output.capacity() + reducer.retained_bytes();
         if retained > available {
             return Err(Error::Limit);

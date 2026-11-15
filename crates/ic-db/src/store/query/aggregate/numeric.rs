@@ -1,4 +1,5 @@
 //! Integer/decimal sums and averages over one exact total, without numeric coercion.
+use super::super::Plan;
 use super::{Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
@@ -25,10 +26,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn sum<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        let mut plan = self.aggregate_plan(None, false)?;
-        let sum = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Sum)?;
-        plan.selected |= 1 << sum.position;
-        self.scalar_value(&plan, Reducer::Numeric(sum))
+        let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Sum)?;
+        self.scalar_value(&plan, reducer)
     }
     /// Sum one integer or Decimal operand per exact grouping record, retaining absent keys
     /// and all-absent groups. R selects the same explicit result widening as sum.
@@ -42,10 +41,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_sum<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let sum = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Sum)?;
-        plan.selected |= 1 << sum.position;
-        self.group_values(&plan, Reducer::Numeric(sum))
+        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
+        self.group_values(&plan, reducer)
     }
 
     /// Average an integer or Decimal field into a single-field Decimal record.
@@ -61,10 +58,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn avg<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        let mut plan = self.aggregate_plan(None, false)?;
-        let state = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Average)?;
-        plan.selected |= 1 << state.position;
-        self.scalar_value(&plan, Reducer::Numeric(state))
+        let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Average)?;
+        self.scalar_value(&plan, reducer)
     }
 
     /// Average per group using [`Self::avg`]'s Decimal scale and rounding contract.
@@ -76,27 +71,39 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_avg<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let state = NumericAggregate::admit(E::SCHEMA, R::definition(), Operation::Average)?;
+        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
+        self.group_values(&plan, reducer)
+    }
+
+    // One admission path for synchronous, grouped and retained numeric terminals.
+    pub(super) fn numeric_plan<R: Value>(
+        &self,
+        group: Option<&TypeSchema>,
+        operation: Operation,
+    ) -> Result<(Plan<'static>, Reducer), Error> {
+        let mut plan = self.aggregate_plan(group, group.is_some())?;
+        let state = NumericAggregate::admit(E::SCHEMA, R::definition(), operation)?;
         plan.selected |= 1 << state.position;
-        self.group_values(&plan, Reducer::Numeric(state))
+        Ok((plan, Reducer::Numeric(state)))
     }
 }
 
 #[derive(Clone, Copy)]
-enum Operation {
-    Sum,
-    Average,
+#[repr(u8)]
+pub(super) enum Operation {
+    // Stable job-binding tags; preserve the original sum identity.
+    Sum = 1,
+    Average = 2,
 }
 
 #[derive(Clone)]
 pub(in crate::store::query) struct NumericAggregate {
-    position: usize,
+    pub(super) position: usize,
     source_scale: u32,
     output: ValueSchema,
     total: Total,
     count: u64,
-    operation: Operation,
+    pub(super) operation: Operation,
 }
 #[derive(Clone)]
 enum Total {
@@ -186,7 +193,8 @@ impl NumericAggregate {
                         .ok_or(Error::Corrupt)?,
                     _ => return Err(Error::Corrupt),
                 };
-                // At most 512 inputs of at most 128 signed bits fit in I256.
+                // Both synchronous and retained scans bound input counts; sums
+                // remain checked independently of that resource proof.
                 *total = total
                     .checked_add(I256::from(value))
                     .ok_or(Error::ArithmeticOverflow)?;
@@ -204,8 +212,28 @@ impl NumericAggregate {
                 *total = total.checked_add(value).ok_or(Error::ArithmeticOverflow)?;
             }
         }
-        self.count += 1; // The shared scanner admits at most 512 candidates.
+        self.count = self.count.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         Ok(())
+    }
+
+    // The job binding supplies admitted type/scale/operation metadata. Store only
+    // the exact accumulator and presence count, never a second schema or value AST.
+    pub(super) fn checkpoint(&self) -> (u64, [u8; 32]) {
+        (
+            self.count,
+            match self.total {
+                Total::Signed(n) => n.to_be_bytes(),
+                Total::Unsigned(n) => n.to_be_bytes(),
+            },
+        )
+    }
+
+    pub(super) fn restore(&mut self, count: u64, total: [u8; 32]) {
+        self.count = count;
+        self.total = match self.total {
+            Total::Signed(_) => Total::Signed(I256::from_be_bytes(total)),
+            Total::Unsigned(_) => Total::Unsigned(U256::from_be_bytes(total)),
+        };
     }
 
     pub(super) fn retained_bytes(&self) -> usize {
@@ -233,7 +261,8 @@ impl NumericAggregate {
             let numerator = match self.total {
                 Total::Signed(n) => n,
                 // A nonnegative integer total this large cannot produce a Decimal
-                // coefficient fitting i128 after division by at most 512.
+                // coefficient fitting i128 even after division by the retained
+                // job's maximum one million inputs (synchronous scans use 512).
                 Total::Unsigned(n) => n.try_into().map_err(|_| Error::ArithmeticOverflow)?,
             };
             self.total = Total::Signed(rounded_average(
@@ -290,6 +319,10 @@ fn rounded_average(
     source_scale: u32,
     result_scale: u32,
 ) -> Result<I256, Error> {
+    // One million signed 128-bit inputs plus 28 decimal scale digits fit I256.
+    // For unsigned totals, a scale-up overflow cannot hide a fitting i128 result:
+    // division by at most one million cannot bring that magnitude into range.
+    // The scale-down denominator and twice-remainder also fit comfortably.
     let factor = I256::from(10_i128.pow(source_scale.abs_diff(result_scale)));
     let (numerator, denominator) = if result_scale >= source_scale {
         (

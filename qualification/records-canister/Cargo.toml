@@ -18,6 +18,7 @@ category = "tests"
 crate-type = ["cdylib"]
 
 [features]
+aggregate-jobs = ["fault-injection"]
 fault-injection = []
 
 [dependencies]

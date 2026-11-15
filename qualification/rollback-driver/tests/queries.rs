@@ -179,6 +179,38 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         (6, 6, 8)
     );
     assert!(distinct_count.2.is_none());
+    assert_eq!(
+        aggregate("category,distinct-count:amount", 1, 7, 16)
+            .await
+            .unwrap(),
+        grouped
+    );
+    let distinct_groups = aggregate("category,distinct-count:category", 2, 7, 32)
+        .await
+        .unwrap();
+    assert_eq!(distinct_groups.1, [vec!["0", "1"], vec!["1", "1"]]);
+    assert!(
+        aggregate("category,distinct-count:amount", 2, 6, 32)
+            .await
+            .is_err()
+    );
+    let absent_note_group = console((
+        "Document",
+        None,
+        1,
+        None,
+        None,
+        None,
+        vec![],
+        false,
+        8,
+        16,
+        "entry_id,distinct-count:note",
+        false,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(absent_note_group.1, [vec!["1", "1"]]);
     assert_eq!(aggregate("count:amount", 1, 7, 8).await.unwrap(), count);
     assert_eq!(
         aggregate("category,count:amount", 1, 7, 16).await.unwrap(),
@@ -393,6 +425,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert_eq!(
         aggregate("distinct-count:category", 1, 7, 8).await.unwrap(),
         distinct_count
+    );
+    assert_eq!(
+        aggregate("category,distinct-count:category", 2, 7, 32)
+            .await
+            .unwrap(),
+        distinct_groups
     );
     assert_eq!(
         selected(ordered_request, Some(15), Some("desc"))

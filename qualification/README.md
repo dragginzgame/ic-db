@@ -38,6 +38,7 @@ The first M2 fluent-read probe is selected separately:
 
 ```sh
 make m2-queries
+make m2-jobs
 ```
 
 It exercises exact scalar filters, primary/index-prefix traversal, reverse order,
@@ -78,6 +79,15 @@ present empty blobs/lists, zero-count groups, independent output limits, unknown
 fields on empty input and noncontiguous duplicate tuples. Wasm checks optional
 note and grouped field counts, then distinct category counts across reopen.
 This is not qualification of resumable jobs, arithmetic reducers or all type pairs.
+
+Scalar and grouped distinct counts now share a bounded comparison-key set. Native
+cases cover absent/multi-field tuples, projection overlap, Decimal equality, 32
+distinct values per group, duplicate acceptance at capacity and shared byte/key
+refusal before output selection. Scalar counting retains no projected records.
+The Wasm probe repeats grouped distinct counts after upgrade and checks that an
+absent note contributes one distinct tuple. The CLI selectors are
+`category,distinct-count:amount`, `category,distinct-count:category` and
+`entry_id,distinct-count:note`; all execute through the fluent engine.
 
 Synchronous minima/maxima use the same query probe: exact single-field projection,
 absence versus zero, empty input, decimal ordering, owned text winners and final
@@ -1131,6 +1141,66 @@ schema/query/algorithm; it does not implement general identity admission. Caller
 authorization, expiry, changed-code recovery, multi-entity inputs, arbitrary group
 cardinality/types and production instruction/byte budgets remain unqualified.
 These limits do not reduce the accepted product capabilities.
+
+## Product retained aggregates
+
+`make m2-jobs` selects the native job tests and a feature-selected records-canister
+build using the actual product `AggregateJobs`, query scanner, exact reducers and
+IC Storage allocation. The normal CLI fixture has neither these controls nor the
+additional job allocation. Testkit owns the PocketIC instance. Private endpoints
+are test controls; production authorization and endpoint generation remain Canic's.
+
+Twenty-eight native tests qualify counts beyond the synchronous 512-candidate budget,
+sparse indexed filters, independent 64-KiB source-byte steps, exact signed/Decimal
+cancellation across checkpoints, U256 preservation, all-absent results, query/
+result/database/store binding, sequence refusals, same-code reopen, backwards
+time, expiry/capacity/cancellation and safe slot reuse. Output/arithmetic refusal
+preserves prior progress. Malformed cleanup input and unsupported store headers
+refuse with backing bytes intact. Existing 47 synchronous query tests still pass.
+Average cases additionally cover unequal step sizes and present counts, positive/
+negative even ties, absence versus zero, 1025-row cancellation at scale 28,
+reopened denominators, operation/result-scale mismatches, U256 conversion after
+division, and finalization refusal without a scale fallback or lost checkpoint.
+Grouped-count cases use an independent complete-input count/sort oracle, including
+521 rows, multi-field/absent keys, sparse indexed input, empty input, selection
+bindings and output refusal. Separate probes exceed group cardinality and the
+4-KiB whole-job bound even when selection hides groups, preserving backing bytes.
+Reopening reconstructs comparison keys; malformed group counts refuse intact.
+Grouped numeric cases add 522-row complete totals, all-absent groups, signed
+rounding ties and selection on rounded values, reopened cancelling totals and
+denominators, Decimal/U256 preservation, operation/key/scale mismatches, excluded
+overflow and output/frame refusals. A malformed nonzero total with zero present
+count refuses intact and remains explicitly cancellable.
+
+The Wasm witness injects traps during creation and each measured checkpoint
+backing-write position, then after a successful advance returns to application
+code. It compares the complete stable-memory image, including allocator metadata.
+A trapped source write preserves the revision; no-op and unrelated-entity writes
+allow completion. Same-code upgrade preserves unfinished scalar and grouped state;
+retries do not double-count. Real source changes invalidate running jobs; completed totals retain
+their captured boundary until expiry. Explicit bounded cleanup frees slots and
+stale handles cannot cancel later occupants. Average checkpoint and later
+application traps also restore complete backing bytes, as do grouped checkpoint
+and later application traps. Grouped sums/averages receive both trap probes and
+same-code upgrade/retry/completion checks. This qualifies scalar/grouped
+count/sum/average, not retained DISTINCT jobs, physical-memory shrink or completion
+under sustained writes. Initial quotas are design bounds, not peak-memory or
+performance claims. The earlier fixed M0 grouped probe remains separate evidence.
+
+The driver can also install a recorded scalar predecessor before upgrading to
+the current artifact, selected explicitly by `IC_DB_M2_SCALAR_JOBS_WASM`. The
+grouping run used the previously verified scalar artifact with SHA-256
+`3602176165900fc7ad6475ad273b7e28f0d29cbcc0888c5a02da7e9ba6b1785c`, retained at
+`qualification/target/evidence/m2/scalar-jobs-before-grouping.wasm`. Its unfinished
+count/sum/average jobs resume under the grouped implementation without migration.
+Without that optional artifact, `make m2-jobs` verifies same-code upgrades. This
+specific compatibility witness does not qualify arbitrary changed-code recovery.
+The numeric grouping run also selected `IC_DB_M2_GROUP_COUNT_JOBS_WASM` for the
+intermediate grouped-count predecessor, SHA-256
+`70998b9a5bcce9abbc60a019ed9853d257e237cb4ef6549f453b2e49f472ebad`, retained at
+`qualification/target/evidence/m2/count-groups-before-numeric.wasm`. Its unfinished
+grouped counts resume under the numeric grouping implementation without migration.
+Omitting either predecessor uses the current executable for that upgrade step.
 
 ## Identified maintenance and the local console
 

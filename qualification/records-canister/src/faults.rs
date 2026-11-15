@@ -17,6 +17,24 @@ thread_local! {
     static INJECTION: Cell<Option<Injection>> = const { Cell::new(None) };
 }
 
+#[cfg(feature = "aggregate-jobs")]
+pub(super) fn arm_job_write(stop_after: u64) {
+    INJECTION.with(|slot| {
+        slot.set(Some(Injection {
+            stop_after,
+            deny_growth: false,
+            exhaust_instructions: false,
+            writes: 0,
+            grows: 0,
+        }))
+    });
+}
+
+#[cfg(feature = "aggregate-jobs")]
+pub(super) fn finish_job_write() -> u64 {
+    INJECTION.with(|slot| slot.take().unwrap().writes)
+}
+
 #[derive(Default)]
 pub(super) struct FaultMemory(DefaultMemoryImpl);
 

@@ -25,6 +25,7 @@ help:
 	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
+	  'make m2-jobs                    Check retained aggregates and rollback' \
 	  'make m2-cli                     Check the fluent CLI and migrated query caller' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
@@ -164,6 +165,15 @@ m1-records-wasm: m1-records-artifact
 m2-queries: m1-records-artifact
 	cargo test --locked -p ic-db --test queries
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries -- --nocapture
+
+.PHONY: m2-jobs
+m2-jobs:
+	cargo test --locked -p ic-db --test jobs
+	@mkdir -p qualification/target/evidence/m2
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features aggregate-jobs --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/jobs-build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/jobs-build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/m2/jobs.wasm
+	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs -- --nocapture
 
 .PHONY: m2-cli
 m2-cli: m1-records-artifact
