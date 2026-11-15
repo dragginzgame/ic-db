@@ -32,7 +32,7 @@ enum Command {
     Status,
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and explicit ordering, and never return partial counts. --limit selects completed groups, not input rows."
+        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for both entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nFor category DISTINCT, use --select category --order-by category --distinct. --category is supported there; --min varies within a category and refuses.\n--select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document"])]
@@ -62,11 +62,22 @@ enum Command {
         bytes: u32,
         /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
         /// category,count or category,count:FIELD. Field counts exclude absence.
+        /// min:amount/max:amount for Entry; min:note/max:note and
+        /// min:priority/max:priority for Document. Extrema ignore absence.
+        /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
+        /// Prefix extrema with category, for Entry or entry_id, for Document
+        /// to group results; all-absent groups display an absent value.
         #[arg(long, default_value = "full")]
         select: String,
         /// Deduplicate a leading-index projection; filters must be constant per tuple.
         #[arg(long)]
         distinct: bool,
+        /// Keep completed Nat64 aggregate values at least VALUE (grouped terminals only).
+        #[arg(long)]
+        group_min: Option<u64>,
+        /// Order completed groups by key or aggregate value; ties use ascending keys.
+        #[arg(long, value_parser=["key", "asc", "desc"])]
+        group_order: Option<String>,
     },
     /// Display command help.
     Help,
@@ -301,6 +312,8 @@ async fn main() -> Result<(), String> {
                 bytes,
                 select,
                 distinct,
+                group_min,
+                group_order,
             } => {
                 let reply = pic
                     .query_call(
@@ -321,7 +334,7 @@ async fn main() -> Result<(), String> {
                                 work,
                                 bytes,
                                 select,
-                                distinct,
+                                (distinct, group_min, group_order),
                             ),
                             LIMITS,
                         )

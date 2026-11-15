@@ -1551,7 +1551,7 @@ existing scanner still validates every examined source row/index, including
 nonmatches, and count-only execution never materializes full typed entities.
 
 Initial synchronous group bounds are 32 retained groups, a 4096-byte encoded
-comparison key and 128 KiB retained key capacity/output payload/count bytes. Map
+comparison key and 128 KiB retained comparison keys, record capacities and reducer payloads. Map
 nodes and fixed bookkeeping are separately bounded by group cardinality; the
 byte cap is not a measured total peak-memory claim. Group keys have their own
 bound, not the physical 512-byte index-key cap. The validated source-row bound
@@ -1571,8 +1571,116 @@ it does not silently apply null exclusion to distinct projected tuples. The
 present-field count 3, distinct tuple count 3 and distinct-present count 2.
 No job records, revisions, journal, format or macro changes are added. These are
 the first aggregate semantics in M2, not a replacement for the accepted resumable
-aggregation contract. Numeric reducers, completed-group filters/order, retained
+aggregation contract. Further arithmetic reducers, retained
 jobs and completed-output pagination remain subsequent implementation work.
+
+The next synchronous terminals, `min::<Record>()` and `max::<Record>()`, accept
+one exact projected field and return `Aggregate<Option<Record>>`. Multi-field
+projections refuse rather than choosing tuple extrema or independent field
+extrema implicitly. Ordered scalars and unit enums retain their stored types;
+optional absence is ignored. Empty/all-absent input returns `None`; a present
+zero returns a record, with its declared optional wrapper when applicable.
+Equality keeps the first encountered value. No index is required.
+
+Counts and extrema share aggregate admission and the existing scanner through
+a closed internal accumulator choice. Extrema retain one ordered component key
+(at most 4096 logical bytes) and one encoded projected value (bounded by the
+4096-byte source row), with temporary candidate encoding bounded by that same
+row contract. This is not a physical peak-memory measurement. Only winning
+values are copied and only the completed result is decoded at the typed boundary.
+The output byte allowance applies after complete scanning, so a large provisional
+winner cannot reject a smaller final result. `None` has zero payload bytes;
+transport option framing is outside this metric. Work exhaustion refuses even
+if a plausible minimum/maximum has already been found. Cursors, DISTINCT and
+explicit ordering retain the existing aggregate refusals.
+
+This adapts IcyDB `6d421e3`'s `value_reducer` null exclusion, strict winner
+replacement and selected-value ownership lessons, including its borrowed text
+regression. Exact schema types and the existing ordered component codec replace
+its numeric-or-strict value comparison here; no universal value tree, coercion
+or generic reducer framework is imported. Native witnesses cover optional zero,
+empty input, decimal agreement, owned text, final-output limits and key/work
+refusals; the Wasm/CLI witness covers exact amounts, absent notes, present zero
+priority, upgrade/reopen and unchanged backing bytes. Broader arithmetic reducers and
+resumable aggregation remain subsequent work. Schema macros, stored
+contracts and cursor formats are unchanged.
+
+`group_min::<KeyRecord, ValueRecord>()` and `group_max::<KeyRecord, ValueRecord>()`
+extend this contract through the same grouping table as counts. Keys use an exact
+record projection; the operand uses an exact single-field record, with overlap
+allowed. `GroupExtremum { key, value: Option<ValueRecord> }` retains absent-key and
+all-absent groups; empty input has no groups. Output defaults to canonical key order,
+with limits applied after complete input. Encoded bytes count the key record plus
+the present winning record, excluding transport framing. State admission includes
+new groups and growing winners; replacement releases the previous winner's
+charge before admitting its replacement. Temporary candidates remain row-bounded.
+Counts and extrema use the same concrete reducers for scalar and grouped execution,
+with no parallel count map or user-extensible reducer framework. This retains
+IcyDB `6d421e3`'s independent group state, winner ownership and memory-admission
+lessons from `aggregate/contracts/state/grouped/tests` and
+`aggregate/runtime/grouped_fold/bundle`. Qualification covers interleaved groups,
+absence/zero, overlap, independent result oracles, shrinking/growing text winners
+and work/state/output refusals. Completed-output pagination remains implementation work.
+
+Completed grouped counts/extrema now accept `filter_groups(comparison, operand)`
+and `order_groups(GroupOrder)`. Up to eight group predicates are ANDed independently
+of the eight input predicates. Counts admit exact Nat64 operands; extrema admit
+the exact source field type, including declared scale/enum identity. Grouped
+extrema are nullable even for required inputs: absence supports Eq/Ne, while
+range comparisons require present operands/results. Invalid operands refuse even
+for empty input. Row fetches, scalar counts/extrema/sums and distinct counts refuse
+group modifiers, including an explicit default key order.
+
+The stages are input filtering, complete accumulation, group filtering, group
+ordering, output limit and byte admission. Builder call order cannot change these
+stages. Default `GroupOrder::Key` uses canonical keys. AggregateAscending and
+AggregateDescending compare completed values and always break ties with ascending
+keys; absent extrema sort first ascending, last descending. The last order call
+wins. Input work and retained group/state caps still apply to groups later excluded;
+only selected output records consume output bytes. No cursor or implicit retry is
+added. At most 32 groups reach finalization, allowing one bounded in-memory sort.
+Admitted predicate keys are separately bounded to eight keys of at most 4096
+logical bytes; source literals also retain the row-byte bound before encoding.
+
+This preserves IcyDB `6d421e3`'s completion-before-HAVING and
+HAVING-before-pagination behavior from
+`aggregate/runtime/grouped_fold/generic/page_finalize`. Its general projection,
+top-k and page-resumption machinery is not copied: this slice has one aggregate
+value per group and the accepted small synchronous cap. Native witnesses cover
+stage composition, ties, absence, exact operand refusal and resource bounds;
+Wasm repeats group filtering/order after upgrade with unchanged backing bytes.
+The local CLI maps `--group-min` (Nat64 aggregate >= operand) and
+`--group-order key|asc|desc` to these fluent methods without local result sorting.
+No durable state, schema contract, cursor format or macro changes are introduced.
+
+Scalar integer `sum::<Record>()` now returns `Aggregate<Option<Record>>` through
+the same scanner. The single-field record names the source field, preserves its
+optionality and explicitly selects an equal or wider integer result type within
+the same signed/unsigned family (including unsigned widening to U256). All other
+projection operations retain their exact-type contract. Narrowing, cross-family
+conversion, noninteger inputs and malformed result shapes refuse before scanning,
+including empty input. Group modifiers and ordinary aggregate-incompatible
+modifiers refuse. Output limits do not truncate input.
+
+The accumulator is one I256 or U256 plus presence, without per-row allocations.
+The 512-candidate work cap bounds signed 128-bit input totals well inside I256.
+Unsigned U256 overflow refuses on addition; final conversion to the selected
+result width reports `ArithmeticOverflow` if it cannot fit. Signed cancellation
+is therefore independent of a narrow overflowing prefix. Empty/all-absent input
+returns `None`; present zero returns a record with the declared optional wrapper.
+Final bytes come from the ordinary database-owned codec. No arithmetic result
+format, persisted state, schema/macro change or dependency is added.
+
+This retains IcyDB `6d421e3`'s absent-input, exact U256 and typed-overflow lessons
+from `aggregate/value_reducer/tests`, without importing its general numeric
+coercion path. Its Nat128-to-decimal representability refusal does not apply to
+this integer-only path. Signed overflow is checked at final result conversion,
+not at the narrower running-result boundary. Native witnesses cover every integer
+width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow,
+absent/zero results, source corruption and admission/work/output refusal. Wasm
+checks sums across upgrade and an exact widened total beyond u64, with unchanged
+backing during queries. Grouped sums, decimal/float arithmetic, averages and
+resumable execution remain required implementation work.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed
@@ -2016,8 +2124,8 @@ malformed-width regressions, plus the high-bit/maximum cases from
 `icydb-schema/src/u256/tests.rs`. It uses IcyDB's underlying integer supplier
 without copying its wrapper, Serde/Wire conversion or NumericValue/Decimal
 machinery. There is one new product dependency, no new product crate, durable
-state or executor. Database arithmetic and aggregate accumulator rules remain
-separate work; Rust integer methods alone do not implement aggregate semantics.
+state or executor. The later scalar-sum slice above adds explicit U256 aggregate
+semantics; Rust integer methods alone were not aggregate qualification.
 Native/Wasm qualification covers literal bytes and independently framed schema
 hashes, ordering across 128 bits and the highest bit, optional uniqueness swaps,
 row byte exhaustion, malformed keys, preparation refusals, late message traps
@@ -2109,7 +2217,8 @@ width/extrema regression cases. Unlike IcyDB's widened runtime value path, typed
 construction here already enforces representability; the database never truncates
 an i64/u64 into a smaller field. Optional values keep their separate presence tag.
 The new type tags preserve existing codec-v3 contracts. Narrow secondary and primary keys
-are now admitted with exact references; query arithmetic remains separate work.
+are now admitted with exact references. The later scalar-sum slice above supports
+these exact integers with explicitly selected result widening.
 
 Blob fields use `value(item(prim="Blob", max_bytes=1024))`, optionally with
 `opt`. They expose `ic_db::Blob`, an alias for `Vec<u8>` encoded directly by the

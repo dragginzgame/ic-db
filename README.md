@@ -132,9 +132,75 @@ These operations finish synchronously or refuse. Completion must be observed
 before the work cap, so a scan examining exactly the allowed number can still
 return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
-refuses instead of returning partial counts. Cursors, DISTINCT and explicit order
-are not yet aggregate compositions. Other reducers, group
-filters/order, resumable jobs and completed-output pagination remain required work.
+refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
+are not yet aggregate compositions. Grouped sums, decimal/float arithmetic,
+averages, resumable jobs and
+completed-output pagination remain required work.
+
+`.min::<Record>()` and `.max::<Record>()` accept an exact **single-field** record
+projection and return `Aggregate<Option<Record>>`. They preserve ordered scalar
+and unit-enum types, ignore absent operands, and return `None` for empty/all-absent
+input. For optional fields, a present result retains the record's `Some(value)`.
+No index is required; the scanner retains only the current winner. The comparison
+key is bounded to 4096 bytes; the retained record uses the existing row bound.
+All matching input must complete within the work budget, regardless of `limit`.
+Only the final record's bytes count toward `byte_limit` (zero when no result).
+An oversized provisional winner does not reject a smaller final answer.
+
+```rust
+let minimum = db.query::<Entry>().min::<AmountOnly>()?;
+let maximum = db.query::<Entry>().max::<AmountOnly>()?;
+let grouped = db.query::<Entry>().group_max::<CategoryOnly, AmountOnly>()?;
+```
+
+`group_min::<KeyRecord, ValueRecord>()` / `group_max::<KeyRecord, ValueRecord>()`
+return `Aggregate<Vec<GroupExtremum<KeyRecord, ValueRecord>>>`. Each result has
+`key` and `value: Option<ValueRecord>`. An absent key still forms a group, and an
+all-absent group retains `None`; empty input has no groups. Key and operand
+projections may overlap. Group counts and extrema share the 32-group/128-KiB
+retained-state bounds, including winner growth and replacement. Output follows
+canonical key order and is limited only after the full input completes. Encoded
+output bytes count both records, excluding transport option framing.
+
+`.filter_groups(comparison, operand)` applies up to eight AND terms to the
+completed aggregate value. Counts require `u64`; extrema require the exact source
+type. Absent extrema support equality/inequality; range comparisons require
+presence. `.order_groups(GroupOrder::AggregateAscending)` or
+`AggregateDescending` sorts completed groups, breaking ties by ascending group key.
+Absent extrema sort first ascending, last descending. `GroupOrder::Key` is the
+default. These modifiers refuse on row queries and scalar aggregates.
+
+```rust
+let groups = db.query::<Entry>()
+    .filter("amount", ic_db::Comparison::Ge, 40_u64)
+    .filter_groups(ic_db::Comparison::Ge, 2_u64)
+    .order_groups(ic_db::GroupOrder::AggregateDescending)
+    .limit(1)
+    .group_count::<CategoryOnly>()?;
+```
+
+All input and retained-state bounds apply before group filtering. Output limits
+and bytes apply after filtering and ordering; an excluded group uses no output
+bytes. Final sorting is bounded by the existing 32-group cap.
+
+Scalar integer `.sum::<Record>()` returns `Aggregate<Option<Record>>`. The record
+selects one field by name, preserving optionality; its integer type may match or
+widen the source within the same signed/unsigned family. Unsigned results may
+widen to U256. For example, a Nat64 amount can explicitly produce a Nat128 total:
+
+```rust
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
+struct TotalAmount {}
+let total = db.query::<Entry>().sum::<TotalAmount>()?;
+```
+
+Absent operands are ignored; empty/all-absent input returns `None`, while present
+zero returns a record. I256/U256 accumulators retain exact totals before checking
+the declared result range. Signed cancelling prefixes can exceed that result range;
+final overflow and U256 accumulator overflow return `ArithmeticOverflow`.
+No decimal or float conversion occurs. Work exhaustion refuses without a partial
+sum. Output limits never truncate input; final result bytes use the ordinary codec.
+These are scalar sums; grouped sums and broader arithmetic remain required work.
 
 The [first matched scalar comparison](docs/design/ic-db-system-design.md#first-matched-scalar-comparison)
 measures a smaller host and lower operation costs than frozen SQL-disabled IcyDB
@@ -197,8 +263,8 @@ collection budget, and their nested contents consume the same budget. Inspect
 `MapRow`/`Rates` and recursive `MapTree` with `db schema`.
 `value(item(prim = "U256"))` uses `ic_db::U256` (ethnum), with exact 32-byte
 big-endian storage and secondary-index keys. Optional values and collection
-elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`;
-aggregate arithmetic remains separate work.
+elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`.
+Scalar sums preserve U256 and explicitly refuse accumulator overflow.
 `prim = "Float32"` / `prim = "Float64"` use finite `ic_db::Float32` /
 `ic_db::Float64` wrappers. Construct with `try_new(value)`; NaN/infinities refuse,
 while either signed zero becomes positive zero. Row bytes, ordering, uniqueness

@@ -113,6 +113,24 @@ installer. Do not edit vendor files or copy upstream reference documents.
   `group_count_field` retains zero-count groups. `count_distinct::<Record>` uses
   the same bounded group state and includes absent tuples. Keep these semantics
   distinct from row count and from output limits.
+  `min`/`max` use exact single-field record projections and the same scanner.
+  Ignore absent operands, preserve stored types and retain only the winning
+  key/value. Finish input before applying the output-byte budget; no prefix
+  extrema or implicit numeric coercion. Grouped min/max use separate exact key
+  and single-field operand records, retaining all-absent groups as `None`.
+  Counts and extrema share one bounded grouping table. Charge changing winners
+  and release replaced allocations; an output limit never relaxes group/state caps.
+  `filter_groups` and `order_groups` act only on completed grouped values before
+  output limits. Exact count operands are Nat64; extrema retain source types.
+  Aggregate ties use ascending canonical keys; absent extrema sort first ascending
+  and last descending. Scalar/row terminals refuse group modifiers. Keep the
+  bounded 32-group sort concrete; output filters cannot relax scan/state caps.
+  Scalar integer `sum::<Record>` selects one named field and explicit same-family
+  result widening while preserving optionality. Use checked I256/U256 totals;
+  validate the final result range after accumulation so signed prefixes can cancel.
+  Distinguish arithmetic overflow from resource refusal, absence from present zero.
+  Reuse the scanner and owned codec; grouped sums and decimal/float arithmetic
+  remain separate work. No implicit numeric coercion or general reducer framework.
   Output records are not durable schema additions. The local CLI constructs
   fluent queries for Entry/Document, uses opaque continuation and display-only
   result mapping; no client-side filtering or paging engine. `make m2-cli` checks

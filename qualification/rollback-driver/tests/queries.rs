@@ -50,18 +50,74 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         native::decode_response::<Result<Page, u8>>(95, &reply, LIMITS).unwrap()
     };
     let before = pic.get_stable_memory(canister).await;
-    let console = async |request: ConsoleRequest<'_>| {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "query",
-                native::encode_request(3, &request, LIMITS).unwrap(),
-            )
-            .await
-            .unwrap();
-        native::decode_response::<Result<DisplayPage, String>>(3, &reply, LIMITS).unwrap()
-    };
+    let selected =
+        async |request: ConsoleRequest<'_>, group_min: Option<u64>, group_order: Option<&str>| {
+            let (
+                entity,
+                cursor,
+                limit,
+                min,
+                category,
+                entry_id,
+                order,
+                desc,
+                work,
+                bytes,
+                select,
+                distinct,
+            ) = request;
+            let request = (
+                entity,
+                cursor,
+                limit,
+                min,
+                category,
+                entry_id,
+                order,
+                desc,
+                work,
+                bytes,
+                select,
+                (distinct, group_min, group_order),
+            );
+            let reply = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "query",
+                    native::encode_request(3, &request, LIMITS).unwrap(),
+                )
+                .await
+                .unwrap();
+            native::decode_response::<Result<DisplayPage, String>>(3, &reply, LIMITS).unwrap()
+        };
+    let console = async |request: ConsoleRequest<'_>| selected(request, None, None).await;
+    let ordered_request = (
+        "Entry",
+        None,
+        1,
+        None,
+        None,
+        None,
+        vec![],
+        false,
+        7,
+        16,
+        "category,min:amount",
+        false,
+    );
+    let selected_groups = selected(ordered_request.clone(), Some(15), Some("desc"))
+        .await
+        .unwrap();
+    assert_eq!(selected_groups.1, [vec!["0", "20"]]);
+    assert_eq!((selected_groups.3, selected_groups.5), (6, 16));
+    let ascending = selected(ordered_request.clone(), None, Some("asc"))
+        .await
+        .unwrap();
+    assert_eq!(ascending.1, [vec!["1", "11"]]);
+    let mut row_request = ordered_request.clone();
+    row_request.10 = "full";
+    assert!(selected(row_request, None, Some("key")).await.is_err());
     let distinct = async |cursor: Option<Vec<u8>>,
                           work: u32,
                           bytes: u32,
@@ -101,6 +157,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         ))
         .await
     };
+    let sum = aggregate("sum:amount", 1, 7, 16).await.unwrap();
+    assert_eq!(sum.1, [vec!["213"]]);
+    assert_eq!((sum.3, sum.4, sum.5), (6, 6, 16));
+    assert!(sum.2.is_none());
+    assert!(aggregate("sum:amount", 1, 6, 16).await.is_err());
+    assert!(aggregate("sum:amount", 1, 7, 15).await.is_err());
     let count = aggregate("count", 1, 7, 8).await.unwrap();
     assert_eq!(count.1, [vec!["6"]]);
     assert_eq!((count.3, count.4, count.5), (6, 6, 8));
@@ -142,6 +204,77 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     .unwrap();
     assert_eq!(notes.1, [vec!["0"]]);
     assert_eq!((notes.3, notes.4, notes.5), (1, 1, 8));
+    let minimum = aggregate("min:amount", 1, 7, 8).await.unwrap();
+    let maximum = aggregate("max:amount", 1, 7, 8).await.unwrap();
+    assert_eq!(minimum.1, [vec!["11"]]);
+    assert_eq!(maximum.1, [vec!["60"]]);
+    assert_eq!((maximum.3, maximum.4, maximum.5), (6, 6, 8));
+    assert!(maximum.2.is_none());
+    assert!(aggregate("max:amount", 1, 6, 8).await.is_err());
+    assert!(aggregate("min:amount", 1, 7, 7).await.is_err());
+    let group_min = aggregate("category,min:amount", 2, 7, 32).await.unwrap();
+    let group_max = aggregate("category,max:amount", 2, 7, 32).await.unwrap();
+    assert_eq!(group_min.1, [vec!["0", "20"], vec!["1", "11"]]);
+    assert_eq!(group_max.1, [vec!["0", "60"], vec!["1", "51"]]);
+    assert_eq!((group_max.3, group_max.4, group_max.5), (6, 6, 32));
+    assert!(group_max.2.is_none());
+    assert_eq!(
+        aggregate("category,max:amount", 1, 7, 16).await.unwrap().1,
+        [vec!["0", "60"]]
+    );
+    assert!(aggregate("category,min:amount", 1, 6, 16).await.is_err());
+    assert!(aggregate("category,max:amount", 2, 7, 31).await.is_err());
+    for (select, expected, bytes) in [
+        ("entry_id,min:note", "—", 8),
+        ("entry_id,max:priority", "0", 17),
+    ] {
+        let result = console((
+            "Document",
+            None,
+            1,
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            128,
+            bytes,
+            select,
+            false,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.1, [vec!["1", expected]]);
+        assert_eq!((result.3, result.4, result.5), (1, 1, bytes));
+        assert!(result.2.is_none());
+    }
+    for select in ["min:note", "max:note", "min:priority", "max:priority"] {
+        let result = console((
+            "Document",
+            None,
+            1,
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            128,
+            9,
+            select,
+            false,
+        ))
+        .await
+        .unwrap();
+        if select.ends_with("note") {
+            assert!(result.1.is_empty());
+            assert_eq!(result.5, 0);
+        } else {
+            assert_eq!(result.1, [vec!["0"]]);
+            assert_eq!(result.5, 9);
+        }
+        assert_eq!((result.3, result.4), (1, 1));
+        assert!(result.2.is_none());
+    }
     let unique_first = distinct(None, 1, 8, false, None).await;
     assert_eq!(unique_first.1, [vec!["0"]]);
     assert_eq!((unique_first.3, unique_first.5), (1, 8));
@@ -228,6 +361,18 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert_eq!(
         aggregate("distinct-count:category", 1, 7, 8).await.unwrap(),
         distinct_count
+    );
+    assert_eq!(
+        selected(ordered_request, Some(15), Some("desc"))
+            .await
+            .unwrap(),
+        selected_groups
+    );
+    assert_eq!(aggregate("sum:amount", 1, 7, 16).await.unwrap(), sum);
+    assert_eq!(aggregate("max:amount", 1, 7, 8).await.unwrap(), maximum);
+    assert_eq!(
+        aggregate("category,max:amount", 2, 7, 32).await.unwrap(),
+        group_max
     );
     let filtered_done = distinct(filtered_unique.2, 4, 8, false, Some(1)).await;
     assert!(filtered_done.1.is_empty());
@@ -348,6 +493,28 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert_eq!((full.1, projected.1), (1037, 8));
     println!("fluent_blob_full_instructions={}", full.2);
     println!("fluent_blob_projected_instructions={}", projected.2);
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    // Explicit result widening stays exact beyond the source's 64-bit range in Wasm.
+    for id in 1_u64..=2 {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "write",
+                native::encode_request(4, &(id, id % 2, u64::MAX, 0_u8), LIMITS).unwrap(),
+            )
+            .await
+            .unwrap();
+        native::decode_response::<Result<(), u8>>(4, &reply, LIMITS)
+            .unwrap()
+            .unwrap();
+    }
+    let before = pic.get_stable_memory(canister).await;
+    let widened = aggregate("sum:amount", 1, 7, 16).await.unwrap();
+    assert_eq!(
+        widened.1,
+        [vec![(u128::from(u64::MAX) * 2 + 182).to_string()]]
+    );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     owned.close().await;
 }

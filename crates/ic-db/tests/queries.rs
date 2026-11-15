@@ -417,6 +417,12 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
             .fetch_as::<CategoryOnly>(),
         Err(Error::Corrupt)
     ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("id", C::Eq, 0_u64)
+            .sum::<WideAmount>(),
+        Err(Error::Corrupt)
+    ));
     assert!(matches!(db.query::<Entry>().count(), Err(Error::Corrupt)));
     assert!(matches!(
         db.query::<Entry>().count_field("maybe"),
@@ -424,6 +430,16 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
     ));
     assert!(matches!(
         db.query::<Entry>().count_distinct::<CategoryOnly>(),
+        Err(Error::Corrupt)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().group_min::<CategoryOnly, AmountOnly>(),
+        Err(Error::Corrupt)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("id", C::Eq, 0_u64)
+            .min::<AmountOnly>(),
         Err(Error::Corrupt)
     ));
     assert!(matches!(
@@ -1487,6 +1503,26 @@ fn field_counts_use_presence_for_empty_and_non_scalar_values() {
     }
     db.commit(batch).unwrap();
     assert_eq!(db.query::<CountInput>().count().unwrap().value, 6);
+    let min = db
+        .query::<CountInput>()
+        .limit(1)
+        .min::<OptionalOnly>()
+        .unwrap();
+    let max = db
+        .query::<CountInput>()
+        .limit(1)
+        .max::<OptionalOnly>()
+        .unwrap();
+    assert_eq!(min.value.unwrap().maybe, Some(10));
+    assert_eq!(max.value.unwrap().maybe, Some(30));
+    assert_eq!((min.examined, min.fetched, min.output_bytes), (6, 6, 9));
+    let absent = db
+        .query::<CountInput>()
+        .filter("maybe", C::Eq, IndexValue::Absent)
+        .min::<OptionalOnly>()
+        .unwrap();
+    assert!(absent.value.is_none());
+    assert_eq!(absent.output_bytes, 0);
     assert_eq!(
         db.query::<CountInput>().count_field("maybe").unwrap().value,
         3
@@ -1524,6 +1560,26 @@ fn field_counts_use_presence_for_empty_and_non_scalar_values() {
             [(0, 2), (1, 0)]
         );
     }
+    let mut batch = Batch::new();
+    batch
+        .insert(&CountInput {
+            id: 6,
+            category: 0,
+            maybe: Some(0),
+            payload: None,
+            items: None,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<CountInput>()
+            .min::<OptionalOnly>()
+            .unwrap()
+            .value
+            .unwrap()
+            .maybe,
+        Some(0)
+    );
 }
 
 #[test]
@@ -1615,6 +1671,14 @@ fn grouping_cardinality_is_bounded_independently_of_output_limit() {
     );
     let mut batch = Batch::new();
     batch.insert(&row(33)).unwrap();
+    assert_eq!(
+        db.query::<Entry>()
+            .group_max::<Summary, AmountOnly>()
+            .unwrap()
+            .value
+            .len(),
+        32
+    );
     db.commit(batch).unwrap();
     assert!(matches!(
         db.query::<Entry>().limit(1).group_count::<Summary>(),
@@ -1622,6 +1686,19 @@ fn grouping_cardinality_is_bounded_independently_of_output_limit() {
     ));
     assert!(matches!(
         db.query::<Entry>().limit(1).count_distinct::<Summary>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .limit(1)
+            .group_min::<Summary, AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_groups(C::Gt, 100_u64)
+            .limit(1)
+            .group_count::<Summary>(),
         Err(Error::Limit)
     ));
     assert_eq!(db.query::<Entry>().limit(1).count().unwrap().value, 33);
@@ -1719,6 +1796,28 @@ fn grouping_decimal_equality_agrees_with_filters_and_index_order() {
             .unwrap();
     }
     db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<Priced>()
+            .min::<PriceKey>()
+            .unwrap()
+            .value
+            .unwrap()
+            .price
+            .coefficient_at_scale(2)
+            .unwrap(),
+        -200
+    );
+    assert_eq!(
+        db.query::<Priced>()
+            .max::<PriceKey>()
+            .unwrap()
+            .value
+            .unwrap()
+            .price
+            .coefficient_at_scale(2)
+            .unwrap(),
+        100
+    );
     let groups = db.query::<Priced>().group_count::<PriceKey>().unwrap();
     assert_eq!(
         groups
@@ -1744,5 +1843,1041 @@ fn grouping_decimal_equality_agrees_with_filters_and_index_order() {
             .unwrap()
             .value,
         2
+    );
+}
+
+#[test]
+fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let db = create(&runtime, 23);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Entry>().group_min::<CategoryOnly, Summary>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().group_max::<CategoryOnly, PayloadOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().group_max::<PayloadOnly, AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    let min = db
+        .query::<Entry>()
+        .limit(1)
+        .byte_limit(8)
+        .min::<AmountOnly>()
+        .unwrap();
+    let max = db
+        .query::<Entry>()
+        .limit(1)
+        .byte_limit(8)
+        .max::<AmountOnly>()
+        .unwrap();
+    assert_eq!(min.value.unwrap().amount, 10);
+    assert_eq!(max.value.unwrap().amount, 80);
+    assert_eq!((max.examined, max.fetched, max.output_bytes), (8, 8, 8));
+    assert_eq!(
+        db.query::<Entry>()
+            .using_index("category", &[1_u8.into()])
+            .max::<AmountOnly>()
+            .unwrap()
+            .value
+            .unwrap()
+            .amount,
+        70
+    );
+    assert!(
+        db.query::<Entry>()
+            .filter("id", C::Gt, 8_u64)
+            .max::<AmountOnly>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(matches!(
+        db.query::<Entry>().work_limit(8).max::<AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().byte_limit(7).min::<AmountOnly>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().min::<Summary>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().min::<PayloadOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().min::<WrongWidth>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().min::<Missing>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().min::<Empty>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().distinct().min::<AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().order_by(&["id"]).max::<AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().descending().max::<AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    let cursor = db.query::<Entry>().limit(1).fetch().unwrap().next.unwrap();
+    assert!(matches!(
+        db.query::<Entry>().after(&cursor).min::<AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn extrema_own_text_winners_and_bound_comparison_and_final_output_separately() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[GroupText::SCHEMA]).unwrap(),
+        [24; 16],
+    )
+    .unwrap();
+    let labels = [
+        "z".repeat(1000),
+        "middle".into(),
+        "a".into(),
+        "Ω".into(),
+        "\0x".into(),
+    ];
+    let mut batch = Batch::new();
+    for (id, label) in labels.iter().enumerate() {
+        batch
+            .insert(&GroupText {
+                id: id as u64,
+                label: label.clone(),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    // An oversized provisional winner must not refuse a smaller final answer.
+    let min = db
+        .query::<GroupText>()
+        .byte_limit(6)
+        .min::<TextKey>()
+        .unwrap();
+    let max = db
+        .query::<GroupText>()
+        .byte_limit(6)
+        .max::<TextKey>()
+        .unwrap();
+    assert_eq!(&min.value.unwrap().label, labels.iter().min().unwrap());
+    assert_eq!(&max.value.unwrap().label, labels.iter().max().unwrap());
+    assert_eq!((min.examined, min.output_bytes), (5, 6));
+    assert!(matches!(
+        db.query::<GroupText>().byte_limit(5).min::<TextKey>(),
+        Err(Error::RowTooLarge)
+    ));
+    let mut batch = Batch::new();
+    batch
+        .insert(&GroupText {
+            id: 5,
+            label: "\0".repeat(2100),
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<GroupText>().max::<TextKey>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(opt, item(prim = "Nat8"))),
+        field(name = "maybe", value(opt, item(prim = "Nat64")))
+    )
+)]
+struct GroupedOptional {}
+#[ic_db::record(fields(field(name = "category", value(opt, item(prim = "Nat8")))))]
+struct OptionalCategory {}
+
+#[test]
+fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[GroupedOptional::SCHEMA]).unwrap(),
+        [25; 16],
+    )
+    .unwrap();
+    let inputs = [
+        (None, Some(10)),
+        (Some(1), None),
+        (None, Some(30)),
+        (Some(2), Some(0)),
+        (Some(1), None),
+        (Some(2), Some(5)),
+    ];
+    let mut oracle = std::collections::BTreeMap::<_, Vec<u64>>::new();
+    let mut batch = Batch::new();
+    for (id, (category, maybe)) in inputs.into_iter().enumerate() {
+        oracle.entry(category).or_default().extend(maybe);
+        batch
+            .insert(&GroupedOptional {
+                id: id as u64,
+                category,
+                maybe,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    let min = db
+        .query::<GroupedOptional>()
+        .group_min::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    let max = db
+        .query::<GroupedOptional>()
+        .group_max::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    let minimum: Vec<_> = min
+        .value
+        .into_iter()
+        .map(|g| (g.key.category, g.value.and_then(|r| r.maybe)))
+        .collect();
+    let maximum: Vec<_> = max
+        .value
+        .into_iter()
+        .map(|g| (g.key.category, g.value.and_then(|r| r.maybe)))
+        .collect();
+    assert_eq!(
+        minimum,
+        oracle
+            .iter()
+            .map(|(k, v)| (*k, v.iter().min().copied()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        maximum,
+        oracle
+            .iter()
+            .map(|(k, v)| (*k, v.iter().max().copied()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!((min.examined, min.fetched, min.output_bytes), (6, 6, 23));
+    let limited = db
+        .query::<GroupedOptional>()
+        .limit(1)
+        .byte_limit(10)
+        .group_max::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    assert_eq!(limited.value.len(), 1);
+    assert_eq!(limited.value[0].key.category, None);
+    assert_eq!(limited.value[0].value.as_ref().unwrap().maybe, Some(30));
+    assert_eq!((limited.examined, limited.output_bytes), (6, 10));
+    let absent = db
+        .query::<GroupedOptional>()
+        .filter("category", C::Eq, 1_u8)
+        .byte_limit(2)
+        .group_min::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    assert_eq!(absent.value.len(), 1);
+    assert!(absent.value[0].value.is_none());
+    for (order, expected) in [
+        (
+            ic_db::GroupOrder::AggregateAscending,
+            vec![Some(1), Some(2), None],
+        ),
+        (
+            ic_db::GroupOrder::AggregateDescending,
+            vec![None, Some(2), Some(1)],
+        ),
+    ] {
+        let sorted = db
+            .query::<GroupedOptional>()
+            .order_groups(order)
+            .group_min::<OptionalCategory, OptionalOnly>()
+            .unwrap();
+        assert_eq!(
+            sorted
+                .value
+                .into_iter()
+                .map(|g| g.key.category)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    for (comparison, operand, expected) in [
+        (C::Eq, IndexValue::Absent, vec![Some(1)]),
+        (C::Ne, IndexValue::Absent, vec![None, Some(2)]),
+        (C::Ge, IndexValue::Nat64(0), vec![None, Some(2)]),
+        (C::Lt, IndexValue::Nat64(10), vec![Some(2)]),
+    ] {
+        let filtered = db
+            .query::<GroupedOptional>()
+            .filter_groups(comparison, operand)
+            .group_min::<OptionalCategory, OptionalOnly>()
+            .unwrap();
+        assert_eq!(
+            filtered
+                .value
+                .into_iter()
+                .map(|g| g.key.category)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    let absent_output = db
+        .query::<GroupedOptional>()
+        .filter_groups(C::Eq, IndexValue::Absent)
+        .byte_limit(2)
+        .group_min::<OptionalCategory, OptionalOnly>()
+        .unwrap();
+    assert_eq!(absent_output.output_bytes, 2);
+    assert_eq!(absent_output.value.len(), 1);
+    let zero = db
+        .query::<GroupedOptional>()
+        .filter_groups(C::Eq, 0_u64)
+        .group_count_field::<OptionalCategory>("maybe")
+        .unwrap();
+    assert_eq!(zero.value.len(), 1);
+    assert_eq!(
+        (zero.value[0].key.category, zero.value[0].count),
+        (Some(1), 0)
+    );
+    let overlap = db
+        .query::<GroupedOptional>()
+        .group_min::<OptionalOnly, OptionalOnly>()
+        .unwrap();
+    assert_eq!(overlap.value[0].key.maybe, None);
+    assert!(overlap.value[0].value.is_none());
+    assert!(
+        overlap
+            .value
+            .iter()
+            .skip(1)
+            .all(|g| g.key.maybe == g.value.as_ref().unwrap().maybe)
+    );
+    assert!(
+        db.query::<GroupedOptional>()
+            .filter("id", C::Gt, 6_u64)
+            .group_min::<OptionalCategory, OptionalOnly>()
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .work_limit(6)
+            .group_min::<OptionalCategory, OptionalOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .limit(1)
+            .byte_limit(9)
+            .group_max::<OptionalCategory, OptionalOnly>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .byte_limit(22)
+            .group_max::<OptionalCategory, OptionalOnly>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .group_min::<OptionalCategory, WrongPresence>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .group_min::<OptionalCategory, Missing>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<GroupedOptional>()
+            .group_max::<OptionalCategory, Empty>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat8"))),
+        field(name = "label", value(item(prim = "Text", max_bytes = 3000)))
+    )
+)]
+struct GroupedText {}
+
+#[test]
+fn grouped_winner_replacement_reclaims_state_and_growth_can_refuse() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[GroupedText::SCHEMA]).unwrap(),
+        [26; 16],
+    )
+    .unwrap();
+    // Fifteen large winners fit. Shrinking each winner must release its charge
+    // before the next wave of large winners, rather than accumulating history.
+    for (phase, label) in [
+        format!("b{}", "x".repeat(2800)),
+        "c".into(),
+        format!("d{}", "x".repeat(2800)),
+        "z".into(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut batch = Batch::new();
+        for category in 0..15 {
+            batch
+                .insert(&GroupedText {
+                    id: (phase * 32 + category) as u64,
+                    category: category as u8,
+                    label: label.clone(),
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    // Output admission uses the small final winners, not provisional values.
+    let result = db
+        .query::<GroupedText>()
+        .byte_limit(90)
+        .group_max::<CategoryOnly, TextKey>()
+        .unwrap();
+    assert_eq!(
+        (result.value.len(), result.examined, result.output_bytes),
+        (15, 60, 90)
+    );
+    assert!(
+        result
+            .value
+            .iter()
+            .all(|g| g.value.as_ref().unwrap().label == "z")
+    );
+    // Only existing groups change here: their MIN winners now grow beyond the
+    // shared state envelope. MAX still fits, so the source itself is valid.
+    for phase in 0..2 {
+        let mut batch = Batch::new();
+        for category in 0..32 {
+            batch
+                .insert(&GroupedText {
+                    id: 128 + (phase * 32 + category) as u64,
+                    category: category as u8,
+                    label: if phase == 0 {
+                        "b".into()
+                    } else {
+                        format!("a{}", "x".repeat(2800))
+                    },
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    assert!(matches!(
+        db.query::<GroupedText>()
+            .filter("id", C::Ge, 128_u64)
+            .work_limit(200)
+            .limit(1)
+            .filter_groups(C::Ge, "zz")
+            .group_min::<CategoryOnly, TextKey>(),
+        Err(Error::Limit)
+    ));
+    let max = db
+        .query::<GroupedText>()
+        .filter("id", C::Ge, 128_u64)
+        .work_limit(200)
+        .group_max::<CategoryOnly, TextKey>()
+        .unwrap();
+    assert_eq!(max.value.len(), 32);
+    assert!(
+        max.value
+            .iter()
+            .all(|g| g.value.as_ref().unwrap().label == "b")
+    );
+}
+
+#[test]
+fn completed_group_selection_precedes_output_limits_not_input_bounds() {
+    use ic_db::GroupOrder as O;
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let db = create(&runtime, 28);
+    let before = backing.borrow().clone();
+    // Matching input is (category,amount): (0,60),(1,70),(0,80).
+    // Both row filtering and full accumulation must precede the group predicate.
+    for reordered in [false, true] {
+        let query = db.query::<Entry>();
+        let query = if reordered {
+            query
+                .limit(1)
+                .order_groups(O::AggregateDescending)
+                .filter_groups(C::Ge, 2_u64)
+                .filter("amount", C::Ge, 60_u64)
+        } else {
+            query
+                .filter("amount", C::Ge, 60_u64)
+                .filter_groups(C::Ge, 2_u64)
+                .order_groups(O::AggregateDescending)
+                .limit(1)
+        };
+        let result = query.byte_limit(9).group_count::<CategoryOnly>().unwrap();
+        assert_eq!(result.value.len(), 1);
+        assert_eq!(
+            (result.value[0].key.category, result.value[0].count),
+            (0, 2)
+        );
+        assert_eq!((result.examined, result.output_bytes), (8, 9));
+    }
+    for (order, expected) in [
+        (O::AggregateAscending, vec![(1, 1), (0, 2)]),
+        (O::AggregateDescending, vec![(0, 2), (1, 1)]),
+    ] {
+        let result = db
+            .query::<Entry>()
+            .filter("amount", C::Ge, 60_u64)
+            .order_groups(order)
+            .group_count::<CategoryOnly>()
+            .unwrap();
+        assert_eq!(
+            result
+                .value
+                .into_iter()
+                .map(|g| (g.key.category, g.count))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        // Equal counts keep key order even when aggregate ordering is reversed.
+        let tied = db
+            .query::<Entry>()
+            .order_groups(order)
+            .group_count::<CategoryOnly>()
+            .unwrap();
+        assert_eq!(
+            tied.value
+                .into_iter()
+                .map(|g| g.key.category)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+    }
+    let minimum = db
+        .query::<Entry>()
+        .filter_groups(C::Ge, 20_u64)
+        .order_groups(O::AggregateDescending)
+        .byte_limit(9)
+        .group_min::<CategoryOnly, AmountOnly>()
+        .unwrap();
+    assert_eq!(minimum.value.len(), 1);
+    assert_eq!(minimum.value[0].key.category, 0);
+    assert_eq!(minimum.value[0].value.as_ref().unwrap().amount, 20);
+    let none = db
+        .query::<Entry>()
+        .filter_groups(C::Gt, 8_u64)
+        .byte_limit(1)
+        .group_count::<CategoryOnly>()
+        .unwrap();
+    assert!(none.value.is_empty());
+    assert_eq!(none.output_bytes, 0);
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_groups(C::Gt, 8_u64)
+            .work_limit(8)
+            .group_count::<CategoryOnly>(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn group_modifiers_refuse_incompatible_terminals_and_bad_operands() {
+    use ic_db::GroupOrder as O;
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 29);
+    for filter in [true, false] {
+        let query = || {
+            if filter {
+                db.query::<Entry>().filter_groups(C::Ge, 0_u64)
+            } else {
+                db.query::<Entry>().order_groups(O::Key)
+            }
+        };
+        assert!(matches!(query().fetch(), Err(Error::InvalidQuery)));
+        assert!(matches!(
+            query().fetch_as::<CategoryOnly>(),
+            Err(Error::InvalidQuery)
+        ));
+        assert!(matches!(query().count(), Err(Error::InvalidQuery)));
+        assert!(matches!(
+            query().count_field("amount"),
+            Err(Error::InvalidQuery)
+        ));
+        assert!(matches!(
+            query().count_distinct::<CategoryOnly>(),
+            Err(Error::InvalidQuery)
+        ));
+        assert!(matches!(
+            query().min::<AmountOnly>(),
+            Err(Error::InvalidQuery)
+        ));
+        assert!(matches!(
+            query().max::<AmountOnly>(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+    for value in [
+        IndexValue::Nat8(1),
+        IndexValue::Text("1"),
+        IndexValue::Absent,
+    ] {
+        assert!(matches!(
+            db.query::<Entry>()
+                .filter("id", C::Gt, 100_u64)
+                .filter_groups(C::Eq, value)
+                .group_count::<CategoryOnly>(),
+            Err(Error::InvalidOperand)
+        ));
+    }
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("id", C::Gt, 100_u64)
+            .filter_groups(C::Eq, 1_u8)
+            .group_min::<CategoryOnly, AmountOnly>(),
+        Err(Error::InvalidOperand)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_groups(C::Ge, IndexValue::Absent)
+            .group_max::<CategoryOnly, AmountOnly>(),
+        Err(Error::InvalidOperand)
+    ));
+    let mut query = db.query::<Entry>();
+    for _ in 0..8 {
+        query = query.filter_groups(C::Ge, 0_u64);
+    }
+    assert_eq!(query.group_count::<CategoryOnly>().unwrap().value.len(), 2);
+    let mut query = db.query::<Entry>();
+    for _ in 0..9 {
+        query = query.filter_groups(C::Ge, 0_u64);
+    }
+    assert!(matches!(
+        query.group_count::<CategoryOnly>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
+fn integer_sums_cover_each_width_without_float_conversion() {
+    macro_rules! check {
+        ($prim:literal) => {{
+            #[entity(pk(field="id"), fields(
+                                                        field(name="id",value(item(prim="Nat64"))),
+                                                        field(name="number",value(item(prim=$prim)))
+                                                    ))]
+            struct Input {}
+            #[ic_db::record(fields(field(name="number",value(item(prim=$prim)))))]
+            struct Output {}
+            let runtime = host(VectorMemory::default());
+            let mut db = Database::create(
+                runtime
+                    .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                    .unwrap(),
+                Schema::new(&[Input::SCHEMA]).unwrap(),
+                [31; 16],
+            )
+            .unwrap();
+            assert!(db.query::<Input>().sum::<Output>().unwrap().value.is_none());
+            let mut batch = Batch::new();
+            batch
+                .insert(&Input {
+                    id: 1,
+                    number: 2_u8.try_into().unwrap(),
+                })
+                .unwrap();
+            batch
+                .insert(&Input {
+                    id: 2,
+                    number: 3_u8.try_into().unwrap(),
+                })
+                .unwrap();
+            db.commit(batch).unwrap();
+            assert_eq!(
+                db.query::<Input>()
+                    .sum::<Output>()
+                    .unwrap()
+                    .value
+                    .unwrap()
+                    .number,
+                Output {
+                    number: 5_u8.try_into().unwrap()
+                }
+                .number
+            );
+        }};
+    }
+    check!("Nat8");
+    check!("Nat16");
+    check!("Nat32");
+    check!("Nat64");
+    check!("Nat128");
+    check!("U256");
+    check!("Int8");
+    check!("Int16");
+    check!("Int32");
+    check!("Int64");
+    check!("Int128");
+}
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
+struct WideAmount {}
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "U256")))))]
+struct HugeAmount {}
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat32")))))]
+struct NarrowAmount {}
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Int128")))))]
+struct SignedAmount {}
+#[test]
+fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let mut db = create(&runtime, 32);
+    let before = backing.borrow().clone();
+    let sum = db
+        .query::<Entry>()
+        .limit(1)
+        .byte_limit(16)
+        .sum::<WideAmount>()
+        .unwrap();
+    assert_eq!(sum.value.unwrap().amount, 360);
+    assert_eq!((sum.examined, sum.fetched, sum.output_bytes), (8, 8, 16));
+    assert_eq!(
+        db.query::<Entry>()
+            .filter("amount", C::Ge, 60_u64)
+            .sum::<WideAmount>()
+            .unwrap()
+            .value
+            .unwrap()
+            .amount,
+        210
+    );
+    assert!(
+        db.query::<Entry>()
+            .filter("id", C::Gt, 100_u64)
+            .byte_limit(1)
+            .sum::<WideAmount>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert_eq!(
+        db.query::<Entry>()
+            .sum::<OptionalOnly>()
+            .unwrap()
+            .value
+            .unwrap()
+            .maybe,
+        Some(27)
+    );
+    assert!(
+        db.query::<Entry>()
+            .filter("maybe", C::Eq, IndexValue::Absent)
+            .sum::<OptionalOnly>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(matches!(
+        db.query::<Entry>().work_limit(8).sum::<WideAmount>(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().byte_limit(15).sum::<WideAmount>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().sum::<NarrowAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().sum::<SignedAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().sum::<Summary>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().sum::<PayloadOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().sum::<WrongPresence>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("id", C::Gt, 100_u64)
+            .sum::<Missing>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().distinct().sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().order_by(&["id"]).sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().descending().sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_groups(C::Ge, 0_u64)
+            .sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .order_groups(ic_db::GroupOrder::Key)
+            .sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    let cursor = db.query::<Entry>().limit(1).fetch().unwrap().next.unwrap();
+    assert!(matches!(
+        db.query::<Entry>().after(&cursor).sum::<WideAmount>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    for id in 1..=2 {
+        let mut r = row(id);
+        r.amount = u64::MAX;
+        batch.replace(&r).unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<Entry>().sum::<AmountOnly>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    let expected = u128::from(u64::MAX) * 2 + 330;
+    assert_eq!(
+        db.query::<Entry>()
+            .sum::<WideAmount>()
+            .unwrap()
+            .value
+            .unwrap()
+            .amount,
+        expected
+    );
+    assert_eq!(
+        db.query::<Entry>()
+            .sum::<HugeAmount>()
+            .unwrap()
+            .value
+            .unwrap()
+            .amount,
+        ic_db::U256::from(expected)
+    );
+}
+
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "number", value(item(prim = "Int128")))
+    )
+)]
+struct SignedSum {}
+#[ic_db::record(fields(field(name = "number", value(item(prim = "Int128")))))]
+struct SignedTotal {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "number", value(item(prim = "U256")))
+    )
+)]
+struct HugeSum {}
+#[ic_db::record(fields(field(name = "number", value(item(prim = "U256")))))]
+struct HugeTotal {}
+#[test]
+fn sums_distinguish_final_range_overflow_from_cancelling_signed_prefixes() {
+    for inputs in [
+        [i128::MAX, 1, -1],
+        [1, i128::MAX, -1],
+        [-1, 1, i128::MAX],
+        [i128::MIN, -1, 1],
+        [-1, i128::MIN, 1],
+        [1, -1, i128::MIN],
+    ] {
+        let runtime = host(VectorMemory::default());
+        let mut db = Database::create(
+            runtime
+                .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                .unwrap(),
+            Schema::new(&[SignedSum::SCHEMA]).unwrap(),
+            [33; 16],
+        )
+        .unwrap();
+        let mut batch = Batch::new();
+        for (id, number) in inputs.into_iter().enumerate() {
+            batch
+                .insert(&SignedSum {
+                    id: id as u64,
+                    number,
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+        let expected = if inputs.contains(&i128::MAX) {
+            i128::MAX
+        } else {
+            i128::MIN
+        };
+        assert_eq!(
+            db.query::<SignedSum>()
+                .sum::<SignedTotal>()
+                .unwrap()
+                .value
+                .unwrap()
+                .number,
+            expected
+        );
+        let prefix = db
+            .query::<SignedSum>()
+            .filter("id", C::Le, 1_u64)
+            .sum::<SignedTotal>();
+        match inputs[0].checked_add(inputs[1]) {
+            Some(expected) => assert_eq!(prefix.unwrap().value.unwrap().number, expected),
+            None => assert!(matches!(prefix, Err(Error::ArithmeticOverflow))),
+        }
+        let mut batch = Batch::new();
+        for id in 0..3 {
+            batch.replace(&SignedSum { id, number: 0 }).unwrap();
+        }
+        db.commit(batch).unwrap();
+        assert_eq!(
+            db.query::<SignedSum>()
+                .sum::<SignedTotal>()
+                .unwrap()
+                .value
+                .unwrap()
+                .number,
+            0
+        );
+    }
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[HugeSum::SCHEMA]).unwrap(),
+        [34; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&HugeSum {
+            id: 1,
+            number: ic_db::U256::MAX,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<HugeSum>()
+            .sum::<HugeTotal>()
+            .unwrap()
+            .value
+            .unwrap()
+            .number,
+        ic_db::U256::MAX
+    );
+    let mut batch = Batch::new();
+    batch
+        .insert(&HugeSum {
+            id: 2,
+            number: ic_db::U256::ONE,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<HugeSum>().sum::<HugeTotal>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+}
+
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "number", value(item(prim = "Nat128")))
+    )
+)]
+struct Unsigned128Sum {}
+#[ic_db::record(fields(field(name = "number", value(item(prim = "Nat128")))))]
+struct Unsigned128Total {}
+#[test]
+fn unsigned_128_totals_can_widen_to_u256() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Unsigned128Sum::SCHEMA]).unwrap(),
+        [35; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for id in 0..2 {
+        batch
+            .insert(&Unsigned128Sum {
+                id,
+                number: u128::MAX,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<Unsigned128Sum>().sum::<Unsigned128Total>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    let expected = ic_db::U256::from(u128::MAX) * 2;
+    assert_eq!(
+        db.query::<Unsigned128Sum>()
+            .sum::<HugeTotal>()
+            .unwrap()
+            .value
+            .unwrap()
+            .number,
+        expected
     );
 }

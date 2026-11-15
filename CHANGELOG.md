@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.9.0] - Unreleased
+
+### ▶️ Try it
+
+```sh
+make db
+db query Entry --select sum:amount
+db query Document --select sum:priority
+db query Document --select sum:score
+db query Entry --select min:amount
+db query Entry --select max:amount --min 40
+db query Document --select min:note
+db query Document --select min:priority
+db query Entry --select category,min:amount
+db query Entry --select category,max:amount --limit 1
+db query Document --select entry_id,min:note
+db query Document --select entry_id,max:priority
+db query Entry --select category,min:amount --group-order asc --limit 1
+db query Entry --select category,count --min 40 --group-min 2 --group-order desc
+```
+
+The local fixture returns total amount 213, priority sum 0 and score sum -10.
+These sums explicitly select 128-bit results. It returns minimum amount 11 and maximum amount 60. Its absent
+note has no extremum; present priority zero returns 0. Aggregates finish within
+one execution or refuse, without partial answers or continuation.
+Grouped extrema retain the group when every operand is absent, displaying `—`.
+`--limit 1` selects the first completed group; it does not shorten the input scan.
+Aggregate ascending order puts category 1’s minimum (11) before category 0’s (20).
+The filtered count command returns category 0 with count 2.
+
+```sh
+toko-cloc
+toko-cloc -d 1
+toko-cloc -d 2
+```
+
+### 🛠️ Changes
+
+- Add `.min::<Record>()` and `.max::<Record>()` over exact single-field
+  projections. Preserve ordered scalar/unit-enum types, ignore absent operands
+  and distinguish no result from a present zero. Reuse the scanner and ordering
+  codec; retain only the winning key/value. Work and comparison-key exhaustion
+  refuse, while output bytes apply to the completed winner.
+- Add `.group_min::<KeyRecord, ValueRecord>()` and `.group_max::<KeyRecord, ValueRecord>()`.
+  Preserve absent grouping keys and all-absent groups; allow overlapping key/value
+  projections. Counts and extrema now share one bounded group table and reducer
+  implementation. Account for winner growth and release replaced winner storage;
+  keep output limits separate from complete input and retained-state bounds.
+- Add `.filter_groups(comparison, operand)` and `.order_groups(GroupOrder)` for
+  completed counts/extrema. Filter, sort, then limit output; aggregate ties retain
+  ascending group keys. Reject these modifiers on scalar and row terminals.
+  The local CLI exposes `--group-min` and `--group-order key|asc|desc`.
+- Add scalar integer `.sum::<Record>()` with explicit same-family result widening,
+  no implicit narrowing or float/decimal conversion. Preserve absence versus zero;
+  checked 256-bit accumulation precedes final result-range validation. Signed
+  cancellation can recover an out-of-range prefix; overflow reports
+  `ArithmeticOverflow`. Reuse the scanner and owned result codecs.
+- Adopt Toko Tooling 0.44.3 in both workspaces through its published installer.
+  Default LOC output matches `-d 0` compact totals; `-d 1` expands crates and
+  `-d 2` expands modules. Executable snapshot ownership remains unchanged.
+
 ## [0.8.0] - 2026-11-15 (development checkpoint)
 
 ### 📝 Summary

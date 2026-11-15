@@ -87,13 +87,16 @@ pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{
-    Aggregate, Batch, Comparison, Database, GroupCount, Page, Query, QueryCursor, QueryPage,
+    Aggregate, Batch, Comparison, Database, GroupCount, GroupExtremum, GroupOrder, Page, Query,
+    QueryCursor, QueryPage,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// An arithmetic total exceeds its accumulator or explicitly selected result range.
+    ArithmeticOverflow,
     /// Unsupported query field/shape or unavailable ordered access path.
     InvalidQuery,
     /// Malformed continuation or a different database/schema/query boundary.

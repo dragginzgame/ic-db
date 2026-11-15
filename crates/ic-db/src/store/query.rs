@@ -2,7 +2,7 @@
 mod aggregate;
 mod distinct;
 mod order;
-pub use aggregate::{Aggregate, GroupCount};
+pub use aggregate::{Aggregate, GroupCount, GroupExtremum, GroupOrder};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{
@@ -33,6 +33,20 @@ pub enum Comparison {
     Gt = 4,
     /// Present and greater than or equal to the present operand.
     Ge = 5,
+}
+
+impl Comparison {
+    fn accepts(self, order: Ordering, absent: bool) -> bool {
+        match self {
+            Self::Eq => order == Ordering::Equal,
+            Self::Ne => order != Ordering::Equal,
+            _ if absent => false,
+            Self::Lt => order == Ordering::Less,
+            Self::Le => order != Ordering::Greater,
+            Self::Gt => order == Ordering::Greater,
+            Self::Ge => order != Ordering::Less,
+        }
+    }
 }
 
 /// A bounded logical position, bound to database, schema, query and direction.
@@ -92,6 +106,7 @@ struct Predicate<'a> {
     value: IndexValue<'a>,
 }
 struct Request<'a> {
+    groups: aggregate::GroupRequest<'a>,
     predicates: Vec<Predicate<'a>>,
     index: Option<(&'a str, Vec<IndexValue<'a>>)>,
     order: Option<Vec<&'a str>>,
@@ -120,6 +135,7 @@ impl<M: Memory> Database<M> {
             db: self,
             entity: PhantomData,
             request: Request {
+                groups: aggregate::GroupRequest::default(),
                 predicates: Vec::new(),
                 index: None,
                 order: None,
@@ -235,6 +251,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.db.schema.fingerprint(),
             self.db.incarnation,
             None,
+            false,
         )?;
         let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
         Ok(QueryPage {
@@ -266,6 +283,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.db.schema.fingerprint(),
             self.db.incarnation,
             Some(R::definition()),
+            false,
         )?;
         let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
         Ok(QueryPage {
@@ -360,6 +378,7 @@ impl<'a> Plan<'a> {
         schema: [u8; 32],
         incarnation: [u8; 16],
         projection: Option<&TypeSchema>,
+        group_output: bool,
     ) -> Result<Self, Error> {
         if request.over_limit
             || !(1..=32).contains(&request.rows)
@@ -367,6 +386,9 @@ impl<'a> Plan<'a> {
             || !(1..=MAX_OUTPUT).contains(&request.bytes)
         {
             return Err(Error::Limit);
+        }
+        if !group_output && !request.groups.is_empty() {
+            return Err(Error::InvalidQuery);
         }
         // Bound literal encoding even when a declaration's maximum exceeds one row.
         for value in request
@@ -539,7 +561,7 @@ fn execute<M: Memory>(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &Plan<'_>,
-    mut aggregate: Option<&mut aggregate::Counts>,
+    mut aggregate: Option<aggregate::Accumulator<'_>>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
     let mut upper = plan.prefix.clone();
     // Namespace prefixes always have a successor; no unbounded reverse scan.
@@ -628,21 +650,13 @@ fn execute<M: Memory>(
             component.clear();
             value.append_component(entity.fields[term.position].optional, &mut component);
             let order = component.cmp(&term.operand);
-            match term.comparison {
-                Comparison::Eq => order == Ordering::Equal,
-                Comparison::Ne => order != Ordering::Equal,
-                _ if value == IndexValue::Absent => false,
-                Comparison::Lt => order == Ordering::Less,
-                Comparison::Le => order != Ordering::Greater,
-                Comparison::Gt => order == Ordering::Greater,
-                Comparison::Ge => order != Ordering::Less,
-            }
+            term.comparison.accepts(order, value == IndexValue::Absent)
         });
         let boundary =
             distinct::boundary(entity, plan.index, plan.distinct_components, stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
-        if matches && let Some(counts) = aggregate.as_deref_mut() {
-            counts.push(entity, &values, &bytes, &spans)?;
+        if matches && let Some(accumulator) = aggregate.as_mut() {
+            accumulator.push(entity, &values, &bytes, &spans)?;
         } else if matches && !duplicate {
             let size = plan.projection.map_or(bytes.len(), |mask| {
                 spans
@@ -671,7 +685,7 @@ fn execute<M: Memory>(
         }
         if page.rows.len() == request.rows || page.examined == request.work {
             if aggregate.is_some() {
-                // Completion has not been observed. Never expose prefix counts;
+                // Completion has not been observed. Never expose prefix aggregates;
                 // an exact-boundary scan may conservatively require more budget.
                 return Err(Error::Limit);
             }

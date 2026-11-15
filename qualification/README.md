@@ -79,6 +79,31 @@ fields on empty input and noncontiguous duplicate tuples. Wasm checks optional
 note and grouped field counts, then distinct category counts across reopen.
 This is not qualification of resumable jobs, arithmetic reducers or all type pairs.
 
+Synchronous minima/maxima use the same query probe: exact single-field projection,
+absence versus zero, empty input, decimal ordering, owned text winners and final
+output admission after scanning. Work/key exhaustion, malformed source rows and
+unsupported shapes refuse. Wasm checks Entry amounts and Document absence/zero,
+then repeats maximum after upgrade and verifies unchanged backing bytes.
+Grouped extrema add independent per-key minima/maxima oracles, absent keys,
+all-absent groups, overlapping projections, and growth/release of winning text.
+They share the count grouping budget: result limits cannot bypass group or state
+caps. Wasm repeats grouped maxima after upgrade and distinguishes absent grouped
+notes from zero priorities; the CLI displays both through ordinary result mapping.
+Completed-group selection adds input/group-filter composition, exact operands,
+aggregate ties, absent-value ordering and output limits after sorting. Refused
+modifiers on scalar/row terminals and work/state caps remain covered. Wasm
+repeats selected group output across upgrade with unchanged backing bytes.
+The installed CLI exposes `--group-min VALUE` and `--group-order key|asc|desc`;
+these construct fluent operations, without client-side filtering or sorting.
+
+Scalar integer sums add every supported integer width, explicit same-family
+widening, signed cancellation at the i128 boundaries, final result overflow and
+U256 accumulator overflow. Empty/all-absent input differs from present zero;
+unsupported result shapes refuse before scanning. The Wasm fixture returns 213
+for Entry amounts, repeats after upgrade, then checks a widened total beyond
+u64 after explicit fixture writes. Queries leave backing unchanged. The CLI adds
+`sum:amount`, `sum:priority` and `sum:score`, with 128-bit result records.
+
 The blob witness returns identical IDs with 1,037 encoded bytes for full entities
 versus 8 for projected records. Its measured execution after opening is 74,795
 versus 74,464 instructions. This is selective materialization, not partial storage
@@ -262,7 +287,8 @@ including signed extrema, unsigned maximum and values just beyond 64 bits.
 Independent 16-byte scalar vectors and schema hashes qualify encoding;
 truncation, surplus bytes and incompatible width/signedness refuse. Native and Wasm
 checks preserve all bits across writes, no-ops, traps and reopen. Wide secondary
-indexes are qualified below; wide primary keys and arithmetic remain unimplemented.
+indexes and later primary keys are qualified below. This codec probe does not
+qualify arithmetic; the later scalar-sum coverage above owns that evidence.
 NarrowNumbers exercises required and optional 8/16/32-bit integers using IcyDB's
 exact-width/extrema regression cases. Independent literal payloads and a schema
 fingerprint cover 1/2/4-byte encoding, signedness, all truncated prefixes, surplus
@@ -1146,6 +1172,11 @@ Full entities and ID projections are inherently unique.
 `--select count` counts matching rows; Entry also supports `--select category,count`.
 `--select count:FIELD` counts present field values (for example, Document's `note`).
 Entry supports `--select distinct-count:category` and `--select category,count:FIELD`.
+Entry also supports `--select min:amount` / `max:amount`; Document supports
+`min:note` / `max:note` and `min:priority` / `max:priority`. No present operand
+produces zero output rows; present zero produces one result row.
+Prefix those extrema with `category,` for Entry or `entry_id,` for Document to
+group the results. An all-absent group stays visible with `—` as its value.
 These are fixed typed projections and direct fluent terminals in the private
 adapter; field presence uses the ordinary schema admission.
 For aggregates, `--limit` selects completed groups and no continuation is returned.
