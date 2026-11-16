@@ -3,22 +3,94 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_host_text::{escape::terminal_text, table::render_bordered};
+use ic_host_text::{bordered_table, escape};
 use ic_wire::{Direction, Encoding};
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::{
+    cell::RefCell,
+    io::{self, BufRead, IsTerminal, Write},
+    time::Instant,
+};
+
+#[derive(Clone, Copy)]
+enum CallKind {
+    Query,
+    Update,
+}
+
+fn charged_cycles(before: u128, after: u128) -> String {
+    match before.checked_sub(after) {
+        Some(cycles) if cycles >= 1_000_000 => {
+            // Round to one decimal without converting the exact balance to f64.
+            let tenths = cycles / 100_000 + u128::from(cycles % 100_000 >= 50_000);
+            format!(
+                "{}.{:01}M cycles charged ({cycles})",
+                tenths / 10,
+                tenths % 10
+            )
+        }
+        Some(cycles) => format!("{cycles} cycles charged"),
+        None => format!(
+            "cycle charge unavailable (balance increased by {})",
+            after - before
+        ),
+    }
+}
+
+async fn measured_call(
+    pic: &pocket_ic::nonblocking::PocketIc,
+    canister: pocket_ic::CanisterId,
+    kind: CallKind,
+    method: &str,
+    payload: Vec<u8>,
+) -> (Result<Vec<u8>, pocket_ic::RejectResponse>, String) {
+    let before = pic.cycle_balance(canister).await;
+    let started = Instant::now();
+    let result = match kind {
+        CallKind::Query => pic.query_call(canister, canister, method, payload).await,
+        CallKind::Update => pic.update_call(canister, canister, method, payload).await,
+    };
+    let elapsed = started.elapsed();
+    let after = pic.cycle_balance(canister).await;
+    let kind = match kind {
+        CallKind::Query => "query",
+        CallKind::Update => "update",
+    };
+    let statistics = format!(
+        "{kind} call ({method}): {:.2} sec, {}",
+        elapsed.as_secs_f64(),
+        charged_cycles(before, after)
+    );
+    (result, statistics)
+}
 
 #[derive(Parser)]
 #[command(
     name = "db",
     about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query supports Entry, Document and DecimalRow.",
+    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query supports Entry, Document and DecimalRow.\nCall statistics follow normal results; JSON and failed-command statistics use stderr. Seconds measure the local simulator call, excluding startup, fixture setup and cycle sampling. Cycles charged are the observed canister balance decrease, not an instruction-derived estimate; zero charged cycles does not mean zero execution work. Aggregate and migration commands report each database call separately.",
     disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 }
+
+fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
+    // Only split argument words: no shell execution, expansion or SQL parsing.
+    let words = shlex::split(line.trim_end_matches(['\r', '\n'])).ok_or_else(|| {
+        Cli::command().error(
+            clap::error::ErrorKind::InvalidValue,
+            "unterminated quote or trailing escape",
+        )
+    })?;
+    Cli::try_parse_from(std::iter::once("db".to_owned()).chain(words))
+}
+
+mod terminal;
+#[cfg(test)]
+mod tests;
+
 #[derive(Subcommand)]
 enum Command {
     /// Inspect generated fields, types, indexes and admitted schema identity.
@@ -28,6 +100,10 @@ enum Command {
     Schema {
         /// Exact declared entity name; omit to inspect the whole schema.
         entity: Option<String>,
+        /// Emit JSON display data. A single invocation writes only JSON to stdout.
+        /// This describes the local fixture; it is not a schema import format.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
@@ -187,6 +263,53 @@ type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
 
+fn print_schema_json(
+    fingerprint: [u8; 32],
+    entities: &[EntityView],
+    types: &[TypeView],
+) -> Result<(), String> {
+    use serde_json::json;
+    let entities: Vec<_> = entities
+        .iter()
+        .map(|(name, _, primary, fields, indexes)| {
+            let fields: Vec<_> = fields
+                .iter()
+                .map(|(name, kind, optional, info, reference)| {
+                    json!({"name": name, "type": kind, "optional": optional, "info": info,
+                    "reference": reference.as_ref().map(|(target, index)|
+                        json!({"target": target, "index": index}))})
+                })
+                .collect();
+            let indexes: Vec<_> = indexes
+                .iter()
+                .map(|(name, fields, unique, present_only)| {
+                    json!({"name": name, "fields": fields, "unique": unique,
+                    "present_only": present_only})
+                })
+                .collect();
+            json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
+        })
+        .collect();
+    let types: Vec<_> = types
+        .iter()
+        .map(|(name, kind, members)| {
+            let members: Vec<_> = members.iter().map(|(name, kind, optional, info)| {
+            json!({"name": name, "type": kind, "optional": optional, "info": info})
+        }).collect();
+            json!({"name": name, "kind": kind, "members": members})
+        })
+        .collect();
+    let document = json!({
+        "source": "local_fixture",
+        "schema_fingerprint": fingerprint.map(|b| format!("{b:02x}")).concat(),
+        "entities": entities,
+        "types": types,
+    });
+    let mut output = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut output, &document).map_err(|e| e.to_string())?;
+    writeln!(output).map_err(|e| e.to_string())
+}
+
 fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
     println!(
         "\nSchema: {} {}\n",
@@ -198,10 +321,10 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
         }
     );
     for (name, _, primary, mut fields, indexes) in entities {
-        println!("{}", terminal_text(&name));
+        println!("{}", escape(&name));
         println!(
             "Primary key: {} (supplied by the application)\n",
-            terminal_text(&primary)
+            escape(&primary)
         );
         fields.sort_by_key(|field| field.0 != primary); // primary first, otherwise canonical order
         let references = fields.iter().any(|field| field.4.is_some());
@@ -217,19 +340,21 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                     if info.is_empty() { "-".into() } else { info },
                 ];
                 if references {
-                    row.push(reference.map_or_else(
-                        || "-".into(),
-                        |(target, index)| format!("{target} (via {index})"),
-                    ));
+                    row.extend(match reference {
+                        Some((target, index)) => {
+                            [target, format!("({})", index.replace(',', ", "))]
+                        }
+                        None => ["-".into(), "-".into()],
+                    });
                 }
                 row
             })
             .collect();
         let mut columns = vec!["Field", "Type", "Optional", "Key", "Info"];
         if references {
-            columns.push("References");
+            columns.extend(["References", "Reference index"]);
         }
-        println!("{}", render_bordered(&columns, &rows));
+        println!("{}", bordered_table(&columns, &rows));
         if indexes.is_empty() {
             println!("Indexes: none\n");
         } else {
@@ -251,7 +376,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                 .collect();
             println!(
                 "\nIndexes\n{}\n",
-                render_bordered(
+                bordered_table(
                     &["Name", "Fields (in order)", "Unique", "Membership"],
                     &rows
                 )
@@ -259,13 +384,13 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
         }
     }
     for (name, kind, members) in types {
-        println!("{}: {}", terminal_text(&kind), terminal_text(&name));
+        println!("{}: {}", escape(&kind), escape(&name));
         let rows: Vec<Vec<String>> = members
             .into_iter()
             .map(|(name, ty, optional, info)| {
                 vec![
-                    terminal_text(&name).into_owned(),
-                    terminal_text(&ty).into_owned(),
+                    name,
+                    ty,
                     if optional { "Yes" } else { "No" }.into(),
                     if info.is_empty() { "-".into() } else { info },
                 ]
@@ -273,7 +398,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             .collect();
         println!(
             "{}\n",
-            render_bordered(
+            bordered_table(
                 &[
                     match kind.as_str() {
                         "Enum" => "Variant",
@@ -309,7 +434,7 @@ fn print_status((schema, incarnation, revision, pages): Status) {
             format!("{pages} pages (64 KiB each)"),
         ],
     ];
-    println!("\n{}", render_bordered(&["Property", "Value"], &rows));
+    println!("\n{}", bordered_table(&["Property", "Value"], &rows));
 }
 
 fn main() -> Result<(), String> {
@@ -326,12 +451,37 @@ fn main() -> Result<(), String> {
         // explicit endpoint; the async driver never discovers/spawns a server.
         let runner =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/with-pocketic.sh");
-        let status = std::process::Command::new("bash")
-            .arg(runner)
+        let mut launcher = std::process::Command::new("bash");
+        launcher.arg(runner);
+        if cli.command.is_none() {
+            launcher.arg("--console");
+        }
+        launcher
             .arg(std::env::current_exe().map_err(|e| e.to_string())?)
-            .args(std::env::args_os().skip(1))
-            .status()
+            .args(std::env::args_os().skip(1));
+        let interactive = io::stdin().is_terminal() && cli.command.is_none();
+        let mut editor = interactive
+            .then(rustyline::DefaultEditor::new)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        if interactive {
+            // Testkit owns a separate child process group. Only this foreground
+            // process may read the terminal; the console receives a pipe instead.
+            launcher
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .env("IC_DB_TERMINAL_INPUT", "1");
+        }
+        let mut child = launcher
+            .spawn()
             .map_err(|e| format!("cannot run prepared simulator launcher: {e}"))?;
+        let input_result = editor
+            .as_mut()
+            .map_or(Ok(()), |editor| terminal::relay(&mut child, editor));
+        let status = child
+            .wait()
+            .map_err(|e| format!("cannot wait for simulator launcher: {e}"))?;
+        input_result?;
         return if status.success() {
             Ok(())
         } else {
@@ -400,31 +550,42 @@ async fn session(
     )
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("decimal fixture setup failed: {e}"))?;
-    println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
-    let interactive = io::stdin().is_terminal() && cli.command.is_none();
+    if !matches!(cli.command, Some(Command::Schema { json: true, .. })) {
+        println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
+    }
+    let interactive = cli.command.is_none()
+        && (io::stdin().is_terminal()
+            || std::env::var_os("IC_DB_TERMINAL_INPUT").as_deref()
+                == Some(std::ffi::OsStr::new("1")));
     let execute = async |command: Command| -> Result<(), String> {
+        let json = matches!(command, Command::Schema { json: true, .. });
+        let statistics = RefCell::new(Vec::new());
+        let invoke = async |kind, method: &str, payload| {
+            let (result, line) = measured_call(pic, canister, kind, method, payload).await;
+            statistics.borrow_mut().push(line);
+            result
+        };
+        let outcome = async {
         match command {
             Command::Help => help(),
             Command::Quit => {}
             Command::MigrationDemo => {
                 let step = async |action: u8| -> Result<(bool, Vec<Vec<String>>), String> {
-                    let reply = pic
-                        .update_call(
-                            canister,
-                            canister,
-                            "migration_demo",
-                            ic_wire::encode(
-                                &action,
-                                Encoding::Frame {
-                                    method: 142,
-                                    direction: Direction::Request,
-                                },
-                                LIMITS,
-                            )
-                            .map_err(|e| e.to_string())?,
+                    let reply = invoke(
+                        CallKind::Update,
+                        "migration_demo",
+                        ic_wire::encode(
+                            &action,
+                            Encoding::Frame {
+                                method: 142,
+                                direction: Direction::Request,
+                            },
+                            LIMITS,
                         )
-                        .await
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?,
+                    )
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
                     ic_wire::decode(
                         &reply,
                         Encoding::Frame {
@@ -438,7 +599,7 @@ async fn session(
                 let (_, rows) = step(0).await?;
                 println!(
                     "\nItem — source\n{}",
-                    render_bordered(&["id", "amount"], &rows)
+                    bordered_table(&["id", "amount"], &rows)
                 );
                 println!("\nMigration: console-item-label v1");
                 for (action, phase) in [
@@ -456,7 +617,7 @@ async fn session(
                             if complete { "complete" } else { "in progress" }
                         );
                         if action == 2 {
-                            println!("{}", render_bordered(&["Copied rows"], &rows));
+                            println!("{}", bordered_table(&["Copied rows"], &rows));
                             if call == 1 {
                                 ic_db_m0_rollback_driver::upgrade_stopped(
                                     pic,
@@ -481,7 +642,7 @@ async fn session(
                 let (_, rows) = step(6).await?;
                 println!(
                     "\nItem — target (label index)\n{}",
-                    render_bordered(&["id", "amount", "label"], &rows)
+                    bordered_table(&["id", "amount", "label"], &rows)
                 );
             }
             Command::Aggregate {
@@ -506,23 +667,21 @@ async fn session(
                     (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
                 );
-                let reply = pic
-                    .update_call(
-                        canister,
-                        canister,
-                        "aggregate_start",
-                        ic_wire::encode(
-                            &selection,
-                            Encoding::Frame {
-                                method: 120,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
+                let reply = invoke(
+                    CallKind::Update,
+                    "aggregate_start",
+                    ic_wire::encode(
+                        &selection,
+                        Encoding::Frame {
+                            method: 120,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
                     )
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?,
+                )
+                .await
+                .map_err(|e| format!("{e:?}"))?;
                 let handle: Result<Vec<u8>, String> = ic_wire::decode(
                     &reply,
                     Encoding::Frame {
@@ -540,7 +699,7 @@ async fn session(
                     // At most six rows per entity and two groups. A finite host bound
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
-                        let reply = pic.update_call(canister, canister, "aggregate_resume",
+                        let reply = invoke(CallKind::Update, "aggregate_resume",
                             ic_wire::encode(&(&selection, &handle, sequence, work, bytes, page_size, &after), Encoding::Frame { method: 121, direction: Direction::Request }, LIMITS).map_err(|e| e.to_string())?)
                             .await.map_err(|e| format!("{e:?}"))?;
                         type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
@@ -552,9 +711,7 @@ async fn session(
                         match phase.as_str() {
                             "Running" => {},
                             "Complete" => {
-                                let rows = rows.into_iter().map(|r| r.into_iter().map(|v| terminal_text(&v).into_owned()).collect()).collect::<Vec<Vec<String>>>();
-                                let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();
-                                println!("{}", render_bordered(&columns, &rows));
+                                println!("{}", bordered_table(&columns, &rows));
                                 if next.is_none() { return Ok(()); }
                                 after = next;
                             }
@@ -567,23 +724,21 @@ async fn session(
                 // Cleanup also runs after an output/resource refusal. No automatic
                 // restart, lost cursor, or client-side aggregation is hidden here.
                 let cleanup = async {
-                    let reply = pic
-                        .update_call(
-                            canister,
-                            canister,
-                            "aggregate_cancel",
-                            ic_wire::encode(
-                                &handle,
-                                Encoding::Frame {
-                                    method: 122,
-                                    direction: Direction::Request,
-                                },
-                                LIMITS,
-                            )
-                            .map_err(|e| e.to_string())?,
+                    let reply = invoke(
+                        CallKind::Update,
+                        "aggregate_cancel",
+                        ic_wire::encode(
+                            &handle,
+                            Encoding::Frame {
+                                method: 122,
+                                direction: Direction::Request,
+                            },
+                            LIMITS,
                         )
-                        .await
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?,
+                    )
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
                     ic_wire::decode::<Result<(), String>>(
                         &reply,
                         Encoding::Frame {
@@ -604,23 +759,21 @@ async fn session(
                 }
             }
             Command::Count { entity } => {
-                let reply = pic
-                    .query_call(
-                        canister,
-                        canister,
-                        "cardinality",
-                        ic_wire::encode(
-                            &entity,
-                            Encoding::Frame {
-                                method: 148,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
+                let reply = invoke(
+                    CallKind::Query,
+                    "cardinality",
+                    ic_wire::encode(
+                        &entity,
+                        Encoding::Frame {
+                            method: 148,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
                     )
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?,
+                )
+                .await
+                .map_err(|e| format!("{e:?}"))?;
                 let count = ic_wire::decode::<Result<u64, String>>(
                     &reply,
                     Encoding::Frame {
@@ -632,13 +785,13 @@ async fn session(
                 .map_err(|e| e.to_string())??;
                 println!(
                     "{}",
-                    render_bordered(&["count"], &[vec![count.to_string()]])
+                    bordered_table(&["count"], &[vec![count.to_string()]])
                 );
             }
             Command::Schema { .. } | Command::Status => {
-                let (id, selected) = match command {
-                    Command::Schema { entity } => (2, entity),
-                    _ => (1, None),
+                let (id, selected, json) = match command {
+                    Command::Schema { entity, json } => (2, entity, json),
+                    _ => (1, None, false),
                 };
                 let endpoint = if id == 2 { "schema" } else { "inspect" };
                 let request = if id == 2 {
@@ -661,12 +814,11 @@ async fn session(
                     )
                 }
                 .map_err(|e| e.to_string())?;
-                let reply = pic
-                    .query_call(canister, canister, endpoint, request)
+                let reply = invoke(CallKind::Query, endpoint, request)
                     .await
                     .map_err(|e| format!("{e:?}"))?;
                 if id == 2 {
-                    let (_, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
+                    let (status, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
                         ic_wire::decode(
                             &reply,
                             Encoding::Frame {
@@ -681,10 +833,14 @@ async fn session(
                     {
                         return Err(format!(
                             "Unknown entity '{}'. Use db schema to list entities.",
-                            terminal_text(&name)
+                            escape(&name)
                         ));
                     }
-                    print_schema(entities, types);
+                    if json {
+                        print_schema_json(status.0, &entities, &types)?;
+                    } else {
+                        print_schema(entities, types);
+                    }
                 } else {
                     print_status(
                         ic_wire::decode(
@@ -716,36 +872,34 @@ async fn session(
                 group_max,
                 group_order,
             } => {
-                let reply = pic
-                    .query_call(
-                        canister,
-                        canister,
-                        "query",
-                        ic_wire::encode(
-                            &(
-                                entity.as_str(),
-                                after.map(|cursor| cursor.0),
-                                limit,
-                                minimum,
-                                category,
-                                entry_id,
-                                order_by,
-                                desc,
-                                work,
-                                bytes,
-                                select,
-                                (distinct, (group_min, group_max), group_order),
-                            ),
-                            Encoding::Frame {
-                                method: 3,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
+                let reply = invoke(
+                    CallKind::Query,
+                    "query",
+                    ic_wire::encode(
+                        &(
+                            entity.as_str(),
+                            after.map(|cursor| cursor.0),
+                            limit,
+                            minimum,
+                            category,
+                            entry_id,
+                            order_by,
+                            desc,
+                            work,
+                            bytes,
+                            select,
+                            (distinct, (group_min, group_max), group_order),
+                        ),
+                        Encoding::Frame {
+                            method: 3,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
                     )
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?,
+                )
+                .await
+                .map_err(|e| format!("{e:?}"))?;
                 type Page = (
                     Vec<String>,
                     Vec<Vec<String>>,
@@ -765,16 +919,7 @@ async fn session(
                 .map_err(|e| e.to_string())?;
                 let (columns, rows, next, examined, fetched, bytes) = result?;
                 let count = rows.len();
-                let rows: Vec<Vec<String>> = rows
-                    .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|v| terminal_text(&v).into_owned())
-                            .collect()
-                    })
-                    .collect();
-                let columns: Vec<_> = columns.iter().map(String::as_str).collect();
-                println!("\n{entity}\n{}", render_bordered(&columns, &rows));
+                println!("\n{entity}\n{}", bordered_table(&columns, &rows));
                 let noun = if count == 1 { "row" } else { "rows" };
                 println!(
                     "{count} {noun}; {examined} examined; {fetched} fetched; {bytes} encoded bytes."
@@ -789,31 +934,53 @@ async fn session(
             }
         }
         Ok(())
+        }.await;
+        for line in statistics.into_inner() {
+            if json || outcome.is_err() {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        }
+        outcome
     };
     if let Some(command) = cli.command {
         execute(command).await
     } else {
+        let mut editor = io::stdin()
+            .is_terminal()
+            .then(rustyline::DefaultEditor::new)
+            .transpose()
+            .map_err(|e| e.to_string())?;
         let mut input = io::stdin().lock();
         loop {
-            if interactive {
-                print!("db> ");
-                io::stdout().flush().map_err(|e| e.to_string())?;
-            }
-            let mut line = String::new();
-            let count = std::io::Read::take(&mut input, 4097)
-                .read_line(&mut line)
-                .map_err(|e| e.to_string())?;
-            if count == 0 {
-                break Ok(());
-            }
-            if count > 4096 {
+            let line = if let Some(editor) = editor.as_mut() {
+                let Some(line) = terminal::readline(editor)? else {
+                    break Ok(());
+                };
+                line
+            } else {
+                if interactive {
+                    terminal::request_input().map_err(|e| e.to_string())?;
+                }
+                let mut line = String::new();
+                if std::io::Read::take(&mut input, 4097)
+                    .read_line(&mut line)
+                    .map_err(|e| e.to_string())?
+                    == 0
+                {
+                    break Ok(());
+                }
+                line
+            };
+            if line.len() > 4096 {
                 break Err("command exceeds 4096 bytes".into());
             }
             if line.trim().is_empty() {
                 continue;
             }
-            // Console tokenization only: Clap owns the same grammar and validation as argv.
-            match Cli::try_parse_from(std::iter::once("db").chain(line.split_whitespace())) {
+            // Clap owns the same grammar and validation as argv.
+            match parse_console_line(&line) {
                 Ok(Cli {
                     command: Some(Command::Quit),
                 }) => break Ok(()),

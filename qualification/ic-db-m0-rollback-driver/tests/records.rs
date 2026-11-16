@@ -120,6 +120,119 @@ fn console_counts_use_entity_metadata() {
     std::fs::remove_dir_all(prefix).unwrap();
 }
 
+#[test]
+fn console_schema_json_is_complete_selected_and_pipeable() {
+    let help = Command::new(env!("CARGO_BIN_EXE_db"))
+        .args(["schema", "--help"])
+        .env_remove("IC_TESTKIT_POCKET_IC_URL")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--json"));
+
+    let prefix = std::env::temp_dir().join(format!("ic-db-schema-json-{}", std::process::id()));
+    std::fs::create_dir(&prefix).unwrap();
+    std::fs::create_dir(prefix.join("bin")).unwrap();
+    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
+    let binary = prefix.join("bin/db");
+    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
+    std::fs::copy(
+        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build the console fixture"),
+        prefix.join("share/ic-db/m1/records.wasm"),
+    )
+    .unwrap();
+    let inspect = |args: &[&str]| -> serde_json::Value {
+        let output = Command::new(&binary).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Parsing the entire stdout rejects banners, tables and trailing help.
+        let stats = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stats.lines().count(), 1, "{stats}");
+        assert!(stats.starts_with("query call (schema): "), "{stats}");
+        assert!(stats.ends_with("sec, 0 cycles charged\n"), "{stats}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let all = inspect(&["schema", "--json"]);
+    assert_eq!(all["source"], "local_fixture");
+    let fingerprint = all["schema_fingerprint"].as_str().unwrap();
+    assert_eq!(fingerprint.len(), 64);
+    assert!(fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let selected = inspect(&["schema", "Document", "--json"]);
+    assert_eq!(selected["schema_fingerprint"], all["schema_fingerprint"]);
+    let entities = selected["entities"].as_array().unwrap();
+    assert_eq!(entities.len(), 1);
+    let document = &entities[0];
+    assert_eq!(document["name"], "Document");
+    assert_eq!(document["primary_key"], "id");
+    assert_eq!(
+        all["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entity| entity["name"] == "Document"),
+        Some(document)
+    );
+    let fields = document["fields"].as_array().unwrap();
+    let note = fields.iter().find(|field| field["name"] == "note").unwrap();
+    assert_eq!(note["type"], "Text");
+    assert_eq!(note["optional"], true);
+    assert_eq!(note["info"], "max 64 bytes");
+    assert!(note["reference"].is_null());
+    let reference = fields
+        .iter()
+        .find(|field| field["name"] == "entry_id")
+        .unwrap();
+    assert_eq!(
+        reference["reference"],
+        serde_json::json!({"target": "Entry.id", "index": "entry_id,score"})
+    );
+    assert!(
+        document["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |index| index["fields"] == serde_json::json!(["entry_id", "score"])
+                    && index["unique"] == false
+                    && index["present_only"] == false
+            )
+    );
+
+    let recursive = inspect(&["schema", "ListRow", "--json"]);
+    let types = recursive["types"].as_array().unwrap();
+    assert_eq!(
+        types.iter().filter(|ty| ty["name"] == "ListNode").count(),
+        1
+    );
+    assert!(!types.iter().any(|ty| ty["name"] == "Lifecycle"));
+
+    let refused = Command::new(&binary)
+        .args(["schema", "Missing", "--json"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("Unknown entity"));
+
+    let tables = Command::new(&binary)
+        .args(["schema", "Document"])
+        .output()
+        .unwrap();
+    assert!(tables.status.success());
+    let table = String::from_utf8_lossy(&tables.stdout);
+    assert!(table.contains("Schema: 1 entity"));
+    assert!(table.contains("Reference index"));
+    assert!(
+        table
+            .lines()
+            .any(|line| line.contains("Entry.id") && line.contains("(entry_id, score)"))
+    );
+    std::fs::remove_dir_all(prefix).unwrap();
+}
+
 #[tokio::test]
 async fn console_counts_preserve_backing_and_reopen() {
     let wasm = std::fs::read(
@@ -250,15 +363,27 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("DecimalRow"));
     assert!(stdout.contains("KeyRow"));
     assert!(stdout.contains("SignedKey"));
-    assert!(stdout.contains("WideKey.id (via peer,id)"));
-    assert!(stdout.contains("KeyRow.id (via target,id)"));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("WideKey.id") && line.contains("(peer, id)"))
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("KeyRow.id") && line.contains("(target, id)"))
+    );
     assert!(stdout.contains("17 bytes; scale 2; exact"));
     assert!(stdout.contains("Unix milliseconds"));
     assert!(stdout.contains("Subaccount"));
     assert!(stdout.contains("Float32"));
     assert!(stdout.contains("Float64"));
     assert!(stdout.contains("Enum: NestedPayload"));
-    assert!(stdout.contains("OptionalLink.id (via next,id)"));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("OptionalLink.id") && line.contains("(next, id)"))
+    );
     assert!(stdout.contains("All optional keys present"));
     assert!(stdout.contains("0 rows; 3 examined; 3 fetched; 0 encoded bytes."));
     assert!(stdout.contains("6 rows; 6 examined; 6 fetched; 144 encoded bytes."));
@@ -476,11 +601,7 @@ fn console_inspects_and_queries() {
         ("NestedRow", "Record: Details", "Enum: Lifecycle"),
         ("ListRow", "Record: ListNode", "Enum: Lifecycle"),
         ("MapTreeRow", "Map: MapTree", "Enum: Lifecycle"),
-        (
-            "Document",
-            "Entry.id (via entry_id,score)",
-            "Enum: Lifecycle",
-        ),
+        ("Document", "(entry_id, score)", "Enum: Lifecycle"),
     ] {
         let output = Command::new(&binary)
             .args(["schema", entity])

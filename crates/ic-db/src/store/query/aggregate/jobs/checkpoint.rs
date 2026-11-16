@@ -3,7 +3,7 @@ use super::super::{
     Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_GROUPS, MAX_STATE_BYTES,
     Reducer, comparison_key,
 };
-use super::storage::Record;
+use super::storage::{MAX_JOB_BYTES, Record};
 use crate::{
     EntitySchema, Error, IndexValue,
     codec::{Decoder, Encoder, MAX_ROW_BYTES},
@@ -20,7 +20,7 @@ impl Accumulator<'_> {
                 reducer.restore_extremum(entity, record.count, &record.state)
             }
             Self::Scalar(Reducer::Distinct { mask, seen }) => {
-                let mut reader = Decoder::new(&record.state)?;
+                let mut reader = Decoder::with_byte_limit(&record.state, MAX_JOB_BYTES)?;
                 *seen = read_distinct(&mut reader, entity, *mask)?;
                 if seen.len() as u64 != record.count {
                     return Err(Error::Corrupt);
@@ -46,7 +46,7 @@ impl Accumulator<'_> {
                 .as_ref()
                 .map_or_else(|| (0, Vec::new()), |(_, bytes)| (1, bytes.clone())),
             Self::Scalar(Reducer::Distinct { seen, .. }) => {
-                let mut writer = Encoder::new();
+                let mut writer = Encoder::with_byte_limit(MAX_JOB_BYTES);
                 write_distinct(&mut writer, seen)?;
                 (seen.len() as u64, writer.finish())
             }
@@ -120,7 +120,7 @@ impl Reducer {
 }
 impl Groups {
     fn checkpoint(&self) -> Result<(u64, Vec<u8>), Error> {
-        let mut writer = Encoder::new();
+        let mut writer = Encoder::with_byte_limit(MAX_JOB_BYTES);
         writer.nat8(self.rows.len() as u8)?;
         let mut count = 0_u64;
         // Store only original key-record bytes; reconstruct comparison keys through
@@ -150,7 +150,7 @@ impl Groups {
     }
 
     fn restore(&mut self, entity: &EntitySchema, record: &Record) -> Result<(), Error> {
-        let mut reader = Decoder::new(&record.state)?;
+        let mut reader = Decoder::with_byte_limit(&record.state, MAX_JOB_BYTES)?;
         let length = usize::from(reader.nat8()?);
         if length > MAX_GROUPS || length as u64 > record.examined {
             return Err(Error::Corrupt);

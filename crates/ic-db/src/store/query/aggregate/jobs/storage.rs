@@ -7,16 +7,20 @@ use crate::{
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
 
 pub(super) const SLOTS: u8 = 16;
-const MAGIC: &[u8; 8] = b"ICDBAJ01";
+pub(super) const MAX_JOB_BYTES: usize = 16 * 1024;
+const LEGACY_MAX_JOB_BYTES: usize = 4096;
+const MAGIC: &[u8; 8] = b"ICDBAJ02";
+const LEGACY_MAGIC: &[u8; 8] = b"ICDBAJ01";
 
 /// Durable bounded aggregates in a host-governed allocation.
-/// Holds at most 16 jobs, each at most 4096 encoded bytes. Creation requires a
+/// Holds at most 16 jobs, each at most 16 KiB encoded bytes. Creation requires a
 /// fresh nonzero incarnation. Handles identify jobs; they do not authorize access.
 /// All mutation must run synchronously within one IC message, without awaits.
 /// Supplier failures trap; a later message trap rolls these changes back too.
 pub struct AggregateJobs<M: Memory = DefaultMemoryImpl> {
     map: StableBTreeMap<u8, Vec<u8>, M>,
     incarnation: [u8; 16],
+    legacy: bool,
 }
 impl<M: Memory> AggregateJobs<M> {
     /// Create in an empty allocation, with a host-supplied fresh incarnation.
@@ -30,10 +34,16 @@ impl<M: Memory> AggregateJobs<M> {
         }
         let mut map = StableBTreeMap::create(memory).map_err(Error::Storage)?;
         map.insert(0, header(incarnation, 0));
-        Ok(Self { map, incarnation })
+        Ok(Self {
+            map,
+            incarnation,
+            legacy: false,
+        })
     }
 
-    /// Reopen a supported job-store format without modifying it.
+    /// Reopen a supported job-store format without modifying it. Version-one
+    /// jobs remain readable; the first successful insert/save atomically admits
+    /// version two and its larger frame bound. Older executables then refuse.
     /// # Errors
     /// Refuses missing/corrupt headers and unsupported formats intact.
     /// # Panics
@@ -42,7 +52,7 @@ impl<M: Memory> AggregateJobs<M> {
         let map: StableBTreeMap<u8, Vec<u8>, M> =
             StableBTreeMap::load(memory).map_err(Error::Storage)?;
         let bytes = map.get(&0).ok_or(Error::Corrupt)?;
-        let (incarnation, _) = read_header(&bytes)?;
+        let (incarnation, _, legacy) = read_header(&bytes)?;
         if map.len() > u64::from(SLOTS) + 1
             || map
                 .range(..)
@@ -51,7 +61,11 @@ impl<M: Memory> AggregateJobs<M> {
         {
             return Err(Error::Corrupt);
         }
-        Ok(Self { map, incarnation })
+        Ok(Self {
+            map,
+            incarnation,
+            legacy,
+        })
     }
 
     /// Cancel one job, immediately releasing its logical slot. Repeated/stale
@@ -62,8 +76,8 @@ impl<M: Memory> AggregateJobs<M> {
     /// # Panics
     /// Supplier mutation failures trap the enclosing message.
     pub fn cancel(&mut self, handle: &JobHandle) -> Result<(), Error> {
-        self.load(handle)?;
-        self.map.remove(&handle.slot);
+        self.with_record(handle, |_| ())?;
+        self.map.remove_discard(&handle.slot);
         Ok(())
     }
 
@@ -81,14 +95,14 @@ impl<M: Memory> AggregateJobs<M> {
         let mut expired = Vec::new();
         for slot in 1..=SLOTS {
             if let Some(bytes) = self.map.get(&slot) {
-                let record = Record::decode(&bytes)?;
+                let record = self.decode(&bytes)?;
                 if record.expires <= now && expired.len() < limit {
                     expired.push(slot);
                 }
             }
         }
         for slot in &expired {
-            self.map.remove(slot);
+            self.map.remove_discard(slot);
         }
         Ok(expired.len())
     }
@@ -97,7 +111,7 @@ impl<M: Memory> AggregateJobs<M> {
         let slot = (1..=SLOTS)
             .find(|slot| !self.map.contains_key(slot))
             .ok_or(Error::JobCapacity)?;
-        let (incarnation, generation) = read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
+        let (incarnation, generation, _) = read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
         if incarnation != self.incarnation {
             return Err(Error::Corrupt);
         }
@@ -107,6 +121,7 @@ impl<M: Memory> AggregateJobs<M> {
         // No recoverable refusal after the first persistent write.
         self.map.insert(0, header(incarnation, generation));
         self.map.insert(slot, bytes);
+        self.legacy = false;
         Ok(JobHandle {
             incarnation,
             slot,
@@ -115,21 +130,46 @@ impl<M: Memory> AggregateJobs<M> {
     }
 
     pub(super) fn load(&self, handle: &JobHandle) -> Result<Record, Error> {
+        self.with_record(handle, |record| record.into_owned())
+    }
+
+    // One identity/framing admission for owned resume and borrowed cancellation.
+    // Only resume needs owned cursor/accumulator bytes after the supplier buffer dies.
+    fn with_record<R>(
+        &self,
+        handle: &JobHandle,
+        inspect: impl FnOnce(Record<&[u8]>) -> R,
+    ) -> Result<R, Error> {
         if handle.incarnation != self.incarnation {
             return Err(Error::InvalidJob);
         }
         let bytes = self.map.get(&handle.slot).ok_or(Error::InvalidJob)?;
-        let record = Record::decode(&bytes)?;
+        let record = self.decode(&bytes)?;
         if record.generation != handle.generation {
             return Err(Error::InvalidJob);
         }
-        Ok(record)
+        Ok(inspect(record))
     }
 
     pub(super) fn save(&mut self, handle: &JobHandle, record: &Record) -> Result<(), Error> {
         let bytes = record.encode()?;
+        // Prepare every refusal before publishing the wider bound. Both writes
+        // share the enclosing message's rollback boundary, just like insertion.
+        if self.legacy {
+            let (incarnation, generation, _) =
+                read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
+            self.map.insert(0, header(incarnation, generation));
+        }
         self.map.insert(handle.slot, bytes);
+        self.legacy = false;
         Ok(())
+    }
+
+    fn decode<'a>(&self, bytes: &'a [u8]) -> Result<Record<&'a [u8]>, Error> {
+        if self.legacy && bytes.len() > LEGACY_MAX_JOB_BYTES {
+            return Err(Error::Corrupt);
+        }
+        Record::decode(bytes)
     }
 }
 fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
@@ -139,11 +179,13 @@ fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
     bytes.extend(generation.to_le_bytes());
     bytes
 }
-fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
+fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64, bool), Error> {
     if bytes.len() != 36 {
         return Err(Error::Corrupt);
     }
-    if &bytes[..8] != MAGIC || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes() {
+    if (&bytes[..8] != MAGIC && &bytes[..8] != LEGACY_MAGIC)
+        || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes()
+    {
         return Err(Error::InvalidJob);
     }
     let incarnation = bytes[12..28].try_into().map_err(|_| Error::Corrupt)?;
@@ -153,10 +195,13 @@ fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
     Ok((
         incarnation,
         u64::from_le_bytes(bytes[28..].try_into().map_err(|_| Error::Corrupt)?),
+        &bytes[..8] == LEGACY_MAGIC,
     ))
 }
 
-pub(super) struct Record {
+// The byte boundary has two representations: a validated borrowed frame for
+// inspection, and owned cursor/state for advancing a job. Execution stays shared.
+pub(super) struct Record<Bytes = Vec<u8>> {
     pub generation: u64,
     pub binding: [u8; 32],
     pub revision: u64,
@@ -166,14 +211,14 @@ pub(super) struct Record {
     pub examined: u64,
     pub input_bytes: u64,
     pub phase: JobOutcome<()>,
-    pub cursor: Vec<u8>,
+    pub cursor: Bytes,
     pub count: u64,
     // Interpretation belongs to the query-bound accumulator, not the job store.
-    pub state: Vec<u8>,
+    pub state: Bytes,
 }
 impl Record {
     fn encode(&self) -> Result<Vec<u8>, Error> {
-        let mut e = Encoder::new();
+        let mut e = Encoder::with_byte_limit(MAX_JOB_BYTES);
         e.nat64(self.generation)?;
         e.bytes(&self.binding)?;
         e.nat64(self.revision)?;
@@ -193,8 +238,10 @@ impl Record {
         e.bytes(&self.state)?;
         Ok(e.finish())
     }
-    fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let mut d = Decoder::new(bytes)?;
+}
+impl<'a> Record<&'a [u8]> {
+    fn decode(bytes: &'a [u8]) -> Result<Self, Error> {
+        let mut d = Decoder::with_byte_limit(bytes, MAX_JOB_BYTES)?;
         let record = Self {
             generation: d.nat64()?,
             binding: d.blob_ref(32)?.try_into().map_err(|_| Error::Corrupt)?,
@@ -211,9 +258,9 @@ impl Record {
                 3 => JobOutcome::Expired,
                 _ => return Err(Error::Corrupt),
             },
-            cursor: d.blob(QueryCursor::MAX_ENCODED_BYTES)?,
+            cursor: d.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?,
             count: d.nat64()?,
-            state: d.blob(crate::codec::MAX_ROW_BYTES)?,
+            state: d.blob_ref(MAX_JOB_BYTES)?,
         };
         d.finish()?;
         if record.generation == 0
@@ -229,5 +276,22 @@ impl Record {
             return Err(Error::Corrupt);
         }
         Ok(record)
+    }
+
+    fn into_owned(self) -> Record {
+        Record {
+            generation: self.generation,
+            binding: self.binding,
+            revision: self.revision,
+            expires: self.expires,
+            observed: self.observed,
+            sequence: self.sequence,
+            examined: self.examined,
+            input_bytes: self.input_bytes,
+            phase: self.phase,
+            cursor: self.cursor.to_vec(),
+            count: self.count,
+            state: self.state.to_vec(),
+        }
     }
 }

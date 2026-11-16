@@ -12,7 +12,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain grouped row counts without scanning input. K is the same exact key
     /// record as synchronous `group_count`. Group predicates, order and output
     /// row limit bind the job; work/output-byte allowances may change on resume.
-    /// Keep at most 32 groups and the complete job frame within 4096 bytes,
+    /// Keep at most 32 groups and the complete job frame within 16 KiB,
     /// including progress and encoded key records. No spill or partial output.
     /// # Errors
     /// Refuses group/query admission, invalid expiry or occupied job capacity.
@@ -71,7 +71,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Finalize all input before filtering, ordering and selecting completed groups.
     /// Use `group_page` to page completed output; otherwise all selected groups must fit.
     /// # Errors
-    /// Refuses mismatched queries/keys/selection, cardinality or the 4096-byte job
+    /// Refuses mismatched queries/keys/selection, cardinality or the 16 KiB job
     /// frame. Group/output bounds apply before saving; a refusal preserves prior
     /// progress. `limit` never limits input or relaxes retained-state bounds.
     /// # Panics
@@ -138,7 +138,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     }
 
     /// Retain grouped integer/Decimal sums with `group_sum`'s exact result types.
-    /// Uses grouped counts' 32-group/4096-byte frame, revision and expiry bounds.
+    /// Uses grouped counts' 32-group/16 KiB frame, revision and expiry bounds.
     /// Key/result types, operation and completed-group selection bind the job.
     /// # Errors
     /// Refuses invalid query/result shapes, expiry or exhausted job capacity.

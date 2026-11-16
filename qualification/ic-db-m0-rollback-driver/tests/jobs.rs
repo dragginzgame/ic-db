@@ -297,6 +297,36 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
+    // With a recorded v1 predecessor this is the first save that promotes the
+    // store to v2. A backing failure or enclosing trap restores header AND job.
+    let before = pic.get_stable_memory(canister).await;
+    assert!(advance(&sum, 1, 1, 2, 1, false).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert!(advance(&sum, 1, 1, 2, 0, true).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    // A successful old-sequence replay preserves progress while admitting v2.
+    let replay = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap());
+    assert_eq!((replay.0, replay.2, replay.4), (1, 2, 0));
+    if let Some(path) = std::env::var_os("IC_DB_M2_V1_JOBS_WASM") {
+        let before = pic.get_stable_memory(canister).await;
+        ic_db_m0_rollback_driver::upgrade_stopped(
+            pic,
+            canister,
+            std::fs::read(path).unwrap(),
+            vec![],
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            start(0, 0).await.is_err(),
+            "v1 executable must refuse the v2 store"
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+    }
     let group_distinct = handle(start(9, 0).await.unwrap());
     let first = decode(advance(&group_distinct, 9, 0, 1, 0, false).await.unwrap());
     assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));

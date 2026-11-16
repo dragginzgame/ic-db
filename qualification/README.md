@@ -26,7 +26,8 @@ download, server startup or private session wrapper. Creation/request waits are
 bounded to 30 seconds; timeout/cancellation can leave remote effects. Upstream
 async `drop` is best-effort, not proof of successful deletion.
 
-`make m0-setup` explicitly prepares the released `ic-testkit-server` 0.106.0 CLI
+`make m0-setup` explicitly prepares an optimized release-profile build of the
+released `ic-testkit-server` 0.106.0 CLI
 and authenticates the server assets. This retained executable is a development
 bootstrap outside the Cargo driver graph; it is not adoption of the retired
 Testkit library. [The command runner](../scripts/with-pocketic.sh) checks that
@@ -65,6 +66,17 @@ db count Entry
 
 For direct Wasm-test invocations, prefix Cargo with
 `bash scripts/with-pocketic.sh`; pure native contract tests need no simulator.
+
+The 0.20 startup investigation timed the installed CLI separately from database
+execution: 9.51 s to the session-ready banner versus 0.90–2.01 ms for three
+subsequent counts in one session. The debug launcher spent 5.69 s authenticating
+and decompressing the PocketIC bundle. The same 0.106.0 source built with the
+release profile spent 0.37 s on that check and 0.75 s on check/start/stop with an
+empty child command. Toko Tooling's release-launcher admission took another
+2.84 s. Installed `db count Document` then took 4.09 s end to end versus the
+earlier 9.52 s standalone invocation. These are local wall-clock startup observations, not IC performance
+results. Both setup and command admission now select the release profile;
+archive/executable/version validation and command-scoped ownership remain intact.
 
 The M1 `EnumRow` fixture now indexes the all-unit `Lifecycle` type through
 `state,id` and sparse unique `previous`. Its focused Wasm witness checks reads,
@@ -256,7 +268,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
-| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; 16 shared retained slots across two entities and upgrades | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019) |
+| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
 | Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Adapter is in Canic's working checkout; delivery and application CLI remain M4 work. [Receipt](#canic-typed-application-integration-019) |
@@ -2930,7 +2942,7 @@ division, and finalization refusal without a scale fallback or lost checkpoint.
 Grouped-count cases use an independent complete-input count/sort oracle, including
 521 rows, multi-field/absent keys, sparse indexed input, empty input, selection
 bindings and output refusal. Separate probes exceed group cardinality and the
-4-KiB whole-job bound even when selection hides groups, preserving backing bytes.
+16-KiB whole-job bound even when selection hides groups, preserving backing bytes.
 Reopening reconstructs comparison keys; malformed group counts refuse intact.
 Grouped numeric cases add 522-row complete totals, all-absent groups, signed
 rounding ties and selection on rounded values, reopened cancelling totals and
@@ -3061,8 +3073,12 @@ from empty, lexical from numeric order, and literal `None` from absence. It chec
 unchanged query bytes, and retained resumption across upgrade. Changed text bounds
 refuse without changing the saved checkpoint. Both min and max use the existing
 product comparator; no adapter-side text normalization is introduced.
-Empty or whitespace-containing CLI bounds use one-shot shell arguments; the
-interactive console's whitespace splitting does not interpret quotes.
+As of 0.20, empty or whitespace-containing CLI bounds also work in the console
+using single/double quotes or backslash escapes. Native parser checks compare
+exact fluent operands, including Unicode and literal shell metacharacters;
+the terminal regression checks quoted queries and recovery after an incomplete
+quote without executing a database call. Each physical command line remains
+bounded; a trailing backslash does not continue onto another line.
 It also preserves the existing installed-layout query/schema and product-record
 checks. `make db` installs this console fixture without starting the program.
 
@@ -3137,6 +3153,145 @@ IC_DB_M2_JOBS_WASM="$PWD/qualification/target/evidence/m2/jobs.wasm" \
 bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test jobs_contention shared_jobs_ -- --nocapture
 ```
+
+### Retained aggregate envelope (0.20)
+
+```sh
+make m2-job-envelope
+```
+
+`make m2-jobs` also selects `tests/jobs_envelope.rs`. The existing job fixture
+adds grouped DISTINCT selections (`category` key, distinct `amount` or `(id, amount)`) and
+private measurement wrappers around its existing advance/page/control handlers. They are
+selected only by `aggregate-jobs`, not the normal console or product. The product
+now owns a separate 16 KiB whole-job bound; rows remain at 4 KiB. Encoder/decoder
+primitives are shared, without public budget setters or a second codec.
+
+The first dataset has 93 rows in 32 groups, with `1 + category % 5` rows per
+group and `amount = id * 10`. Independent native tuples establish counts, sums,
+integral averages, count filtering (`>= 2`), descending aggregate order and
+ascending key tie-breaking. All input is consumed before a separate exhaustion
+call finalizes the result. The test proves:
+
+- All 32 groups fit for these count/sum/average shapes; 32 distinct categories
+  accept subsequent duplicates. The 33rd group/distinct category refuses.
+- A one-byte output allowance refuses finalization without modifying stable
+  memory. Retrying with 128 bytes yields nine pages containing the exact 25
+  selected groups. Replays and upgrades preserve both progress and output.
+- Cardinality refusals preserve the entire stable-memory backing before and
+  after upgrade. Old-sequence retries do not accumulate twice. Cancellation
+  releases the job for a new, successful count.
+
+A separate 1024-row dataset uses 32 groups and 32 distinct amounts per group.
+Numeric grouped DISTINCT completes, including an upgrade after 512 candidates
+with a checkpoint larger than 4 KiB. On the same input, distinct `(id, amount)`
+tuples reach the **16 KiB whole-job frame** before either cardinality limit:
+steps of 16 save 784 candidates; a refused step preserves that checkpoint,
+including after upgrade. Steps of one then reach 790; candidate 791 refuses
+without a write. Cancellation permits a fresh count of all 1024 rows. This is
+an encoding-dependent boundary, not a 790-value product limit. Smaller chunks
+cannot make a larger retained state fit; the 128 KiB transient bound does not
+override the persisted frame bound. Larger values can exhaust the frame earlier.
+
+The earlier 4 KiB numeric probe stopped at 293 values. Increasing the independent
+job budget admits the complete 32-by-32 numeric case without raising group,
+per-group DISTINCT, row, output or per-message work limits. Sixteen full frames
+contain at most 256 KiB of encoded job records, excluding supplier/allocation
+overhead. This is a starting budget, not a claim about arbitrary query completion.
+
+The lifecycle extension fills all 16 slots with the 790-tuple checkpoints and
+proves that another start refuses without changing storage. After an upgrade,
+a source mutation invalidates one job without silently freeing its slot.
+Cancellation and multi-job cleanup traps restore the complete stable-memory
+backing, including allocator metadata. A successful cancellation permits a
+replacement with a new handle; the old handle cannot cancel it.
+No-expiry cleanup and an invalid removal limit perform no writes. Expiry cleanup
+then removes 1/3/12/0 jobs with limits 1/3/16/16 across the same store. All 16 slots
+are filled with near-limit replacements, old handles still refuse, and one
+maximum-size expiry cleanup removes all 16. Logical reuse is established;
+physical allocation shrinking or long-term supplier reuse is not inferred.
+Cleanup examines at most 16 frames before deletion; its limit bounds removals,
+not examined slots. The optimized lifecycle path borrows cursor/state slices
+while validating the complete outer frame, then uses IC Storage's existing
+`remove_discard` rather than requesting the removed value. Resume shares this
+decoder and copies bytes only when it needs owned mutable state. One bounded
+supplier read per inspected frame remains; this is not metadata-only storage I/O.
+Stored bytes, lifecycle policy and corruption admission are unchanged.
+Native negative cases keep valid identity/expiry metadata but truncate the tail,
+append trailing bytes or corrupt its length: both cancellation and cleanup refuse
+without deleting the earlier valid slot. Correctly framed opaque accumulator
+bytes remain cancellable even when the reducer rejects their contents.
+
+Job store v2 (`ICDBAJ02`) preserves the record encoding and admits the wider
+envelope. Native cases construct the v1 header independently and prove read-only
+reopening, refusal preservation, insert/save promotion and cancellation/expiry
+without promotion. Existing Wasm predecessor hooks also ran against the recorded
+4 KiB artifact (SHA-256
+`ee01c24a829691f6fff20e4088613712f701c69cbf473a4743ede6c690d439e8`):
+old scalar/grouped/DISTINCT progress resumes, traps restore the header and job,
+and the old executable refuses a promoted store intact. Reinstalling the new
+executable restores access. No data reset or application schema migration is
+required; after the first successful insert/save, keep a v2-capable executable.
+Without predecessor paths, the normal job test qualifies same-code upgrades.
+`IC_DB_M2_SCALAR_JOBS_WASM`, `IC_DB_M2_GROUP_COUNT_JOBS_WASM` and
+`IC_DB_M2_DISTINCT_JOBS_WASM` select predecessors for those checkpoints;
+`IC_DB_M2_V1_JOBS_WASM` explicitly selects a v1 executable for downgrade refusal.
+All four pointed to the recorded 4 KiB artifact for this run.
+
+Measured on 2026-11-16 with the pending 0.20 engine and qualification host,
+Rust 1.100.0, IC Storage 0.74.1, Platform Runtime 0.23.14, qualification
+Wire 0.24.3 and PocketIC 16.1.0 on its application subnet. The release-profile
+fixture is 1,106,347 uncompressed Wasm bytes, 1,052,072 code-section bytes, SHA-256
+`9fabafdb93a742606625f50bea3bc0dadfd9db5df32a402ebeef5ca0f9a05d39`.
+It includes qualification controls; its size is not a production footprint.
+
+| Selected operation | Instructions | Charged cycles |
+| --- | ---: | ---: |
+| Warm 32-group sum finalization | 982,321 | 8,082,194 |
+| Warm 32-group average finalization | 1,386,264 | 8,485,073 |
+| Warm count finalization, filter/order and first three output rows | 882,528 | 7,977,207 |
+| First completed-page replay after upgrade | 2,138,861 | 9,233,817 |
+| Subsequent three-row pages, maximum observed | 764,243 | 7,925,324 |
+| Numeric grouped DISTINCT: 32 candidates taking retained state to 1024 | 6,986,953 | 14,075,043 |
+| Numeric grouped DISTINCT: finalization at 1024 values | 6,455,613 | 13,554,268 |
+| Tuple grouped DISTINCT: refused 16-candidate step just after upgrade | 6,772,683 | 13,858,461 |
+| Tuple grouped DISTINCT: refused candidate 791, warm | 5,013,308 | 12,098,886 |
+| Invalidate one 790-tuple job after a source change, warm | 4,461,004 | 11,549,071 |
+| Cancel one near-limit job, warm | 713,803 | 7,796,049 |
+| Check 16 near-limit jobs before expiry, warm (replacement set) | 1,598,695 | 8,621,443 |
+| Cleanup first expired job from 16 near-limit frames, after upgrade | 2,202,431 | 9,225,894 |
+| Cleanup all 16 near-limit replacements in one call, warm | 2,660,405 | 9,683,270 |
+
+The matched pre-change fixture was 1,106,615 / 1,052,356 total/code bytes,
+SHA-256 `b1e513bc311a6d81296e29375661b04f8445aa9968e04b22a5edc3546f5dbe82`.
+With the same input, limits, sequence and supplier, full cleanup falls from
+3,579,543 to 2,660,405 instructions (25.7%) and 10,602,408 to 9,683,270 charged
+cycles (8.7%). Both perform 112 backing writes; ownership/return-value copies
+changed, not deletion semantics. Empty cleanup costs 137,460 instructions and
+7,160,134 charged cycles in the current fixture. Thus full cleanup adds 2,523,136
+cycles above that baseline; the whole update charge is not database execution
+alone. This is an IC DB before/after comparison, not new IcyDB savings evidence.
+
+Instruction intervals include reopening, query admission, checkpoint work and
+result conversion, excluding transport decode/encode. Finalization rows include
+the exhaustion check and save; they are not isolated reducer microbenchmarks.
+Cycles are the observed balance decrease around the entire isolated update,
+including platform/transport charges. The runner emits each sample and artifact
+identity; these are observations, not universal ceilings or a matched IcyDB run.
+Rich keys, other arithmetic states, maximum transient memory and production
+write rates need separate evidence. The lifecycle measurements cover the selected
+near-limit numeric tuple frames, not every supported accumulator representation.
+
+Frozen IcyDB `6d421e3`,
+`crates/icydb-core/src/db/executor/aggregate/contracts/grouped/context/tests.rs`,
+separately checks exact DISTINCT cardinality, duplicates at the limit and byte
+ceilings. This witness carries those invariants to IC DB's retained-job boundary;
+it copies no executor code or adjustable-budget framework. Existing shared-slot
+and rollback probes remain responsible for their separate failure boundaries.
+Borrowed inspection follows the existing owned codec's scalar-view approach,
+also present in frozen IcyDB's `db/data/persisted_row/codec/scalar/mod.rs`:
+validate framing once and materialize ownership only for the caller that needs
+it. No additional legacy code, decoder or persisted metadata was introduced.
 
 ## Identified maintenance and the local console
 
@@ -3429,6 +3584,65 @@ validation/cleanup bounds. Full repeated-migration lifecycle qualification remai
 open. The transformation is synthetic; full coverage belongs to the delivered engine.
 
 ## Installed console
+
+The 0.20 schema JSON check runs the installed-layout CLI against the existing
+records Wasm. It parses complete stdout, compares selected/full schema facts,
+checks optional text bounds and reverse-reference indexes, includes a recursive
+named type once, excludes unrelated types, and checks empty stdout on unknown
+entity refusal. The default table command remains covered. JSON is native CLI
+presentation only; schema authority, tuple transport and product codecs are
+unchanged.
+
+```sh
+make m1-records-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" \
+  bash scripts/with-pocketic.sh cargo test \
+    --manifest-path qualification/Cargo.toml --locked \
+    -p ic-db-m0-rollback-driver --test records \
+    console_schema_json_is_complete_selected_and_pipeable -- --exact
+```
+
+Per-call CLI statistics use PocketIC's canister balance before/after each query
+or update and a monotonic host timer around that call only. No extra update or
+tick is executed to manufacture a query cost. These are local call latency and
+observed charges, not production latency or IC instruction measurements. JSON
+tests require statistics on stderr; normal commands place them after results.
+The installed migration demo checks this ordering and
+schema/status/count/query labels, per-resume aggregate reporting, cleanup and
+migration updates, two decimal places for time and positive measured update
+charges. Unit checks cover exact large-integer deltas, rounding and explicit
+balance-increase reporting instead of saturating to zero.
+
+The terminal regression in `make m3-cli` runs the installed-layout binary through
+the host's `script` utility and the real prepared launcher. It waits for each
+prompt before sending another command, and requires counts plus their statistics
+without closing stdin. Blank lines, parse-error recovery and prompt-free `quit`
+are covered. This caught the separate launcher child group being suspended by
+SIGTTIN when it inherited the foreground terminal. The foreground CLI now forwards
+terminal input through a pipe and retains interactive prompting in the child;
+Testkit still owns server and child cleanup. Linux execution passes; the macOS
+`script` invocation is supplied but awaits native qualification.
+Console launches select the prepared launcher's `--idle-ttl 86400`; ordinary
+test launches keep PocketIC's default. The explicitly selected idle regression
+waits 90 seconds without server requests, then exercises queries and normal quit:
+
+```sh
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
+  cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+    -p ic-db-m0-rollback-driver --test console_terminal \
+    terminal_survives_pocketic_default_idle_timeout -- --ignored --exact
+```
+
+This long check is excluded from routine CLI tests. A fresh console must not
+inherit the server's 60-second test-oriented idle shutdown; no heartbeat changes
+call counts, canister state or cycle statistics.
+Linux execution passed on 2026-11-16: 90 seconds with no requests, followed by
+the terminal command/history checks and successful quit (94.21 seconds total).
+The same terminal regression now sends actual ↑/↓, cursor/delete and Ctrl-C
+sequences. It checks recalled results, draft restoration, editing, cancellation
+and refusal of multiline bracketed paste without executing a prefix. Rustyline
+owns line editing and session history; the foreground relay renders each result
+before requesting another line. Piped and single-command JSON modes bypass it.
 
 `make db` builds and installs the release binary at `~/.local/bin/db` and the M1
 host at `~/.local/share/ic-db/m1/records.wasm`; it does not start PocketIC or the

@@ -351,6 +351,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clipboard-win"
+version = "5.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
+dependencies = [
+ "error-code",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -624,6 +633,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "error-code"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "ethnum"
@@ -959,7 +974,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
  "toko-tooling",
 ]
@@ -970,7 +985,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "icydb",
  "toko-tooling",
 ]
@@ -988,7 +1003,7 @@ name = "ic-db-m0-aggregation-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
  "toko-tooling",
 ]
@@ -998,7 +1013,7 @@ name = "ic-db-m0-maintenance-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
  "toko-tooling",
 ]
@@ -1008,9 +1023,9 @@ name = "ic-db-m0-rollback-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
- "ic-wire 0.24.2",
+ "ic-wire 0.24.3",
  "toko-tooling",
 ]
 
@@ -1021,10 +1036,13 @@ dependencies = [
  "clap",
  "ic-host-artifacts",
  "ic-host-text",
- "ic-wire 0.24.2",
+ "ic-wire 0.24.3",
  "pocket-ic",
+ "rustyline",
  "serde",
+ "serde_json",
  "sha2 0.11.1",
+ "shlex",
  "tokio",
  "toko-tooling",
  "wasmparser",
@@ -1037,9 +1055,9 @@ dependencies = [
  "ic-db",
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
- "ic-wire 0.24.2",
+ "ic-wire 0.24.3",
  "toko-tooling",
 ]
 
@@ -1064,8 +1082,8 @@ dependencies = [
 name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
- "ic-platform-runtime 0.23.13",
- "ic-wire 0.24.2",
+ "ic-platform-runtime 0.23.14",
+ "ic-wire 0.24.3",
  "serde",
  "toko-tooling",
 ]
@@ -1076,7 +1094,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.13",
+ "ic-platform-runtime 0.23.14",
  "ic-storage",
  "toko-tooling",
 ]
@@ -1102,9 +1120,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-text"
-version = "0.76.0"
+version = "0.77.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e4ca740ecd5342a449b401fca5ce2521e34ea3ab482dc67d989de3862b75c4a"
+checksum = "421d01724ce7a61567333c6fd1a18ccf7878958cff441729581f69959a2389bb"
 dependencies = [
  "unicode-width",
 ]
@@ -1122,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-macros"
-version = "0.23.13"
+version = "0.23.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5afcfb99f22c7153355b387ff56b4d19e78ae1ea0023cf713e25124b2db613e"
+checksum = "0376721a68d30392d7005bfaeca422bb0674cfa3c1778ca69b6661183327792c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1142,9 +1160,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime"
-version = "0.23.13"
+version = "0.23.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f5f46eebbf414e38b7ad6db694ce05bebeae40ff8df28eba6c1e48a6c308df4"
+checksum = "6f91abeacf7b1602e67b49391ea1e66d1c8f7e45779de79a5835b9c8dac3afb8"
 dependencies = [
  "ic-platform-macros",
  "ic-platform-runtime-guard",
@@ -1153,9 +1171,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime-guard"
-version = "0.23.13"
+version = "0.23.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a97003ee80dc942a11a313430685929df56c6dc5eeff506239904355ef7aa5"
+checksum = "239aeacc00fa6015ea4656defdfe643cdd6116f180887ea27b8164105c58a2ce"
 
 [[package]]
 name = "ic-platform-types"
@@ -1226,9 +1244,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.24.2"
+version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "852a98f3b818bf1e6841c63845d88ded595b659181377e749cf8cf50b12b48c6"
+checksum = "9bb811860c129acbf0de96b16f44cad6b554c0e12e3cc3b67f0e5ad0109292e2"
 dependencies = [
  "bytemuck",
  "postcard",
@@ -1674,6 +1692,18 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -2213,6 +2243,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rustyline"
+version = "19.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56e1d6bd81c2d5feafd2419138df9183c45a10a492c4e873b8b0acb8eb2b549e"
+dependencies = [
+ "bitflags",
+ "clipboard-win",
+ "libc",
+ "log",
+ "memchr",
+ "nix",
+ "unicode-segmentation",
+ "unicode-width",
+ "utf8parse",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2744,9 +2792,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.44.9"
+version = "0.44.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdfd5bc761f55ede02e82f8af36ca82415696209b3ff45e8f080e82cab85c418"
+checksum = "7d16b815ae322ae3f88580ee6af1611bdafde08b77592cd886bfa0eece0f1be8"
 
 [[package]]
 name = "toml_datetime"

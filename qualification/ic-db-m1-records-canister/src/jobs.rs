@@ -11,6 +11,11 @@ use ic_db::{
 
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct Amount {}
+#[ic_db::record(fields(
+    field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "amount", value(item(prim = "Nat64")))
+))]
+struct IdAmount {}
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
 struct AverageAmount {}
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
@@ -41,6 +46,7 @@ fn query(db: &Database<Backing>, operation: u8) -> Query<'_, Entry, Backing> {
 }
 
 type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
+type AdvanceRequest = (Vec<u8>, u8, u64, u32, i64, u64, bool);
 type Progress = (u64, u64, u64, u64, u8, Option<String>);
 fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
     let (phase, value) = match step.outcome {
@@ -126,6 +132,16 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
         ),
+        16 => query.start_group_count_distinct::<Category, Amount>(
+            &mut jobs,
+            Timestamp::from_millis(now),
+            Timestamp::from_millis(expires),
+        ),
+        17 => query.start_group_count_distinct::<Category, IdAmount>(
+            &mut jobs,
+            Timestamp::from_millis(now),
+            Timestamp::from_millis(expires),
+        ),
         10 => query.start_min::<Amount>(
             &mut jobs,
             Timestamp::from_millis(now),
@@ -163,15 +179,7 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
     on_error = crate::transport::endpoint_error
 )]
 fn job_advance(
-    (bytes, operation, sequence, work, now, fault, trap_after): (
-        Vec<u8>,
-        u8,
-        u64,
-        u32,
-        i64,
-        u64,
-        bool,
-    ),
+    (bytes, operation, sequence, work, now, fault, trap_after): AdvanceRequest,
 ) -> Result<Response, String> {
     let host = runtime();
     let db = open(&host);
@@ -293,24 +301,39 @@ fn job_advance(
                 Timestamp::from_millis(now),
             )
             .map(|s| progress(s, |count| Some(count.to_string()))),
-        9 => query
-            .resume_group_count_distinct::<Category, Category>(
+        9 | 16 | 17 => (if operation == 9 {
+            query.resume_group_count_distinct::<Category, Category>(
                 &mut jobs,
                 &handle,
                 sequence,
                 Timestamp::from_millis(now),
             )
-            .map(|s| {
-                progress(s, |rows| {
-                    Some(
-                        rows.rows
-                            .into_iter()
-                            .map(|row| format!("{}:{}", row.key.category, row.count))
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    )
-                })
-            }),
+        } else if operation == 16 {
+            query.resume_group_count_distinct::<Category, Amount>(
+                &mut jobs,
+                &handle,
+                sequence,
+                Timestamp::from_millis(now),
+            )
+        } else {
+            query.resume_group_count_distinct::<Category, IdAmount>(
+                &mut jobs,
+                &handle,
+                sequence,
+                Timestamp::from_millis(now),
+            )
+        })
+        .map(|s| {
+            progress(s, |rows| {
+                Some(
+                    rows.rows
+                        .into_iter()
+                        .map(|row| format!("{}:{}", row.key.category, row.count))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            })
+        }),
         _ => Err(ic_db::Error::InvalidQuery),
     };
     let writes = faults::finish_job_write();
@@ -323,8 +346,48 @@ fn job_advance(
         })
         .map_err(|e| e.to_string())
 }
+
+// Measurements wrap the same fixture operations, including reopen and refusals.
+// Transport decoding/encoding is outside the instruction interval; balance
+// deltas in the driver include the whole update. No product telemetry is added.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_advance_cost",
+    guard = crate::transport::admit::<115>,
+    decode = crate::transport::decode::<_, 115>,
+    encode = crate::transport::encode::<_, 115>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    let result = job_advance(request);
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
+}
+
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_page_cost",
+    guard = crate::transport::admit::<116>,
+    decode = crate::transport::decode::<_, 116>,
+    encode = crate::transport::encode::<_, 116>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn job_page_cost(request: PageRequest) -> (Result<PageResponse, String>, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    let result = job_page(request);
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
+}
 // operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
 // 4 unrelated entity mutation; 5 mutate source then trap.
+type ControlRequest = (u8, Vec<u8>, i64, u32);
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_control",
@@ -334,7 +397,7 @@ fn job_advance(
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn job_control((operation, bytes, now, limit): (u8, Vec<u8>, i64, u32)) -> Result<u64, String> {
+fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, String> {
     let host = runtime();
     let mut jobs = open_jobs(&host);
     match operation {
@@ -367,6 +430,34 @@ fn job_control((operation, bytes, now, limit): (u8, Vec<u8>, i64, u32)) -> Resul
         _ => return Err("invalid operation".into()),
     }
     .map_err(|e| e.to_string())
+}
+
+// Observe the existing lifecycle operations and inject rollback faults only in
+// this qualification host. Cleanup policy stays in AggregateJobs.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_control_cost",
+    guard = crate::transport::admit::<117>,
+    decode = crate::transport::decode::<_, 117>,
+    encode = crate::transport::encode::<_, 117>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn job_control_cost(
+    (request, fault, trap_after): (ControlRequest, u64, bool),
+) -> (Result<u64, String>, u64, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    faults::arm_job_write(fault);
+    let result = job_control(request);
+    let writes = faults::finish_job_write();
+    if trap_after {
+        ic_platform_runtime::system::trap("after aggregate lifecycle operation");
+    }
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+        writes,
+    )
 }
 
 // Private qualification endpoint; product endpoints remain adapter-owned.

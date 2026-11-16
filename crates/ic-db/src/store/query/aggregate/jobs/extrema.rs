@@ -7,7 +7,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain minima per exact key record, without scanning input. R selects one
     /// exact ordered field, as in `group_min`; key and operand may overlap.
     /// Retain all-absent groups with None. Keep at most 32 groups within the
-    /// complete 4096-byte job frame, including keys, winners and progress.
+    /// complete 16 KiB job frame, including keys, winners and progress.
     /// Group predicates, order and total limit bind the job. No automatic spill.
     /// # Errors
     /// Refuses unsupported shapes, page modifiers, expiry or occupied capacity.
@@ -80,7 +80,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain a minimum over one exact single-field result record, without scanning.
     /// Uses `min`'s ordered types and absence semantics and `start_count`'s expiry,
     /// revision and capacity bounds. Persist only the winning record, within the
-    /// complete 4096-byte job frame; no partial result or automatic spill.
+    /// complete 16 KiB job frame; no partial result or automatic spill.
     /// # Errors
     /// Refuses unsupported projections/query shapes, expiry or occupied capacity.
     /// # Panics

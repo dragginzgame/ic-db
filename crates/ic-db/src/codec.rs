@@ -18,10 +18,16 @@ pub const MAX_ROW_BYTES: usize = 4096;
 // A durable contract bound, independent of any future supplier API expansion.
 pub(crate) const MAX_PRINCIPAL_BYTES: usize = 29;
 
-#[derive(Default)]
 pub struct Encoder {
     bytes: Vec<u8>,
     budget: Budget,
+    byte_limit: usize,
+}
+
+impl Default for Encoder {
+    fn default() -> Self {
+        Self::with_byte_limit(MAX_ROW_BYTES)
+    }
 }
 
 impl Encoder {
@@ -30,8 +36,17 @@ impl Encoder {
         Self::default()
     }
 
+    // Internal envelopes share the scalar encoding without inheriting row policy.
+    pub(crate) fn with_byte_limit(byte_limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            budget: Budget::default(),
+            byte_limit,
+        }
+    }
+
     fn append(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        if bytes.len() > MAX_ROW_BYTES - self.bytes.len() {
+        if bytes.len() > self.byte_limit - self.bytes.len() {
             return Err(Error::Limit);
         }
         self.bytes.extend_from_slice(bytes);
@@ -190,7 +205,7 @@ impl Encoder {
         // format-defined u32, never a host-sized integer or an adaptive encoding.
         let len = u32::try_from(bytes.len()).map_err(|_| Error::Limit)?;
         let framed = bytes.len().checked_add(4).ok_or(Error::Limit)?;
-        if framed > MAX_ROW_BYTES - self.bytes.len() {
+        if framed > self.byte_limit - self.bytes.len() {
             return Err(Error::Limit);
         }
         self.append(&len.to_le_bytes())?;
@@ -214,7 +229,11 @@ impl<'a> Decoder<'a> {
         self.position
     }
     pub fn new(bytes: &'a [u8]) -> Result<Self, Error> {
-        if bytes.len() > MAX_ROW_BYTES {
+        Self::with_byte_limit(bytes, MAX_ROW_BYTES)
+    }
+
+    pub(crate) fn with_byte_limit(bytes: &'a [u8], byte_limit: usize) -> Result<Self, Error> {
+        if bytes.len() > byte_limit {
             return Err(Error::Corrupt);
         }
         Ok(Self {

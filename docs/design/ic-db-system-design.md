@@ -1,7 +1,10 @@
 # IC DB system design
 
-Status reviewed 2026-11-16: this design includes the 0.19 maintained-count hard
-cut and the 0.18.0 migration CLI, bounded-sort and comparison increments.
+Status reviewed 2026-11-16: delivered engine scope includes the 0.19 maintained-count
+hard cut and the 0.18 migration, sorting and comparison increments. Version
+0.20 separates 16 KiB job frames from 4 KiB rows and improves console inspection
+and local operation; it does not establish remote application support.
+Section 9 specifies the preferred next integration slice.
 The changelog and Git tags record releases.
 Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
@@ -1466,6 +1469,19 @@ on complete results unless a separately proved execution path can finalize group
 earlier. Page-local deduplication is not whole-query distinct. Completed output
 may itself need bounded pagination and cleanup.
 
+The 0.20 [retained-envelope witness](../../qualification/README.md#retained-aggregate-envelope-020)
+qualifies selected count/sum/average finalization at 32 groups and filtered,
+ordered output pages across upgrades. Job state now has its own 16 KiB bound,
+independent of 4 KiB rows. Its numeric grouped DISTINCT workload completes with
+32 values in each of 32 groups; a wider two-field tuple reaches the frame bound
+at 790 values. These are encoding-dependent observations, not fixed value-count
+promises. Smaller input chunks cannot bypass state exhaustion; refusal preserves
+the checkpoint and cancellation remains available. IcyDB's
+frozen exact-limit/duplicate and independent-byte-budget regressions supply the
+invariants, without importing its resource framework. Costs and remaining
+qualification gaps belong to the linked receipt. Retain one bounded checkpoint
+per job; no spill, new allocation or job interpreter is introduced.
+
 For a projection whose access path orders by the distinct key, product
 `.distinct()` suppresses adjacent equal keys across pages without a retained
 seen-set, following the earlier M0 witness. Predicates must be constant within
@@ -1556,13 +1572,34 @@ One `AggregateJobs` collection uses a
 separate host-governed allocation, leaving the row manifest and codec unchanged.
 Its versioned header admits the owned codec version and owns a fresh incarnation
 and monotonic slot generation.
-At most 16 slots retain 4096 encoded bytes each; expiry is fixed at creation and
+Version two (`ICDBAJ02`) admits 16 KiB frames. Version-one stores remain readable
+with their original 4096-byte bound; reopening, refused operations, cancellation
+and expiry cleanup do not promote the header. The first successful insert/save
+atomically promotes it alongside the job write, preserving incarnation, existing
+records and progress. This is a specific compatible envelope expansion, not a
+schema transformation or general format reconciler. Old executables refuse the
+v2 header; downgrade does not reopen it. Row codecs, schema identity and ordinary
+row bounds are unchanged. Internal envelope constructors reuse scalar encoding
+with a byte budget owned by jobs; public row constructors retain 4 KiB.
+At most 16 slots retain 16 KiB encoded bytes each; expiry is fixed at creation and
 at most one hour after host-captured time. A job admits one million candidates;
 each advance examines at most the fluent work limit (1–512) and reads at most
 64 KiB of source row/key bytes. Candidate bounds reserve room before another
 fetch; neither this byte count nor the encoded-state cap claims total allocator
 or traversal memory. Finalization of one count/sum/average is fixed-size and
 output-bound. Job records use the cursor codec's own encoded-frame bound.
+Expiry cleanup checks at most 16 frames before deletion; its caller limit bounds
+removals, not examined slots. Lifecycle inspection borrows cursor/accumulator
+slices through the same bounded frame decoder as resume; only resume materializes
+owned bytes. After identity/expiry admission, IC Storage's `remove_discard`
+avoids retrieving the deleted payload again. Complete outer framing and metadata
+checks remain required; cleanup does not interpret reducer-specific contents.
+This retains the scalar-view ownership lesson from frozen IcyDB `6d421e3` without
+a second decoder, metadata collection or durable-format change.
+The 0.20 envelope witness exercises invalidation,
+cancellation, interrupted cleanup and slot reuse with all 16 jobs near their
+frame bound, including a maximum-size expiry cleanup. This establishes selected
+logical progress/rollback and costs, not physical shrinking or general allocator reuse.
 
 Re-admit the caller's fluent query on each advance. Bind the exact database/schema,
 access path, predicates, source entity, numeric operation, operand/result type and
@@ -1593,7 +1630,7 @@ that marker, optional presence and complete value framing before reconstructing
 the ordered comparison key. No durable duplicate key or universal value tree is
 added. Distinct operation identities prevent switching minimum/maximum or numeric
 terminals; existing identities and payloads are unchanged. State must fit the
-complete 4096-byte job envelope even for a provisional winner. The output budget
+complete 16 KiB job envelope even for a provisional winner. The output budget
 applies only at completion, allowing a smaller final minimum to replace a large
 provisional one. Empty/all-absent input yields `None`; source changes, retry,
 expiry and cancellation use the shared lifecycle. Scalar value finalization and
@@ -1608,7 +1645,7 @@ cannot restore a winnerless nonempty group. Scalar/grouped winner validation
 shares full presence/value framing checks. Grouping and operand records may
 overlap; operation, key, operand and complete selection bind the job. New grouped
 extrema identities preserve all existing payloads and identities. Start/resume
-and output pages share grouped numeric machinery. The 32-group/4096-byte complete
+and output pages share grouped numeric machinery. The 32-group/16 KiB complete
 job bounds apply before output selection, including groups later excluded.
 No extra allocation, durable comparison-key copy or output cache is introduced.
 
@@ -1630,7 +1667,7 @@ existing validated field spans, without a universal value conversion.
 
 Retained scalar DISTINCT counts share synchronous tuple-projection admission and
 the exact comparison-key set. Persist a sorted set of at most 32 keys inside the
-existing 4096-byte whole-job frame, with a separate algorithm identity. On resume,
+16 KiB whole-job frame, with a separate algorithm identity. On resume,
 validate full typed key components using the owned key codec, optional tags,
 strict ordering, set cardinality and the outer count. No original projected rows
 or duplicate key representations are retained. Empty input counts zero; all-absent
@@ -1645,7 +1682,7 @@ Retained grouped DISTINCT counts use the same grouping table and key-set codec.
 Persist each group key record followed by its nonempty sorted distinct set; sum
 set cardinalities in the outer progress count, bounded by examined input. Groups
 have independent 32-key limits and a separate 32-group cap; the existing whole-job
-4096-byte limit covers all sets together. Transient accumulation retains the shared
+16 KiB limit covers all sets together. Transient accumulation retains the shared
 group-state allowance. Bind both projections (including overlapping fields) and
 completed-group selection under a grouped-DISTINCT algorithm identity. Group keys
 are reconstructed as before; scalar key-set bytes and prior job identities remain
@@ -1672,7 +1709,7 @@ null-exclusion and typed-overflow lessons from `value_reducer/tests`, with IC DB
 already selected I256/U256 totals and declared-scale rounding rather than its
 universal `Value` coercion path. This adds no arithmetic engine or job collection.
 
-The first retained grouping envelope is 32 groups inside the existing 4096-byte
+The retained grouping envelope is 32 groups inside a separately bounded 16 KiB
 whole job frame, including cursor and metadata. It is deliberately smaller than
 the synchronous 128-KiB group-state envelope. Large key/group combinations refuse
 instead of spilling; output filtering/limits cannot conceal that refusal. Per-step
@@ -2055,6 +2092,20 @@ temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. Deployed-database CLI access
 and production endpoint composition remain M4 integration work.
 
+The 0.20 console adds selected-entity/JSON schema inspection, separate
+reference target/index columns, per-call measured charges, history and quoted
+arguments. These remain fixture presentation and input handling, not a new query
+engine, schema authority or transport contract. The foreground CLI owns editing;
+the prepared Testkit launcher owns the server, including a console-specific
+24-hour idle timeout and cleanup on exit. No heartbeat or silent restart is added.
+Exact commands, limits and regression evidence live in the
+[installed-console guide](../../qualification/README.md#installed-console).
+Frozen IcyDB `6d421e3` supplies the named-schema rendering lesson
+(`shell/render/tests.rs`, `verbose_dossier_golden`) and Rustyline precedent
+(`shell/interactive.rs`); its SQL statement loop and persistent dossier are not
+copied. Host Text owns terminal escaping and table layout; Clap owns command
+admission after Shlex splits words. No deployed representation changes here.
+
 Canic's existing Blob adapter, reviewed at
 [`e84702b`](https://github.com/dragginzgame/canic/tree/e84702b3bdcf4eb209476aadd053df21f18dd8eb),
 established the integration pattern: explicit synchronous application handlers,
@@ -2063,16 +2114,17 @@ fluent operations with explicit bounds, without a second planner, SQL or a gener
 dynamic frontend. A real CLI must consume an explicit adapter/application
 contract; fixture tuple controls are not a public protocol to promote.
 
-The initially isolated adapter probe has now moved into Canic's working checkout,
-where `make db-test` passes with its selected dependency graph. The optional
+The initially isolated adapter probe moved into Canic's working checkout;
+the recorded `make db-test` run passed with its selected dependency graph. The optional
 adapter mounts three synchronous application-supplied handlers; the application
 owns passive request/reply types, method identities, its schema, actual-caller
 authorization and explicit storage initialization. Bounded batches, sparse live
 pages, five upgrades and frozen-source cancellation exercise the existing engine.
 Ordinary Wasm exposes no fixture fault/maintenance controls. IC DB's temporary
 patch and runner are retired, leaving one implementation owner. These Canic
-changes are not yet committed/pushed; remote application CLI support and a common
-inspection protocol remain outstanding. See the
+files remain untracked in the read-only review at Canic HEAD `e84702b` on
+2026-11-16; that review did not rerun qualification or establish delivery.
+Remote application CLI support and a common inspection protocol remain outstanding. See the
 [integration receipt](../../qualification/README.md#canic-typed-application-integration-019).
 
 This preserves IcyDB's application-supplied, synchronous caller authorization
@@ -2081,6 +2133,56 @@ It does not copy its generated SQL/schema surface, session executor or transport
 into IC DB. Mounting follows Canic's existing Blob hooks; application policy
 remains outside both engines. An operation-level authorization grant does not
 replace any tenant/row checks required inside an application's typed handler.
+
+### Next integration design: inspect one application canister
+
+Preferred next M4 slice, not an implemented remote CLI or authorization to edit
+Canic: inspect a deliberately selected application canister, then exercise one
+application-defined listing through its typed adapter. The existing broad fluent
+engine remains the query implementation. This slice establishes the client/host
+boundary before adding a generic command surface around it.
+
+| Contract | Preferred initial rule |
+| --- | --- |
+| Target | Select the network/provider, canister and caller identity explicitly. Show the resolved target; a failed connection never falls back to the fixture or another identity. Fixture operation remains clearly identified. |
+| Inspection authority | Canic checks the actual caller before decoding. Applications choose which schema/status facts may be exposed; knowing an entity name grants no read or write permission. |
+| Version and identity | Admit an explicit inspection-protocol version independently of the database format. Return the executable schema identity, readable database incarnation and supported stored admission/maintenance state; never describe compiled declarations as proof that stored data matches. |
+| Schema detail | Begin with a bounded entity catalogue and a selected entity's named fields, types, indexes and reference target/index pairs. Bound reachable named-type metadata and bytes. Refuse an oversized reply explicitly; never truncate a schema and call it complete. |
+| Closed or unsupported database | Report a supported maintenance/refusal state without reopening ordinary access or creating missing storage. Unsupported formats remain intact; do not decode unknown layouts merely to improve diagnostics. |
+| Counts | A selected entity's maintained cardinality may be exposed when ordinary admission and application policy permit it. Label it as metadata; inspection must not silently scan every row or validate all indexes. |
+| Queries | The application owns passive request/reply types and constructs a bounded fluent query. Start with one explicitly compiled witness client. Schema inspection does not grant arbitrary field queries, writes, migration or runtime DDL. The current fixture tuple protocol is not promoted to a public API. |
+| Continuation | Forward the application's bounded cursor unchanged and preserve empty-page continuation. Each request is authorized again. Inspection across several calls is not a snapshot; changed schema/database identity invalidates the client's accumulated description. |
+| Call evidence | Report the actual query/update lane and measured client elapsed time. Show cycles only when their source and scope are known; unavailable remote charges are not zero and concurrent balance changes are not an exact per-call meter. |
+
+Share passive inspection definitions at the adapter boundary once both producer
+and client need them. Wire stays outside the engine and durable codec. Do not
+add a crate, generated endpoint registry, protocol-negotiation framework or
+general dynamic executor merely to expose these few facts. The current JSON
+display strings are not a substitute for a versioned typed reply. Endpoint names,
+transport IDs and exact metadata bounds still need agreement at the Canic owner.
+The adapter contract and its focused installed qualification are tracked in
+[Canic #18](https://github.com/dragginzgame/canic/issues/18); CLI target selection
+and presentation remain IC DB responsibilities.
+
+Retain IcyDB's conservative call-failure distinction, inspected at frozen
+`6d421e3`, `crates/icydb-cli/src/icp/call/mod.rs`: an update whose reply is lost
+may have committed. Report an unknown outcome rather than retrying automatically
+or claiming rollback. An observed application refusal, pre-dispatch failure and
+unknown update outcome remain distinguishable. No ordinary-write WAL or client
+retry journal follows from this requirement. Inspection alone does not reconcile
+an unknown write; the application must provide an appropriate state/idempotency
+check before a write-capable client is admitted.
+
+Qualification is one small end-to-end application witness, not a second engine:
+authorized schema/status, denied caller before malformed decoding, wrong protocol
+version, unsupported/maintenance state without backing changes, selected-entity
+bounds, and unchanged-schema upgrade. Add its real filtered/ordered listing with
+sparse pages and altered-cursor refusal. A later write-capable client must also
+prove lost-reply handling. Keep network-call latency separate from Wasm bytes,
+instructions and cycles; the frozen IcyDB comparison matrix remains authoritative
+only for its matched workloads. No remote implementation is claimed by this plan.
+
+### Current engine delivery and qualification
 
 Maintainer sequencing decision: prioritize application integration and engine
 maturity over further performance tuning. Keep the maintained-prefix counter
@@ -4095,8 +4197,9 @@ source LOC, generic elegance and native timings cannot establish absence of bloa
 Include generated codec/field glue and application mapping, not just the shared core.
 Maintainer feedback on 2026-11-16 retains approximately 2 KB per added entity as
 the objective and the approximately 4 KB IcyDB result as the working comparison
-ceiling. The current approximately 5.8 KB reachable-entity result is an unresolved
-size gap. Small query-shape/map increments do not establish acceptable entity
+ceiling. The latest 0.18 fluent composition fixture measures approximately 4.30 KB
+per added reachable entity (down from the earlier 5.8 KB result); this remains an
+unresolved size gap. Small query-shape/map increments do not establish acceptable entity
 growth. Attribute the full reachable delta before choosing a reduction; do not
 raise the budget or substitute dead-strippable schema measurements. Historical
 IcyDB thresholds and post-link optimization recipes are separate evidence, not
@@ -4338,6 +4441,21 @@ input, and accepted migration downtime does not authorize query write freezes.
 Any proposed capability cut needs a concrete reason, not lack of application use.
 At adoption, assess measured benefit after consumer changes, missing capabilities
 and supplier responsibilities are included.
+
+The next M4 slice has two concrete decisions before implementation, rather than
+another engine-wide redesign:
+
+| Decision | Owner and completion condition |
+| --- | --- |
+| Shared inspection contract | Canic/application and CLI agree the versioned passive types, method identities, supported maintenance/refusal views and measured metadata bounds. No engine transport dependency or duplicate schema authority. |
+| Target and credential selection | CLI selects an existing host/Platform calling boundary with explicit network, canister and identity; test denied/missing credentials and target mismatch without fallback. Do not introduce another credential store. |
+
+The accepted broad query/type scope remains intact. Nested references/indexes,
+composite primary keys, larger DISTINCT/sorting and broader maintenance envelopes
+remain named gaps in section 9, not capability cuts justified by this sequencing.
+Keep the current synchronous write and explicit-maintenance contracts while
+qualifying real application combinations; do not reopen prefix-counter tuning
+merely because the integration work has a different owner.
 
 A negative answer can stop the rewrite or change its scope. The goal is a simpler
 useful database, not completing a rewrite because a repository now exists.

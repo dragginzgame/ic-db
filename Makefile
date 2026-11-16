@@ -82,7 +82,7 @@ qualification-tooling-check:
 	  printf '%s\n' 'Qualification tooling declarations and lock match the product selection.'
 
 m0-setup:
-	@launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.106.0 --bin ic-testkit-server --profile debug --features cli)" && \
+	@launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.106.0 --bin ic-testkit-server --profile release --features cli)" && \
 	  "$$launcher" setup --directory "$(CURDIR)/.tools/m0-pocketic"
 
 m0-contracts:
@@ -217,10 +217,13 @@ m2-sort-costs-artifact:
 m2-sort-costs: m2-sort-costs-artifact
 	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
 
-.PHONY: m2-jobs m2-jobs-artifact m2-contention
+.PHONY: m2-jobs m2-jobs-artifact m2-contention m2-job-envelope
 m2-jobs: m2-jobs-artifact
 	cargo test --locked -p ic-db --test jobs
-	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs --test jobs_contention -- --nocapture
+	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs --test jobs_contention --test jobs_envelope -- --nocapture
+
+m2-job-envelope: m2-jobs-artifact
+	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_envelope -- --nocapture
 
 m2-contention: m2-jobs-artifact
 	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_contention -- --nocapture
@@ -279,6 +282,7 @@ m2-cli: m2-cli-artifact
 .PHONY: m3-cli
 m3-cli: m2-cli-artifact
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_migration -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_terminal -- --nocapture
 
 .PHONY: m1-write-envelope
 m1-write-envelope: m1-records-artifact

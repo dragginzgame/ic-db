@@ -401,9 +401,11 @@ Thresholds use the exact result type: signed sums accept negative values and
 Decimal results accept fractions at the declared scale. Grouped note min/max
 bounds are literal text, including empty strings, ordered by UTF-8 bytes without
 normalization. They exclude absent results; `None` is ordinary text, not an absence
-marker. Use a one-shot shell command for empty or whitespace-containing bounds
-(for example, `db query Document --select entry_id,min:note --group-min ''`);
-interactive commands currently split on whitespace without quote interpretation.
+marker. Quote empty or whitespace-containing bounds in shell commands and at
+`db>` (for example, `query Document --select entry_id,min:note --group-min ''`).
+The console accepts single/double quotes and backslash escapes; it performs no
+variable, wildcard or command expansion. Incomplete quoting refuses before any
+database call and returns to the interactive prompt.
 Integer fractions,
 overflow and threshold text above 64 bytes per bound refuse. A valid inverted
 range selects no groups. `--limit`
@@ -806,6 +808,8 @@ At the `db>` prompt, use `schema`, `status`, `query Entry --limit 3`,
 For one command, try:
 
 ```sh
+db schema Document --json
+db schema --json > schema.json
 db query Entry --category 1 --order-by id --desc --select id,amount
 db query Entry --min 100 --work 2
 db query Document --entry-id 1 --order-by score
@@ -816,6 +820,30 @@ db query Entry --order-by category:desc --select category --distinct --limit 1
 db migration-demo
 db query --help
 ```
+
+`schema --json` writes one JSON document to stdout for a single invocation;
+failures use stderr and a nonzero exit status. Entity selection includes its
+reachable named types, while `schema_fingerprint` identifies the whole schema.
+The `source` is `local_fixture`. Types and `info` contain the same display text
+as the tables; this output is not a schema import format or remote API contract.
+
+Each database call reports query/update kind, local call duration to two decimal
+places and cycles charged below the command's results. JSON and failed-command
+statistics use stderr. Cycles are the canister's observed balance
+decrease, not an instruction-based estimate; compact millions also show the exact
+integer. Queries in this fixture can charge zero cycles while still doing work.
+Durations exclude simulator startup, fixture installation/seeding and balance
+sampling. Start `db` once and enter several commands to reuse that setup.
+Aggregates and migrations show each constituent database call separately.
+
+For repeated commands, launch `db` without arguments. Wait for `db>`, then enter
+`count Document`, `query Entry` or `aggregate Entry --select count --work 2`.
+The same temporary canister stays open until `quit` or end of input, with a
+24-hour idle timeout for a server started by the console.
+Use ↑/↓ to recall commands and ←/→ to edit them. Ctrl-C clears the current
+input; Ctrl-D on an empty line exits. History retains the last 100 commands in
+this session only. Interactive input accepts one command at a time; piped stdin
+continues to accept multiple command lines.
 
 `Entry` is the default entity. Copy the returned hexadecimal cursor into `--after`
 with the same entity, filters, order and projection. The old `--after ID` syntax

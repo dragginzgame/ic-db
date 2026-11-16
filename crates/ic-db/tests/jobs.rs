@@ -774,6 +774,148 @@ fn foreign_database_and_job_store_cannot_resume_a_handle() {
 }
 
 #[test]
+fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save() {
+    use ic_storage::adapter::StableBTreeMap;
+    for action in 0..4 {
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let (db, mut jobs) = create(&runtime, &[Some(1); 4], 0);
+        let handle = db
+            .query::<Row>()
+            .start_count(&mut jobs, time(0), time(100))
+            .unwrap();
+        db.query::<Row>()
+            .work_limit(2)
+            .resume_count(&mut jobs, &handle, 0, time(1))
+            .unwrap();
+        drop(jobs);
+        let key = StableKey::parse("test.jobs.v1").unwrap();
+        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+        // V1's header and record layout are unchanged except for the admitted
+        // envelope marker. Build the predecessor header independently of its writer.
+        let mut header = b"ICDBAJ01".to_vec();
+        header.extend(3_u32.to_le_bytes());
+        header.extend([2_u8; 16]);
+        header.extend(1_u64.to_le_bytes());
+        assert!(raw.get(&1).unwrap().len() <= 4096);
+        raw.insert(0, header.clone());
+        drop(raw);
+        let before = backing.borrow().clone();
+        let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
+        assert_eq!(*backing.borrow(), before, "reopen must be read-only");
+        assert!(matches!(
+            db.query::<Row>()
+                .resume_count(&mut jobs, &handle, 99, time(1)),
+            Err(Error::InvalidJob)
+        ));
+        assert_eq!(
+            *backing.borrow(),
+            before,
+            "refusal must not promote the header"
+        );
+        match action {
+            0 => {
+                let result = db
+                    .query::<Row>()
+                    .resume_count(&mut jobs, &handle, 1, time(2))
+                    .unwrap();
+                assert!(matches!(result.outcome, JobOutcome::Complete(4)));
+            }
+            1 => {
+                db.query::<Row>()
+                    .start_count(&mut jobs, time(1), time(100))
+                    .unwrap();
+            }
+            2 => jobs.cancel(&handle).unwrap(),
+            3 => assert_eq!(jobs.cleanup_expired(time(100), 1).unwrap(), 1),
+            _ => unreachable!(),
+        }
+        drop(jobs);
+        let raw: StableBTreeMap<u8, Vec<u8>, _> =
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+        if action < 2 {
+            header[..8].copy_from_slice(b"ICDBAJ02");
+        }
+        if action == 1 {
+            header[28..36].copy_from_slice(&2_u64.to_le_bytes());
+        }
+        assert_eq!(raw.get(&0).unwrap(), header);
+        drop(raw);
+        if action < 2 {
+            let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
+            let step = db
+                .query::<Row>()
+                .resume_count(&mut jobs, &handle, 1, time(2))
+                .unwrap();
+            assert!(matches!(step.outcome, JobOutcome::Complete(4)));
+        }
+    }
+}
+
+#[test]
+fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
+    use ic_storage::adapter::StableBTreeMap;
+    for corruption in 0..4 {
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let (db, mut jobs) = create(&runtime, &[], 0);
+        db.query::<Row>()
+            .start_count(&mut jobs, time(0), time(10))
+            .unwrap();
+        let handle = db
+            .query::<Row>()
+            .start_count(&mut jobs, time(0), time(10))
+            .unwrap();
+        drop(jobs);
+        let key = StableKey::parse("test.jobs.v1").unwrap();
+        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+        let mut record = raw.get(&2).unwrap();
+        // Scalar count carries a final 32-byte accumulator with a u32 prefix.
+        // Damage the tail while keeping the lifecycle metadata untouched.
+        let payload = record.len() - 32;
+        match corruption {
+            0 => {
+                record.pop();
+            }
+            1 => record.push(0),
+            2 => record[payload - 4..payload].copy_from_slice(&33_u32.to_le_bytes()),
+            3 => record[payload..].fill(255),
+            _ => unreachable!(),
+        }
+        raw.insert(2, record);
+        drop(raw);
+        let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            db.query::<Row>()
+                .resume_count(&mut jobs, &handle, 0, time(1)),
+            Err(Error::Corrupt)
+        ));
+        assert_eq!(*backing.borrow(), before);
+        if corruption == 3 {
+            // Framed opaque state remains cancellable even when the reducer
+            // rejects its contents. Cleanup never becomes an aggregate executor.
+            jobs.cancel(&handle).unwrap();
+            assert_eq!(jobs.cleanup_expired(time(10), 16).unwrap(), 1);
+        } else {
+            assert!(matches!(jobs.cancel(&handle), Err(Error::Corrupt)));
+            assert_eq!(*backing.borrow(), before);
+            assert!(matches!(
+                jobs.cleanup_expired(time(10), 16),
+                Err(Error::Corrupt)
+            ));
+            assert_eq!(
+                *backing.borrow(),
+                before,
+                "no deletion of the earlier valid job"
+            );
+        }
+    }
+}
+
+#[test]
 fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
     use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
@@ -1597,7 +1739,7 @@ fn grouped_job_frame_bound_is_independent_of_output_and_synchronous_state_limits
     let host = host(backing.clone());
     let (mut db, mut jobs) = create_stores(&host, Schema::new(&[LabelRow::SCHEMA]).unwrap());
     let mut batch = Batch::new();
-    for (id, c) in ['a', 'b', 'c'].into_iter().enumerate() {
+    for (id, c) in ('a'..='l').enumerate() {
         batch
             .insert(&LabelRow {
                 id: id as u64,
@@ -1612,13 +1754,13 @@ fn grouped_job_frame_bound_is_independent_of_output_and_synchronous_state_limits
             .unwrap()
             .value
             .len(),
-        3
+        12
     );
     let query = || db.query::<LabelRow>().limit(1);
     let handle = query()
         .start_group_count::<Label>(&mut jobs, time(0), time(100))
         .unwrap();
-    for sequence in 0..2 {
+    for sequence in 0..11 {
         query()
             .work_limit(1)
             .resume_group_count::<Label>(&mut jobs, &handle, sequence, time(1))
@@ -1626,14 +1768,14 @@ fn grouped_job_frame_bound_is_independent_of_output_and_synchronous_state_limits
     }
     let before = backing.borrow().clone();
     assert!(matches!(
-        query().resume_group_count::<Label>(&mut jobs, &handle, 2, time(2)),
+        query().resume_group_count::<Label>(&mut jobs, &handle, 11, time(2)),
         Err(Error::Limit)
     ));
     assert_eq!(*backing.borrow(), before);
     let retry = query()
-        .resume_group_count::<Label>(&mut jobs, &handle, 1, time(1))
+        .resume_group_count::<Label>(&mut jobs, &handle, 10, time(1))
         .unwrap();
-    assert_eq!((retry.sequence, retry.examined), (2, 2));
+    assert_eq!((retry.sequence, retry.examined), (11, 11));
     jobs.cancel(&handle).unwrap();
 }
 
@@ -2086,7 +2228,7 @@ fn grouped_numeric_frame_refusal_preserves_progress_before_output_selection() {
     let host = host(backing.clone());
     let (mut db, mut jobs) = create_stores(&host, Schema::new(&[LabelRow::SCHEMA]).unwrap());
     let mut batch = Batch::new();
-    for (id, c) in ['a', 'b', 'c'].into_iter().enumerate() {
+    for (id, c) in ('a'..='l').enumerate() {
         batch
             .insert(&LabelRow {
                 id: id as u64,
@@ -2103,7 +2245,7 @@ fn grouped_numeric_frame_refusal_preserves_progress_before_output_selection() {
     let handle = query()
         .start_group_sum::<Label, Id>(&mut jobs, time(0), time(100))
         .unwrap();
-    for sequence in 0..2 {
+    for sequence in 0..11 {
         query()
             .work_limit(1)
             .resume_group_sum::<Label, Id>(&mut jobs, &handle, sequence, time(1))
@@ -2111,14 +2253,14 @@ fn grouped_numeric_frame_refusal_preserves_progress_before_output_selection() {
     }
     let before = backing.borrow().clone();
     assert!(matches!(
-        query().resume_group_sum::<Label, Id>(&mut jobs, &handle, 2, time(2)),
+        query().resume_group_sum::<Label, Id>(&mut jobs, &handle, 11, time(2)),
         Err(Error::Limit)
     ));
     assert_eq!(*backing.borrow(), before);
     let retry = query()
-        .resume_group_sum::<Label, Id>(&mut jobs, &handle, 1, time(1))
+        .resume_group_sum::<Label, Id>(&mut jobs, &handle, 10, time(1))
         .unwrap();
-    assert_eq!((retry.sequence, retry.examined), (2, 2));
+    assert_eq!((retry.sequence, retry.examined), (11, 11));
 }
 
 #[test]
@@ -2712,7 +2854,7 @@ fn retained_distinct_cardinality_and_frame_refusals_preserve_saved_sets() {
     let runtime = host(backing.clone());
     let (mut db, mut jobs) = create_stores(&runtime, Schema::new(&[LabelRow::SCHEMA]).unwrap());
     let mut batch = Batch::new();
-    for (id, c) in ['a', 'b', 'c'].into_iter().enumerate() {
+    for (id, c) in ('a'..='l').enumerate() {
         batch
             .insert(&LabelRow {
                 id: id as u64,
@@ -2726,14 +2868,14 @@ fn retained_distinct_cardinality_and_frame_refusals_preserve_saved_sets() {
             .count_distinct::<Label>()
             .unwrap()
             .value,
-        3
+        12
     );
     let handle = db
         .query::<LabelRow>()
         .start_count_distinct::<Label>(&mut jobs, time(0), time(100))
         .unwrap();
     db.query::<LabelRow>()
-        .work_limit(2)
+        .work_limit(11)
         .resume_count_distinct::<Label>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     let before = backing.borrow().clone();
@@ -3082,7 +3224,7 @@ fn retained_group_distinct_frame_limit_covers_all_sets_together() {
     let runtime = host(backing.clone());
     let (mut db, mut jobs) = create_stores(&runtime, Schema::new(&[LabelRow::SCHEMA]).unwrap());
     let mut batch = Batch::new();
-    for (id, c) in ['a', 'b', 'c'].into_iter().enumerate() {
+    for (id, c) in ('a'..='l').enumerate() {
         batch
             .insert(&LabelRow {
                 id: id as u64,
@@ -3097,7 +3239,7 @@ fn retained_group_distinct_frame_limit_covers_all_sets_together() {
             .unwrap()
             .value
             .len(),
-        3
+        12
     );
     let query = || {
         db.query::<LabelRow>()
@@ -3108,7 +3250,7 @@ fn retained_group_distinct_frame_limit_covers_all_sets_together() {
         .start_group_count_distinct::<Id, Label>(&mut jobs, time(0), time(100))
         .unwrap();
     query()
-        .work_limit(2)
+        .work_limit(11)
         .resume_group_count_distinct::<Id, Label>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     let before = backing.borrow().clone();
@@ -3961,10 +4103,21 @@ fn retained_extrema_state_caps_and_final_output_budgets_are_separate() {
     let before = backing.borrow().clone();
     assert!(matches!(
         db.query::<WideLabelRow>()
+            .byte_limit(5)
             .resume_max::<WideLabel>(&mut jobs, &max, 1, time(2)),
-        Err(Error::Limit)
+        Err(Error::RowTooLarge)
     ));
     assert_eq!(*backing.borrow(), before);
+    // A near-row-sized winner now fits with its progress metadata; row bounds
+    // no longer accidentally constrain the larger enclosing job record.
+    let step = db
+        .query::<WideLabelRow>()
+        .resume_max::<WideLabel>(&mut jobs, &max, 1, time(2))
+        .unwrap();
+    let JobOutcome::Complete(Some(value)) = step.outcome else {
+        panic!("missing maximum")
+    };
+    assert_eq!(value.label, "z".repeat(3990));
     // The large losing value does not need a durable copy for minimum.
     let min = db
         .query::<WideLabelRow>()
@@ -4338,7 +4491,7 @@ fn retained_group_extrema_cardinality_and_frame_caps_ignore_output_selection() {
     let runtime = host(backing.clone());
     let (mut db, mut jobs) = create_stores(&runtime, Schema::new(&[LabelRow::SCHEMA]).unwrap());
     let mut batch = Batch::new();
-    for id in 0..3 {
+    for id in 0..12 {
         batch
             .insert(&LabelRow {
                 id,
@@ -4356,7 +4509,7 @@ fn retained_group_extrema_cardinality_and_frame_caps_ignore_output_selection() {
         .start_group_max::<Id, Label>(&mut jobs, time(0), time(100))
         .unwrap();
     query()
-        .work_limit(1)
+        .work_limit(11)
         .resume_group_max::<Id, Label>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     let before = backing.borrow().clone();

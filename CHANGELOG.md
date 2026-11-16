@@ -1,5 +1,107 @@
 # Changelog
 
+## [0.20.0] - Unreleased
+
+### ▶️ Try it
+
+```sh
+make m0-setup
+make db
+db count Document
+db aggregate Entry --select count --work 2
+db schema Document
+db schema Document --json
+db schema --json > schema.json
+db
+```
+
+These inspect a fresh local fixture. JSON contains display metadata, not an
+importable schema or a deployed-database protocol.
+At `db>`, enter `count Document`, then press ↑ and Enter to repeat it. ↓ returns
+toward newer commands or your draft; ←/→ edit the line. Use `quit` to leave.
+Quoted bounds now work there too:
+
+```text
+query Document --select entry_id,min:note --group-min "a b"
+query Document --select entry_id,min:note --group-min ''
+```
+
+### ➕ Added
+
+- Split schema reference details into `References` (for example, `Entry.id`)
+  and `Reference index` (for example, `(entry_id, score)`) columns.
+- Accept quoted text, empty strings and backslash escapes in console commands.
+  Parse argument words with Shlex, then use the existing Clap command grammar;
+  no shell expansion or execution. Incomplete quotes/escapes refuse before a
+  database call and leave the interactive session usable.
+- Add interactive command history and cursor editing with Rustyline, the same
+  library used by IcyDB's shell. Retain 100 session-local commands without a
+  history file. Ctrl-C cancels input and Ctrl-D exits an empty prompt. The
+  foreground editor waits until each command finishes before showing its prompt.
+- Show query/update call kind, elapsed seconds and measured cycles charged for
+  every user-requested database call, including aggregate/migration steps.
+  Elapsed time excludes fixture startup and balance sampling; cycle charges are
+  the observed canister balance decrease, with exact values beside rounded
+  millions. Statistics follow normal results; JSON and failed-command statistics
+  use stderr. A zero charge
+  does not claim zero computation; balance increases are reported explicitly.
+- Add `db schema [ENTITY] --json`. A single invocation emits one JSON document
+  with the full schema fingerprint, selected entities, fields, indexes, references
+  and reachable named types. Unknown entities fail with empty stdout. Existing
+  tables remain the default; JSON encoding stays in the native CLI.
+
+### 🔄 Changed
+
+- Inspect retained-job frames through borrowed slices for cancellation/expiry,
+  then use the supplier's discard deletion instead of retrieving removed values.
+  Keep one framing validator shared with resume and preserve identity, malformed
+  input and rollback checks. Full 16-job cleanup drops from 3.58M to 2.66M
+  instructions and 10.60M to 9.68M charged cycles in the matched local fixture;
+  this optimization does not change stored bytes or lifecycle semantics.
+- Separate retained aggregation state from the row codec's size policy: jobs
+  now admit 16 KiB including progress/metadata; rows remain at 4 KiB. Group,
+  DISTINCT and per-message limits stay unchanged. The numeric 32-by-32 DISTINCT
+  witness now completes instead of exhausting its checkpoint at 293 values.
+- **Retained-job format v2:** existing v1 jobs remain readable and resume without
+  a reset. The first successful insert/save atomically updates the store marker;
+  older executables then refuse it. Keep a v2-capable executable afterward.
+  Cancellation/expiry can clean v1 stores without promotion; row/schema formats
+  are unchanged. Upgrade, rollback and older-executable refusal are qualified.
+
+### 🔧 Tooling
+
+- Add `make m2-job-envelope`: real Wasm checks for 32-group count/sum/average
+  finalization, DISTINCT limits, filtered/ordered completed pages and retained
+  checkpoint refusals across upgrades. Record per-call instructions and cycles;
+  a wider two-field grouped DISTINCT fixture reaches its 16 KiB frame at 790
+  tuples and safely refuses the next. Fill all 16 slots near that bound and
+  qualify invalidation, cancellation, bounded/full expiry cleanup, rollback and
+  stale-handle refusal after reuse, with measured instructions and cycles. See the
+  [qualification receipt](qualification/README.md#retained-aggregate-envelope-020).
+- Clarify the preferred next design slice: explicit-target application inspection
+  through Canic, followed by a typed application listing. Specify bounded metadata,
+  maintenance/refusal reporting, unavailable remote cycle charges and unknown
+  update outcomes. This is a design contract, not delivered remote CLI support.
+- Give local console sessions a 24-hour idle timeout instead of PocketIC's
+  60-second default. `quit` and EOF still close the owned server immediately;
+  ordinary test runs retain their existing timeout. Unexpected input-pipe closure
+  now explains that the session ended and a new temporary fixture requires `db`.
+- Fix the interactive console stopping on its first terminal read. The foreground
+  CLI forwards input through a pipe to Testkit's separately owned child group;
+  counts return without EOF, errors return to the prompt, and `quit` exits without
+  another keystroke. A controlling-terminal regression covers this launch path.
+- Build the prepared PocketIC launcher with the optimized release profile.
+  Local asset validation fell from 5.69 s to 0.37 s with the same archive,
+  executable and version checks; an installed `db count Document` took 4.09 s,
+  down from the observed 9.52 s. Launcher admission remains separately measured
+  overhead; no background server or validation bypass is added.
+- Adopt Toko Tooling 0.44.11 through its published installer in both workspaces.
+  The baseline adds repository-qualified issue references and bounded, sanitized
+  CI setup-failure diagnostics. Executable tooling is unchanged.
+- Adopt IC Host Text 0.77.2 in the native CLI. Use its `escape` and
+  `bordered_table` APIs directly; remove redundant per-cell escaping and column
+  conversions. Table layout and terminal-safe rendering remain covered.
+
 ## [0.19.0] - 2026-11-16
 
 ### ▶️ Try it
