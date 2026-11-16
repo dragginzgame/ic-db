@@ -61,6 +61,15 @@ retired entries per call and preserves the retired manifest. It never opens targ
 Allocation reuse and physical shrink are not provided by cleanup.
 Host adapters own access control. Run
 `make m3-maintenance` for the focused native/Wasm probe.
+`make m3-references` separately qualifies a 256-row migration with cross-chunk
+reference pairs, delayed validation refusal and safe cancellation.
+`make m3-jobs` checks retained aggregate access and independent job cleanup while
+maintenance closes the source, then resumption after supported cancellation.
+For a visible local example, `make db` then `db migration-demo` runs a fixed
+six-row transformation, upgrades the temporary canister during copying, resumes,
+validates, publishes and cleans the retired source. It widens `Item.amount` from
+Nat64 to Nat128 and adds an indexed label; final rows come from that new index.
+The existing query fixture stays separate. No deployed database is accessed.
 
 The first bounded fluent read slice is also available:
 
@@ -186,9 +195,16 @@ let page = db.query::<Entry>()
 
 `order_by` accepts up to four distinct ordered fields and adds the primary key as
 the final tie-breaker. All fields share the selected direction. Equality filters
-can fix index components; the engine chooses a path that proves the complete
-order or returns `InvalidQuery`. No bounded-prefix sorting occurs. Without
-`order_by`, the existing primary/explicit-index order remains unchanged.
+can fix index components; the engine prefers a path that proves the complete
+order. Without one, it scans the complete input and sorts at most 32 matching
+rows, then applies `limit`. Work exhaustion or more matches returns `Limit`,
+even for `limit(1)`. Sort keys are capped at 4096 bytes and retained key/output
+buffers at 128 KiB. This fallback returns no continuation and refuses `after`
+or `distinct`; an explicit `using_index` still has to supply the requested order.
+Both entity and projected results are supported, including ordering by fields
+outside the projection. Byte limits apply to the selected output after sorting;
+overflow refuses rather than returning a partial result. Without `order_by`,
+the existing primary/explicit-index order remains unchanged.
 
 Sparse indexes (`present_only`) can supply order when filters exclude absence
 for every optional indexed field. For example, `Ne` with `IndexValue::Absent`,
@@ -736,9 +752,9 @@ limits, ordered DISTINCT and the accepted live-pagination duplicate/omission beh
 SHA-256 fingerprints, bounded recursive row decoding and projection/DISTINCT/grouping
 composition natively. It does not qualify product codecs or measure Wasm cost.
 
-The [M0 readiness review](docs/design/ic-db-system-design.md#next-delivery-close-m0-then-typed-schemas-in-m1)
-separates accepted entry contracts from M1–M3 implementation checks. The M0 entry
-review permits this first typed-schema increment. `make m0-icydb-baseline` provides the first
+The [current delivery status](docs/design/ic-db-system-design.md#9-delivery-and-deletion-gates)
+separates delivered M1–M3 capabilities from remaining qualification and integration
+work. `make m0-icydb-baseline` provides the first
 SQL-disabled comparison workload: persistent writes, indexed reads and unchanged
 upgrade/reopen. It measures the frozen engine only; the separate
 `make m1-records-comparison` provides the matched scalar results. Broader workload
@@ -768,6 +784,8 @@ db query Entry --category 1 --order-by id --desc --select id,amount
 db query Entry --min 100 --work 2
 db query Document --entry-id 1 --order-by score
 db query Document --select id
+db query Entry --order-by amount --desc --limit 2 --select id,amount
+db migration-demo
 db query --help
 ```
 
@@ -775,8 +793,8 @@ db query --help
 with the same entity, filters, order and projection. The old `--after ID` syntax
 is retired. Limits may change: `--limit` bounds returned rows (1–32), `--work`
 bounds examined candidates (1–512), and `--bytes` bounds encoded results
-(1–131072). An empty page can still have a next cursor. `--order-by` admits only
-complete supported orderings; `--desc` reverses the whole order.
+(1–131072). An empty page can still have a next cursor. `--order-by` uses a complete
+ordered path or the bounded complete sort above; `--desc` reverses the whole order.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 

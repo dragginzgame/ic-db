@@ -1,5 +1,122 @@
 # Changelog
 
+## [0.18.0] - Unreleased
+
+### ▶️ Try it
+
+From this checkout, prepare PocketIC once if needed:
+
+```sh
+make m0-setup
+```
+
+Install the updated console and run the disposable local demonstration:
+
+```sh
+make db
+db migration-demo
+db query Entry --order-by amount --desc --limit 2 --select id,amount
+```
+
+Expect six source rows, bounded copy/validation/cleanup progress, a real local
+canister upgrade during copying, and six target rows read through the new label
+index. All data is temporary; no deployed canister or GitHub credentials are used.
+The query scans all six entries and returns IDs 6 and 5 by descending amount,
+with no continuation, using the engine's bounded complete sort.
+
+### ➕ Added
+
+- Support `order_by` without a matching ordered path by collecting and sorting the
+  complete input result: at most 32 matches, 4096-byte keys and 128 KiB retained
+  key/output buffers. Apply result limits after sorting; work or resource exhaustion
+  refuses without partial output. Share the existing scanner, key codec and typed
+  projection. No cursor, DISTINCT or explicit-index fallback; indexed pages retain
+  their current behavior and bindings.
+- Add `db migration-demo`: a fixed compiled `Item` transformation widens `amount`
+  from Nat64 to Nat128 and adds an indexed label. Resume from product checkpoints
+  after upgrade, validate before publication and clean the retired source. Keep
+  the usual query fixture separate. The console adds no product API, durable
+  progress, runtime DDL, planner or fault controls.
+- Add `make m3-cli` for the installed command and its real Wasm admission/recovery
+  checks, including premature publication, source closure and cleanup retries.
+
+### ⚡ Performance
+
+- Share projection decoding by output record type. The matched eight-entity
+  projection build loses 3,688 raw / 3,686 code bytes; projected growth falls
+  from 5.14 KB to 4.61 KB per entity. Eight-entity projected calls improve;
+  one-entity calls add 20–203 instructions/cycles. Reuse the admitted entity ID
+  for revision reads, saving a duplicate membership lookup at a 35-byte raw/code
+  cost in the eight-entity build. Result metadata, codecs and public APIs stay
+  unchanged; ordinary entity-query growth remains about 4.30 KB.
+- Reuse the descriptor returned by schema admission at typed direct-read
+  boundaries. Combined reachable growth falls from 5.79 KB to 4.29 KB per added
+  entity; direct growth falls to 2.79 KB. The eight-entity build loses 9,984 raw /
+  9,988 code bytes, while the one-entity eight-shape build adds 491 / 489 bytes.
+  Sampled reads use fewer work instructions; retain up to 98 extra instructions
+  on first inserts and 44 on a read/replace pair. Total cycles do not improve
+  for every subject. No new cache, schema representation, codec or public API.
+- Move fluent predicate/index/order construction onto the existing concrete request
+  and share fetch/projection admission, execution and cleanup before typed decoding.
+  The eight-entity composition build loses 3,961 raw / 3,948 code bytes; incremental
+  entity growth falls from 7.77 KB to 7.13 KB. Sampled fluent operation instructions
+  and cycles improve. The one-entity eight-shape build adds 509 raw / 517 code bytes
+  for the shared boundary. The roughly 2 KB objective / 4 KB working ceiling remains
+  unmet. No API, schema, persisted-state or continuation-format changes.
+- Share direct primary/index traversal and index-prefix admission across entities,
+  resolving key types once per operation. Combined growth falls further to
+  6.31 KB per entity; the direct-path control falls to 4.33 KB. The eight-entity
+  fluent build loses another 4,989 raw / 4,992 code bytes, with a 741 / 738-byte
+  fixed-cost increase in the one-entity eight-shape build. Sampled direct reads
+  use fewer instructions/cycles. Keep one-row traversal, typed decoding and all
+  ownership/index checks; no cache, extra page buffer or stored-format change.
+- Share the existing typed page-conversion loop across callers. Combined growth
+  falls further to 5.79 KB per entity; the eight-entity fluent build loses another
+  3,642 raw / 3,643 code bytes. Accept 18 extra instructions in sampled multi-query
+  reads (201 in the single-query build) for that reduction. Measured direct reads,
+  inserts and read/replace costs stay unchanged. Keep codecs, page semantics and
+  maintenance source decoding intact; discard ineffective outlining probes.
+
+### 🔧 Qualification
+
+- Add `make m3-jobs`: combine existing retained-aggregate and maintenance fixtures.
+  Check frozen read refusal, independent cancellation/expiry cleanup under an
+  incompatible maintenance executable, rollback of maintenance cancellation,
+  unchanged-source resumption and stale-handle refusal after slot reuse. No new
+  product API, endpoint or durable state.
+- Add `make m3-references`: migrate 256 rows with 128 reference pairs across
+  copy chunks and upgrades. Check literal row/index bytes, checkpoint rollback,
+  delayed dangling-reference refusal, cancellation, publication and final-batch
+  restricted deletion. After publication, check 254 references to one target,
+  refusal beyond a deleted prefix and bounded explicit deletion across upgrade.
+  Record phase instructions using existing product mechanisms; keep fixture
+  controls out of normal builds.
+- Add `make m2-query-growth`: measure the first fluent query, eight query shapes,
+  eight application mapping branches and eight equivalent entities with one fixed
+  endpoint. Check actual results and upgrade behavior, retain Wasm/code bytes and
+  IC instructions/cycles, and keep application growth separate from engine claims.
+- Record first/eighth insert costs and a read followed by replacement in that same
+  workload, after query samples, to compare write costs against preserved artifacts.
+- Add the same-build eight-entity direct-path control: approximately 5.16 KB per
+  added entity before fluent queries, plus 2.61 KB associated with fluent
+  reachability before the boundary reduction above. Record that initial 7.77 KB
+  as an unresolved gap against the
+  maintainer's roughly 2 KB objective / 4 KB working comparison ceiling.
+- Add `make m2-contention`: exercise the product retained sum over 96 rows with
+  controlled writes between advances. Cover unrelated writes, no-ops, trapped and
+  refused writes, repeated source invalidation, value restoration across upgrade,
+  explicit cancellation and completion after writes stop. Reuse existing host
+  endpoints; add no product state or automatic retry policy. These deterministic
+  schedules do not establish completion rates under production traffic.
+
+### 🧹 Cleanup
+
+- Reconcile the system design with delivered M1–M3 capabilities and explicit gaps.
+  Separate current contracts from dated probes/benchmarks; remove stale prerequisite
+  wording and numeric index examples without changing runtime behavior.
+- Put the query test entrypoint beside its child modules, using ordinary Rust
+  discovery instead of a source-path override. Keep the `queries` test target.
+
 ## [0.17.0] - 2026-11-15
 
 ### ➕ Added

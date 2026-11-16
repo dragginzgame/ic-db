@@ -1,4 +1,4 @@
-//! Prove complete order from bounded schema metadata, without sorting or statistics.
+//! Select a proven ordered path or a bounded complete-sort fallback.
 use super::{Comparison, Request};
 use crate::{EntitySchema, Error, IndexSchema, IndexValue, key, store::admit_index_prefix};
 
@@ -10,26 +10,37 @@ pub(super) struct IndexPath<'a> {
     pub fixed: usize,
 }
 
+pub(super) enum Path<'a> {
+    Primary,
+    Index(IndexPath<'a>),
+    Sort(Vec<usize>),
+}
+
 pub(super) fn select<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
-) -> Result<Option<IndexPath<'a>>, Error> {
+) -> Result<Path<'a>, Error> {
+    // Plan admission bounds the order to four fields. Indexed paths allocate no
+    // additional sort metadata; materialize it only for the complete fallback.
+    let mut positions = [0; 4];
     if let Some(order) = &request.order {
         if order.is_empty() {
             return Err(Error::InvalidQuery);
         }
         for (i, name) in order.iter().enumerate() {
-            let field = entity
+            let position = entity
                 .fields
                 .iter()
-                .find(|f| f.name == *name)
+                .position(|f| f.name == *name)
                 .ok_or(Error::InvalidQuery)?;
+            let field = &entity.fields[position];
             if !key::supports(field.value)
                 || order[..i].contains(name)
                 || (*name == entity.primary_key && i + 1 != order.len())
             {
                 return Err(Error::InvalidQuery);
             }
+            positions[i] = position;
         }
     }
     if let Some((name, values)) = &request.index {
@@ -47,7 +58,7 @@ pub(super) fn select<'a>(
         {
             return Err(Error::InvalidQuery);
         }
-        return Ok(Some(IndexPath {
+        return Ok(Path::Index(IndexPath {
             index,
             prefix,
             fixed: values.len(),
@@ -55,7 +66,7 @@ pub(super) fn select<'a>(
     }
     // Keep the existing no-order contract and its cursors unchanged.
     if request.order.is_none() {
-        return Ok(None);
+        return Ok(Path::Primary);
     }
     let primary_fits = satisfies(entity, request, None, 0);
     let mut best: Option<(&IndexSchema, Vec<IndexValue<'_>>)> = None;
@@ -90,10 +101,27 @@ pub(super) fn select<'a>(
     // A restrictive prefix avoids unrelated candidates. Otherwise prefer direct
     // primary traversal to fetching rows through an equally broad index scan.
     if primary_fits && best.as_ref().is_none_or(|(_, values)| values.is_empty()) {
-        return Ok(None);
+        return Ok(Path::Primary);
     }
-    let (index, values) = best.ok_or(Error::InvalidQuery)?;
-    Ok(Some(IndexPath {
+    let Some((index, values)) = best else {
+        // No live cursor or projected DISTINCT semantics are implied by a sort.
+        // Explicit paths above still have to prove their requested order.
+        if request.cursor.is_some() || request.distinct {
+            return Err(Error::InvalidQuery);
+        }
+        let mut positions =
+            positions[..request.order.as_ref().ok_or(Error::InvalidQuery)?.len()].to_vec();
+        let primary = entity
+            .fields
+            .iter()
+            .position(|f| f.name == entity.primary_key)
+            .ok_or(Error::InvalidQuery)?;
+        if positions.last() != Some(&primary) {
+            positions.push(primary);
+        }
+        return Ok(Path::Sort(positions));
+    };
+    Ok(Path::Index(IndexPath {
         index,
         prefix: admit_index_prefix(entity, index, &values)?,
         fixed: values.len(),

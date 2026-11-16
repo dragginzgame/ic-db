@@ -19,6 +19,8 @@ mod maintenance;
 mod managed;
 #[cfg(feature = "maintenance-faults")]
 mod migration_capacity;
+#[cfg(feature = "maintenance-faults")]
+mod migration_references;
 mod principal_keys;
 mod queries;
 
@@ -76,6 +78,15 @@ fn new_runtime() -> MemoryRuntime<Backing> {
     let requests = {
         let mut requests = requests;
         requests.push(MemoryRequest::new("m1", aggregate_store::KEY).unwrap());
+        requests
+    };
+    #[cfg(feature = "retained-console")]
+    let requests = {
+        let mut requests = requests;
+        requests.extend(
+            [console::migration::SOURCE, console::migration::TARGET]
+                .map(|key| MemoryRequest::new("m1", key).unwrap()),
+        );
         requests
     };
     let declarations = SealedDeclarationSnapshot::new(requests).unwrap();

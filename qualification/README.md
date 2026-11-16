@@ -769,6 +769,482 @@ scalar comparison in `target/evidence/records-comparison-before-demand-revisions
 The added counter/reply fields and trap branch affect current fixture Wasm;
 use the current matched fresh/retained pairs to attribute reuse cost.
 
+## Controlled fluent composition
+
+```sh
+make m2-query-growth
+```
+
+The existing entity-growth canister and measurement runner build six subjects
+with one update endpoint, the same tuple transport, retained host/immutable schema,
+scalar codec, index and direct read/write operations. Only selected fluent call
+sites, post-fetch application maps and entity declarations vary:
+
+| Subject | Entities | Fluent shapes | Extra mapping branches |
+| --- | ---: | ---: | ---: |
+| `direct` | 1 | 0 | 0 |
+| `direct-entities` | 8 | 0 | 0 |
+| `one` | 1 | 1 | 0 |
+| `shapes` | 1 | 8 | 0 |
+| `maps` | 1 | 8 | 8 |
+| `entities` | 8 | 8 per entity | 0 |
+
+The eight distinct `fetch()` call sites exercise comparisons, OR, descending
+primary traversal, complete amount sorting, an equality-prefix index, primary
+ranges and exclusions. Ingress arguments keep their inputs runtime-selected.
+Maps run over fetched entities and change the returned tuple, making their
+reachability observable. The mapping delta includes application code and routing;
+it is not an isolated measurement of closure monomorphisation.
+
+The driver seeds eight rows per entity with duplicate amounts and independently
+checks every selected query/map against ordinary Rust tuples. It verifies the
+fixed export set, entity isolation, repeated warm calls, cold opening after a real
+upgrade and empty matches. Each call reports separate bootstrap, lease, schema
+and open instruction intervals, plus operation instructions. Operation cost
+includes result mapping and the fixture's revision/schema observation; external
+cycle deltas also include transport and execution overhead. No native or elapsed
+time is used as performance evidence.
+
+Artifacts, build feature trees, compiler/profile inputs, dirty-source diff and
+input hashes, artifact hashes, raw/code-section byte counts and execution results
+are retained under `qualification/target/evidence/query-growth/`. Builds use the
+qualification release profile without post-link shrinking. This is a scalar
+row-query composition witness, not a full application, aggregate/projection
+growth study, Canic endpoint comparison or matched IcyDB benchmark. The frozen
+IcyDB composition investigation supplies the method of separating first-use cost
+from incremental reachability; no engine code is copied for this experiment.
+
+Initial measurement, before the shared-boundary reduction below, on 2026-11-16
+with Rust 1.100.0, `opt-level=z`, fat LTO, one codegen unit,
+panic abort and stripped symbols, using the recorded qualification lock:
+
+| Subject | Total Wasm bytes | Code-section bytes | Compared with | Total delta | Code delta |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `direct` | 231,075 | 209,645 | — | — | — |
+| `direct-entities` | 267,211 | 245,320 | `direct` | +36,136 | +35,675 |
+| `one` | 268,683 | 245,111 | `direct` | +37,608 | +35,466 |
+| `shapes` | 269,880 | 246,279 | `one` | +1,197 | +1,168 |
+| `maps` | 271,673 | 248,072 | `shapes` | +1,793 | +1,793 |
+| `entities` | 324,266 | 300,266 | `shapes` | +54,386 | +53,987 |
+
+The same first query uses 124,071 operation instructions in `one`, 124,610 in
+`shapes` and 124,620 in `maps`; corresponding complete-call cycle deltas are
+7,233,088 / 7,233,627 / 7,233,637. Warm opening is 104,534 instructions in all
+three. Cold post-upgrade opening is 441,181 instructions and must not be hidden
+in the warm samples. The eight-entity subject has 64 total rows rather than
+eight: its 156,623 first-query instructions include a larger physical collection
+and metadata, so that increase is not attributed solely to generic code.
+
+The small additional shape/map deltas support the current shared-execution
+boundary for those inputs, but do not establish acceptable entity growth.
+The same-build direct control adds 36,136 bytes across seven entities: about
+5,162 bytes each before fluent queries. With the eight fluent shapes, growth is
+54,386 bytes, about 7,769 each. The difference of slopes is 18,250 bytes, or about
+2,607 additional bytes per entity associated with fluent reachability. These
+totals include compiler layout, codecs, metadata, typed boundaries and fixture
+dispatch; they are not isolated removable ownership totals.
+
+Maintainer feedback retains roughly 2 KB as the per-entity objective and roughly
+4 KB as the working comparison ceiling. IcyDB's frozen
+[0.251 investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/archive/0.251-runtime-and-entity-codec-wasm-reduction/0.251-status.md#codec-baseline)
+records a 2 KiB objective and 4,451-byte reachable result after post-link shrinking;
+its older compiler, different workload and separate 8 KiB gate do not redefine
+IC DB's target or provide a matched subtraction baseline. The current reachable
+result is an unresolved size gap, not an accepted budget.
+
+A separate symbol-preserving diagnostic shows shared planning/execution alongside
+eight typed `fetch` wrappers and a large dispatch body containing inlined typed
+operations. This directs the next experiment toward typed wrappers and inlining,
+not a new schema registry or removal of integrity checks. The diagnostic code
+section did not match the measured stripped build byte-for-byte, so its function
+sizes are not used to partition the release delta or promise savings. No product
+optimization was introduced by that initial measurement-only increment.
+
+### Shared fluent boundaries (0.18)
+
+Move predicate, clause, index-prefix and order construction from `Query<E>` onto
+its existing `Request`. Keep allocations and loops outside entity-specialized
+inlining. `fetch` and `fetch_as` share one private boundary for schema admission,
+planning, execution and request disposal; final result decoding remains typed.
+This retains one request representation and one executor, without a public dynamic
+frontend, callback table, prepared handle, cache or stored-format change. Limits,
+clause order and cursor/job bindings are unchanged.
+
+The same six-subject workload passes with these retained changes, before the
+direct-traversal reduction below:
+
+| Subject | Total Wasm | Code bytes | Total change | Code change |
+| --- | ---: | ---: | ---: | ---: |
+| `direct` | 231,075 | 209,645 | 0 | 0 |
+| `direct-entities` | 267,211 | 245,320 | 0 | 0 |
+| `one` | 268,973 | 245,400 | +290 | +289 |
+| `shapes` | 270,389 | 246,796 | +509 | +517 |
+| `maps` | 272,180 | 248,587 | +507 | +515 |
+| `entities` | 320,305 | 296,318 | -3,961 | -3,948 |
+
+The entity slope falls from 54,386 to 49,916 bytes across seven added entities:
+7,769 to 7,131 bytes each, an 8.2% reduction. Direct typed paths still account for
+5,162 bytes per entity; fluent-associated incremental growth falls from 2,607 to
+1,969 bytes. The one-entity fixed cost increases slightly in exchange for sharing
+across entities. This is progress, not satisfaction of the 2 KB objective / 4 KB
+working comparison ceiling.
+
+Every sampled warm fluent operation uses fewer instructions and cycles than the
+initial baseline: 261–1,662 fewer operation instructions and 299–1,662 fewer cycles.
+For the first query, `one` / `shapes` / `entities` measure 123,652 / 124,063 /
+155,848 work instructions and 7,232,631 / 7,233,042 / 7,274,328 complete-call cycles.
+The direct controls remain byte-identical. The six-subject result/upgrade checks,
+79 native query tests, 68 retained-job tests, focused Wasm projection/cursor/
+refusal and bounded-sort/upgrade regressions pass. These remain workload-specific
+measurements, not a matched IcyDB performance comparison.
+
+This adapts IcyDB `6d421e3`'s concrete prepared-read boundary lesson from its 0.250
+exact-key reduction: share admission/execution and retain only final Rust conversion
+at the typed edge. IC DB needs neither IcyDB's binding/catalog reconciliation nor
+its prepared public facade; it already owns the required request and encoded result.
+An additional concrete `get` lookup candidate was rejected: only about 42 bytes
+less per added entity, with a one-entity read cost increase. Direct lookup remains
+unchanged. No diagnostic-only candidate or alternate runtime route remains.
+
+This stage is preserved under `target/evidence/0.18/query-growth-request-boundary/`.
+The initial baseline, fetch-only intermediate and rejected lookup candidate are
+also preserved under `target/evidence/0.18/`; their names identify the experiment.
+
+### Shared direct traversal (0.18)
+
+Primary pages and index-prefix reads now share their storage-advancement steps
+across entities. Index-prefix admission also has one concrete boundary. Resolve
+the admitted primary-key type once per operation; retain typed row decoding,
+physical-key agreement and full index-entry validation at the caller. Each step
+handles one row: no extra page buffer, callback executor, cache, supplier-specific
+layout assumption, public API or durable representation is added. This continues
+the IcyDB boundary lesson above rather than importing its prepared-query facade.
+
+Against the preceding shared fluent boundaries, the same six-subject workload gives
+the following intermediate result, before shared typed page conversion:
+
+| Subject | Total Wasm | Code bytes | Total change | Code change |
+| --- | ---: | ---: | ---: | ---: |
+| `direct` | 231,828 | 210,395 | +753 | +750 |
+| `direct-entities` | 262,110 | 240,219 | -5,101 | -5,101 |
+| `one` | 269,708 | 246,132 | +735 | +732 |
+| `shapes` | 271,130 | 247,534 | +741 | +738 |
+| `maps` | 272,921 | 249,325 | +741 | +738 |
+| `entities` | 315,316 | 291,326 | -4,989 | -4,992 |
+
+The combined entity slope falls from 7,131 to 6,312 bytes each (11.5%); direct
+paths fall from 5,162 to 4,326. Relative to the original 7,769-byte slope, the two
+retained reductions remove 18.8%. The one-entity fixed-cost increase is explicit;
+the combined result still exceeds the 4 KB working ceiling and 2 KB objective.
+
+All six sampled warm direct calls use 356–465 fewer instructions and cycles.
+Post-upgrade direct controls improve by 194/461 instructions and cycles for one/
+eight entities. Fluent/mapping costs remain within two instructions and cycles of
+the preceding measurement (one mapping case adds two); accept that tiny movement
+with the measured size reduction, without claiming a fluent speedup from this
+change. Opening-stage counts are unchanged. These are selected read costs, not
+a new full-application write-performance comparison.
+
+A buffered primary-page candidate was rejected for extra allocation and roughly
+1,500 additional direct-read instructions. Per-row key-type lookup and consuming
+supplier entries by value also measured worse than the retained combination.
+No alternate product path from these trials remains. The 38 native record/key
+tests and focused Wasm records/message-boundary regression pass, including
+corruption, ownership, index consistency, reopening and rollback checks; the
+six-subject composition workload also passes its result and upgrade assertions.
+
+This stage is preserved under `target/evidence/0.18/query-growth-shared-traversal/`.
+The preceding baseline and discarded experiments are retained under
+`target/evidence/0.18/query-growth-*`; evidence is local and does not imply a
+release or a matched IcyDB performance comparison.
+
+### Shared typed page conversion (0.18)
+
+Keep the existing typed `QueryPage::decode_entities` loop out of caller inlining.
+This removes repeated result-conversion code while preserving typed decoding,
+page metadata, decode errors and maintenance source-page behavior. It adds no
+representation, callback, framework, schema attribute or durable change.
+Macro-generated codecs and key extraction remain unchanged.
+
+| Subject | Current total Wasm | Current code bytes | Total change | Code change |
+| --- | ---: | ---: | ---: | ---: |
+| `direct` | 231,828 | 210,395 | 0 | 0 |
+| `direct-entities` | 262,110 | 240,219 | 0 | 0 |
+| `one` | 269,820 | 246,243 | +112 | +111 |
+| `shapes` | 271,140 | 247,543 | +10 | +9 |
+| `maps` | 272,931 | 249,334 | +10 | +9 |
+| `entities` | 311,674 | 287,683 | -3,642 | -3,643 |
+
+The seven-added-entity delta falls from 44,186 to 40,534 raw bytes: 6,312 to
+5,791 bytes per entity, another 8.3% reduction. Direct growth remains 4,326;
+the fluent-associated difference of slopes is now 1,465 bytes. The result is
+25.5% below the initial 7,769-byte slope but still exceeds the 4 KB ceiling.
+These equivalent three-Nat64-field entities do not establish a heterogeneous
+application's per-entity cost.
+
+Explicit tradeoff: the shared conversion adds 18 instructions/cycles to each
+sampled multi-shape fluent operation, and 201 in the single-shape build (about
+0.16% of operation instructions). Retain that small cost for the measured size
+reduction; this change is not a query speedup. Direct reads and opening stages
+are unchanged. The driver now records first/eighth inserts and a read followed
+by replacement after the existing query samples. Both baseline and candidate
+give identical measured insert and read/replace work/cycles in all six variants.
+The read/replace figure sums two IC calls, including their transport/open costs
+in cycles; it is not one atomic transaction or a client-side timing measurement.
+
+IcyDB's 0.251 codec investigation cautioned that apparent source duplication may
+already be compiler-shared. Separate no-inline probes of generated row decoding
+and key extraction produced byte-identical artifacts here; outlining batch append
+also saved no bytes. Remove all three hints. Consuming raw page buffers while
+decoding measured worse than the retained borrowed loop and was discarded too.
+No new generic decoder or binding/ordinal machinery was imported from IcyDB.
+
+Two further candidates were measured and discarded. Outlining request defaults
+saved 553 raw bytes in the eight-entity build but added 21 in the one-entity
+eight-shape build: only 82 bytes per entity, with 15–218 extra sampled fluent
+instructions/cycles. Moving the existing managed-time check into shared batch
+append saved 224 raw bytes in the eight-entity build but added 28 in the
+one-entity eight-shape build: 36 bytes per entity. Sampled inserts added 72
+instructions/cycles, while read/replace improved by 14. These small gains do not
+justify retaining the hints or moving validation. Both six-subject Wasm runs
+passed; the batch candidate also passed 53 native managed/record/copy tests.
+That stage retained 5,791 bytes per entity, with no constructor or batch
+admission change. Trial evidence is under `query-growth-request-default` and
+`query-growth-rejected-batch-admission` in the local 0.18 evidence directory.
+
+The retained boundary passes 79 native query, six maintenance and 13 schema-copy
+tests, plus the six-subject Wasm result/upgrade/write comparison and focused Wasm
+sparse-page, projection, refusal and upgrade regression. Product/driver Clippy
+and formatting checks pass. No discarded hint or consuming-loop path remains.
+
+Current artifacts, hashes, source inputs and results stay under
+`qualification/target/evidence/query-growth/`. The baseline with extended write
+measurements and discarded probes are retained under `target/evidence/0.18/`.
+
+### Deeper specialization investigation (0.18)
+
+The follow-up investigates whether the remaining growth is a private boundary
+problem or requires changing schema authoring, codecs or durable contracts.
+Diagnostic builds retain symbol names with `-Cstrip=none -Cdebuginfo=0`.
+Their concatenated non-custom Wasm sections match the measured stripped builds
+byte for byte, so symbol attribution applies to the actual baseline executable,
+not a differently optimized debug build. The one/eight core hashes are
+`a00c5cde04e2cf126bd6d4ed2c24da25ac54da8678315a49b0a7b419347bb540` and
+`992712c3aea50c366ad9ea9d7d902339233b752cdef77c745c1baff72e2b8b56`.
+
+| Baseline growth from one to eight entities | Bytes |
+| --- | ---: |
+| Application operation wrappers, including inlined database work, plus commit | 36,113 |
+| Typed `Query::fetch` functions | 2,225 |
+| Typed revision access | 854 |
+| Other code, including shared execution/admission and layout changes | 948 |
+| Non-code sections | 394 |
+| Total | 40,534 |
+
+Commit is inlined into the one-entity operation wrapper but outlined once in the
+eight-entity artifact; those owners must be counted together. The 36,113 bytes
+are neither pure application overhead nor automatically removable. The uniform
+fixture has one named encoder, decoder and row-info body each, totaling 794
+bytes in either build. Named-leaf sharing does not exclude inlined copies;
+the earlier decoder/key-extraction experiments separately found no saving.
+All eight 314-byte `fetch` bodies differ only in the embedded schema-address
+operand. This is direct evidence of specialization at the typed boundary.
+
+A diagnostic fixture splits write, exact-read, primary-page, index-page and
+fluent wrappers into separate non-inlined functions. All six result/upgrade/write
+subjects pass, but combined growth rises to 6,035 bytes per entity. Its largest
+delta families are fluent call sites (10,626 bytes), writes plus shared commit
+(8,052), indexed reads/conversion (7,411), primary pages/conversion (5,654),
+host dispatch (3,015) and exact reads/conversion (3,010). These explain where to
+investigate; they are not additive savings or a reason to weaken the fixture.
+
+A matched mixed-width control changes only `amount` to two entities each of
+Nat64, Nat128, Int64 and Int128, with correctly typed operands and the same
+positive test values/result oracle. Its eight-entity artifact is 316,433 raw /
+291,996 code bytes versus the matched uniform control's 312,167 / 288,176.
+The raw slope rises from 5,851 to 6,460 bytes per entity, another 609 bytes.
+This includes necessary layout/operand conversions and does not establish costs
+for owned text, containers, aggregate outputs or Canic. The matched control
+differs slightly from the original fixture because it constructs typed operands.
+
+A disposable product prototype moves the existing streaming primary-page
+conversion loop behind a private function boundary, retaining range admission,
+key/row agreement checks, decoding and continuation. It adds no raw-page buffer,
+allocation, callback, public API or durable representation. The original fixture's
+slope falls from 5,791 to 5,503 bytes per entity; the mixed-width slope falls from
+6,460 to 6,247. Both six-subject Wasm runs and 38 native record/key tests pass.
+Sampled inserts add 66–72 instructions/cycles and direct page calls add 72; the
+two-call read/replace journey adds 144. Inserts include page readback, so this
+does not isolate commit cost. This prototype is not retained as a new baseline.
+
+A second disposable prototype carries the existing static schema reference in
+the private `Query` value and passes it to `fetch`/`fetch_as`, instead of embedding
+`E::SCHEMA` at those terminals. Admission still occurs at execution; the reference
+is not a new catalog, cache or public dynamic-query API. The eight named `fetch`
+bodies merge into one 320-byte body. Its symbol-bearing executable sections again
+match the stripped artifact exactly (SHA-256
+`d363e01452675c4226462cdb0fc25fe01865bb4fd3cb5c6a1401e53ce2dab820`).
+The original fixture's one-entity eight-shape build grows to 271,794 raw / 248,153
+code bytes, while the eight-entity build falls to 309,554 / 285,570: a slope of
+5,394 raw bytes per entity. Direct-only builds are unchanged. All six Wasm
+subjects pass. Sampled eight-entity fluent calls add 6–10 instructions/cycles;
+one-entity multi-shape calls add 222–554, and single-shape calls add 316.
+The one-entity fluent builds also add 46–48 instructions to sampled inserts and
+92–96 to the two-call read/replace journey through changed code layout, despite
+unchanged write code. This is not a uniform performance improvement. The added
+transient pointer and effects on other aggregate terminals require a cohesive
+design and broader qualification before adoption. This prototype is removed too;
+the two prototype savings must not be added together.
+
+This follows frozen IcyDB `6d421e3`'s
+[operation-wrapper investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/archive/0.250-generated-entity-specialization-reduction/0.250-landing-slice-6-receipt.md):
+generic operation wrappers can dominate generated codec leaves, and symbolic
+size attribution is not an additive savings estimate. No IcyDB implementation,
+descriptor framework or supplier-specific layout is imported. Local artifacts,
+source controls, section checks and diagnostic scripts are under
+`target/evidence/0.18/attribution/`; these are experiments, not new product tools.
+
+### Admitted descriptors at typed read boundaries (0.18)
+
+Retain the follow-up that returns the existing validated entity descriptor from
+`Schema::admits` and passes it into the typed exact-read, primary-page and
+index-prefix bodies. Admission still checks logical identity, fields, indexes
+and the complete reachable type graph before any read. The index-key helper no
+longer repeats admission or takes an unused database receiver. Public methods,
+key/row agreement, index validation, decode errors and continuation are unchanged.
+There is no cache, prepared public handle, extra page buffer, callback, new
+representation or durable-state change.
+
+The important difference is where metadata comes from. Merely moving static
+`E::SCHEMA` arguments into private helpers let the compiler propagate their
+addresses and specialize the bodies again. A borrowed two-pointer reader context
+did not prevent that either. Execution-only query request objects shared code
+but added request-movement/cleanup costs; borrowing reduced some of those costs
+without improving the tradeoff sufficiently. Remove those prototypes. Passing
+the descriptor returned by actual admission shares the direct read bodies
+without retaining any of the experimental context types or query changes.
+
+| Subject | Previous raw / code bytes | Retained raw / code bytes | Raw / code change |
+| --- | ---: | ---: | ---: |
+| `direct` | 231,828 / 210,395 | 232,564 / 211,125 | +736 / +730 |
+| `direct-entities` | 262,110 / 240,219 | 252,087 / 230,193 | -10,023 / -10,026 |
+| `one` | 269,820 / 246,243 | 270,311 / 246,732 | +491 / +489 |
+| `shapes` | 271,140 / 247,543 | 271,631 / 248,032 | +491 / +489 |
+| `maps` | 272,931 / 249,334 | 273,422 / 249,823 | +491 / +489 |
+| `entities` | 311,674 / 287,683 | 301,690 / 277,695 | -9,984 / -9,988 |
+
+Combined raw growth falls from 5,791 to 4,294 bytes per added entity (25.8%);
+direct growth falls from 4,326 to 2,789. The combined ceiling remains unmet.
+Symbol-bearing executable sections match the retained eight-entity artifact
+exactly, SHA-256
+`6cf0cae148f5a35bbc07b973f62b607573bc02efae5238cf6f30fa34e40284c5`.
+There is one named typed exact-read body (336 bytes), primary-page body (796)
+and index-prefix body (866) for all eight uniform entities. This demonstrates
+sharing for these codecs/layouts, not identical costs for arbitrary entity types.
+
+The final mixed-width control also passes. Its one-entity eight-shape build is
+271,704 raw / 248,105 code bytes and its eight-entity build is 307,927 / 283,483,
+down from 271,213 / 247,616 and 316,433 / 291,996 respectively. Mixed raw growth
+falls from 6,460 to 5,175 bytes per entity (19.9%). This remains a controlled
+integer-width comparison, not an owned-container or aggregate-output workload.
+
+Matching one/eight named builds attribute the remaining 29,663 code-byte delta
+to operation wrappers plus shared-commit inlining (25,670), typed fluent fetch
+(2,225), revision access (931) and other code/layout effects (837). As before,
+the combined wrapper/commit owner includes inlined database work; it is not
+25,670 bytes of removable application overhead. Direct-read bodies now share,
+so further work should investigate the remaining terminal/conversion boundaries.
+
+Explicit retained tradeoff: sampled first inserts add 44–98 work instructions;
+eighth inserts save 62–116. These operations include readback. Direct reads save
+67–120 work instructions, and fluent calls save 82–896 instructions/cycles.
+The complete two-call read/replace journey ranges from 70 fewer to 44 more work
+instructions. Total cycles mostly follow work, but the standalone one-entity
+direct build increases by 138 cycles per sampled read and 456 per read/replace
+pair; its opening costs also change. Keep those increases explicit rather than
+calling every operation faster. The measured size reduction justifies this small
+cost; it does not establish general write-performance or heterogeneous parity.
+
+The native regression extends compact-handle collision refusal to primary pages
+and index reads, and confirms that an equivalent renamed Rust type still reads
+through the admitted descriptor. This applies IcyDB's concrete prepared-read
+boundary lesson using IC DB's existing compiled schema; no historical binding
+catalog or runtime registry is copied. Diagnostic alternatives and retained
+artifacts stay under `target/evidence/0.18/terminal-boundaries/`.
+
+Qualification passes 136 focused native record/key/query/maintenance/copy tests,
+both six-subject Wasm composition controls, 11 Wasm query and 24 Wasm record
+regressions, and the installed-console regression. The console initially retained
+an obsolete expectation that unindexed `order_by amount` must fail; replace it
+with the supported sorted result and an insufficient-work refusal. Its focused
+rerun passes. Product/driver Clippy, formatting and local-link checks pass.
+The original fixture and fluent query implementation are restored; only the
+admitted-descriptor read change and applicable regression corrections remain.
+
+### Projection decoding and admitted revision reads (0.18)
+
+Retain a result-type-only boundary for the existing projection decoding loop.
+`fetch_as<E, R>` still performs the same admission/execution, then delegates to
+`QueryPage::decode_projection<R>`. This avoids carrying the source entity type
+through output decoding. Byte validation, decoder completion, error propagation
+and page metadata are unchanged. No result abstraction, callback or alternate
+codec is introduced. This applies the same measured conversion-boundary lesson
+as entity pages, rather than importing IcyDB's codec descriptor machinery.
+
+A disposable matched fixture replaces entity fetches with full-field projections
+into one shared named record; source entities, predicates, ordering, application
+maps, writes, independent tuple expectations and upgrade checks stay the same.
+This isolates repeated use of one output shape across entities. It does not
+measure different output-record counts, rich projected types or aggregate outputs.
+Both controls include the revision-read cleanup described below.
+
+| Projected subject | Before raw / code bytes | After raw / code bytes | Raw / code change |
+| --- | ---: | ---: | ---: |
+| One entity, one shape | 271,228 / 247,648 | 271,342 / 247,761 | +114 / +113 |
+| One entity, eight shapes | 272,640 / 249,040 | 272,662 / 249,061 | +22 / +21 |
+| One entity, mapping closures | 274,449 / 250,849 | 274,471 / 250,870 | +22 / +21 |
+| Eight entities, eight shapes | 308,620 / 284,621 | 304,932 / 280,935 | -3,688 / -3,686 |
+
+Projected raw growth falls from 5,140 to 4,610 bytes per entity (10.3%). In the
+eight-entity build, sampled projected queries save 37–96 instructions/cycles.
+Retain the opposite small fixed-cost tradeoff in the one-entity builds: +20 per
+multi-shape/mapping query and +203 for the single-shape query. Direct reads,
+inserts and complete read/replace costs are unchanged by projection outlining.
+The named artifact's executable sections match the stripped eight-entity build
+exactly (SHA-256
+`10ad4a720e0c25742b7e4be9f73c072d4f6c6f094f7f11cba3c2616f97e169a5`),
+with one shared projection-decoding body and its iterator helper.
+
+Also retain the simpler public `revision` path: use the entity ID returned by
+schema admission and call the existing revision reader, avoiding a second entity
+membership lookup. ID-only internal callers retain their membership checks.
+This saves 27 sampled read instructions/cycles, 30 on inserts and 57 on the
+two-call read/replace journey. It adds 6–8 raw/code bytes to one-entity builds
+and 35 to eight-entity builds. This is a small runtime/simplicity tradeoff, not a
+Wasm saving. The ordinary entity-query slope is consequently about 4,298 bytes,
+slightly above the preceding 4,294-byte result; the 4 KB ceiling remains unmet.
+
+A separate entity-fetch prototype moved admission into typed terminals and
+passed its descriptor to a shared typed helper. It reached 4,057 raw bytes per
+entity but added 25–1,117 sampled fluent instructions/cycles. Remove it: the
+additional request/error handling is a poor tradeoff for this size reduction.
+No changed builder layout or prepared query object remains. Local controls,
+source variants, artifacts and costs are under `target/evidence/0.18/fluent-terminals/`.
+
+The final ordinary entity-page artifacts are 271,637 raw / 248,038 code bytes for
+one entity with eight shapes and 301,725 / 277,730 for eight entities. The final
+mixed-width control is 271,710 / 248,111 and 307,962 / 283,518 respectively,
+about 5,179 raw bytes per added entity. Those controls use ordinary entity pages;
+the separate projection fixture establishes only the shared uniform output case.
+
+Qualification passes both matched six-subject projection runs, the final uniform
+and mixed-width entity-page runs, 134 focused native record/query/maintenance/copy
+and revision-invalidation tests, and 11 Wasm query regressions including projection
+and upgrade behavior. Product Clippy, formatting and local-link checks pass.
+The original fixture is restored; the only retained product changes in this
+increment are the result-type decoding boundary and duplicate revision-lookup
+removal. No experimental entity-fetch helper or request context remains.
+
 ## Frozen IcyDB baseline
 
 ```sh
@@ -1188,13 +1664,14 @@ IC Storage allocation. The CLI's optional `retained-console` build shares the jo
 allocation without rollback fault controls. Testkit owns the PocketIC instance. Private endpoints
 are test controls; production authorization and endpoint generation remain Canic's.
 
-Sixty-two native tests qualify counts beyond the synchronous 512-candidate budget,
+Native tests qualify counts beyond the synchronous 512-candidate budget,
 sparse indexed filters, independent 64-KiB source-byte steps, exact signed/Decimal
 cancellation across checkpoints, U256 preservation, all-absent results, query/
 result/database/store binding, sequence refusals, same-code reopen, backwards
 time, expiry/capacity/cancellation and safe slot reuse. Output/arithmetic refusal
 preserves prior progress. Malformed cleanup input and unsupported store headers
-refuse with backing bytes intact. Existing 47 synchronous query tests still pass.
+refuse with backing bytes intact. Synchronous query tests separately qualify the
+shared scanner and reducers.
 Average cases additionally cover unequal step sizes and present counts, positive/
 negative even ties, absence versus zero, 1025-row cancellation at scale 28,
 reopened denominators, operation/result-scale mismatches, U256 conversion after
@@ -1338,6 +1815,46 @@ interactive console's whitespace splitting does not interpret quotes.
 It also preserves the existing installed-layout query/schema and product-record
 checks. `make db` installs this console fixture without starting the program.
 
+### Controlled product aggregate contention (0.18)
+
+Run only the product sum/write-schedule witness:
+
+```sh
+make m2-contention
+```
+
+It shares `m2-jobs-artifact` with `make m2-jobs`, which also selects this test.
+The existing private `write`, `job_start`, `job_advance` and `job_control`
+endpoints exercise the actual engine and supplier; no new endpoint, product state
+or host scheduler is introduced. Testkit owns the local PocketIC instance.
+
+The dataset has 96 entries with independently calculated amounts
+`id * 10 + id % 2`. Each advance permits 12 candidates. The successful runs
+need nine advances: eight process 96 rows and the ninth observes exhaustion.
+
+| Intervening messages | Observed result |
+| --- | --- |
+| None | Complete, sum 46,608 |
+| Unrelated entity write after each running step | Complete, same revision and sum |
+| Same-value source replacement after each running step | Complete, same revision and sum |
+| Source write followed by a trap after each running step | Complete, same revision and sum; full backing restored by each trap |
+| Refused duplicate insertion after each running step | Complete, same revision and sum; full backing unchanged by each refusal |
+| Source change after the first step, three explicit attempts | All invalidated after 12 examined rows, without a result or hidden restart |
+| Fresh attempt after those writes stop | Complete, sum 46,610 for the newly captured revision |
+
+One contended attempt restores the old row value and upgrades before resuming;
+it still invalidates. Retrying an invalidated handle preserves its outcome, and
+explicit cancellation makes that handle unusable. Completed output keeps its
+captured revision and value after a subsequent source write. Job-checkpoint
+writes never invalidate their source.
+
+These are deterministic execution schedules, not wall-clock load or performance
+measurements. They demonstrate the accepted possibility of starvation and
+recovery after a quiet interval; they do not establish its frequency for a real
+application, high-cardinality group finalization costs or completion guarantees
+under continuous source changes. The historical M0 aggregation probe above
+remains candidate evidence, separate from this product-level check.
+
 ## Identified maintenance and the local console
 
 The product gate is now separately qualified with `make m3-maintenance`.
@@ -1473,6 +1990,94 @@ tests also reject a 33-row request and a 4,095-byte source-page budget without a
 backing write or growth. The original ordinary-write and write-envelope probes
 exercise the shared fault wrapper and byte oracle independently.
 
+### Cross-chunk reference migration (0.18)
+
+```sh
+make m3-references
+```
+
+This focused Wasm probe migrates 256 rows forming 128 two-way reference pairs.
+Each partner is 128 primary keys away, so the first 32-row copy chunk references
+targets that have not been copied yet. The transformation adds a unique rank
+index while preserving entity names and primary keys. Independent literal-byte
+oracles check source rows/indexes and all 256 target rows plus 512 index entries.
+
+The valid case resumes across upgrades during copying and validation, then
+publishes and cleans the retired source. Deleting one referenced target refuses;
+deleting its pair in the same batch succeeds. The invalid case introduces a
+missing target in the last row: validation refuses after earlier checkpoints,
+publication stays closed, and bounded cancellation restores source service.
+Backing comparisons cover a trap on the first copy write, a later application
+trap after a validation checkpoint, and normal refusals. Cleanup retains only the
+recorded manifest in the discarded allocation.
+
+After successful publication and pair deletion, the same probe repoints the
+remaining 254 rows to one target (253 dependants and its self-reference). A
+32-command batch deleting that target and the first 31 dependants must refuse
+without a backing write: a later surviving reference still blocks deletion.
+Eight explicit batches then remove the dependants, with the target included only
+in the final batch. Literal row/index oracles check every intermediate result;
+a late application trap restores a deletion batch, and deletion continues after
+an upgrade. These are application-issued bounded batches, not automatic cascades
+or a transaction spanning messages.
+
+With Storage 0.74.1, the fault-enabled fixture recorded:
+
+| Phase | Per-call bound | Maximum observed IC instructions |
+| --- | --- | ---: |
+| Copy | 32 rows / 4096 source bytes | 17,053,201 |
+| Validation | 32 physical entries, plus bounded admission | 7,615,070 |
+| Retired-source cleanup | 32 entries | 2,754,782 |
+| Cancellation cleanup | 32 entries | 3,473,406 |
+| Post-publication restricted deletion refusal | Target plus first 31 dependants | 6,849,884 |
+| Post-publication accepted deletion | At most 32 rows per batch | 13,699,351 |
+
+Counters include host reopen, schema construction, product and supplier work,
+excluding transport decoding/encoding. The measured artifact SHA-256 is
+`9c1064deeee28fda77cb7d680112d52264951956d3c2f29c5cf6df859f6e8a65`.
+Both fixture endpoints are gated by `maintenance-faults`; inspection of the normal
+record artifact confirms neither export is present. `make m3-maintenance-wasm`
+also selects this test.
+
+This carries forward IcyDB's target-existence and final-batch deletion invariants
+using the existing IC DB maintenance mechanism, without its general relationship
+framework. Migration qualifies one entity with small Nat64 rows and one incoming
+reference per row; post-publication deletion additionally checks 254 incoming
+references on one target. Nested references, larger populations, arbitrary payload
+sizes and allocation reuse remain outside this result. It introduces no product
+API or durable state.
+
+### Retained jobs during maintenance (0.18)
+
+```sh
+make m3-jobs
+```
+
+This focused Wasm test combines the existing `aggregate-jobs` and maintenance
+fixture features, without adding endpoints or product code. It starts running,
+completed, cancelled and expiring sums over the six-row source, then freezes the
+database. Both starting a job and accessing running/completed jobs must remain
+closed across upgrades. These fixture adapters unwrap ordinary database admission,
+so the `Maintenance` refusal appears as a message trap; complete backing must stay
+unchanged.
+
+An executable supporting only transition version two cannot cancel the active
+version-one maintenance. It can still cancel a known-format job and remove expired
+jobs one at a time through the separately owned job store. A cleanup no-op and
+stale cancellation leave backing unchanged. Reinstalling the supported executable
+permits maintenance cancellation; a trap after cancellation restores the gate.
+Successful cancellation restores the unchanged source, allowing the original
+running sum to continue from its checkpoint without double-counting. The completed
+sum retains its exact result, and removed handles cannot affect a newly reused slot.
+
+The test uses explicit synthetic host times for job expiry; PocketIC clock advances
+only drive upgrades. It does not claim survival past expiry, access through a
+closed source, compatibility with changed job formats, or job transfer at cutover.
+`make m3-maintenance-wasm` includes this combination. No new durable state,
+automatic cleanup, retry policy or migration/job coordinator is introduced.
+
+### Historical M0 maintenance probe
+
 Run `make m0-maintenance` after setup. Cargo builds four executable variants from
 one small fixture: source A, target B, B-prime with a different transformation
 identity, and a target whose upgrade hook deliberately traps. Artifact messages
@@ -1519,17 +2124,36 @@ open. The transformation is synthetic; full coverage belongs to the delivered en
 
 `make db` builds and installs the release binary at `~/.local/bin/db` and the M1
 host at `~/.local/share/ic-db/m1/records.wasm`; it does not start PocketIC or the
-console. `DB_INSTALL_PREFIX` overrides `~/.local`. Maintenance variants are not
-built for the console. Cargo artifact records select both
+console. `DB_INSTALL_PREFIX` overrides `~/.local`. Fault-injection maintenance
+variants are not built for the console. Cargo artifact records select both
 build outputs. Keep the installation's `bin` directory on `PATH`.
 
 Run `db` to open a fresh temporary local record database. Commands are `schema`,
-`status`, `query [Entry|Document|DecimalRow]`, `aggregate ENTITY`, `help` and `quit`.
+`status`, `query [Entry|Document|DecimalRow]`, `aggregate ENTITY`, `migration-demo`,
+`help` and `quit`.
+`migration-demo` creates separate source/target allocations for a six-row `Item`
+transformation. The console feature carries its source and target declarations;
+product manifests own all progress. After copying two rows, the CLI upgrades the
+local canister with the same executable and resumes. It finishes bounded copying,
+validation, publication and retired cleanup, then reads the new label index.
+The command runs once per console session; it leaves the ordinary query fixture
+unchanged. It has no fault controls or deployed-canister access.
+`make m3-cli` selects the installed-command check and a Wasm test of wrong-phase
+refusals, exact copy progress across upgrade, validation before publication,
+source closure, repeated cleanup and target reopen. Refusals compare complete
+backing, including allocator metadata. This demonstrates the existing contract;
+it does not add migration capabilities or replace the larger M3 probes.
 Entry is the default for `query`; `aggregate` requires an explicit entity.
 Queries use the fluent product engine. Entry supports `--min` and `--category`;
 Document supports `--entry-id`. `--order-by FIELD[,FIELD]` selects a proven complete
-order, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
+order or a bounded complete sort, `--desc` reverses it, and `--select id` or `--select id,amount` uses typed
 projection (the latter is Entry-only). Full entities are the default result.
+For example, `db query Entry --order-by amount --desc --limit 2 --select id,amount`
+scans all six entries and returns IDs 6 and 5 with no continuation. Complete sorting
+retains at most 32 matches and refuses work/state/output exhaustion, `--after`
+and DISTINCT. `make m2-queries` includes its Wasm console-boundary check for
+global selection, limits, unchanged backing and indexed cursors across upgrade;
+no fixture endpoint or client sorting engine is added.
 Entry also supports `--select category`; combine it with
 `--order-by category --distinct` for the ordered-DISTINCT path. `--category` is
 supported; `--min` varies within a category and refuses with this projection.

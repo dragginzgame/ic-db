@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Controlled entity-count growth with one endpoint and identical typed operations.
-//! This fixture measures direct product paths, not a fluent planner or Canic adapter.
+//! Optional fluent shapes and result maps isolate application composition growth.
 
 use ic_db::{Batch, Database, Entity, Schema, entity};
 use ic_db_qualification_transport as transport;
@@ -11,6 +11,8 @@ use ic_storage::{
 };
 
 const KEY: &str = "m1.growth.records.v1";
+#[cfg(feature = "fluent")]
+mod fluent;
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);
 
@@ -168,6 +170,10 @@ fn operate<E: Entity<Key = u64>>(
     row: &E,
     project: impl Fn(&E) -> Row,
 ) -> Observation {
+    #[cfg(feature = "fluent")]
+    if mode >= 10 {
+        return fluent::operate::<E>(db, mode, input, project);
+    }
     let mut batch = Batch::new();
     match mode {
         0 => {} // Read only, invoked as an update to retain one fixed export.

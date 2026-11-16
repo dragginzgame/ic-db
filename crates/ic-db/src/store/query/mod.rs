@@ -3,6 +3,7 @@ mod aggregate;
 mod distinct;
 mod order;
 mod range;
+mod sort;
 pub use aggregate::jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep};
 pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
 
@@ -159,6 +160,7 @@ pub struct QueryPage<T> {
 }
 
 impl QueryPage<Vec<u8>> {
+    #[inline(never)]
     pub(super) fn decode_entities<E: Entity>(self) -> Result<QueryPage<E>, Error> {
         Ok(QueryPage {
             rows: self
@@ -166,6 +168,27 @@ impl QueryPage<Vec<u8>> {
                 .iter()
                 .map(|bytes| E::decode(bytes))
                 .collect::<Result<_, _>>()?,
+            next: self.next,
+            examined: self.examined,
+            fetched: self.fetched,
+            output_bytes: self.output_bytes,
+        })
+    }
+
+    #[inline(never)]
+    fn decode_projection<R: Value>(self) -> Result<QueryPage<R>, Error> {
+        Ok(QueryPage {
+            rows: self
+                .rows
+                .iter()
+                .map(|bytes| {
+                    let mut reader = Decoder::new(bytes)?;
+                    // Output records replace the entity root, not an extra nested value.
+                    let row = R::decode_from(&mut reader)?;
+                    reader.finish()?;
+                    Ok(row)
+                })
+                .collect::<Result<_, Error>>()?,
             next: self.next,
             examined: self.examined,
             fetched: self.fetched,
@@ -213,6 +236,73 @@ impl Default for Request<'_> {
     }
 }
 
+// Request construction depends on operand shapes, not the entity's Rust type.
+// Keep allocation and clause loops out of every typed builder instantiation.
+impl<'a> Request<'a> {
+    #[inline(never)]
+    fn filter(&mut self, field: &'a str, comparison: Comparison, value: impl Into<IndexValue<'a>>) {
+        if self.predicates.len() == MAX_TERMS {
+            self.over_limit = true;
+        } else {
+            self.predicates.push(Predicate {
+                field,
+                comparison,
+                value: value.into(),
+                or_next: false,
+            });
+        }
+    }
+
+    #[inline(never)]
+    fn or_clause(
+        &mut self,
+        alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, IndexValue<'a>)>,
+    ) {
+        let count = alternatives.len();
+        if count == 0 || count > MAX_TERMS - self.predicates.len() {
+            self.over_limit = true;
+        } else {
+            self.predicates.extend(alternatives.enumerate().map(
+                |(i, (field, comparison, value))| Predicate {
+                    field,
+                    comparison,
+                    value,
+                    or_next: i + 1 < count,
+                },
+            ));
+        }
+    }
+
+    #[inline(never)]
+    fn filter_not_in(&mut self, field: &'a str, values: &[IndexValue<'a>]) {
+        if values.is_empty() || values.len() > MAX_TERMS - self.predicates.len() {
+            self.over_limit = true;
+            return;
+        }
+        for &value in values {
+            self.filter(field, Comparison::Ne, value);
+        }
+    }
+
+    #[inline(never)]
+    fn using_index(&mut self, name: &'a str, values: &[IndexValue<'a>]) {
+        if values.len() > 4 {
+            self.over_limit = true;
+        } else {
+            self.index = Some((name, values.to_vec()));
+        }
+    }
+
+    #[inline(never)]
+    fn order_by(&mut self, fields: &[&'a str]) {
+        if fields.len() > 4 {
+            self.over_limit = true;
+        } else {
+            self.order = Some(fields.to_vec());
+        }
+    }
+}
+
 // Maintenance gets only bounded primary traversal, not a second query frontend.
 pub(super) fn source_page<M: Memory>(
     map: &Map<M>,
@@ -235,8 +325,8 @@ pub(super) fn source_page<M: Memory>(
 }
 
 /// Fluent exact predicates over one entity. No callback executor is generated.
-/// Ordering uses primary order, an explicit index or a proven automatic path.
-/// Arbitrary sorting is not supported.
+/// Ordering uses primary order, an explicit index, a proven automatic path or
+/// bounded complete sorting. Work exhaustion never returns a sorted prefix.
 pub struct Query<'a, E, M: Memory = ic_storage::DefaultMemoryImpl> {
     db: &'a Database<M>,
     request: Request<'a>,
@@ -282,16 +372,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         comparison: Comparison,
         value: impl Into<IndexValue<'a>>,
     ) -> Self {
-        if self.request.predicates.len() == MAX_TERMS {
-            self.request.over_limit = true;
-        } else {
-            self.request.predicates.push(Predicate {
-                field,
-                comparison,
-                value: value.into(),
-                or_next: false,
-            });
-        }
+        self.request.filter(field, comparison, value);
         self
     }
     /// Add an OR clause of exact top-level comparisons, ANDed with other filters.
@@ -301,8 +382,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Uses one ordered traversal, without union scans or duplicate rows. Alternatives
     /// do not establish fixed index prefixes; a one-term clause behaves like `filter`.
     #[must_use]
-    pub fn filter_any(self, alternatives: &[(&'a str, Comparison, IndexValue<'a>)]) -> Self {
-        self.or_clause(alternatives.iter().copied())
+    pub fn filter_any(mut self, alternatives: &[(&'a str, Comparison, IndexValue<'a>)]) -> Self {
+        self.request.or_clause(alternatives.iter().copied());
+        self
     }
     /// Match a field against any supplied exact value, ANDed with other filters.
     /// Equivalent to `filter_any` with equality comparisons in the supplied order.
@@ -312,13 +394,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Every member is admitted before reading; there is no coercion, sorting or
     /// deduplication of operands. Reordering members changes cursor/job identity.
     #[must_use]
-    pub fn filter_in(self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
-        self.or_clause(
+    pub fn filter_in(mut self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
+        self.request.or_clause(
             values
                 .iter()
                 .copied()
                 .map(|value| (field, Comparison::Eq, value)),
-        )
+        );
+        self
     }
 
     /// Exclude every supplied exact value, ANDed with other filters.
@@ -330,32 +413,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// the list changes that identity. No coercion or deduplication is performed.
     #[must_use]
     pub fn filter_not_in(mut self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
-        if values.is_empty() || values.len() > MAX_TERMS - self.request.predicates.len() {
-            self.request.over_limit = true;
-            return self;
-        }
-        values.iter().fold(self, |query, &value| {
-            query.filter(field, Comparison::Ne, value)
-        })
-    }
-
-    fn or_clause(
-        mut self,
-        alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, IndexValue<'a>)>,
-    ) -> Self {
-        let count = alternatives.len();
-        if count == 0 || count > MAX_TERMS - self.request.predicates.len() {
-            self.request.over_limit = true;
-        } else {
-            self.request.predicates.extend(alternatives.enumerate().map(
-                |(i, (field, comparison, value))| Predicate {
-                    field,
-                    comparison,
-                    value,
-                    or_next: i + 1 < count,
-                },
-            ));
-        }
+        self.request.filter_not_in(field, values);
         self
     }
     /// Select index order and exact leading components (at most four).
@@ -364,28 +422,22 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// filters. Every alternative in a proving OR clause must reject absence.
     #[must_use]
     pub fn using_index(mut self, name: &'a str, values: &[IndexValue<'a>]) -> Self {
-        if values.len() > 4 {
-            self.request.over_limit = true;
-        } else {
-            self.request.index = Some((name, values.to_vec()));
-        }
+        self.request.using_index(name, values);
         self
     }
     /// Order by 1..=4 distinct top-level ordered fields, then the primary key.
     /// An explicitly listed primary key must be last. All fields share one
-    /// direction, reversed by `descending`. Select a complete ordered path or
-    /// refuse; never sort a bounded input prefix. Equality terms may fix leading
-    /// index components. With `using_index`, verify that requested path instead.
+    /// direction, reversed by `descending`. Prefer a complete ordered path.
+    /// Otherwise collect at most 32 matches within 128 KiB of key/output buffers,
+    /// sort the complete result and apply `limit`. Work exhaustion refuses; no
+    /// cursor or DISTINCT is supported by this fallback. Equality terms may fix
+    /// leading index components. With `using_index`, require that path's order.
     #[must_use]
     pub fn order_by(mut self, fields: &[&'a str]) -> Self {
-        if fields.len() > 4 {
-            self.request.over_limit = true;
-        } else {
-            self.request.order = Some(fields.to_vec());
-        }
+        self.request.order_by(fields);
         self
     }
-    /// Reverse the complete access-path order, including its unique tie-breaker.
+    /// Reverse the complete result order, including its unique tie-breaker.
     #[must_use]
     pub fn descending(mut self) -> Self {
         self.request.descending = true;
@@ -393,6 +445,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
     /// Return at most 1..=32 matching rows in this page.
     /// Complete-collection DISTINCT refuses if the full result exceeds this cap.
+    /// Complete sorting applies this cap after examining the entire input; it
+    /// never relaxes the separate 32-matching-row retention bound.
     /// For grouped aggregates, cap the complete selected result instead; use
     /// `group_page` to set a retained grouped response's page size separately.
     #[must_use]
@@ -421,21 +475,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Admit and execute one page, then decode only its matching output rows.
     /// # Errors
     /// Refuses unsupported shapes, inexact operands, limits, invalid cursors and corruption.
-    /// A matching row larger than the whole byte allowance returns `RowTooLarge`.
+    /// A selected output row larger than the whole byte allowance returns `RowTooLarge`.
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch(self) -> Result<QueryPage<E>, Error> {
-        self.db.schema.admits(E::SCHEMA)?;
-        let plan = Plan::admit(
-            E::SCHEMA,
-            &self.request,
-            self.db.schema.fingerprint(),
-            self.db.incarnation,
-            None,
-            false,
-        )?;
-        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
-        raw.decode_entities()
+        fetch_rows(self.db, E::SCHEMA, self.request, None)?.decode_entities()
     }
     /// Project matching top-level fields into an existing `#[record]` type.
     /// Names, optionality and complete value definitions must match exactly.
@@ -447,33 +491,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch_as<R: Value>(self) -> Result<QueryPage<R>, Error> {
-        self.db.schema.admits(E::SCHEMA)?;
-        let plan = Plan::admit(
-            E::SCHEMA,
-            &self.request,
-            self.db.schema.fingerprint(),
-            self.db.incarnation,
-            Some(R::definition()),
-            false,
-        )?;
-        let raw = execute(&self.db.map, E::SCHEMA, &self.request, &plan, None)?;
-        Ok(QueryPage {
-            rows: raw
-                .rows
-                .iter()
-                .map(|bytes| {
-                    let mut reader = Decoder::new(bytes)?;
-                    // Output records replace the entity root, not an extra nested value.
-                    let row = R::decode_from(&mut reader)?;
-                    reader.finish()?;
-                    Ok(row)
-                })
-                .collect::<Result<_, Error>>()?,
-            next: raw.next,
-            examined: raw.examined,
-            fetched: raw.fetched,
-            output_bytes: raw.output_bytes,
-        })
+        let raw = fetch_rows(self.db, E::SCHEMA, self.request, Some(R::definition()))?;
+        raw.decode_projection()
     }
 }
 
@@ -593,6 +612,7 @@ struct Plan<'a> {
     binding: [u8; 32],
     projection: Option<u16>,
     distinct: distinct::Strategy,
+    sort: Option<Vec<usize>>,
 }
 impl<'a> Plan<'a> {
     fn admit(
@@ -641,6 +661,7 @@ impl<'a> Plan<'a> {
                 .map(|output| admit_projection(entity, output))
                 .transpose()?,
             distinct: distinct::Strategy::Identity,
+            sort: None,
         };
         for predicate in &request.predicates {
             let position = entity
@@ -679,11 +700,20 @@ impl<'a> Plan<'a> {
         }
         // Admit every operand before selecting a path, even for empty or
         // contradictory queries. The scanner consumes this one proven choice.
-        if let Some(path) = order::select(entity, request)? {
-            plan.index = Some(path.index);
-            plan.prefix = path.prefix;
-            plan.selected |= entity.key_fields();
-            plan.fixed_components = path.fixed;
+        match order::select(entity, request)? {
+            order::Path::Primary => {}
+            order::Path::Index(path) => {
+                plan.index = Some(path.index);
+                plan.prefix = path.prefix;
+                plan.selected |= entity.key_fields();
+                plan.fixed_components = path.fixed;
+            }
+            order::Path::Sort(fields) => {
+                for &position in &fields {
+                    plan.selected |= 1 << position;
+                }
+                plan.sort = Some(fields);
+            }
         }
         if request.distinct {
             plan.distinct = distinct::admit(
@@ -807,6 +837,31 @@ fn consume_index_component(
     key::consume(remaining, field.value)
 }
 
+// Admission, execution and request cleanup share one entity-independent boundary.
+// Only conversion of the returned bytes remains in the typed public terminals.
+#[inline(never)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "own the request so predicate cleanup stays outside entity-specialized terminals"
+)]
+fn fetch_rows<M: Memory>(
+    db: &Database<M>,
+    entity: &EntitySchema,
+    request: Request<'_>,
+    projection: Option<&TypeSchema>,
+) -> Result<QueryPage<Vec<u8>>, Error> {
+    db.schema.admits(entity)?;
+    let plan = Plan::admit(
+        entity,
+        &request,
+        db.schema.fingerprint(),
+        db.incarnation,
+        projection,
+        false,
+    )?;
+    execute(&db.map, entity, &request, &plan, None)
+}
+
 fn execute<M: Memory>(
     map: &Map<M>,
     entity: &EntitySchema,
@@ -848,6 +903,7 @@ fn execute_inner<M: Memory>(
     } else {
         None
     };
+    let mut sorted = plan.sort.as_ref().map(|_| sort::Collection::default());
     let mut component = Vec::new();
     // Each processed equivalence class is either wholly rejected or already
     // emitted. Inclusive byte retries point at an unreturned class instead.
@@ -943,6 +999,8 @@ fn execute_inner<M: Memory>(
             }
         } else if matches && let Some(collection) = collected.as_mut() {
             collection.push(entity, request, &values, &bytes, &spans)?;
+        } else if matches && let Some(collection) = sorted.as_mut() {
+            collection.push(entity, plan, &values, &bytes, &spans)?;
         } else if matches && !duplicate {
             let size = plan
                 .projection
@@ -970,7 +1028,10 @@ fn execute_inner<M: Memory>(
                 .as_deref()
                 .is_some_and(|used| *used > STEP_INPUT_BYTES - CANDIDATE_BYTES)
         {
-            if (aggregate.is_some() && input_bytes.is_none()) || collected.is_some() {
+            if (aggregate.is_some() && input_bytes.is_none())
+                || collected.is_some()
+                || sorted.is_some()
+            {
                 // Completion has not been observed. Never expose partial reductions;
                 // an exact-boundary scan may conservatively require more budget.
                 return Err(Error::Limit);
@@ -982,6 +1043,9 @@ fn execute_inner<M: Memory>(
     if let Some(collection) = collected {
         page.output_bytes = collection.output_bytes;
         page.rows = collection.rows;
+    }
+    if let Some(collection) = sorted {
+        collection.finish(request, &mut page)?;
     }
     Ok(page)
 }

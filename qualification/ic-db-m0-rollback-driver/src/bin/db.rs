@@ -31,6 +31,11 @@ enum Command {
     },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
+    /// Run a fixed migration with a real local canister upgrade during copying.
+    #[command(
+        after_help = "Creates a separate six-row Item fixture, widens amount from Nat64 to Nat128 and adds an indexed label.\nCopies two rows per call, upgrades the local canister, resumes, validates, publishes and cleans the retired source.\nRuns once per console session. All data is temporary; this does not connect to or migrate a deployed database."
+    )]
+    MigrationDemo,
     /// Run a retained aggregate, displaying progress and each completed result page.
     #[command(
         after_help = "Runs bounded update calls against this temporary fixture, then cancels the job. No partial aggregate is presented as a result.\n--min and --category filter Entry rows; --entry-id filters Document rows. --group-min, --group-max, --group-order and --limit select completed groups. --limit never truncates input.\n--work bounds input candidates per call; --page-size bounds completed groups per response. The fixture and jobs are discarded on exit."
@@ -79,7 +84,7 @@ enum Command {
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by selects a complete index order or refuses; --desc reverses every component.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it sorts the full matching result (at most 32 rows, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor or DISTINCT support.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow"])]
@@ -319,7 +324,8 @@ async fn main() -> Result<(), String> {
     let pic = owned.instance();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
-    pic.install_canister(canister, wasm, vec![], None).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
     // Private CLI sample data; ordinary Wasm probes supply their own decimal rows.
     let decimal_rows = vec![
         (1_u64, None::<String>, "1.25".to_owned()),
@@ -359,6 +365,78 @@ async fn main() -> Result<(), String> {
         match command {
             Command::Help => help(),
             Command::Quit => {}
+            Command::MigrationDemo => {
+                let step = async |action: u8| -> Result<(bool, Vec<Vec<String>>), String> {
+                    let reply = pic
+                        .update_call(
+                            canister,
+                            canister,
+                            "migration_demo",
+                            ic_wire::encode(
+                                &action,
+                                Encoding::Frame {
+                                    method: 142,
+                                    direction: Direction::Request,
+                                },
+                                LIMITS,
+                            )
+                            .map_err(|e| e.to_string())?,
+                        )
+                        .await
+                        .map_err(|e| format!("{e:?}"))?;
+                    ic_wire::decode(
+                        &reply,
+                        Encoding::Frame {
+                            method: 142,
+                            direction: Direction::Response,
+                        },
+                        LIMITS,
+                    )
+                    .map_err(|e| e.to_string())?
+                };
+                let (_, rows) = step(0).await?;
+                println!(
+                    "\nItem — source\n{}",
+                    render_bordered(&["id", "amount"], &rows)
+                );
+                println!("\nMigration: console-item-label v1");
+                for (action, phase) in [
+                    (1, "Freeze"),
+                    (2, "Copy"),
+                    (3, "Validate"),
+                    (4, "Publish"),
+                    (5, "Cleanup"),
+                ] {
+                    // Fixture-size bound only; product checkpoints own progress.
+                    for call in 1..=32 {
+                        let (complete, rows) = step(action).await?;
+                        println!(
+                            "{phase} {call}: {}",
+                            if complete { "complete" } else { "in progress" }
+                        );
+                        if action == 2 {
+                            println!("{}", render_bordered(&["Copied rows"], &rows));
+                            if call == 1 {
+                                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                                    .await
+                                    .map_err(|e| format!("{e:?}"))?;
+                                println!("Upgrade: complete");
+                            }
+                        }
+                        if complete {
+                            break;
+                        }
+                        if call == 32 {
+                            return Err(format!("{phase} exceeded the fixture's 32-call bound"));
+                        }
+                    }
+                }
+                let (_, rows) = step(6).await?;
+                println!(
+                    "\nItem — target (label index)\n{}",
+                    render_bordered(&["id", "amount", "label"], &rows)
+                );
+            }
             Command::Aggregate {
                 entity,
                 select,

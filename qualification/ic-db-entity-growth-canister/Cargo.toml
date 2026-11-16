@@ -21,6 +21,9 @@ crate-type = ["cdylib"]
 entities-8 = []
 entities-32 = ["entities-8"]
 retained-host = []
+fluent = []
+fluent-shapes = ["fluent"]
+fluent-maps = ["fluent-shapes"]
 
 [dependencies]
 ic-db.workspace = true

@@ -1,4 +1,5 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
+mod sorting;
 use ic_db::{
     Batch, Comparison as C, Database, Entity, Error, IndexValue, QueryCursor, Schema, entity,
 };
@@ -2090,6 +2091,15 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
         db.query::<Entry>().fetch_as::<Summary>(),
         Err(Error::Corrupt)
     ));
+    // A late corrupt row cannot be hidden by the sorted output limit.
+    assert!(matches!(
+        db.query::<Entry>()
+            .order_by(&["amount", "category"])
+            .descending()
+            .limit(1)
+            .fetch_as::<Summary>(),
+        Err(Error::Corrupt)
+    ));
     // Descending category order emits category 1 before reaching corrupt row 1.
     // Suppressing its duplicate projection must not suppress the integrity error.
     assert!(matches!(
@@ -2931,8 +2941,6 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
         &["payload"],
         &["amount", "amount"],
         &["id", "amount"],
-        &["amount", "category"],
-        &["maybe"],
     ] {
         assert!(matches!(
             db.query::<Entry>()
@@ -2941,6 +2949,16 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
                 .work_limit(1)
                 .fetch(),
             Err(Error::InvalidQuery)
+        ));
+    }
+    for order in [&["amount", "category"][..], &["maybe"]] {
+        assert!(matches!(
+            db.query::<Entry>()
+                .order_by(order)
+                .limit(1)
+                .work_limit(1)
+                .fetch(),
+            Err(Error::Limit)
         ));
     }
     assert!(matches!(

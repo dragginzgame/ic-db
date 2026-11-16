@@ -172,6 +172,15 @@ fn console_inspects_and_queries() {
     assert_eq!(result_table_rows(&distinct), [vec!["1"], vec!["0"]]);
     assert!(distinct.contains("2 rows; 6 examined; 6 fetched; 16 encoded bytes."));
     assert!(distinct.contains("Next cursor: none"));
+    let sorted = run_console(
+        &binary,
+        "query Entry --order-by amount --desc --limit 2 --select id,amount\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&sorted),
+        [vec!["6", "60"], vec!["5", "51"]]
+    );
+    assert!(sorted.contains("Next cursor: none"));
     let filtered_distinct = run_console(
         &binary,
         "query Entry --select category --distinct --min 0 --order-by category\nquit\n",
@@ -370,7 +379,7 @@ fn console_inspects_and_queries() {
         "query --bytes 0",
         "query Missing",
         "query Document --min 0",
-        "query Entry --order-by amount",
+        "query Entry --order-by amount --work 1",
         "query Entry --select id --bytes 7",
         "query Entry --select category --distinct --limit 1",
         "query Entry --select count --work 6",

@@ -2,10 +2,13 @@
 //! Typed codecs stay at the boundary; no executor is generated per entity.
 
 use crate::{
-    __private::RowInfo, Entity, EntitySchema, Error, IndexValue, PrimaryKey, Schema, key,
-    primary::RowKey, store_key::StoreKey,
+    __private::RowInfo, Entity, EntitySchema, Error, FieldType, IndexValue, PrimaryKey, Schema,
+    key, primary::RowKey, store_key::StoreKey,
 };
-use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
+use ic_storage::{
+    DefaultMemoryImpl, Memory, RuntimeMemory,
+    adapter::{MapIter, StableBTreeMap},
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod maintenance;
@@ -20,6 +23,62 @@ const MANIFEST: &[u8] = b"ICDBMF01";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
 type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
+
+// Share supplier advancement and physical-key decoding without buffering a page
+// or moving the typed row/key consistency check out of the public terminal.
+#[inline(never)]
+fn next_primary<M: Memory>(
+    entries: &mut MapIter<'_, StoreKey, Vec<u8>, M>,
+    prefix: &[u8],
+    key_type: FieldType,
+) -> Result<Option<(RowKey, Vec<u8>)>, Error> {
+    let Some(entry) = entries.next() else {
+        return Ok(None);
+    };
+    if !entry.key().starts_with(prefix) {
+        return Ok(None);
+    }
+    let id = RowKey::decode(&entry.key()[5..], key_type)?;
+    Ok(Some((id, entry.value())))
+}
+
+// The typed caller checks the decoded row's index components against this key.
+#[inline(never)]
+fn next_index<M: Memory>(
+    map: &Map<M>,
+    entries: &mut MapIter<'_, StoreKey, Vec<u8>, M>,
+    prefix: &[u8],
+    entity: u32,
+    key_type: FieldType,
+) -> Result<Option<(StoreKey, RowKey, Vec<u8>)>, Error> {
+    let Some(entry) = entries.next() else {
+        return Ok(None);
+    };
+    if !entry.key().starts_with(prefix) {
+        return Ok(None);
+    }
+    let id = RowKey::decode(&entry.value(), key_type)?;
+    let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
+    Ok(Some((entry.into_key(), id, bytes)))
+}
+
+#[inline(never)]
+fn index_prefix_key(
+    entity: &EntitySchema,
+    index: &str,
+    values: &[IndexValue<'_>],
+    limit: usize,
+) -> Result<StoreKey, Error> {
+    let index = entity
+        .indexes
+        .iter()
+        .find(|value| value.name == index)
+        .ok_or(Error::InvalidSchema)?;
+    if values.is_empty() || values.len() > index.fields.len() || !(1..=32).contains(&limit) {
+        return Err(Error::Limit);
+    }
+    StoreKey::new(admit_index_prefix(entity, index, values)?)
+}
 
 // Both ordinary batches and complete-target migration validation derive present
 // references from the same admitted reverse-index components.
@@ -291,8 +350,8 @@ impl<M: Memory> Database<M> {
     /// # Errors
     /// Refuses unknown entities and malformed revision metadata.
     pub fn revision<E: Entity>(&self) -> Result<u64, Error> {
-        self.schema.admits(E::SCHEMA)?;
-        self.revision_by_id(E::ID)
+        let entity = self.schema.admits(E::SCHEMA)?;
+        read_revision(&self.map, entity.id)
     }
     fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
         if !self.schema.entities.iter().any(|value| value.id == entity) {
@@ -303,10 +362,18 @@ impl<M: Memory> Database<M> {
     /// Read a typed primary key without planning a scan.
     /// # Errors
     /// Refuses unadmitted types or malformed rows.
+    #[inline]
     pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
-        self.schema.admits(E::SCHEMA)?;
+        let entity = self.schema.admits(E::SCHEMA)?;
+        self.get_typed::<E>(entity, key)
+    }
+
+    // Keep traversal separate from the static type's admission call. Passing
+    // its admitted descriptor lets compatible typed readers share machine code.
+    #[inline(never)]
+    fn get_typed<E: Entity>(&self, entity: &EntitySchema, key: E::Key) -> Result<Option<E>, Error> {
         self.map
-            .get(&row_key(E::SCHEMA.id, key.into_row_key()))
+            .get(&row_key(entity.id, key.into_row_key()))
             .map(|bytes| {
                 let row = E::decode(&bytes)?;
                 if row.key() != key {
@@ -321,32 +388,41 @@ impl<M: Memory> Database<M> {
     /// Refuses zero/oversized limits, unadmitted types or corrupt rows.
     /// # Panics
     /// Supplier corruption, including overlong stored keys, traps without repair.
+    #[inline]
     pub fn page<E: Entity>(&self, after: Option<E::Key>, limit: usize) -> Result<Page<E>, Error> {
-        self.schema.admits(E::SCHEMA)?;
+        let entity = self.schema.admits(E::SCHEMA)?;
+        self.page_typed::<E>(entity, after, limit)
+    }
+
+    #[inline(never)]
+    fn page_typed<E: Entity>(
+        &self,
+        entity: &EntitySchema,
+        after: Option<E::Key>,
+        limit: usize,
+    ) -> Result<Page<E>, Error> {
         if !(1..=32).contains(&limit) {
             return Err(Error::Limit);
         }
-        let prefix = prefix(2, E::SCHEMA.id);
+        let prefix = prefix(2, entity.id);
         let start = after.map_or_else(
             || StoreKey::new(prefix.clone()).expect("row namespace fits"),
-            |key| row_key(E::SCHEMA.id, key.into_row_key()),
+            |key| row_key(entity.id, key.into_row_key()),
         );
         let lower = if after.is_some() {
             std::ops::Bound::Excluded(start)
         } else {
             std::ops::Bound::Included(start)
         };
-        let entries = self
-            .map
-            .range((lower, std::ops::Bound::Unbounded))
-            .take_while(|entry| entry.key().starts_with(&prefix))
-            .take(limit);
+        let mut entries = self.map.range((lower, std::ops::Bound::Unbounded));
+        let key_type = entity.key_type()?;
         let mut rows = Vec::new();
         let mut last = None;
-        for entry in entries {
-            let key = entry.key();
-            let id = E::Key::from_row_key(RowKey::decode(&key[5..], E::SCHEMA.key_type()?)?)?;
-            let bytes = entry.value();
+        for _ in 0..limit {
+            let Some((id, bytes)) = next_primary(&mut entries, &prefix, key_type)? else {
+                break;
+            };
+            let id = E::Key::from_row_key(id)?;
             let row = E::decode(&bytes)?;
             if row.key() != id {
                 return Err(Error::Corrupt);
@@ -366,40 +442,42 @@ impl<M: Memory> Database<M> {
     /// # Errors
     /// Refuses unknown indexes, mismatched operand types, invalid prefix/limit or
     /// inconsistent index entries. This method does not yet return continuation.
+    #[inline]
     pub fn index_prefix<E: Entity>(
         &self,
         index: &str,
         values: &[IndexValue<'_>],
         limit: usize,
     ) -> Result<Vec<E>, Error> {
-        self.schema.admits(E::SCHEMA)?;
-        let index = E::SCHEMA
-            .indexes
-            .iter()
-            .find(|value| value.name == index)
-            .ok_or(Error::InvalidSchema)?;
-        if values.is_empty() || values.len() > index.fields.len() || !(1..=32).contains(&limit) {
-            return Err(Error::Limit);
-        }
-        let prefix = StoreKey::new(admit_index_prefix(E::SCHEMA, index, values)?)?;
+        let entity = self.schema.admits(E::SCHEMA)?;
+        self.index_prefix_typed::<E>(entity, index, values, limit)
+    }
+
+    #[inline(never)]
+    fn index_prefix_typed<E: Entity>(
+        &self,
+        entity: &EntitySchema,
+        index: &str,
+        values: &[IndexValue<'_>],
+        limit: usize,
+    ) -> Result<Vec<E>, Error> {
+        let prefix = index_prefix_key(entity, index, values, limit)?;
         let mut rows = Vec::new();
-        for entry in self
-            .map
-            .range(prefix.clone()..)
-            .take_while(|entry| entry.key().starts_with(&prefix))
-            .take(limit)
-        {
-            let id = RowKey::decode(&entry.value(), E::SCHEMA.key_type()?)?;
-            let bytes = self
-                .map
-                .get(&row_key(E::SCHEMA.id, id))
-                .ok_or(Error::Corrupt)?;
+        let mut entries = self.map.range(prefix.clone()..);
+        let key_type = entity.key_type()?;
+        for _ in 0..limit {
+            let Some((key, id, bytes)) =
+                next_index(&self.map, &mut entries, &prefix, entity.id, key_type)?
+            else {
+                break;
+            };
             let row = E::decode(&bytes)?;
-            validate_index_entry(E::SCHEMA, &row.__row_info(), id, entry.key())?;
+            validate_index_entry(entity, &row.__row_info(), id, &key)?;
             rows.push(row);
         }
         Ok(rows)
     }
+
     /// Prepare the complete final state, then synchronously apply rows/indexes/revisions.
     /// A normal refusal occurs before persistent writes. Success is not a separate
     /// durability point from the surrounding IC message. Empty/no-op batches preserve revisions.

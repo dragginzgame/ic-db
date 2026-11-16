@@ -1,5 +1,7 @@
 //! Private console adapter: fixed typed entities, fluent execution, display-only mapping.
 #[cfg(feature = "retained-console")]
+pub(crate) mod migration;
+#[cfg(feature = "retained-console")]
 mod retained;
 use crate::{
     Backing, open,

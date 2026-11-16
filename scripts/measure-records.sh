@@ -20,7 +20,12 @@ case "$workload" in
         engines=(entities-1 entities-8 entities-32 retained-1 retained-8 retained-32)
         test_name=entity_growth
         ;;
-    *) printf 'Expected scalar, envelope or growth workload\n' >&2; exit 2 ;;
+    queries)
+        evidence="$PWD/qualification/target/evidence/query-growth"
+        engines=(direct direct-entities one shapes maps entities)
+        test_name=query_growth
+        ;;
+    *) printf 'Expected scalar, envelope, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
 rustc -Vv > "$evidence/compiler.txt"
@@ -58,6 +63,17 @@ for engine in "${engines[@]}"; do
     if [[ "$workload" == envelope && "$engine" == icydb-baseline ]]; then
         build_features=envelope
     fi
+    if [[ "$workload" == queries ]]; then
+        package=ic-db-entity-growth-canister
+        build_features=retained-host
+        case "$engine" in
+            direct-entities) build_features+=,entities-8 ;;
+            one) build_features+=,fluent ;;
+            shapes) build_features+=,fluent-shapes ;;
+            maps) build_features+=,fluent-maps ;;
+            entities) build_features+=,fluent-shapes,entities-8 ;;
+        esac
+    fi
     cargo tree --manifest-path qualification/Cargo.toml --locked -p "$package" \
         --features "$build_features" \
         --target wasm32-unknown-unknown -e normal,build --format '{p} features=[{f}]' \
@@ -79,5 +95,6 @@ export IC_DB_ICYDB_BASELINE_WASM="$evidence/icydb-baseline.wasm"
 export IC_DB_M1_RECORDS_WASM="$evidence/m1-records.wasm"
 export IC_DB_ICYDB_ENVELOPE_WASM="$evidence/icydb-baseline.wasm"
 export IC_DB_ENTITY_GROWTH_DIR="$evidence"
+export IC_DB_QUERY_GROWTH_DIR="$evidence"
 cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver \
     --test "$test_name" -- --nocapture 2>&1 | tee "$evidence/results.log"

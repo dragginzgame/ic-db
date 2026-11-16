@@ -1,0 +1,200 @@
+//! Cross-chunk references during copy, validation, cancellation and publication.
+use crate::{
+    faults,
+    maintenance::{COPY_SOURCE, COPY_TARGET},
+    runtime,
+};
+use ic_db::{
+    Batch, Database, Entity, Error, Maintenance, RetiredSource, Schema, SchemaCopy,
+    SchemaTransition,
+};
+use ic_db_m1_records_schema::OptionalLink;
+use ic_platform_runtime::cdk;
+use ic_storage::{StableKey, adapter::StableBTreeMap};
+use std::ops::Bound;
+
+#[ic_db::entity(name="OptionalLink", pk(field="id"),
+    index(fields=["next","id"]), index(field="rank", unique), fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="next",value(opt,item(prim="Nat64")),references(entity="Self",index="next,id")),
+        field(name="rank",value(item(prim="Nat64")))
+    ))]
+struct Target {}
+
+fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool), Error> {
+    let source = Schema::new(&[OptionalLink::SCHEMA])?;
+    let target = Schema::new(&[Target::SCHEMA])?;
+    let transition =
+        SchemaTransition::new(&source, &target, "reference-pairs", 1, &[u8::from(bad)])?;
+    let host = runtime();
+    let source_memory = host
+        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+        .unwrap();
+    match operation {
+        0 => {
+            Database::create(source_memory, source, [12; 16])?;
+            return Ok((0, false));
+        }
+        1 | 2 => {
+            assert!(first < 256 && first.is_multiple_of(32));
+            let mut db = Database::open(source_memory, source)?;
+            let mut batch = Batch::new();
+            for id in u64::from(first)..u64::from(first) + 32 {
+                let row = OptionalLink {
+                    id,
+                    next: Some(if operation == 1 { id } else { (id + 128) % 256 }),
+                };
+                if operation == 1 {
+                    batch.insert(&row)?;
+                } else {
+                    batch.replace(&row)?;
+                }
+            }
+            db.commit(batch)?;
+            return Ok((32, false));
+        }
+        3 => {
+            Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+            return Ok((0, false));
+        }
+        8 => {
+            let mut retired =
+                RetiredSource::resume(source_memory, &transition, [12; 16], [13; 16])?;
+            return Ok((0, retired.cleanup_step(usize::from(limit))?));
+        }
+        10 => {
+            Database::open(source_memory, source)?;
+            return Ok((0, true));
+        }
+        _ => {}
+    }
+    let target_memory = host
+        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .unwrap();
+    if operation == 11 {
+        Database::open(target_memory, target)?;
+        return Ok((0, true));
+    }
+    if operation == 12 {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        batch.delete::<Target>(0)?;
+        if first == 1 {
+            batch.delete::<Target>(128)?;
+        }
+        db.commit(batch)?;
+        return Ok((0, true));
+    }
+    if matches!(operation, 13..=15) {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        if operation == 14 {
+            // These 31 dependants do not include every surviving reference.
+            batch.delete::<Target>(255)?;
+            for id in 1..32 {
+                batch.delete::<Target>(id)?;
+            }
+        } else {
+            assert!(first < 256 && first.is_multiple_of(32));
+            for id in u64::from(first)..u64::from(first) + 32 {
+                // The preceding pair-deletion witness already removed these rows.
+                if matches!(id, 0 | 128) {
+                    continue;
+                }
+                if operation == 13 {
+                    batch.replace(&Target {
+                        id,
+                        next: Some(255),
+                        rank: id + 1000,
+                    })?;
+                } else {
+                    batch.delete::<Target>(id)?;
+                }
+            }
+        }
+        db.commit(batch)?;
+        return Ok((0, true));
+    }
+    if operation == 4 {
+        Maintenance::resume(source_memory, &transition)?.begin_copy(
+            target_memory,
+            source,
+            target,
+            [13; 16],
+        )?;
+        return Ok((0, false));
+    }
+    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+    match operation {
+        5 => {
+            let step =
+                copy.copy_next::<OptionalLink, Target>(usize::from(limit), 4096, |row, inputs| {
+                    Ok(Target {
+                        id: row.id,
+                        next: if row.id == 255 && inputs == [1] {
+                            Some(999)
+                        } else {
+                            row.next
+                        },
+                        rank: row.id + 1000,
+                    })
+                })?;
+            Ok((step.rows as u32, step.complete))
+        }
+        6 => Ok((0, copy.validate_next(usize::from(limit))?)),
+        7 => {
+            copy.publish()?;
+            Ok((0, true))
+        }
+        9 => Ok((0, copy.cancel_step(usize::from(limit))?)),
+        _ => panic!("unsupported reference migration control"),
+    }
+}
+
+#[cdk::update(
+    guard = "crate::transport::admit::<144>",
+    decode_with = "crate::transport::decode::<_, 144>",
+    encode_with = "crate::transport::encode::<_, 144>"
+)]
+fn migration_references(
+    (operation, first, limit, bad, stop): (u8, u16, u8, bool, u64),
+) -> (Result<(u32, bool), u8>, u64, u64) {
+    let start = cdk::api::instruction_counter();
+    faults::arm(if stop == u64::MAX { 0 } else { stop }, false, false);
+    let result = control(operation, first, limit, bad).map_err(|error| match error {
+        Error::ReferenceViolation => 1,
+        Error::Maintenance => 2,
+        Error::InvalidTransition => 3,
+        Error::Limit => 4,
+        other => panic!("unexpected reference migration refusal: {other:?}"),
+    });
+    if stop == u64::MAX {
+        cdk::api::trap("reference migration trap after operation");
+    }
+    let (writes, _) = faults::finish();
+    (result, writes, cdk::api::instruction_counter() - start)
+}
+
+type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
+#[cdk::query(
+    guard = "crate::transport::admit::<145>",
+    decode_with = "crate::transport::decode::<_, 145>",
+    encode_with = "crate::transport::encode::<_, 145>"
+)]
+fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage {
+    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
+    let host = runtime();
+    let key = if target { COPY_TARGET } else { COPY_SOURCE };
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        host.open_memory(&StableKey::parse(key).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
+    let rows: Vec<_> = raw
+        .range((lower, Bound::Unbounded))
+        .take(16)
+        .map(|entry| (entry.key().clone(), entry.value()))
+        .collect();
+    let next = (rows.len() == 16).then(|| rows.last().unwrap().0.clone());
+    (rows, next)
+}

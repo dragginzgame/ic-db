@@ -2836,11 +2836,23 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
     assert!(matches!(db.get::<Second>(7), Err(Error::UnknownEntity)));
+    assert!(matches!(
+        db.page::<Second>(None, 1),
+        Err(Error::UnknownEntity)
+    ));
+    assert!(matches!(
+        db.index_prefix::<Second>("missing", &[7_u64.into()], 1),
+        Err(Error::UnknownEntity)
+    ));
     assert!(matches!(db.revision::<Second>(), Err(Error::UnknownEntity)));
     let mut batch = Batch::new();
     batch.delete::<Second>(7).unwrap();
     assert!(matches!(db.commit(batch), Err(Error::UnknownEntity)));
     assert_eq!(db.get::<Renamed>(7).unwrap(), Some(Renamed { id: 7 }));
+    assert_eq!(
+        db.page::<Renamed>(None, 2).unwrap().rows,
+        [Renamed { id: 7 }]
+    );
     drop(db);
     assert!(matches!(
         Database::open(

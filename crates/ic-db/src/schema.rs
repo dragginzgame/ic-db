@@ -480,7 +480,10 @@ impl Schema {
         self.types.definitions()
     }
 
-    pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<(), Error> {
+    // Return the existing admitted descriptor after checking the complete type
+    // contract. Typed callers can use it without specializing execution around
+    // their executable's descriptor address.
+    pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<&'static EntitySchema, Error> {
         let current = self
             .entities
             .iter()
@@ -502,7 +505,7 @@ impl Schema {
         if !self.types.contains(&proposed_types) {
             return Err(Error::UnknownEntity);
         }
-        Ok(())
+        Ok(*current)
     }
 }
 
