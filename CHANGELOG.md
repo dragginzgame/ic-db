@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.20.0] - Unreleased
+## [0.20.0] - 2026-11-16
 
 ### ▶️ Try it
 
