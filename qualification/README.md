@@ -60,6 +60,9 @@ Account/Principal primary keys, instruction exhaustion, all 137 backing-write
 trap positions, growth refusal and identified maintenance/cancellation/reopen.
 Safe failure and subsequent progress are checked separately. These are correctness
 checks; the comparison measurements below retain their original supplier cohorts.
+The parked prefix-count patch also uses the new hooks; applying it to a disposable
+source copy and checking its count-comparison Wasm host passes. Its historical
+performance measurements were not rerun for this adoption.
 
 The cross-runtime `platform_upgrade` test installs the predecessor built with
 Runtime 0.22.5 and Types 0.20.4, writes identity records, then upgrades to the new

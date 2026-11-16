@@ -573,16 +573,20 @@
 +}
 --- a/qualification/ic-db-records-benchmark-canister/src/lib.rs
 +++ b/qualification/ic-db-records-benchmark-canister/src/lib.rs
-@@ -281,3 +281,17 @@
+@@ -322,3 +322,21 @@
          }
      })
  }
 +
 +#[cfg(feature = "count-comparison")]
-+#[ic_platform_runtime::cdk::query(
-+    guard = "crate::transport::admit::<9>",
-+    decode_with = "crate::transport::decode::<_,9>",
-+    encode_with = "crate::transport::encode::<_,9>"
++#[ic_platform_runtime::query(
++    runtime = ic_platform_runtime,
++    name = "prefix_count",
++    guard = crate::transport::admit::<9>,
++    decode = crate::transport::decode::<_, 9>,
++    encode = crate::transport::encode::<_, 9>,
++    max_bytes = 65_536,
++    on_error = crate::transport::endpoint_error
 +)]
 +fn prefix_count(category: u64) -> (u64, u64) {
 +    measure(|| {
