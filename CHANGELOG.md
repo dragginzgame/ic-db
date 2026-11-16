@@ -42,6 +42,10 @@ db query DecimalRow --order-by maybe:desc --select maybe --distinct
 
 ### ➕ Added
 
+- Authorize public source releases to `dragginzgame/ic-db` and require public
+  visibility in release preflight and push checks. All crates remain unpublished;
+  source releases do not publish packages or deploy canisters.
+
 - Add `GroupOrder::KeyDescending` and CLI `--group-order key-desc` for synchronous
   and retained grouped results. Reverse completed canonical keys before output
   selection, sharing the existing bounded buffer. Existing order bindings stay

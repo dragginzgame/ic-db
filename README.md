@@ -752,7 +752,7 @@ Generated schemas reuse immutable executable metadata. Opening still checks the
 current manifest; explicit revision reads and write preparation validate only
 the counters they need. Unrelated broken counters do not block ordinary row
 reads or other entities' writes. No revision values are cached across calls.
-The private source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
+The public source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
 No public licence or crates.io publication has been selected; packages are unpublished.
 
 M0 investigation has begun in the independent [qualification workspace](qualification/README.md).
@@ -880,13 +880,13 @@ Keep `~/.local/bin` on `PATH`; the launcher uses the current checkout's installe
 
 IcyDB and Canic remain separate; there is no path dependency on either repository.
 
-## Private source releases
+## Public source releases
 
 `make release-patch`, `make release-minor` and `make release-major` use the same
 shared runner and local adapter. They require clean committed source on `main`,
 prepare the locked dependencies/tools and PocketIC server, run the scaffold and
 all M0 gates, finalize version/changelog metadata, then atomically push `main`
-and the annotated version tag to the private repository. `make release-resume
+and the annotated version tag to the public repository. `make release-resume
 VERSION=X.Y.Z` recovers a specific interrupted attempt. There is no crates.io
 upload or live-canister deployment. Creating the GitHub prerelease is a separate
 delivery step after tag verification.

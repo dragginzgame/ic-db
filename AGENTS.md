@@ -10,8 +10,8 @@ This overlay owns local authority, product boundaries and qualification choices.
   preserve committed and uncommitted work, releases and data. Research is read-only;
   edits, commits, pushes, merges, releases or deployments require an explicit exception or lift.
   Canic is also a read-only research input unless separately authorized.
-- Private source releases to `dragginzgame/ic-db`, branch `main`, are authorized
-  when requested. Keep packages private and unpublished. Crates.io publication,
+- Public source releases to `dragginzgame/ic-db`, branch `main`, are authorized
+  when requested. Keep all packages unpublished with `publish = false`. Crates.io publication,
   live-canister deployment, IcyDB feature retirement and runtime migration remain
   excluded. A hard cut never authorizes deleting retained data.
 - Read the opening status and affected sections of the

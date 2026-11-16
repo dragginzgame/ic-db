@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Private source releases. Shared tooling owns version edits, Git effects and recovery.
+# Public source releases. Shared tooling owns version edits, Git effects and recovery.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PWD/.tools/host/bin:$PATH"
@@ -33,7 +33,7 @@ case "${1:-}" in
         bash "$shared/check-release-source.sh"
         [[ "${RELEASE_REMOTE:?}" == origin && "${RELEASE_BRANCH:?}" == main ]]
         [[ "$(git remote get-url --push origin)" == https://github.com/dragginzgame/ic-db.git ]]
-        [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PRIVATE ]]
+        [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]]
         bash "$shared/check-release-changelog.sh" "$RELEASE_VERSION" "$RELEASE_PREVIOUS" "$RELEASE_DATE" CHANGELOG.md
         cargo fetch --locked
         cargo fetch --manifest-path qualification/Cargo.toml --locked
@@ -81,7 +81,7 @@ case "${1:-}" in
         git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
         metadata_check
         if [[ "$1" == release-push-check ]]; then
-            [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PRIVATE ]]
+            [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]]
         fi
         ;;
     *) echo 'unknown release hook' >&2; exit 2 ;;

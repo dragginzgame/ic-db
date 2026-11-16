@@ -6,7 +6,7 @@ Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration
 remain open; this is not a production-readiness or IcyDB-parity declaration.
-Private source releases to `dragginzgame/ic-db` are authorized when requested;
+Public source releases to `dragginzgame/ic-db` are authorized when requested;
 live deployment and replacement of IcyDB are not. Written 2026-11-13.
 
 Read sections 4–6 for contracts and supported mechanisms, and
