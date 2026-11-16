@@ -18,7 +18,7 @@ async fn matched_high_fanout_writes() {
             .collect();
         eprintln!("{label} sha256={hash}");
         let owned = instance().await.unwrap();
-        let pic = owned.instance();
+        let pic = &owned;
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 100_000_000_000_000).await;
         pic.install_canister(canister, wasm, vec![], None).await;
@@ -213,6 +213,6 @@ async fn matched_high_fanout_writes() {
                 assert_eq!(ids, expected);
             }
         }
-        owned.close().await;
+        owned.drop().await;
     }
 }

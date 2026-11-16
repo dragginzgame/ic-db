@@ -26,7 +26,7 @@ help:
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
 	  'make m2-jobs                    Check retained aggregates and rollback' \
-	  'make m2-contention              Check retained sums under source/other writes' \
+	  'make m2-contention              Check retained aggregates and shared job capacity' \
 	  'make m2-cli                     Check the fluent CLI and migrated query caller' \
 	  'make m3-maintenance             Check product migration, cutover and rollback' \
 	  'make m3-references              Check cross-chunk migration references' \
@@ -82,7 +82,8 @@ qualification-tooling-check:
 	  printf '%s\n' 'Qualification tooling declarations and lock match the product selection.'
 
 m0-setup:
-	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback prepare_server -- --ignored --nocapture
+	@launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.106.0 --bin ic-testkit-server --profile debug --features cli)" && \
+	  "$$launcher" setup --directory "$(CURDIR)/.tools/m0-pocketic"
 
 m0-contracts:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test nested_row_codec --test query_composition -- --nocapture
@@ -96,7 +97,7 @@ m0-icydb-baseline:
 	cargo build --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/icydb-baseline/build.jsonl
 	@IC_DB_ICYDB_BASELINE_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_icydb_baseline_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/icydb-baseline/build.jsonl)" && \
 	  export IC_DB_ICYDB_BASELINE_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
 
 .PHONY: m1-records-comparison m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
 m1-records-comparison:
@@ -143,7 +144,7 @@ m0-rollback:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/rollback-build.jsonl
 	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/rollback-build.jsonl)" && \
 	  export IC_DB_M0_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback message_rollback -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback message_rollback -- --nocapture
 
 .PHONY: m0-endpoints
 m0-endpoints:
@@ -151,21 +152,21 @@ m0-endpoints:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/entrypoints-build.jsonl
 	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/entrypoints-build.jsonl)" && \
 	  export IC_DB_M0_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints -- --nocapture
 
 m0-aggregation:
 	@mkdir -p qualification/target/evidence/m0
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-aggregation-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/aggregation-build.jsonl
 	@IC_DB_M0_AGGREGATION_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_aggregation_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/aggregation-build.jsonl)" && \
 	  export IC_DB_M0_AGGREGATION_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test aggregation revision_aggregation -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test aggregation revision_aggregation -- --nocapture
 
 m0-batch:
 	@mkdir -p qualification/target/evidence/m0
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/batch-build.jsonl
 	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/batch-build.jsonl)" && \
 	  export IC_DB_M0_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test batch final_state_batches -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test batch final_state_batches -- --nocapture
 
 m0-maintenance-artifacts:
 	@set -eu; out=qualification/target/evidence/m0; mkdir -p "$$out"; \
@@ -181,10 +182,10 @@ m0-reads:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/reads-build.jsonl
 	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/reads-build.jsonl)" && \
 	  export IC_DB_M0_WASM && \
-	  cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test reads bounded_reads -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test reads bounded_reads -- --nocapture
 
 m0-maintenance: m0-maintenance-artifacts
-	IC_DB_M0_MAINTENANCE_DIR="$(CURDIR)/qualification/target/evidence/m0" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test maintenance -- --nocapture
+	IC_DB_M0_MAINTENANCE_DIR="$(CURDIR)/qualification/target/evidence/m0" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test maintenance -- --nocapture
 
 .PHONY: m1-records m1-records-artifact m1-records-wasm
 m1-records-artifact:
@@ -199,13 +200,13 @@ m1-records:
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys --test sorting -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys --test sorting -- --nocapture
 
 .PHONY: m1-commit-failures
 .PHONY: m2-queries m2-sort-costs m2-sort-costs-artifact
 m2-queries: m1-records-artifact
 	cargo test --locked -p ic-db --test queries
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting -- --nocapture
 
 m2-sort-costs-artifact:
 	@mkdir -p qualification/target/evidence/m2
@@ -214,15 +215,15 @@ m2-sort-costs-artifact:
 	  cp "$$artifact" qualification/target/evidence/m2/sort-costs.wasm
 
 m2-sort-costs: m2-sort-costs-artifact
-	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
+	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
 
 .PHONY: m2-jobs m2-jobs-artifact m2-contention
 m2-jobs: m2-jobs-artifact
 	cargo test --locked -p ic-db --test jobs
-	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs --test jobs_contention -- --nocapture
+	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs --test jobs_contention -- --nocapture
 
 m2-contention: m2-jobs-artifact
-	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_contention -- --nocapture
+	IC_DB_M2_JOBS_WASM="$(CURDIR)/qualification/target/evidence/m2/jobs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_contention -- --nocapture
 
 m2-jobs-artifact:
 	@mkdir -p qualification/target/evidence/m2
@@ -242,7 +243,7 @@ m3-maintenance-wasm:
 	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
 	  cp "$$artifact" "qualification/target/evidence/m3/$$feature.wasm"; \
 	done
-	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy --test product_capacity --test product_references -- --nocapture
+	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy --test product_capacity --test product_references -- --nocapture
 	$(MAKE) m3-jobs
 
 .PHONY: m3-references
@@ -251,7 +252,7 @@ m3-references:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m3/references-build.jsonl
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m3/references-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m3/maintenance-faults.wasm
-	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_references -- --nocapture
+	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_references -- --nocapture
 
 .PHONY: m3-jobs
 m3-jobs:
@@ -261,7 +262,7 @@ m3-jobs:
 	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/jobs-$$feature-build.jsonl")"; \
 	  cp "$$artifact" "qualification/target/evidence/m3/jobs-$$feature.wasm"; \
 	done
-	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_maintenance -- --nocapture
+	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_maintenance -- --nocapture
 
 .PHONY: m2-cli m2-cli-artifact
 m2-cli-artifact:
@@ -271,23 +272,23 @@ m2-cli-artifact:
 	  cp "$$artifact" qualification/target/evidence/m2/console.wasm
 
 m2-cli: m2-cli-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_text -- --nocapture
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" IC_DB_CLI_RETAINED=1 cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_text -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" IC_DB_CLI_RETAINED=1 bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
 
 .PHONY: m3-cli
 m3-cli: m2-cli-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_migration -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_migration -- --nocapture
 
 .PHONY: m1-write-envelope
 m1-write-envelope: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture
 
 m1-commit-failures:
 	@mkdir -p qualification/target/evidence/m1
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/fault-build.jsonl
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/fault-build.jsonl)" && \
-	  IC_DB_M1_FAULT_WASM="$$artifact" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture
+	  IC_DB_M1_FAULT_WASM="$$artifact" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture
 
 .PHONY: m4-lifecycle
 m4-lifecycle:
@@ -301,7 +302,7 @@ m4-lifecycle:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features mixed-lifecycle --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/mixed-lifecycle/build.jsonl
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/mixed-lifecycle/build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/mixed-lifecycle/host.wasm
-	@if IC_DB_M4_WASM="$$PWD/qualification/target/evidence/mixed-lifecycle/host.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test mixed_lifecycle -- --nocapture > qualification/target/evidence/mixed-lifecycle/run.log 2>&1; then \
+	@if IC_DB_M4_WASM="$$PWD/qualification/target/evidence/mixed-lifecycle/host.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test mixed_lifecycle -- --nocapture > qualification/target/evidence/mixed-lifecycle/run.log 2>&1; then \
 	  cat qualification/target/evidence/mixed-lifecycle/run.log; \
 	else cat qualification/target/evidence/mixed-lifecycle/run.log; exit 1; fi
 

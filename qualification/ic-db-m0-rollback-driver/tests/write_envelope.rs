@@ -1,7 +1,7 @@
 //! Real Wasm envelope witness with independent row/index byte expectations.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
+use pocket_ic::ErrorCode;
 
 use std::collections::BTreeMap;
 
@@ -16,7 +16,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
     )
     .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -228,5 +228,5 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
         pic.get_stable_memory(canister).await.len()
     );
     audit(None).await;
-    owned.close().await;
+    owned.drop().await;
 }

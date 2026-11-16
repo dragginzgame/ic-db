@@ -18,7 +18,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -157,7 +157,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
         assert!(absent.2.is_none());
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -192,7 +192,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         );
     }
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -610,5 +610,5 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         );
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
-    owned.close().await;
+    owned.drop().await;
 }

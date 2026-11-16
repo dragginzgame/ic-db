@@ -1,8 +1,8 @@
 //! Standalone installed hooks: raw refusals and reply failures across IC boundaries.
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{ByteBuf, Direction, Encoding};
+use pocket_ic::ErrorCode;
 
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 4]);
@@ -14,7 +14,7 @@ fn wasm() -> Vec<u8> {
 #[tokio::test]
 async fn admission_and_decode_refuse_before_dispatch() {
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm(), vec![], None).await;
@@ -144,14 +144,14 @@ async fn admission_and_decode_refuse_before_dispatch() {
     assert_eq!(snapshot.0, vec![(7, 11)]);
     assert_eq!(snapshot.1, vec![(11, 7)]);
     assert_eq!(snapshot.2, vec![(7, 11)]);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
 async fn reply_failure_rolls_back_only_the_current_execution() {
     let wasm = wasm();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     for (method, id, asynchronous) in [("endpoint_sync", 8, false), ("endpoint_async", 10, true)] {
         for oversized in [false, true] {
             let canister = pic.create_canister().await;
@@ -252,5 +252,5 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
             assert_eq!(snapshot.2, expected);
         }
     }
-    owned.close().await;
+    owned.drop().await;
 }

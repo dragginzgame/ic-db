@@ -12,7 +12,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").unwrap());
     let wasm = std::fs::read(directory.join("maintenance-faults.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -235,4 +235,5 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     println!(
         "migration envelope maximum measured instructions: copy={max_copy_instructions} validation={max_validation_instructions} cleanup={max_cleanup_instructions}"
     );
+    owned.drop().await;
 }

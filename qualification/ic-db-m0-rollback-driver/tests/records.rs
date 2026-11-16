@@ -55,6 +55,133 @@ fn run_console(binary: &std::path::Path, commands: &str) -> String {
 }
 
 #[test]
+fn console_counts_use_entity_metadata() {
+    // Admission/help must work without loading the adjacent fixture.
+    for args in [
+        vec!["count"],
+        vec!["count", "Unknown"],
+        vec!["count", "Entry", "--category", "1"],
+        vec!["count", "Entry", "--limit", "1"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_db"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_db"))
+        .args(["count", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("atomic entity metadata")
+    );
+
+    let prefix = std::env::temp_dir().join(format!("ic-db-count-{}", std::process::id()));
+    std::fs::create_dir(&prefix).unwrap();
+    std::fs::create_dir(prefix.join("bin")).unwrap();
+    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
+    let binary = prefix.join("bin/db");
+    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
+    std::fs::copy(
+        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build the console fixture"),
+        prefix.join("share/ic-db/m1/records.wasm"),
+    )
+    .unwrap();
+    let output = run_console(
+        &binary,
+        "count Entry\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&output),
+        [vec!["6"], vec!["1"], vec!["3"], vec!["3"], vec!["6"]]
+    );
+    assert!(!output.contains("atomic entity metadata"));
+    // Standalone db preserves its normal launch behavior through the prepared
+    // command owner, without requiring the caller to supply an endpoint.
+    let standalone = Command::new(&binary)
+        .args(["count", "Entry"])
+        .env_remove("IC_TESTKIT_POCKET_IC_URL")
+        .env_remove("POCKET_IC_BIN")
+        .output()
+        .unwrap();
+    assert!(
+        standalone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&standalone.stderr)
+    );
+    assert_eq!(
+        result_table_rows(&String::from_utf8(standalone.stdout).unwrap()),
+        [vec!["6"]]
+    );
+    std::fs::remove_dir_all(prefix).unwrap();
+}
+
+#[tokio::test]
+async fn console_counts_preserve_backing_and_reopen() {
+    let wasm = std::fs::read(
+        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build the console fixture"),
+    )
+    .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let backing = pic.get_stable_memory(canister).await;
+    for upgraded in [false, true] {
+        if upgraded {
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+        for (entity, expected) in [
+            ("Entry", Some(6)),
+            ("Document", Some(1)),
+            ("DecimalRow", Some(0)),
+            ("Unknown", None),
+        ] {
+            let reply = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "cardinality",
+                    ic_wire::encode(
+                        &entity,
+                        Encoding::Frame {
+                            method: 148,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let actual = ic_wire::decode::<Result<u64, String>>(
+                &reply,
+                Encoding::Frame {
+                    method: 148,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            match expected {
+                Some(count) => assert_eq!(actual, Ok(count)),
+                None => assert!(actual.unwrap_err().contains("count supports")),
+            }
+            assert_eq!(pic.get_stable_memory(canister).await, backing);
+        }
+    }
+    owned.drop().await;
+}
+
+#[test]
 fn console_inspects_and_queries() {
     let prefix = std::env::temp_dir().join(format!("ic-db-console-{}", std::process::id()));
     std::fs::create_dir(&prefix).unwrap();
@@ -797,7 +924,7 @@ async fn references_follow_final_batch_state_in_wasm() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -878,7 +1005,7 @@ async fn references_follow_final_batch_state_in_wasm() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(reference(1).await, Some(2));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -887,7 +1014,7 @@ async fn product_records_and_message_boundary() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1482,7 +1609,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(replace_document(next.clone()).await, Ok(()));
     assert_eq!(document().await, (next, 6));
     assert_eq!(status().await.2, 2);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1492,7 +1619,7 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1578,7 +1705,7 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (final_value, 6));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1589,7 +1716,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1750,7 +1877,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (full, 3));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1769,7 +1896,7 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1858,7 +1985,7 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (final_value, revision));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1869,7 +1996,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2022,7 +2149,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
         .unwrap();
     assert_eq!(read().await, (final_value, revision));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2034,7 +2161,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2160,7 +2287,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
         .unwrap();
     assert_eq!(read(vec![4]).await, (vec![2], expected));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2171,7 +2298,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2306,7 +2433,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
         Ok(vec![("a".into(), 7)])
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2318,7 +2445,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2462,7 +2589,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
         .unwrap();
     assert_eq!(read(Some(ByteBuf::new())).await, expected);
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2472,7 +2599,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2592,7 +2719,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
         )
     );
     assert_eq!(write(vec![], vec![u64::MAX]).await, Ok(()));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2601,7 +2728,7 @@ async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2695,7 +2822,7 @@ async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
         decode(&write(2, 0, None).await.unwrap()),
         Ok((vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 2))
     );
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2704,7 +2831,7 @@ async fn nested_records_payloads_and_shared_bounds_survive_wasm_reopen() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2798,7 +2925,7 @@ async fn nested_records_payloads_and_shared_bounds_survive_wasm_reopen() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let (_, revision) = decode(&write(0, 0, 0).await.unwrap()).unwrap();
     assert_eq!(revision, 2);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2807,7 +2934,7 @@ async fn ordered_lists_preserve_bounds_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -2908,7 +3035,7 @@ async fn ordered_lists_preserve_bounds_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(decode(&write(0, 0, 0).await.unwrap()), saved);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -2917,7 +3044,7 @@ async fn canonical_sets_preserve_order_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -3016,7 +3143,7 @@ async fn canonical_sets_preserve_order_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(decode(&write(0, false, 0).await.unwrap()), saved);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -3025,7 +3152,7 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -3206,7 +3333,7 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
             valid
         );
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -3215,7 +3342,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -3413,7 +3540,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (expected(&swapped), 2));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -3422,7 +3549,7 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -3689,7 +3816,7 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
     for small in [false, true] {
         assert_eq!(read(small).await, (expected(&swapped), 2));
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -3698,7 +3825,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -3944,7 +4071,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
     for sub in [false, true] {
         assert_eq!(read(sub).await, (expected(&swapped), 2));
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -3953,7 +4080,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -4196,7 +4323,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (expected(&swapped), 2));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -4205,7 +4332,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -4406,7 +4533,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (expected(&swapped), 2));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -4415,7 +4542,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -4672,7 +4799,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
     for duration in [false, true] {
         assert_eq!(read(duration).await, (expected(&swapped, duration), 2));
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -4681,7 +4808,7 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -4875,7 +5002,7 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (expected(true), 2));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -4884,7 +5011,7 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -5078,7 +5205,7 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
     );
     assert_eq!(page(None, 32).await, (rows[1..].to_vec(), None, 3));
     assert_eq!(lookup([0; 16], 6).await, (None, vec![]));
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -5087,7 +5214,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -5342,5 +5469,5 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
     );
     assert_eq!(signed_page(None, 32).await, (signed[1..].to_vec(), None, 3));
     assert_eq!(wide_page(None, 32).await, (wide[1..].to_vec(), None, 3));
-    owned.close().await;
+    owned.drop().await;
 }

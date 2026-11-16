@@ -12,7 +12,7 @@ async fn final_state_batches() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-batch")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -235,5 +235,5 @@ async fn final_state_batches() {
     println!(
         "batch constraints: unique exchange/release, present-only optional uniqueness, final-state references, indexed restricted deletion, pre-write refusals and five commit trap boundaries passed"
     );
-    owned.close().await;
+    owned.drop().await;
 }

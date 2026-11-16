@@ -1,26 +1,18 @@
 //! Actual Wasm rollback checks; raw stable bytes provide an oracle independent of row lookup.
 
 use ic_db_m0_rollback_driver as support;
-use ic_testkit::pic::server_assets;
 use ic_wire::{Direction, Encoding};
 
-use support::{LIMITS, server_directory};
+use support::LIMITS;
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 4]);
-
-#[test]
-#[ignore = "explicit provisioning only: make m0-setup"]
-fn prepare_server() {
-    let path = server_assets::setup(&server_directory(), || false).unwrap();
-    println!("Prepared {}", path.display());
-}
 
 #[tokio::test]
 async fn message_rollback() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-rollback")).unwrap();
     let owned = support::instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     for mode in 0_u8..=8 {
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 2_000_000_000_000).await;
@@ -194,5 +186,5 @@ async fn message_rollback() {
             assert!(after == pic.get_stable_memory(canister).await);
         }
     }
-    owned.close().await;
+    owned.drop().await;
 }

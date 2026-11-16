@@ -8,7 +8,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -74,5 +74,5 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
         Ok((empty, 2))
     );
     assert_eq!(decode(&call(4, vec![]).await.unwrap()), Ok((vec![], 3)));
-    owned.close().await;
+    owned.drop().await;
 }

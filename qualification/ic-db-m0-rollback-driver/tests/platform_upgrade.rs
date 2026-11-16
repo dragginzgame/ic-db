@@ -36,7 +36,7 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
     let new = wasm("IC_DB_M1_RECORDS_WASM");
     assert_ne!(old, new, "this is a cross-artifact upgrade probe");
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, old, vec![], None).await;
@@ -151,4 +151,5 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
         decode::<((ByteBuf, Option<ByteBuf>), u64)>(18, &reply).0,
         changed
     );
+    owned.drop().await;
 }

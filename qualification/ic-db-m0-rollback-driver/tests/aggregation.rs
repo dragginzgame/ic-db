@@ -14,7 +14,7 @@ async fn revision_aggregation() {
     )
     .unwrap();
     let owned = support::instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -251,5 +251,5 @@ async fn revision_aggregation() {
     println!(
         "exact sums={expected:?}; quiet completion=4 advances; contention=5 explicit invalidations/5 attempts; empty completion=1 advance"
     );
-    owned.close().await;
+    owned.drop().await;
 }

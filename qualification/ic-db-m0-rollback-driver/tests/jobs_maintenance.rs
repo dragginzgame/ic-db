@@ -11,7 +11,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     let wasm = std::fs::read(directory.join("jobs-maintenance.wasm")).unwrap();
     let changed = std::fs::read(directory.join("jobs-maintenance-v2.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -226,7 +226,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     for job in [&running, &completed, &fresh] {
         assert_eq!(control(0, job, 23, 0).await, Ok(0));
     }
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -235,7 +235,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
         std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").expect("run make m3-jobs"));
     let wasm = std::fs::read(directory.join("jobs-maintenance.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -264,7 +264,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 .unwrap(),
             )
             .await?;
-        Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
+        Ok::<_, pocket_ic::RejectResponse>(
             ic_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
                 &reply,
                 Encoding::Frame {
@@ -410,5 +410,5 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
     }
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(cleanup(0, &fresh, 1).await, Ok(0));
-    owned.close().await;
+    owned.drop().await;
 }

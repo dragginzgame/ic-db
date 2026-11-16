@@ -84,7 +84,7 @@ async fn fluent_shapes_and_mapping_growth() {
                 .collect::<String>()
         );
         let owned = instance().await.unwrap();
-        let pic = owned.instance();
+        let pic = &owned;
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 10_000_000_000_000).await;
         pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -234,5 +234,6 @@ async fn fluent_shapes_and_mapping_growth() {
             loaded.2 + replaced.2,
             loaded.3 + replaced.3
         );
+        owned.drop().await;
     }
 }

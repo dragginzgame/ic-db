@@ -27,15 +27,15 @@ ic-db-m1-records-schema = { path = "ic-db-m1-records-schema" }
 ic-db-qualification-transport = { path = "ic-db-qualification-transport" }
 ic-host-artifacts = "0.80.1"
 ic-host-text = "0.76.0"
-ic-platform-runtime = { version = "0.23.12", default-features = false }
+ic-platform-runtime = { version = "0.23.13", default-features = false }
 ic-storage = "0.74.1"
-ic-testkit = "0.106.0"
 ic-wire = "0.24.0"
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
+pocket-ic = "16.1.0"
 serde = "1.0.229"
 sha2 = { version = "0.11.1", default-features = false }
 tokio = "1.54.1"
-toko-tooling = "=0.44.8"
+toko-tooling = "=0.44.9"
 wasmparser = { version = "0.263.0", default-features = false, features = ["std", "features", "validate"] }
 
 [workspace.lints.cargo]

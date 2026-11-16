@@ -153,5 +153,5 @@ export IC_DB_M1_RECORDS_WASM="$evidence/m1-records.wasm"
 export IC_DB_ICYDB_ENVELOPE_WASM="$evidence/icydb-baseline.wasm"
 export IC_DB_ENTITY_GROWTH_DIR="$evidence"
 export IC_DB_QUERY_GROWTH_DIR="$evidence"
-cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver \
+bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver \
     --test "$test_name" -- --nocapture 2>&1 | tee "$evidence/results.log"

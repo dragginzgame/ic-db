@@ -34,7 +34,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -173,6 +173,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
         (vec![1], None, 1)
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -182,7 +183,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -254,6 +255,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
     assert_eq!(call(None, false, None, 2, 3, 8).await, (vec![], None, 0));
     assert_eq!(call(None, true, Some(1), 5, 2, 8).await, (vec![], None, 0));
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -263,7 +265,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -344,6 +346,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
     assert_eq!(rest.0, [4, 5]);
     assert!(rest.1.is_none());
     assert_eq!(pic.get_stable_memory(canister).await, backing);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -352,7 +355,7 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -422,6 +425,7 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
         assert!(call(Some(999), 6).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -431,7 +435,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -527,6 +531,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
         }
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -536,7 +541,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -646,6 +651,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
         assert_eq!(examined, 3);
     }
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -655,7 +661,7 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -792,6 +798,7 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
         }
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -800,7 +807,7 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -884,6 +891,7 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
         [(5, 51)]
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -895,7 +903,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, predecessor, vec![], None)
@@ -1000,6 +1008,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
         }
     }
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1008,7 +1017,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1758,7 +1767,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         ]
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -1767,7 +1776,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1994,5 +2003,5 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
         );
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
-    owned.close().await;
+    owned.drop().await;
 }

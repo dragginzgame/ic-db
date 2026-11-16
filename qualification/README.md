@@ -17,6 +17,55 @@ as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
+## External simulator ownership (0.19)
+
+The native driver now depends on PocketIC 16.1.0 directly. It requires
+`IC_TESTKIT_POCKET_IC_URL`, borrows the upstream async client on the caller's Tokio
+runtime and explicitly attempts instance deletion. It has no binary discovery,
+download, server startup or private session wrapper. Creation/request waits are
+bounded to 30 seconds; timeout/cancellation can leave remote effects. Upstream
+async `drop` is best-effort, not proof of successful deletion.
+
+`make m0-setup` explicitly prepares the released `ic-testkit-server` 0.106.0 CLI
+and authenticates the server assets. This retained executable is a development
+bootstrap outside the Cargo driver graph; it is not adoption of the retired
+Testkit library. [The command runner](../scripts/with-pocketic.sh) checks that
+prepared selection, then delegates process ownership to it. Existing Make probes
+use this runner. Standalone `db` re-enters itself through the same runner before
+creating its Tokio runtime; `--help` and argument refusal need no server. A supplied
+endpoint is borrowed without starting or stopping its server. No path downloads
+or provisions missing tools implicitly.
+
+This adapts IC Tooling's `qualification/db/external-session.patch`, inspected at
+local HEAD `89d94189e2efb0ea8e8a1eb39f56a816a68339fd` (patch SHA-256
+`435e460d1d1bf3a3def18e8d394456d6abd3c3a7363205a3bff9cc968cb340c5`).
+IC DB keeps its current callers, stop/upgrade/start policy and independent
+rollback assertions. No IcyDB source or product storage representation changes.
+
+Focused checks cover missing/malformed endpoint refusal with an unusable binary
+selected, the nine rollback modes, endpoint/callback rollback, count reads across
+upgrade and standalone CLI startup. All driver targets compile and pass Clippy.
+Independent `/instances` observations show one instance marked `Deleted` while
+the external server remains reachable, including after CLI setup refuses an
+incompatible fixture (missing `decimal_batch`). Receipts are retained locally under
+`target/evidence/external-server/`. This proves that run's deletion, not cleanup
+after every panic/cancellation. The command owner shuts down its server on exit.
+
+The driver graph loses Testkit 0.106.0, Platform facade 0.33.7 and legacy Host
+FS/Process dependencies. Old Types 0.20.4 remains only under frozen IcyDB; Runtime
+0.22.5 remains under Storage/frozen IcyDB for raw IC imports. Historical performance
+receipts keep their original graphs and are not claimed as remeasured here.
+
+```sh
+make m0-setup
+make m0-rollback
+make db
+db count Entry
+```
+
+For direct Wasm-test invocations, prefix Cargo with
+`bash scripts/with-pocketic.sh`; pure native contract tests need no simulator.
+
 The M1 `EnumRow` fixture now indexes the all-unit `Lifecycle` type through
 `state,id` and sparse unique `previous`. Its focused Wasm witness checks reads,
 replacement cleanup, no-ops, invalid ordinals, whole-message rollback and upgrade.
@@ -37,6 +86,22 @@ transitive key metadata and shared node exhaustion, including borrowed inspectio
 before deletion. The focused `enum_collections` Wasm test checks persistence,
 no-op/refusal invariance, whole-message rollback, upgrade, replacement and deletion.
 Inspect this fixture with `db schema EnumCollectionsRow`.
+
+`db count Entry`, `db count Document` and `db count DecimalRow` read the existing
+typed maintained counts (6, 1 and 3 after CLI seeding). Filtering remains
+`db query Entry --select count --category 1` (3). The count command refuses
+filters/limits and missing or unsupported entity names. The focused `records`
+tests selected by `console_counts_` check CLI rendering/admission and direct
+endpoint calls before/after upgrade, including the unseeded empty DecimalRow
+entity and byte-for-byte unchanged backing. No product count implementation or
+durable representation is added. After building the fixture:
+
+```sh
+make m2-cli-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
+bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test records console_counts_
+```
 
 ## Platform adoption (0.19)
 
@@ -83,9 +148,40 @@ With those retained local artifacts and the prepared PocketIC server:
 ```sh
 IC_DB_PREVIOUS_PLATFORM_WASM="$PWD/qualification/target/evidence/platform-upgrade/previous.wasm" \
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/platform-upgrade/current.wasm" \
-cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test platform_upgrade
 ```
+
+### Platform patch refresh (0.19)
+
+The next published patch selection is Types 0.21.2 and Runtime/macros/guard
+0.23.13, applied to both maintained workspaces. The source comparison against
+0.21.1/0.23.12 finds unchanged Types, macros and guard source. Runtime adds raw
+stable-memory/cycle operations; existing executor/endpoint code is unchanged.
+IC DB does not adopt those raw operations: Storage still owns backing access.
+The product lock now resolves `thiserror` 2.0.21 after Types relaxes its exact pin;
+the independent qualification graph retains its supplier-constrained 2.0.18.
+
+Focused checks cover the 23 Account/scalar-key tests and the two installed
+endpoint admission/reply/callback rollback tests. Earlier cross-runtime artifact
+hashes and maintenance receipts above remain historical evidence, not artifacts
+rebuilt for this patch. No schema, durable-codec or stored-format change.
+
+At this patch's initial qualification, older transitive selections included:
+
+- Latest published Storage 0.74.1 requires Runtime `^0.22.0` with `ic0`; the
+  frozen IcyDB graph also uses this raw-import generation. Revisit when Storage
+  publishes support for the new raw API; do not replace its allocator here.
+- Testkit 0.106.0 requires native Platform `^0.33.3` and Types `^0.20.4`, resolving
+  to 0.33.7/0.20.4. New Testkit 0.107.1 removes `pic::PocketIcStartupConfig`,
+  `PocketIcInstance` and `server_assets` used by our local driver/setup commands.
+  It was not a drop-in update. The subsequent [external-session migration](#external-simulator-ownership-019)
+  removes this Testkit/facade graph; its historical types did not cross into
+  product codecs or the Wasm executor.
+
+All direct Platform uses select the current published versions. The new facade
+0.34.6 is not a direct dependency and is not added merely to change the lock graph.
+The frozen IcyDB source/revision and sibling Canic integration are unchanged.
 
 ## Comparison with frozen IcyDB
 
@@ -160,7 +256,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
-| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows, plus existing retained-job witnesses | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates) |
+| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; 16 shared retained slots across two entities and upgrades | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
 | Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Adapter is in Canic's working checkout; delivery and application CLI remain M4 work. [Receipt](#canic-typed-application-integration-019) |
@@ -2972,7 +3068,7 @@ checks. `make db` installs this console fixture without starting the program.
 
 ### Controlled product aggregate contention (0.18)
 
-Run only the product sum/write-schedule witness:
+Run the focused product write-schedule and shared-capacity witnesses:
 
 ```sh
 make m2-contention
@@ -3009,6 +3105,38 @@ recovery after a quiet interval; they do not establish its frequency for a real
 application, high-cardinality group finalization costs or completion guarantees
 under continuous source changes. The historical M0 aggregation probe above
 remains candidate evidence, separate from this product-level check.
+
+### Shared retained-job capacity (0.19)
+
+The `shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal` witness
+uses all 16 existing aggregate slots: grouped sums, grouped counts and grouped
+DISTINCT counts over six Entry rows, plus optional-note counts over one Document row.
+It reuses the same four private controls and adds no product dependency to the
+native oracle. Expected grouped totals come from literal fixture tuples.
+
+The installed Wasm checks:
+
+- Full capacity refuses without modifying backing, both before and after upgrade.
+- A query-mismatched handle refuses intact. Cancel/refill changes handle identity;
+  stale resume/cancel cannot affect the replacement job.
+- A committed Entry write invalidates unfinished Entry jobs without exposing
+  partial results. Document jobs complete unaffected; an already completed grouped
+  sum retains its old revision and exact result.
+- Completed and invalidated jobs still occupy capacity until explicit cleanup.
+  Cancelling all jobs permits 16 replacements, which complete with the new sum.
+- Across three upgrades, progress and bytes persist. Expiry cleanup removes
+  3/3/3/3/3/1 jobs with limit 3, then zero; a fresh job can start afterward.
+
+This proves scoped logical capacity/isolation and recovery behavior. It is not a
+performance comparison, physical allocation-reuse claim or large-dataset bound.
+Run just this witness with the prepared PocketIC server:
+
+```sh
+make m2-jobs-artifact
+IC_DB_M2_JOBS_WASM="$PWD/qualification/target/evidence/m2/jobs.wasm" \
+bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test jobs_contention shared_jobs_ -- --nocapture
+```
 
 ## Identified maintenance and the local console
 

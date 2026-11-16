@@ -16,7 +16,7 @@ fn wasm() -> Vec<u8> {
 async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
     let wasm = wasm();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -142,7 +142,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
         .await
         .unwrap();
     assert_eq!(call(6).await.unwrap().1, target);
-    owned.close().await;
+    owned.drop().await;
 }
 
 #[test]

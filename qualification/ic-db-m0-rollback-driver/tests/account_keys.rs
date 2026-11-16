@@ -1,7 +1,7 @@
 //! Canonical Account/Subaccount keys across cross-entity batches and IC messages.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
+use pocket_ic::ErrorCode;
 
 type Identity = (Vec<u8>, Option<[u8; 32]>);
 type AccountRow = (Identity, Option<[u8; 32]>, u64);
@@ -21,7 +21,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records-wasm"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -202,5 +202,5 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
         page(None, None, 32, 0).await,
         (vec![], None, vec![], None, (3, 2), vec![])
     );
-    owned.close().await;
+    owned.drop().await;
 }

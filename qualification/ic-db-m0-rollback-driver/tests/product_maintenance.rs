@@ -17,7 +17,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
     let predecessor =
         std::env::var_os("IC_DB_M3_PREDECESSOR_WASM").map(|path| std::fs::read(path).unwrap());
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(
@@ -237,4 +237,5 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
     assert_eq!(page(Some(cursor), 2, 48).await, Err("InvalidCursor".into()));
     assert_eq!(pic.get_stable_memory(canister).await, frozen);
     decode(call(2, vec![9], false).await.unwrap()).unwrap();
+    owned.drop().await;
 }

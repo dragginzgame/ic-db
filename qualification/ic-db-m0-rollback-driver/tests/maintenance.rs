@@ -20,7 +20,7 @@ async fn identified_maintenance() {
     let bprime = std::fs::read(root.join("maintenance-bprime.wasm")).unwrap();
     let bad = std::fs::read(root.join("maintenance-bad.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     for scenario in ["success", "cancel", "collision", "missing", "unsupported"] {
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 3_000_000_000_000).await;
@@ -433,5 +433,5 @@ async fn identified_maintenance() {
             published[8], cleaned[8]
         );
     }
-    owned.close().await;
+    owned.drop().await;
 }

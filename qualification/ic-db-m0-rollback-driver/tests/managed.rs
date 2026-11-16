@@ -10,7 +10,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records-wasm"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -132,5 +132,5 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
         .await
         .unwrap();
     assert_eq!(state(200).await, before);
-    owned.close().await;
+    owned.drop().await;
 }

@@ -63,6 +63,31 @@ type Page = (
     u32,
 );
 
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "cardinality",
+    guard = crate::transport::admit::<148>,
+    decode = crate::transport::decode::<_, 148>,
+    encode = crate::transport::encode::<_, 148>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Platform entrypoints receive an owned decoded request"
+)]
+fn cardinality(entity: String) -> Result<u64, String> {
+    let host = runtime();
+    let db = open(&host);
+    match entity.as_str() {
+        "Entry" => db.cardinality::<Entry>(),
+        "Document" => db.cardinality::<Document>(),
+        "DecimalRow" => db.cardinality::<DecimalRow>(),
+        _ => return Err("count supports Entry, Document and DecimalRow in this fixture".into()),
+    }
+    .map_err(message)
+}
+
 // Measure the exact console path, including open/admission/result formatting.
 // An update permits complete-call cycle accounting; the driver verifies that
 // both successful and refused reads preserve the backing bytes.

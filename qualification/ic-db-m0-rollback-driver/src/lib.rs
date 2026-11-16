@@ -1,28 +1,24 @@
 #![forbid(unsafe_code)]
 
-//! Local M0 harness shared by executable probes and the development console.
-//! Testkit owns server provisioning and lifecycle.
+//! Local probes borrow an explicitly selected server; the launcher owns its process.
 
-use ic_testkit::{
-    pic::{PocketIcInstance, PocketIcStartupConfig, server_assets},
-    pocket_ic::PocketIcBuilder,
-};
 use ic_wire::Limits;
-use std::{path::PathBuf, time::Duration};
+use pocket_ic::{PocketIcBuilder, nonblocking::PocketIc};
+use std::time::Duration;
 
 /// Upgrade a local fixture only after the IC has completed its stop request.
 /// Platform's suspended futures are heap-local; they are never migrated.
 /// Restart also follows a refused atomic upgrade so callers can inspect the
-/// preserved predecessor. Testkit/PocketIC owns each management operation.
+/// preserved predecessor. PocketIC owns each management operation.
 /// # Errors
 /// Returns stop/start or upgrade refusal without retrying the upgrade.
 pub async fn upgrade_stopped(
-    pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
-    canister: ic_testkit::pocket_ic::CanisterId,
+    pic: &PocketIc,
+    canister: pocket_ic::CanisterId,
     wasm: Vec<u8>,
     args: Vec<u8>,
-    sender: Option<ic_testkit::pocket_ic::CanisterId>,
-) -> Result<(), ic_testkit::pocket_ic::RejectResponse> {
+    sender: Option<pocket_ic::CanisterId>,
+) -> Result<(), pocket_ic::RejectResponse> {
     pic.stop_canister(canister, sender).await?;
     let result = pic.upgrade_canister(canister, wasm, args, sender).await;
     pic.start_canister(canister, sender).await?;
@@ -37,34 +33,33 @@ pub const LIMITS: Limits = Limits {
     depth: 32,
 };
 
-/// The explicitly prepared server selection for this checkout.
-///
-/// # Panics
-/// Panics if the compiled package path does not have its workspace ancestors.
-#[must_use]
-pub fn server_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join(".tools/m0-pocketic")
-}
-
-/// Open a local instance with the already prepared, authenticated server.
+/// Create an instance on the explicitly supplied external server.
+/// Never discovers/downloads a binary, starts a server or creates a Tokio runtime.
+/// Call the upstream async `drop` explicitly to attempt deletion. The external
+/// launcher owns shutdown, including after a test panic; deletion is best-effort.
 ///
 /// # Errors
-/// Returns setup or startup failures without provisioning a server implicitly.
-pub async fn instance() -> Result<PocketIcInstance, String> {
-    PocketIcStartupConfig::Spawn {
-        server_binary: server_assets::check(&server_directory())
-            .map_err(|error| format!("run make m0-setup: {error}"))?,
-        timeout: Duration::from_secs(30),
-        server_hard_ttl: None,
-        server_idle_ttl: None,
-        server_output_files: None,
-    }
-    .build_instance(PocketIcBuilder::new().with_application_subnet())
+/// Refuses absent/invalid configuration or creation timeout. Timeout/cancellation
+/// can leave an instance on the external server; no successful cleanup is implied.
+/// # Panics
+/// Requires the caller's Tokio runtime; upstream construction panics propagate.
+pub async fn instance() -> Result<PocketIc, String> {
+    let endpoint = std::env::var("IC_TESTKIT_POCKET_IC_URL").map_err(|_| {
+        "run through scripts/with-pocketic.sh or supply IC_TESTKIT_POCKET_IC_URL".to_owned()
+    })?;
+    let url = endpoint
+        .parse()
+        .map_err(|_| "invalid PocketIC endpoint".to_owned())?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        PocketIcBuilder::new()
+            .with_application_subnet()
+            .with_server_url(url)
+            .with_max_request_time_ms(Some(30_000))
+            .build_async(),
+    )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|_| {
+        "PocketIC instance creation timed out; remote creation may have occurred".to_owned()
+    })
 }

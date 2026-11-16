@@ -76,7 +76,7 @@ pub async fn run(
     );
 
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     let before_install = pic.cycle_balance(canister).await;
@@ -702,5 +702,5 @@ pub async fn run(
         "{label} stable_memory_bytes={}",
         pic.get_stable_memory(canister).await.len()
     );
-    owned.close().await;
+    owned.drop().await;
 }

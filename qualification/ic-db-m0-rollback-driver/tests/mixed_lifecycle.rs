@@ -166,7 +166,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         facts.identity, facts.code_section_bytes
     );
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -488,4 +488,5 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             values.iter().map(|v| v.1).max().unwrap()
         );
     }
+    owned.drop().await;
 }

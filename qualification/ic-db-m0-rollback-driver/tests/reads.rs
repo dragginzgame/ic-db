@@ -13,7 +13,7 @@ async fn bounded_reads() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-reads")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -376,5 +376,5 @@ async fn bounded_reads() {
     println!(
         "read contracts: order refusal, sparse progress, Wire-byte retry/refusal, null DISTINCT, cursor binding and live update/insert/delete cases passed"
     );
-    owned.close().await;
+    owned.drop().await;
 }

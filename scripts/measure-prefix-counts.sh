@@ -38,11 +38,11 @@ build legacy "$root/qualification/Cargo.toml" ic-db-icydb-baseline-canister coun
 export IC_DB_COUNT_COMPARISON=1 IC_DB_PREFIX_WRITE_PROFILE=1 IC_DB_ICYDB_BASELINE_WASM="$out/legacy.wasm"
 for label in control candidate; do
     if [[ "$label" == candidate ]]; then export IC_DB_PREFIX_CANDIDATE=1; fi
-    IC_DB_RECORDS_BENCHMARK_WASM="$out/$label.wasm" cargo test --manifest-path qualification/Cargo.toml \
+    IC_DB_RECORDS_BENCHMARK_WASM="$out/$label.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml \
         --locked -p ic-db-m0-rollback-driver --test records_comparison -- --nocapture \
         2>&1 | tee "$out/$label.log"
 done
 build fault "$source_copy/qualification/Cargo.toml" ic-db-m1-records-canister fault-injection
-IC_DB_M1_FAULT_WASM="$out/fault.wasm" cargo test --manifest-path qualification/Cargo.toml \
+IC_DB_M1_FAULT_WASM="$out/fault.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml \
     --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture \
     2>&1 | tee "$out/fault.log"

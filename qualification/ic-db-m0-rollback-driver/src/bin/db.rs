@@ -31,6 +31,14 @@ enum Command {
     },
     /// Inspect the manifest identity, entity revision and physical allocation.
     Status,
+    /// Read the exact maintained whole-entity row count without scanning rows.
+    #[command(
+        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports Entry, Document and DecimalRow in this temporary local fixture."
+    )]
+    Count {
+        #[arg(value_parser=["Entry", "Document", "DecimalRow"])]
+        entity: String,
+    },
     /// Run a fixed migration with a real local canister upgrade during copying.
     #[command(
         after_help = "Creates a separate six-row Item fixture, widens amount from Nat64 to Nat128 and adds an indexed label.\nCopies two rows per call, upgrades the local canister, resumes, validates, publishes and cleans the retired source.\nRuns once per console session. All data is temporary; this does not connect to or migrate a deployed database."
@@ -304,8 +312,7 @@ fn print_status((schema, incarnation, revision, pages): Status) {
     println!("\n{}", render_bordered(&["Property", "Value"], &rows));
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
     let cli = Cli::parse();
     if matches!(cli.command, Some(Command::Help)) {
         help();
@@ -314,6 +321,29 @@ async fn main() -> Result<(), String> {
     if matches!(cli.command, Some(Command::Quit)) {
         return Ok(());
     }
+    if std::env::var_os("IC_TESTKIT_POCKET_IC_URL").is_none() {
+        // The prepared launcher owns the server. Re-enter this binary with its
+        // explicit endpoint; the async driver never discovers/spawns a server.
+        let runner =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/with-pocketic.sh");
+        let status = std::process::Command::new("bash")
+            .arg(runner)
+            .arg(std::env::current_exe().map_err(|e| e.to_string())?)
+            .args(std::env::args_os().skip(1))
+            .status()
+            .map_err(|e| format!("cannot run prepared simulator launcher: {e}"))?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("db session failed: {status}"))
+        };
+    }
+    tokio::runtime::Runtime::new()
+        .map_err(|e| e.to_string())?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let prefix = executable
         .parent()
@@ -323,7 +353,16 @@ async fn main() -> Result<(), String> {
     let wasm = std::fs::read(&fixture)
         .map_err(|e| format!("{}: {e}; reinstall with make db", fixture.display()))?;
     let owned = instance().await?;
-    let pic = owned.instance();
+    let outcome = session(cli, &owned, wasm).await;
+    owned.drop().await;
+    outcome
+}
+
+async fn session(
+    cli: Cli,
+    pic: &pocket_ic::nonblocking::PocketIc,
+    wasm: Vec<u8>,
+) -> Result<(), String> {
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -564,6 +603,38 @@ async fn main() -> Result<(), String> {
                     }
                 }
             }
+            Command::Count { entity } => {
+                let reply = pic
+                    .query_call(
+                        canister,
+                        canister,
+                        "cardinality",
+                        ic_wire::encode(
+                            &entity,
+                            Encoding::Frame {
+                                method: 148,
+                                direction: Direction::Request,
+                            },
+                            LIMITS,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    )
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                let count = ic_wire::decode::<Result<u64, String>>(
+                    &reply,
+                    Encoding::Frame {
+                        method: 148,
+                        direction: Direction::Response,
+                    },
+                    LIMITS,
+                )
+                .map_err(|e| e.to_string())??;
+                println!(
+                    "{}",
+                    render_bordered(&["count"], &[vec![count.to_string()]])
+                );
+            }
             Command::Schema { .. } | Command::Status => {
                 let (id, selected) = match command {
                     Command::Schema { entity } => (2, entity),
@@ -719,7 +790,7 @@ async fn main() -> Result<(), String> {
         }
         Ok(())
     };
-    let outcome = if let Some(command) = cli.command {
+    if let Some(command) = cli.command {
         execute(command).await
     } else {
         let mut input = io::stdin().lock();
@@ -765,7 +836,5 @@ async fn main() -> Result<(), String> {
                 }
             }
         }
-    };
-    owned.close().await;
-    outcome
+    }
 }

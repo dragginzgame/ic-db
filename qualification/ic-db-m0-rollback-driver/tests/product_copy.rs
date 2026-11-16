@@ -21,7 +21,7 @@ async fn exercise(publish: bool) {
     let wasm = std::fs::read(directory.join("maintenance.wasm")).unwrap();
     let changed = std::fs::read(directory.join("maintenance-v2.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -225,6 +225,7 @@ async fn exercise(publish: bool) {
         let before = pic.get_stable_memory(canister).await;
         assert_eq!(decode(call(7, 2, false).await.unwrap()).unwrap(), (0, true));
         assert_eq!(pic.get_stable_memory(canister).await, before);
+        owned.drop().await;
         return;
     }
     let before = pic.get_stable_memory(canister).await;
@@ -251,6 +252,7 @@ async fn exercise(publish: bool) {
     let (open, target) = entries(true).await;
     assert!(!open);
     assert_eq!(target.len(), 1);
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -259,7 +261,7 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
     let wasm = std::fs::read(directory.join("maintenance.wasm")).unwrap();
     let changed = std::fs::read(directory.join("maintenance-v2.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -335,6 +337,7 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
         decode(call(6, false).await.unwrap()).unwrap().1,
         vec![(2, "after cutover".into(), -10, 30)]
     );
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -357,7 +360,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
     let wasm = std::fs::read(directory.join("maintenance.wasm")).unwrap();
     let changed = std::fs::read(directory.join("maintenance-v2.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -615,6 +618,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             assert!(decode_next(next(8, false).await.unwrap()).is_err());
             assert!(decode(call(9, false).await.unwrap()).is_err());
             assert_eq!(pic.get_stable_memory(canister).await, before);
+            owned.drop().await;
             return;
         }
         let mut copied = false;
@@ -671,4 +675,5 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             before.len()
         );
     }
+    owned.drop().await;
 }

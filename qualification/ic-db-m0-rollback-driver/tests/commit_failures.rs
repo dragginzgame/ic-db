@@ -1,7 +1,7 @@
 //! Failures inside the delivered commit path, using the real IC rollback boundary.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
+use pocket_ic::ErrorCode;
 
 type Status = ([u8; 32], [u8; 16], u64, u64, u64, u64);
 
@@ -12,7 +12,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
     )
     .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -321,5 +321,5 @@ async fn backing_writes_and_growth_failures_roll_back() {
     assert_eq!(status().await, prior);
     assert_eq!(reference().await, Some(2));
     assert_eq!(&category(9).await[..2], &[(1, 901), (2, 902)]);
-    owned.close().await;
+    owned.drop().await;
 }

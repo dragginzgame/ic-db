@@ -37,7 +37,11 @@ This overlay owns local authority, product boundaries and qualification choices.
 - IC DB owns its durable codec. Keep Wire and transport serialization out of
   product dependencies and stored bytes. Version durable changes; unsupported
   formats refuse intact until a supported transition exists.
-- IC Storage owns allocation/collections; Testkit owns PocketIC lifecycle;
+- IC Storage owns allocation/collections. Qualification borrows PocketIC's
+  original async client; a prepared command-scoped launcher owns the server.
+  Keep setup explicit and attempt instance deletion explicitly; no replacement
+  lifecycle framework belongs in IC DB. The released 0.106.0 launcher remains
+  an external bootstrap tool, not a driver library dependency.
   Canic's adapter owns endpoints, guards and composition; applications own
   authorization. Standalone qualification may use Platform hooks and bounded
   Wire transport outside product crates, never a second executor/endpoint registry.

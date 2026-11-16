@@ -11,7 +11,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records-wasm"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -204,5 +204,5 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
     )
     .unwrap();
     assert_eq!(lookup, (Some((resumed, None, 3)), vec![(resumed, None, 3)]));
-    owned.close().await;
+    owned.drop().await;
 }

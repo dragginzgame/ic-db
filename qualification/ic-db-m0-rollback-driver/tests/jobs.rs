@@ -9,7 +9,7 @@ async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -86,6 +86,7 @@ async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
         if step.4 == 1 {
             assert_eq!(step.2, 6);
             assert_eq!(step.5.as_deref(), Some("0:3,1:3"));
+            owned.drop().await;
             return;
         }
         assert_eq!(step.4, 0);
@@ -109,7 +110,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, initial, vec![], None).await;
@@ -424,6 +425,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         .is_err()
     );
     controlled(control(0, &replacement, 0, 0).await.unwrap());
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -434,7 +436,7 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, initial, vec![], None).await;
@@ -518,6 +520,7 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
             (1, 1, Some(if operation == 6 { "0" } else { "1:0" }))
         );
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -529,7 +532,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, predecessor, vec![], None)
@@ -687,6 +690,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
             .unwrap(),
     );
     assert_eq!((expired.1, expired.2, expired.3), (3, vec![], None));
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -694,7 +698,7 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -829,6 +833,7 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
             (sequence, revision, 1, Some(expected))
         );
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -837,7 +842,7 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -1009,4 +1014,5 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
             3
         );
     }
+    owned.drop().await;
 }

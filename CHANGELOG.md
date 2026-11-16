@@ -2,12 +2,32 @@
 
 ## [0.19.0] - Unreleased
 
+### ▶️ Try it
+
+Rebuild the local fixture CLI, then compare maintained and filtered counts:
+
+```sh
+make db
+db status
+db count Entry
+db count Document
+db count DecimalRow
+db query Entry --select count --category 1
+```
+
+Expect format `ICDBMF02`, whole-entity counts 6, 1 and 3, and filtered count 3.
+Each command uses a fresh temporary fixture, not a deployed database.
+
 ### ➕ Added
 
 - Add `Database::cardinality::<E>()` for exact whole-entity counts from maintained
   metadata. Update counts atomically with revisions, rows and indexes; validate
   rebuilt counts before schema-copy publication. Fluent `count()` still validates
   rows and supports filtering. No schema attribute changes or prefix counters.
+- Add `db count ENTITY` for the maintained count of Entry, Document or DecimalRow
+  in the local fixture. Filters and limits refuse; filtered counts remain
+  `db query ENTITY --select count`. Normal output contains only the count table;
+  `db count --help` explains the metadata/integrity distinction.
 
 ### ⚠️ Changed
 
@@ -17,16 +37,41 @@
   Schema fingerprints and row/index encodings are unchanged. `db status` shows
   the new live format.
 
-After rebuilding the local fixture CLI:
-
-```sh
-make db
-db status
-```
-
-Expect format `ICDBMF02`; this command inspects a fresh temporary fixture.
-
 ### 🔧 Qualification
+
+- Release supplier review (2026-11-16): direct selections of Platform, Storage,
+  Wire, Host Artifacts and Toko Tooling match their latest stable registry releases.
+  Defer optional Host Text 0.76.0 → 0.77.2 and release metadata tool IC Build
+  0.84.1 → 0.87.3 to the next dependency-maintenance batch. The external Testkit
+  bootstrap remains 0.106.0; review 0.107.2 at that same boundary. No Testkit
+  library remains in the driver. Frozen IcyDB supplier selections stay unchanged.
+
+- Remove the retired Testkit lifecycle library and its old native Platform graph.
+  The harness uses PocketIC directly and explicitly releases instances; the
+  prepared command launcher owns the server. `make m0-setup` prepares that external
+  bootstrap, existing Make probes use it, and standalone `db` still launches
+  normally. Missing endpoints never trigger driver-side binary discovery or
+  downloads. [Ownership and checks](qualification/README.md#external-simulator-ownership-019).
+
+- Refresh Platform Types to 0.21.2 and Runtime/macros/guard to 0.23.13 across
+  product and qualification selections. Existing identity/endpoint APIs and
+  durable codecs are unchanged; the new raw memory/cycle functions are not used
+  by IC DB. Check identity keys and installed endpoint/callback rollback.
+  Older supplier-owned selections remain explicitly documented in the
+  [refresh receipt](qualification/README.md#platform-patch-refresh-019).
+
+- Exercise all 16 retained aggregate slots together across four query shapes,
+  two source entities and three upgrades. Check selective invalidation, stable
+  completed results, capacity refusal, stale-handle protection after slot reuse
+  and bounded expiry cleanup. Reuse existing host controls; no engine, scheduler
+  or stored-format change. [Receipt](qualification/README.md#shared-retained-job-capacity-019).
+
+- Adopt Toko Tooling 0.44.9 through its published installer in both workspace
+  selections. Its executable payload is unchanged; the baseline clarifies named
+  supplier adoption scope and frozen comparison exceptions.
+- Check the count command through the installed CLI and direct Wasm calls,
+  including empty entities, unsupported names, filter refusal and unchanged
+  backing across upgrade. No new count implementation or stored metadata.
 
 - Adopt Platform Types 0.21.1 and Runtime/macros/guard 0.23.12. Qualification
   hosts declare guards, codecs, bounds and trapping policy explicitly; upgrades

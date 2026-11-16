@@ -54,7 +54,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
     let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").unwrap());
     let wasm = std::fs::read(directory.join("maintenance-faults.wasm")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     for bad in [false, true] {
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 10_000_000_000_000).await;
@@ -311,4 +311,5 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
             "reference migration bad={bad}: copy={maximum_copy} validation={maximum_validation} cleanup={maximum_cleanup} maximum measured instructions"
         );
     }
+    owned.drop().await;
 }

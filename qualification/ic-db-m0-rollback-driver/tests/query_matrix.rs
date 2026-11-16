@@ -284,7 +284,7 @@ async fn matched_query_matrix() {
         );
         for profile in ["balanced", "skewed"] {
             let owned = instance().await.unwrap();
-            let pic = owned.instance();
+            let pic = &owned;
             let canister = pic.create_canister().await;
             pic.add_cycles(canister, 100_000_000_000_000).await;
             pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -401,7 +401,7 @@ async fn matched_query_matrix() {
                     );
                 }
             }
-            owned.close().await;
+            owned.drop().await;
         }
     }
     report(&directory, &samples);

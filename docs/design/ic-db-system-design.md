@@ -207,7 +207,9 @@ a local M1 fixture; add the product CLI package when the real adapter contract e
 IC Storage owns allocation handles and collection/backing mechanics; IC DB owns
 cross-record and cross-index invariants. The supplier boundary must be proved,
 not inferred from the word "storage". Do not recreate Memory/Storage layers merely
-to reproduce old package boundaries. Testkit owns PocketIC provisioning/lifecycle;
+to reproduce old package boundaries. Qualification borrows PocketIC's original
+async client; an explicitly prepared command launcher owns the server process.
+Instance deletion is explicit and best-effort, not a new IC DB lifecycle layer;
 Build owns generic Wasm build mechanics. Choose their current published versions
 when an experiment actually needs them, not speculative pins in this design.
 
@@ -1522,6 +1524,24 @@ qualify the implemented contract, not a production write-rate distribution or
 completion SLA. The witness reuses existing qualification endpoints and adds no
 product mechanism; the historical M0 candidate remains separate evidence.
 
+The 0.19 shared-capacity witness fills all 16 job slots with grouped sums,
+grouped counts, grouped DISTINCT counts and an optional-field count on a second entity.
+Three upgrades preserve progress and custody. A source mutation invalidates only
+its unfinished jobs; completed groups keep their captured result, and the other
+entity's jobs finish. Full-store refusal and stale query/handle operations preserve
+backing bytes. Cancellation permits all slots to be reused, while bounded expiry
+cleanup removes at most three jobs per call. This qualifies logical slot reuse,
+not supplier allocation reclamation or a production throughput/completion SLA.
+It reuses existing endpoints and adds no scheduler or durable representation.
+
+IcyDB's frozen grouped/scalar token contracts (`6d421e3`,
+`db/cursor/token/{grouped,scalar}`) preserve bounded continuation and query/authority
+binding. The applicable lesson here is that a continuation cannot acquire a new
+meaning after reuse or against another query. This independently written witness
+checks IC DB's existing retained-slot generations and query binding; it does not
+copy the token MAC, SQL/frontend layers or claim equivalent retained-job support
+in IcyDB. See the [receipt](../../qualification/README.md#shared-retained-job-capacity-019).
+
 The product now provides `start_count`/`resume_count`,
 `start_count_distinct::<Record>`/`resume_count_distinct::<Record>`,
 `start_group_count_distinct::<KeyRecord, Record>`/`resume_group_count_distinct::<KeyRecord, Record>`,
@@ -1945,7 +1965,7 @@ not automatic inclusion or removal. Nothing here authorizes changes to IcyDB.
 | Memory allocation and raw collections | IC Storage owned | Checked ownership and actual supplier guarantees |
 | Result mapping | Ordinary Rust iteration over bounded results | No engine callback hooks or hidden page fetching; preserve continuation |
 | Endpoints, guards and lifecycle composition | Canic adapter owned | Direct library use and separately composed Canic endpoints |
-| Wasm build and PocketIC infrastructure | Build/Testkit owned | No duplicate provisioning/cache/server manager |
+| Wasm build and PocketIC infrastructure | Build mechanics, upstream client and prepared external launcher | No duplicate provisioning/cache/server manager |
 | CLI/schema inspection and queries | `make db` installs; `db` runs | Thin no-SQL client, shared fluent semantics, bounded output, Canic-owned remote integration |
 | Integrity/error/metrics reporting | Initial bounded essentials | Corruption and incomplete operation produce useful diagnostics |
 | Old formats, cancelled plans and compatibility aliases | Historical research only | Unsupported bytes rejected intact; no legacy read path |
@@ -2070,6 +2090,15 @@ metadata obligations or change planner defaults to improve selected benchmarks.
 The 0.19 increment adds maintained whole-entity cardinality under the explicit
 format hard cut described in section 4. It does not change schema authoring or
 replace fluent counting, and provides no conversion of earlier stored formats.
+The local CLI exposes this as `db count ENTITY` for its three queryable fixture
+entities. It accepts no filtering, limit or continuation options; filtered counts
+remain fluent `db query ENTITY --select count`. This directly calls the existing
+typed cardinality API, with no new engine, cache, metadata or endpoint-generation
+policy. As in frozen IcyDB's `DataStore::exact_entity_count` (`6d421e3`,
+`crates/icydb-core/src/db/data/store/mod.rs`), the result trusts maintained entity
+metadata. IcyDB's journal-overlay deltas and planner-selected prefix-count paths
+are not copied; the CLI does not imply row/index integrity validation or remote
+application support. The existing prefix-count experiment stays parked.
 
 The next qualification emphasis is realistic combinations and operational bounds:
 larger/reference-heavy datasets, aggregate contention, entity/query/endpoint
@@ -4373,10 +4402,10 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.44.8. Qualification selects
-IC Storage 0.74.1, Testkit 0.106.0 (PocketIC 16.1.0), Platform Runtime 0.23.12
+The current tooling baseline is Toko Tooling 0.44.9. Qualification selects
+IC Storage 0.74.1, PocketIC 16.1.0 directly, Platform Runtime 0.23.13
 and Wire 0.24.2, with exact resolution in its own lockfile. The product selects
-Platform Types 0.21.1. Wire Endpoint and its
+Platform Types 0.21.2. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions
 are probe inputs, not a product compatibility promise. Earlier M0 runs used the
 versions recorded with their evidence; product codec carryover from IcyDB is
@@ -4386,8 +4415,8 @@ request/response encoding; method identities and bounds stay unchanged. The
 frozen IcyDB comparison alone retains transitive Wire 0.22.4. No Wire type crosses
 that boundary or enters the product's codecs. Qualification package directories
 now match their existing Cargo package names, without changing package identities.
-Host Artifacts selects 0.80.2 directly, with transitive 0.79.0 retained;
-Host FS/Process select 0.79.0 and Host Text selects 0.76.0. The CLI and
+Host Artifacts selects 0.80.2 and Host Text selects 0.76.0. The old native
+Testkit/Platform facade and Host FS/Process graph have been removed. The CLI and
 probes use their retained APIs. The tooling installer updates the qualification
 release-lock planner; no product release or publication is part of adoption.
 Runtime/macros/guard 0.23.12 removes the old CDK interface. Qualification hosts
@@ -4395,11 +4424,22 @@ explicitly select guards, bounded codecs, trapping error/panic policy and lifecy
 hooks. The local harness stops each canister before upgrade and restarts it after
 success or refusal. Platform owns the executor; no compatibility executor or
 database endpoint layer is introduced. Storage and frozen IcyDB still select
-Runtime 0.22.5 for raw IC imports, while Testkit retains its separate older native
-Platform graph. These are supplier-owned boundaries, not a second old executor.
+Runtime 0.22.5 for raw IC imports. These are supplier-owned boundaries, not a
+second old executor. Old Types 0.20.4 remains only in the frozen IcyDB graph.
 The [adoption receipt](../../qualification/README.md#platform-adoption-019)
 records cross-runtime identity persistence and focused rollback/maintenance checks;
 the schema contract, owned durable codec and stored format are unchanged.
+The [0.23.13 refresh](../../qualification/README.md#platform-patch-refresh-019)
+adds unused raw memory/cycle APIs without changing the existing executor/identity
+source. Storage remains the allocation/collection owner. The subsequent harness
+migration follows IC Tooling's qualified external-session recipe: the driver
+requires an explicit endpoint, uses the original async client and attempts deletion
+explicitly. `make m0-setup` prepares the released 0.106.0 server launcher as an
+external bootstrap, never as a driver library. Make probes and standalone `db`
+delegate server ownership to that launcher without implicit downloads. No new
+runtime wrapper, pool or server manager is added. Missing/malformed endpoints,
+rollback, CLI startup and observed deletion qualify this narrower boundary; see
+the [receipt](../../qualification/README.md#external-simulator-ownership-019).
 Shared fixture declarations now live in a private qualification schema crate,
 preserving two-stage collection with ordinary host/target Cargo dependencies.
 Directory modules and ordinary test modules replace the remaining source-path

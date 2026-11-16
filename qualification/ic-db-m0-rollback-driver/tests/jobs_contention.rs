@@ -1,8 +1,206 @@
-//! Controlled write schedules against product retained sums, without hidden retries.
+//! Controlled write schedules and shared retained-job capacity, without hidden retries.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
 type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
+
+#[tokio::test]
+async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
+    fn request<T: serde::Serialize>(method: u64, value: &T) -> Vec<u8> {
+        ic_wire::encode(
+            value,
+            Encoding::Frame {
+                method,
+                direction: Direction::Request,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    }
+    fn response<T: serde::de::DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
+        ic_wire::decode(
+            bytes,
+            Encoding::Frame {
+                method,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    }
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-contention"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let start = async |operation: u8| {
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "job_start",
+                request(110, &(operation, 0_i64, 100_i64, 0_u64)),
+            )
+            .await
+            .unwrap();
+        response::<Result<Vec<u8>, String>>(110, &bytes)
+    };
+    let advance = async |handle: &[u8], operation: u8, sequence: u64, work: u32| {
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "job_advance",
+                request(
+                    111,
+                    &(handle, operation, sequence, work, 1_i64, 0_u64, false),
+                ),
+            )
+            .await
+            .unwrap();
+        response::<Result<Step, String>>(111, &bytes)
+    };
+    let control = async |operation: u8, handle: &[u8], now: i64, limit: u32| {
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "job_control",
+                request(112, &(operation, handle, now, limit)),
+            )
+            .await
+            .unwrap();
+        response::<Result<u64, String>>(112, &bytes)
+    };
+    let upgrade = async || {
+        let before = pic.get_stable_memory(canister).await;
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    };
+
+    // Four query shapes over two source entities share all 16 logical slots.
+    // Keep most jobs unfinished so one entity mutation can distinguish isolation
+    // from a global "anything changed" counter, including after heap loss.
+    let mut jobs = Vec::new();
+    for operation in [4_u8, 6, 3, 9].into_iter().cycle().take(16) {
+        jobs.push((operation, start(operation).await.unwrap(), 0_u64));
+    }
+    let full = pic.get_stable_memory(canister).await;
+    assert_eq!(start(4).await, Err("JobCapacity".into()));
+    assert_eq!(pic.get_stable_memory(canister).await, full);
+    for (operation, handle, sequence) in &mut jobs {
+        let step = advance(handle, *operation, *sequence, 1).await.unwrap();
+        assert_eq!((step.2, step.4, step.5), (1, 0, None));
+        *sequence = step.0;
+    }
+    // Complete one grouped sum and retain its historical result. Expected values
+    // come from fixture tuples, not the database's reducer or row decoder.
+    let expected = format!(
+        "0:{},1:{}",
+        [20_u64, 40, 60].iter().sum::<u64>(),
+        [11_u64, 31, 51].iter().sum::<u64>()
+    );
+    let complete = advance(&jobs[0].1, 4, jobs[0].2, 32).await.unwrap();
+    assert_eq!(
+        (complete.2, complete.4, complete.5.as_deref()),
+        (6, 1, Some(expected.as_str()))
+    );
+    jobs[0].2 = complete.0;
+    upgrade().await;
+    let full = pic.get_stable_memory(canister).await;
+    assert_eq!(start(6).await, Err("JobCapacity".into()));
+    assert_eq!(pic.get_stable_memory(canister).await, full);
+    assert_eq!(
+        advance(&jobs[0].1, 6, jobs[0].2, 1).await.unwrap_err(),
+        "InvalidJob"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, full);
+
+    // Release one occupied slot, refill it, then try both operations with the old
+    // handle. A stale cancel must never remove the replacement occupant.
+    let stale = jobs[3].clone();
+    assert_eq!(control(0, &stale.1, 0, 0).await, Ok(0));
+    jobs[3] = (6, start(6).await.unwrap(), 0);
+    assert_ne!(jobs[3].1, stale.1);
+    let replaced = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        advance(&stale.1, stale.0, stale.2, 1).await.unwrap_err(),
+        "InvalidJob"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, replaced);
+    assert_eq!(control(0, &stale.1, 0, 0).await, Err("InvalidJob".into()));
+    assert_eq!(pic.get_stable_memory(canister).await, replaced);
+
+    // A committed Entry change invalidates unfinished Entry jobs only.
+    assert_eq!(control(2, &[], 0, 0).await, Ok(complete.1 + 1));
+    upgrade().await;
+    for (index, (operation, handle, sequence)) in jobs.iter_mut().enumerate() {
+        let step = advance(handle, *operation, *sequence, 32).await.unwrap();
+        if index == 0 {
+            assert_eq!(
+                (step.1, step.4, step.5.as_deref()),
+                (complete.1, 1, Some(expected.as_str()))
+            );
+        } else if *operation == 6 {
+            // The fixture's one Document has note=None, so its present-value count is zero.
+            assert_eq!((step.2, step.4, step.5.as_deref()), (1, 1, Some("0")));
+        } else {
+            assert_eq!((step.1, step.2, step.4, step.5), (complete.1, 1, 2, None));
+        }
+        *sequence = step.0;
+    }
+    // Completed and invalidated jobs retain custody until explicit cancellation.
+    let full = pic.get_stable_memory(canister).await;
+    assert_eq!(start(4).await, Err("JobCapacity".into()));
+    assert_eq!(pic.get_stable_memory(canister).await, full);
+    for (_, handle, _) in &jobs {
+        assert_eq!(control(0, handle, 0, 0).await, Ok(0));
+    }
+
+    // Refill every slot with current-source groups. Old generations cannot alias
+    // any new occupant, and every new job completes with the changed exact sum.
+    let mut fresh = Vec::new();
+    for _ in 0..16 {
+        fresh.push(start(4).await.unwrap());
+    }
+    let refilled = pic.get_stable_memory(canister).await;
+    for (operation, handle, sequence) in &jobs {
+        assert!(advance(handle, *operation, *sequence, 32).await.is_err());
+        assert!(control(0, handle, 0, 0).await.is_err());
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, refilled);
+    for handle in &fresh {
+        let step = advance(handle, 4, 0, 32).await.unwrap();
+        assert_eq!(
+            (step.1, step.2, step.4, step.5.as_deref()),
+            (complete.1 + 1, 6, 1, Some("0:120,1:94"))
+        );
+    }
+    // Expiry cleanup has a per-call removal bound, also after an upgrade. It
+    // releases logical capacity; no claim about physical shrinking is made.
+    upgrade().await;
+    let mut removed = 0;
+    for expected in [3, 3, 3, 3, 3, 1, 0] {
+        let count = control(1, &[], 100, 3).await.unwrap();
+        assert_eq!(count, expected);
+        removed += count;
+    }
+    assert_eq!(removed, 16);
+    assert!(advance(&fresh[0], 4, 0, 32).await.is_err());
+    let next = start(4).await.unwrap();
+    assert!(!fresh.contains(&next));
+    assert_eq!(control(0, &next, 0, 0).await, Ok(0));
+    eprintln!(
+        "shared jobs: 16 slots, four query shapes, two entities, three upgrades; isolated invalidation, stale handles and bounded cleanup passed"
+    );
+    owned.drop().await;
+}
 
 #[tokio::test]
 async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
@@ -10,7 +208,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-contention"))
             .unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -245,4 +443,5 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         "schedule=quiet-after-writes advances=9 outcome=complete sum={}",
         base + changes
     );
+    owned.drop().await;
 }

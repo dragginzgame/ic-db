@@ -24,7 +24,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -307,6 +307,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
             );
         }
     }
+    owned.drop().await;
 }
 
 #[tokio::test]
@@ -314,7 +315,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
     let owned = instance().await.unwrap();
-    let pic = owned.instance();
+    let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -507,4 +508,5 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
     }
     assert!(finished, "bounded input and completed pages must finish");
     assert_eq!(rows, vec![vec!["1", "3"], vec!["0", "3"]]);
+    owned.drop().await;
 }
