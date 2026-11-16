@@ -354,8 +354,8 @@ copy found during measurement was removed. These costs remain below the matched
 IcyDB ceilings. The [0.18 refresh](#scalar-comparison-refresh-018) records the
 current scalar measurements. No direct-to-fluent performance parity is claimed.
 
-All six canister hosts use Platform's generic `guard`, `decode_with` and
-`encode_with` hooks with the [fixed fixture codecs](ic-db-qualification-transport/src/lib.rs), shared
+All seven canister hosts use Platform's explicit `guard`, `decode`, `encode`,
+`max_bytes` and `on_error` hooks with the [fixed fixture codecs](ic-db-qualification-transport/src/lib.rs), shared
 through one private qualification crate with ordinary Cargo dependencies. No Canic or
 Wire Endpoint dependency is needed. The [standalone example](ic-db-m0-rollback-canister/src/entrypoints.rs)
 is executable qualification, not a new product API or endpoint framework.
