@@ -328,7 +328,9 @@ release-tools:
 
 release-lint:
 	$(MAKE) clippy
-	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --all-targets -- -D warnings
+	# Native callers/schema builds and IC-only fixtures have different target APIs.
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema -p ic-db-icydb-baseline-schema --all-targets -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --exclude ic-db-m0-rollback-driver --lib --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings

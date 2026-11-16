@@ -52,6 +52,9 @@ Each command uses a fresh temporary fixture, not a deployed database.
   bootstrap, existing Make probes use it, and standalone `db` still launches
   normally. Missing endpoints never trigger driver-side binary discovery or
   downloads. [Ownership and checks](qualification/README.md#external-simulator-ownership-019).
+  Lint native callers/schema builds on the host and all fixture libraries on
+  Wasm, where Platform's IC system calls are available; retain feature-specific
+  Wasm checks and the full release behavior gate.
 
 - Refresh Platform Types to 0.21.2 and Runtime/macros/guard to 0.23.13 across
   product and qualification selections. Existing identity/endpoint APIs and
