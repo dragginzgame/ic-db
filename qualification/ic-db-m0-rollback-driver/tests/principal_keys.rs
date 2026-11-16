@@ -133,7 +133,7 @@ async fn principal_identity_pages_references_and_upgrade() {
     decode(write(1, swap, false).await.unwrap()).unwrap();
     let expected = (rows.clone(), None, 2, vec![ids[3].clone()]);
     assert_eq!(page(None, 32, 0).await, expected);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(page(None, 32, 0).await, expected);

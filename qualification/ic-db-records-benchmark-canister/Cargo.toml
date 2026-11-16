@@ -22,11 +22,12 @@ aggregate-comparison = []
 count-comparison = []
 count-profile = ["count-comparison"]
 fluent-comparison = []
+query-matrix = ["fluent-comparison", "aggregate-comparison", "count-comparison"]
 
 [dependencies]
 ic-db.workspace = true
 ic-db-qualification-transport.workspace = true
-ic-platform-runtime = { workspace = true, features = ["cdk"] }
+ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-storage.workspace = true
 
 [lints]

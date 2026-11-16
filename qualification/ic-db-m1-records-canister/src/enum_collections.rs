@@ -2,10 +2,14 @@
 use crate::{open, runtime, schema::EnumCollectionsRow};
 use ic_db::{Batch, Entity};
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<94>",
-    decode_with = "crate::transport::decode::<_, 94>",
-    encode_with = "crate::transport::encode::<_, 94>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "enum_collections",
+    guard = crate::transport::admit::<94>,
+    decode = crate::transport::decode::<_, 94>,
+    encode = crate::transport::encode::<_, 94>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> {
     let host = runtime();
@@ -31,7 +35,7 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
         }
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::cdk::api::trap("after enum collection replacement");
+            ic_platform_runtime::system::trap("after enum collection replacement");
         }
     }
     Ok((

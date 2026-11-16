@@ -1,10 +1,10 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 //! Controlled entity-count growth with one endpoint and identical typed operations.
 //! Optional fluent shapes and result maps isolate application composition growth.
 
 use ic_db::{Batch, Database, Entity, Schema, entity};
 use ic_db_qualification_transport as transport;
-use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
@@ -151,8 +151,14 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
     host
 }
 
-#[cdk::init]
-fn initialize() {
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
     with_host(|host| {
         Database::create(
             host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
@@ -186,7 +192,7 @@ fn operate<E: Entity<Key = u64>>(
         db.commit(batch).unwrap();
     }
     if mode == 4 {
-        cdk::api::trap("after retained-host commit");
+        ic_platform_runtime::system::trap("after retained-host commit");
     }
     (
         db.get::<E>(input.0).unwrap().as_ref().map(&project),
@@ -206,23 +212,27 @@ fn operate<E: Entity<Key = u64>>(
     )
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "exercise",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn exercise((selector, mode, row): (u8, u8, Row)) -> (Observation, [u64; 4], u64) {
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     with_host(|host| {
-        let bootstrapped = cdk::api::instruction_counter();
+        let bootstrapped = ic_platform_runtime::raw::instruction_counter();
         let memory = host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap();
-        let leased = cdk::api::instruction_counter();
+        let leased = ic_platform_runtime::raw::instruction_counter();
         let schema = schema_for_open();
-        let described = cdk::api::instruction_counter();
+        let described = ic_platform_runtime::raw::instruction_counter();
         let mut db = Database::open(memory, schema).unwrap();
-        let opened = cdk::api::instruction_counter();
+        let opened = ic_platform_runtime::raw::instruction_counter();
         let result = dispatch(&mut db, selector, mode, row);
-        let finished = cdk::api::instruction_counter();
+        let finished = ic_platform_runtime::raw::instruction_counter();
         (
             result,
             [

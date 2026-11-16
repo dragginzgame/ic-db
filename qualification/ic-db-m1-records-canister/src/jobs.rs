@@ -58,10 +58,14 @@ fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> P
         value,
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<110>",
-    decode_with = "crate::transport::decode::<_, 110>",
-    encode_with = "crate::transport::encode::<_, 110>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_start",
+    guard = crate::transport::admit::<110>,
+    decode = crate::transport::decode::<_, 110>,
+    encode = crate::transport::encode::<_, 110>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Vec<u8>, String> {
     let host = runtime();
@@ -149,10 +153,14 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
         .map(|handle| handle.to_bytes())
         .map_err(|e| e.to_string())
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<111>",
-    decode_with = "crate::transport::decode::<_, 111>",
-    encode_with = "crate::transport::encode::<_, 111>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_advance",
+    guard = crate::transport::admit::<111>,
+    decode = crate::transport::decode::<_, 111>,
+    encode = crate::transport::encode::<_, 111>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn job_advance(
     (bytes, operation, sequence, work, now, fault, trap_after): (
@@ -307,7 +315,7 @@ fn job_advance(
     };
     let writes = faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::cdk::api::trap("after successful aggregate advance");
+        ic_platform_runtime::system::trap("after successful aggregate advance");
     }
     result
         .map(|(sequence, revision, examined, bytes, phase, value)| {
@@ -317,10 +325,14 @@ fn job_advance(
 }
 // operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
 // 4 unrelated entity mutation; 5 mutate source then trap.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<112>",
-    decode_with = "crate::transport::decode::<_, 112>",
-    encode_with = "crate::transport::encode::<_, 112>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_control",
+    guard = crate::transport::admit::<112>,
+    decode = crate::transport::decode::<_, 112>,
+    encode = crate::transport::encode::<_, 112>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn job_control((operation, bytes, now, limit): (u8, Vec<u8>, i64, u32)) -> Result<u64, String> {
     let host = runtime();
@@ -348,7 +360,7 @@ fn job_control((operation, bytes, now, limit): (u8, Vec<u8>, i64, u32)) -> Resul
             }
             let result = db.commit(batch).map(|()| db.revision::<Entry>().unwrap());
             if operation == 5 {
-                ic_platform_runtime::cdk::api::trap("after source mutation");
+                ic_platform_runtime::system::trap("after source mutation");
             }
             result
         }
@@ -360,10 +372,14 @@ fn job_control((operation, bytes, now, limit): (u8, Vec<u8>, i64, u32)) -> Resul
 // Private qualification endpoint; product endpoints remain adapter-owned.
 type PageRequest = (Vec<u8>, u64, Option<Vec<u8>>, u32, u32, i64, u64, bool);
 type PageResponse = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<113>",
-    decode_with = "crate::transport::decode::<_, 113>",
-    encode_with = "crate::transport::encode::<_, 113>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_page",
+    guard = crate::transport::admit::<113>,
+    decode = crate::transport::decode::<_, 113>,
+    encode = crate::transport::encode::<_, 113>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn job_page(
     (handle, sequence, after, size, bytes, now, fault, trap_after): PageRequest,
@@ -384,7 +400,7 @@ fn job_page(
         .resume_group_count::<Category>(&mut jobs, &handle, sequence, Timestamp::from_millis(now));
     faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::cdk::api::trap("after successful group page");
+        ic_platform_runtime::system::trap("after successful group page");
     }
     let step = result.map_err(|e| e.to_string())?;
     let (phase, rows, next) = match step.outcome {
@@ -406,10 +422,14 @@ fn job_page(
 // Grouped extrema use the same query/result page boundary, with optional winners.
 type ExtremumRequest = (Vec<u8>, u8, u64, u32, Option<Vec<u8>>, u32, i64, u64, bool);
 type ExtremumResponse = (u64, u8, Vec<(u64, Option<u64>)>, Option<Vec<u8>>, u64, u64);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<114>",
-    decode_with = "crate::transport::decode::<_, 114>",
-    encode_with = "crate::transport::encode::<_, 114>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "job_group_extremum",
+    guard = crate::transport::admit::<114>,
+    decode = crate::transport::decode::<_, 114>,
+    encode = crate::transport::encode::<_, 114>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn job_group_extremum(
     (handle, operation, sequence, work, after, size, now, fault, trap_after): ExtremumRequest,
@@ -444,7 +464,7 @@ fn job_group_extremum(
     };
     faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::cdk::api::trap("after grouped extremum advance");
+        ic_platform_runtime::system::trap("after grouped extremum advance");
     }
     let step = result.map_err(|e| e.to_string())?;
     let (phase, rows, next) = match step.outcome {

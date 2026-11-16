@@ -193,7 +193,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
         vec![ids[3].clone()],
     );
     assert_eq!(page(None, None, 32, 0).await, expected);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(page(None, None, 32, 0).await, expected);

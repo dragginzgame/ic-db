@@ -1,7 +1,6 @@
 //! Installed managed-time semantics through the real bounded batch.
 use crate::{open, runtime, schema::ManagedRow};
 use ic_db::{Batch, Error, Timestamp};
-use ic_platform_runtime::cdk;
 
 type Row = (u64, String, i64, i64);
 fn view(row: ManagedRow) -> Row {
@@ -13,10 +12,14 @@ fn view(row: ManagedRow) -> Row {
     )
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<82>",
-    decode_with = "crate::transport::decode::<_, 82>",
-    encode_with = "crate::transport::encode::<_, 82>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "managed_write",
+    guard = crate::transport::admit::<82>,
+    decode = crate::transport::decode::<_, 82>,
+    encode = crate::transport::encode::<_, 82>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -> Result<(), u8> {
     let host = runtime();
@@ -56,7 +59,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
     prepare.map_err(error)?;
     db.commit(batch).map_err(error)?;
     if trap {
-        cdk::api::trap("after managed commit");
+        ic_platform_runtime::system::trap("after managed commit");
     }
     Ok(())
 }
@@ -74,10 +77,14 @@ fn error(error: Error) -> u8 {
     }
 }
 
-#[cdk::query(
-    guard = "crate::transport::admit::<83>",
-    decode_with = "crate::transport::decode::<_, 83>",
-    encode_with = "crate::transport::encode::<_, 83>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "managed_rows",
+    guard = crate::transport::admit::<83>,
+    decode = crate::transport::decode::<_, 83>,
+    encode = crate::transport::encode::<_, 83>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn managed_rows(millis: i64) -> (Vec<Row>, Vec<u64>, u64) {
     let host = runtime();

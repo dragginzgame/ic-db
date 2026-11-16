@@ -1,17 +1,20 @@
 //! Literal omission rules use the ordinary product batch and constraints.
 use crate::{open, runtime, schema::DefaultRow};
 use ic_db::{Batch, Error};
-use ic_platform_runtime::cdk;
 
 type Row = (u64, u16, bool, Option<String>);
 fn view(row: DefaultRow) -> Row {
     (row.id, row.count, row.enabled, row.label)
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<80>",
-    decode_with = "crate::transport::decode::<_, 80>",
-    encode_with = "crate::transport::encode::<_, 80>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "default_write",
+    guard = crate::transport::admit::<80>,
+    decode = crate::transport::decode::<_, 80>,
+    encode = crate::transport::encode::<_, 80>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
     let host = runtime();
@@ -45,17 +48,21 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
     })?;
     db.commit(batch).map_err(|_| 3_u8)?;
     if trap {
-        cdk::api::trap("after default commit");
+        ic_platform_runtime::system::trap("after default commit");
     }
     Ok(view(row))
 }
 
-#[cdk::query(
-    guard = "crate::transport::admit::<81>",
-    decode_with = "crate::transport::decode::<_, 81>",
-    encode_with = "crate::transport::encode::<_, 81>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "default_rows",
+    guard = crate::transport::admit::<81>,
+    decode = crate::transport::decode::<_, 81>,
+    encode = crate::transport::encode::<_, 81>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn default_rows() -> (Vec<Row>, Vec<u64>, u64) {
+fn default_rows((): ()) -> (Vec<Row>, Vec<u64>, u64) {
     let host = runtime();
     let db = open(&host);
     (

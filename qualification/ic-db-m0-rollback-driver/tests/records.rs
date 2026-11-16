@@ -873,7 +873,7 @@ async fn references_follow_final_batch_state_in_wasm() {
     assert_eq!(batch(3).await, Ok(())); // repoint dependent and delete old target
     assert_eq!(reference(1).await, Some(2));
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -1463,7 +1463,7 @@ async fn product_records_and_message_boundary() {
         assert_eq!(document().await, (next, 3 + offset as u64));
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -1573,7 +1573,7 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (final_value, 6));
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -1745,7 +1745,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
         .expect_err("late trap");
     assert!(error.reject_message.contains("M1 binary application trap"));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -1853,7 +1853,7 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(read().await, (final_value, revision));
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -2017,7 +2017,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
             .contains("M1 principal application trap")
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(read().await, (final_value, revision));
@@ -2155,7 +2155,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
     let expected = vec![(i64::MIN, 2), (-1, 4), (0, 3), (0, 5), (i64::MAX, 1)];
     assert_eq!(read(vec![]).await, (vec![1], expected.clone()));
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(read(vec![4]).await, (vec![2], expected));
@@ -2297,7 +2297,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
         Ok(vec![("a\0b".into(), 3)])
     );
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(read(false, None).await, Ok(expected));
@@ -2457,7 +2457,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
     );
     assert_eq!(read(Some(ByteBuf::new())).await, expected);
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(read(Some(ByteBuf::new())).await, expected);
@@ -2579,7 +2579,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
         Ok(())
     );
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -2686,7 +2686,7 @@ async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
             valid
         );
     }
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -2792,7 +2792,7 @@ async fn nested_records_payloads_and_shared_bounds_survive_wasm_reopen() {
     }
     assert!(decode(&write(2, 2, 6).await.unwrap()).is_ok());
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -2903,7 +2903,7 @@ async fn ordered_lists_preserve_bounds_and_message_rollback() {
     assert!(decode(&write(2, 3, 6).await.unwrap()).is_ok());
     let saved = decode(&write(0, 0, 0).await.unwrap());
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -3011,7 +3011,7 @@ async fn canonical_sets_preserve_order_and_message_rollback() {
     assert_eq!(decode(&write(2, false, 0).await.unwrap()).unwrap().1, 2);
     let saved = decode(&write(0, false, 0).await.unwrap());
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -3122,7 +3122,7 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
     assert_eq!(decode(&write(2, 4).await.unwrap()).unwrap().1, 2);
     let saved = decode(&write(0, 0).await.unwrap());
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -3408,7 +3408,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -3682,7 +3682,7 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -3937,7 +3937,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -4191,7 +4191,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -4401,7 +4401,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -4665,7 +4665,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
         (-2, -1, i64::MAX, i64::MIN)
     );
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -4870,7 +4870,7 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
         );
     }
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -5057,7 +5057,7 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
     );
     assert_eq!(lookup([255; 16], 1).await, (Some(rows[5]), vec![rows[5]]));
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -5320,7 +5320,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
     );
     assert_eq!(lookup(0).await, (vec![signed[4]], vec![wide[4]]));
     let before = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);

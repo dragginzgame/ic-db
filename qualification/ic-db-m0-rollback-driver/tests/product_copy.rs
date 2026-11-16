@@ -85,7 +85,7 @@ async fn exercise(publish: bool) {
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, code.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, code.clone(), vec![], None)
             .await
             .unwrap();
     };
@@ -296,7 +296,7 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, code.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, code.clone(), vec![], None)
             .await
             .unwrap();
     };
@@ -394,7 +394,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, code.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, code.clone(), vec![], None)
             .await
             .unwrap();
     };

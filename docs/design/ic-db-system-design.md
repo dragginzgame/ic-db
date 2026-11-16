@@ -75,7 +75,7 @@ coordination. The Canic adapter owns all product endpoint exports, guards,
 transport and lifecycle composition. IC DB supplies no endpoint generation or
 registration; its Rust library remains usable directly without mounting endpoints.
 Standalone applications can expose their own endpoints through Platform's generic
-guard/decode/encode hooks without Canic. The six qualification hosts demonstrate
+guard/decode/encode hooks without Canic. The seven qualification hosts demonstrate
 this with bounded Wire frames and no Wire Endpoint dependency. This does not add
 endpoint generation to database macros. `make m0-endpoints` qualifies raw admission
 refusals and reply-encoding traps, including persistence across an outgoing call
@@ -1808,8 +1808,15 @@ mutation path must re-establish the count invariant and admission boundary.
 Metadata counting is not an integrity scan or a guarantee about later messages;
 arbitrary well-formed metadata corruption remains undetected by that read alone.
 Future prefix counts need their own state-size, write-fan-out and invalidation
-contract. Broader mixed-operation/write-heavy qualification remains necessary
-before general performance claims; the current fixture is evidence of cost only.
+contract. The 0.19 mixed-history witness now checks accumulated inserts, replacements,
+deletes, unique exchanges and reference changes against independent maps, followed
+by upgrade and maintenance. It retains IcyDB's final-batch uniqueness lesson from
+[`index/plan/unique`](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/plan/unique/mod.rs):
+a value released in the complete intended batch must not block its new owner.
+This is independently implemented qualification, not copied executor code. No
+journal overlay, reverse-reference subsystem or optional-count cache is added.
+The [mixed-history receipt](../../qualification/README.md#mixed-history-qualification-019)
+owns its small envelope; broader workloads are still needed for general claims.
 
 The initial API uses reads of current state followed by one explicit atomic batch
 within the same synchronous message. It has no general transaction closure or
@@ -2020,13 +2027,45 @@ retained capability scope. Later detail explains the implementation and evidence
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Same entity set and keys only; broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
-| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; direct-library qualification hosts | Canic adapter integration, broader matched workloads and operational acceptance; tier-2 application findings remain separate |
+| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent mixed-history model through jobs, upgrade and migration; installed typed adapter now owned by Canic | Adapter delivery and application CLI, broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
 The CLI demonstrates product schemas, bounded queries and aggregates against a
 temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. Deployed-database CLI access
 and production endpoint composition remain M4 integration work.
+
+Canic's existing Blob adapter, reviewed at
+[`e84702b`](https://github.com/dragginzgame/canic/tree/e84702b3bdcf4eb209476aadd053df21f18dd8eb),
+established the integration pattern: explicit synchronous application handlers,
+captured callers and reply-encoding traps. Database requests construct existing
+fluent operations with explicit bounds, without a second planner, SQL or a general
+dynamic frontend. A real CLI must consume an explicit adapter/application
+contract; fixture tuple controls are not a public protocol to promote.
+
+The initially isolated adapter probe has now moved into Canic's working checkout,
+where `make db-test` passes with its selected dependency graph. The optional
+adapter mounts three synchronous application-supplied handlers; the application
+owns passive request/reply types, method identities, its schema, actual-caller
+authorization and explicit storage initialization. Bounded batches, sparse live
+pages, five upgrades and frozen-source cancellation exercise the existing engine.
+Ordinary Wasm exposes no fixture fault/maintenance controls. IC DB's temporary
+patch and runner are retired, leaving one implementation owner. These Canic
+changes are not yet committed/pushed; remote application CLI support and a common
+inspection protocol remain outstanding. See the
+[integration receipt](../../qualification/README.md#canic-typed-application-integration-019).
+
+This preserves IcyDB's application-supplied, synchronous caller authorization
+before request construction (`crates/icydb/src/guards/mod.rs`, frozen `6d421e3`).
+It does not copy its generated SQL/schema surface, session executor or transport
+into IC DB. Mounting follows Canic's existing Blob hooks; application policy
+remains outside both engines. An operation-level authorization grant does not
+replace any tenant/row checks required inside an application's typed handler.
+
+Maintainer sequencing decision: prioritize application integration and engine
+maturity over further performance tuning. Keep the maintained-prefix counter
+experiment parked and its costs/evidence available. Do not adopt its format,
+metadata obligations or change planner defaults to improve selected benchmarks.
 
 The 0.19 increment adds maintained whole-entity cardinality under the explicit
 format hard cut described in section 4. It does not change schema authoring or
@@ -3572,6 +3611,41 @@ were refused by the frozen public lane, so both final queries use explicit group
 keys. No product mechanism or frozen code is copied or changed. Rich types,
 averages, retained jobs, resource ceilings and contention remain unmatched.
 
+The broader 0.19 [query matrix](../../qualification/README.md#broad-query-matrix-019)
+now checks 195 cases across balanced/skewed 32/128/511-row populations before and
+after upgrade: 4,680 checked executions, 1,908 successful matched pairs and 432
+separately reported legacy sort refusals. The original small-fixture gains do not
+generalize uniformly. Prefix counts cost up to 14.4× legacy instructions, and
+selective grouped queries up to 2.6×, while full-input grouping and ordinary
+listings remain cheaper in the selected cases. The count gap reflects scanned,
+validated rows versus maintained prefix metadata. The grouped gap exposes IC DB's
+default unordered primary scan versus legacy's chosen category index. Explicit
+index selection is already available; changing default admission/access choice
+needs its own semantic and mixed-selectivity evidence. This benchmark introduces
+no counter, optimizer framework, codec or product behavior change. It retains
+negative results and does not treat unsupported requests as performance wins.
+
+The subsequent [access-path control](../../qualification/README.md#aggregate-access-path-control-019)
+confirms that selecting an index unconditionally would regress dense grouping:
+at 511 rows, explicit indexed grouping is about 7× cheaper for missing categories
+but 4.1–4.2× more expensive for the whole input. Even a populated quarter of the
+fixture is cheaper through the primary scan. Keep the current default and explicit
+selection; do not introduce a supplier-specific crossover constant or infer a
+new optimizer framework from the selective-case loss alone.
+
+The [maintained-prefix candidate](../../qualification/README.md#maintained-prefix-count-candidate-019)
+is isolated from the product engine. It tests exact stable first-component counters
+with signed net batch deltas and explicit metadata lookup, retaining row-validating
+counting. The selected 512-row count drops from 7.80M to 0.67M instructions, at
+7.31% more insert instructions, 12.06% more for changing-category replacement and
+7,955 extra raw Wasm bytes. It preserves IcyDB's synchronized/complete-count rules
+without its journal-overlay/cache machinery, but stores one 25-byte logical
+record per distinct eligible prefix and never evicts it. Adoption requires an
+explicit counted-prefix/schema contract, wider qualification and a deliberate
+bounded publication-validation policy; the current probe only validates counter
+record shape and independently checks selected rebuilt results. No public API,
+format change, automatic planner policy or runtime DDL is adopted by this probe.
+
 The [exact-count scaling probe](../../qualification/README.md#exact-count-scaling-019)
 records a counterexample to blanket performance claims. IC DB scans and legacy
 reads maintained cardinality: by 128 rows legacy is cheaper for populated entity
@@ -4299,9 +4373,10 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.44.4. Qualification selects
-IC Storage 0.74.1, Testkit 0.106.0 (PocketIC 16.1.0), Platform Runtime 0.22.5
-and Wire 0.24.0, with exact resolution in its own lockfile. Wire Endpoint and its
+The current tooling baseline is Toko Tooling 0.44.8. Qualification selects
+IC Storage 0.74.1, Testkit 0.106.0 (PocketIC 16.1.0), Platform Runtime 0.23.12
+and Wire 0.24.2, with exact resolution in its own lockfile. The product selects
+Platform Types 0.21.1. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions
 are probe inputs, not a product compatibility promise. Earlier M0 runs used the
 versions recorded with their evidence; product codec carryover from IcyDB is
@@ -4311,12 +4386,20 @@ request/response encoding; method identities and bounds stay unchanged. The
 frozen IcyDB comparison alone retains transitive Wire 0.22.4. No Wire type crosses
 that boundary or enters the product's codecs. Qualification package directories
 now match their existing Cargo package names, without changing package identities.
-Host Artifacts/FS/Process select 0.79.0 and Host Text selects 0.76.0; the CLI and
+Host Artifacts selects 0.80.2 directly, with transitive 0.79.0 retained;
+Host FS/Process select 0.79.0 and Host Text selects 0.76.0. The CLI and
 probes use their retained APIs. The tooling installer updates the qualification
 release-lock planner; no product release or publication is part of adoption.
-Runtime/macros/guard 0.22.5 adds supplier-owned guard/codec-hook qualification;
-its executable source is unchanged from 0.22.4. Keep the compatible manifest
-minimum and qualify the exact new lock selection at the consumer boundaries.
+Runtime/macros/guard 0.23.12 removes the old CDK interface. Qualification hosts
+explicitly select guards, bounded codecs, trapping error/panic policy and lifecycle
+hooks. The local harness stops each canister before upgrade and restarts it after
+success or refusal. Platform owns the executor; no compatibility executor or
+database endpoint layer is introduced. Storage and frozen IcyDB still select
+Runtime 0.22.5 for raw IC imports, while Testkit retains its separate older native
+Platform graph. These are supplier-owned boundaries, not a second old executor.
+The [adoption receipt](../../qualification/README.md#platform-adoption-019)
+records cross-runtime identity persistence and focused rollback/maintenance checks;
+the schema contract, owned durable codec and stored format are unchanged.
 Shared fixture declarations now live in a private qualification schema crate,
 preserving two-stage collection with ordinary host/target Cargo dependencies.
 Directory modules and ordinary test modules replace the remaining source-path

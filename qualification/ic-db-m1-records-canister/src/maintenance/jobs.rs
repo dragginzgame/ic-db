@@ -2,7 +2,6 @@
 use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, whole_declaration};
 use crate::{aggregate_store::open_jobs, runtime};
 use ic_db::{Database, Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
-use ic_platform_runtime::cdk;
 use ic_storage::StableKey;
 
 // Position bytes, sequence, source revision, examined rows, completed count.
@@ -78,10 +77,14 @@ fn control(
     }
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<146>",
-    decode_with = "crate::transport::decode::<_, 146>",
-    encode_with = "crate::transport::encode::<_, 146>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_job",
+    guard = crate::transport::admit::<146>,
+    decode = crate::transport::decode::<_, 146>,
+    encode = crate::transport::encode::<_, 146>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_job(
     (operation, target, bytes, sequence, work): (u8, bool, Vec<u8>, u64, u32),

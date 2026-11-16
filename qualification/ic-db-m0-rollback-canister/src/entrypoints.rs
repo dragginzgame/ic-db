@@ -1,10 +1,7 @@
 //! Standalone Platform hooks with bounded Wire codecs, without Canic.
 //! Reply failure probes distinguish the current message from an earlier call.
 
-use ic_platform_runtime::{
-    call::{Call, WaitPolicy},
-    cdk,
-};
+use ic_platform_runtime::call::{Call, Outcome, Wait};
 use ic_wire::{ByteBuf, Direction, Encoding};
 
 fn write(id: u64) {
@@ -15,10 +12,14 @@ fn reply(oversized: bool) -> ByteBuf {
     ByteBuf::from(vec![7; if oversized { 65_536 } else { 1 }])
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<8>",
-    decode_with = "crate::transport::decode::<_, 8>",
-    encode_with = "crate::transport::encode::<_, 8>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "endpoint_sync",
+    guard = crate::transport::admit::<8>,
+    decode = crate::transport::decode::<_, 8>,
+    encode = crate::transport::encode::<_, 8>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn endpoint_sync(oversized: bool) -> ByteBuf {
     write(1);
@@ -26,19 +27,27 @@ fn endpoint_sync(oversized: bool) -> ByteBuf {
     reply(oversized)
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<9>",
-    decode_with = "crate::transport::decode::<_, 9>",
-    encode_with = "crate::transport::encode::<_, 9>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "endpoint_ack",
+    guard = crate::transport::admit::<9>,
+    decode = crate::transport::decode::<_, 9>,
+    encode = crate::transport::encode::<_, 9>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn endpoint_ack() -> u8 {
+fn endpoint_ack((): ()) -> u8 {
     1
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<10>",
-    decode_with = "crate::transport::decode::<_, 10>",
-    encode_with = "crate::transport::encode::<_, 10>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "endpoint_async",
+    guard = crate::transport::admit::<10>,
+    decode = crate::transport::decode::<_, 10>,
+    encode = crate::transport::encode::<_, 10>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 async fn endpoint_async(oversized: bool) -> ByteBuf {
     write(1);
@@ -60,17 +69,20 @@ async fn endpoint_async(oversized: bool) -> ByteBuf {
     )
     .unwrap();
     let response = Call::new(
-        cdk::api::canister_self(),
+        ic_platform_runtime::system::canister_self(),
         "endpoint_ack",
-        WaitPolicy::Unbounded,
+        Wait::Unbounded,
     )
-    .with_raw_args(&request)
+    .args(&request)
     .execute()
     .await
     .unwrap();
     assert_eq!(
         ic_wire::decode::<u8>(
-            &response.into_bytes(),
+            match response.outcome() {
+                Outcome::Reply(bytes) => bytes,
+                other => panic!("unexpected callback: {other:?}"),
+            },
             Encoding::Frame {
                 method: 9,
                 direction: Direction::Response
@@ -88,13 +100,16 @@ fn deny() -> Result<(), String> {
     Err("M0 standalone guard refusal".to_owned())
 }
 
-#[cdk::update(
-    guard = "deny",
-    guard = "crate::transport::admit::<11>",
-    decode_with = "crate::transport::decode::<_, 11>",
-    encode_with = "crate::transport::encode::<_, 11>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "endpoint_denied",
+    guard = deny,
+    decode = crate::transport::decode::<_, 11>,
+    encode = crate::transport::encode::<_, 11>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn endpoint_denied() -> u8 {
+fn endpoint_denied((): ()) -> u8 {
     write(1);
     1
 }

@@ -132,7 +132,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
             // Retry after upgrade to prove durable progress, not a warm heap accident.
             pic.advance_time(std::time::Duration::from_secs(600)).await;
             pic.tick().await;
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
             let (result, writes, grows, instructions) =

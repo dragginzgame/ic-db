@@ -264,9 +264,15 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                         .is_err()
                     );
                     assert_eq!(pic.get_stable_memory(canister).await, checkpoint);
-                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                        .await
-                        .unwrap();
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        wasm.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
             assert!(complete, "bounded input must finish");
@@ -460,7 +466,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         }
         if step_number == 0 || cursor.is_some() {
             // Recover both accumulation and already-selected output after upgrade.
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
             let mut changed = selection.clone();

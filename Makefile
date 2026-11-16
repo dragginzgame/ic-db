@@ -32,6 +32,7 @@ help:
 	  'make m3-references              Check cross-chunk migration references' \
 	  'make m3-jobs                    Check aggregate custody during maintenance' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
+	  'make m4-lifecycle               Check mixed writes, queries, jobs and migration' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
 	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
 	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
@@ -41,6 +42,9 @@ help:
 	  'make m2-count-comparison        Compare entity and indexed-prefix count costs' \
 	  'make m2-aggregate-comparison    Compare grouped IC DB/IcyDB aggregate costs' \
 	  'make m2-fluent-comparison       Compare fluent IC DB/IcyDB listings and sorting' \
+	  'make m2-query-matrix            Compare broad query/selectivity/population matrix' \
+	  'make m2-aggregate-paths         Compare primary and explicit-index aggregates' \
+	  'make m2-prefix-candidate        Measure isolated maintained-prefix experiment' \
 	  'make db                         Install db; run db to open the console' \
 	  'make release-patch/minor/major   Qualify and deliver a public source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
@@ -100,6 +104,18 @@ m1-records-comparison:
 
 m2-fluent-comparison:
 	bash scripts/measure-records.sh fluent
+
+.PHONY: m2-query-matrix
+m2-query-matrix:
+	bash scripts/measure-records.sh query-matrix
+
+.PHONY: m2-aggregate-paths
+m2-aggregate-paths:
+	bash scripts/measure-records.sh aggregate-paths
+
+.PHONY: m2-prefix-candidate
+m2-prefix-candidate:
+	bash scripts/measure-prefix-counts.sh
 
 m2-aggregate-comparison:
 	bash scripts/measure-records.sh aggregate
@@ -272,6 +288,22 @@ m1-commit-failures:
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/fault-build.jsonl
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/fault-build.jsonl)" && \
 	  IC_DB_M1_FAULT_WASM="$$artifact" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture
+
+.PHONY: m4-lifecycle
+m4-lifecycle:
+	@mkdir -p qualification/target/evidence/mixed-lifecycle
+	@git rev-parse HEAD > qualification/target/evidence/mixed-lifecycle/source-head.txt
+	@git diff --binary > qualification/target/evidence/mixed-lifecycle/working.patch
+	@rustc -Vv > qualification/target/evidence/mixed-lifecycle/compiler.txt
+	@cp qualification/Cargo.lock qualification/target/evidence/mixed-lifecycle/Cargo.lock
+	@cp qualification/ic-db-m1-records-canister/src/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/host.rs
+	@cp qualification/ic-db-m0-rollback-driver/tests/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/driver.rs
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features mixed-lifecycle --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/mixed-lifecycle/build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/mixed-lifecycle/build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/mixed-lifecycle/host.wasm
+	@if IC_DB_M4_WASM="$$PWD/qualification/target/evidence/mixed-lifecycle/host.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test mixed_lifecycle -- --nocapture > qualification/target/evidence/mixed-lifecycle/run.log 2>&1; then \
+	  cat qualification/target/evidence/mixed-lifecycle/run.log; \
+	else cat qualification/target/evidence/mixed-lifecycle/run.log; exit 1; fi
 
 db: m2-cli-artifact
 	@set -eu; out=qualification/target/evidence/m1; \

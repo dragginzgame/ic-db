@@ -7,10 +7,14 @@ use icydb::{
     types::Id,
 };
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<93>",
-    decode_with = "crate::transport::decode::<_, 93>",
-    encode_with = "crate::transport::encode::<_, 93>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "envelope_comparison_write",
+    guard = crate::transport::admit::<93>,
+    decode = crate::transport::decode::<_, 93>,
+    encode = crate::transport::encode::<_, 93>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_comparison_write(
     (mode, generation, text_len): (u8, u8, u16),
@@ -57,10 +61,14 @@ fn envelope_comparison_write(
     })
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<91>",
-    decode_with = "crate::transport::decode::<_, 91>",
-    encode_with = "crate::transport::encode::<_, 91>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_row",
+    guard = crate::transport::admit::<91>,
+    decode = crate::transport::decode::<_, 91>,
+    encode = crate::transport::encode::<_, 91>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_row(id: u64) -> (String, String, String, String) {
     measure(|| {
@@ -75,10 +83,14 @@ fn envelope_row(id: u64) -> (String, String, String, String) {
     .0
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<92>",
-    decode_with = "crate::transport::decode::<_, 92>",
-    encode_with = "crate::transport::encode::<_, 92>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_listing",
+    guard = crate::transport::admit::<92>,
+    decode = crate::transport::decode::<_, 92>,
+    encode = crate::transport::encode::<_, 92>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_listing(generation: u8) -> Vec<u64> {
     assert!(generation <= 1);

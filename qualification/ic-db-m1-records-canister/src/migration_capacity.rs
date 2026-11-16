@@ -9,7 +9,6 @@ use ic_db::{
     SchemaTransition,
 };
 use ic_db_m1_records_schema::EnvelopeRow;
-use ic_platform_runtime::cdk;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
@@ -29,7 +28,7 @@ struct Source {}
 
 enum Failure {
     Database(Error),
-    Runtime(ic_storage::RuntimeOpenError),
+    Runtime,
 }
 impl From<Error> for Failure {
     fn from(error: Error) -> Self {
@@ -44,7 +43,7 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
     let host = runtime();
     let source_memory = host
         .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-        .map_err(Failure::Runtime)?;
+        .map_err(|_| Failure::Runtime)?;
     if operation == 0 {
         Database::create(source_memory, source, [10; 16])?;
         return Ok((0, false));
@@ -77,7 +76,7 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
     }
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .map_err(Failure::Runtime)?;
+        .map_err(|_| Failure::Runtime)?;
     if operation == 3 {
         Maintenance::resume(source_memory, &transition)?.begin_copy(
             target_memory,
@@ -117,40 +116,45 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
 
 // Counts include host reopen/allocation admission, product work and supplier calls.
 // Typed refusal is returned normally; it must not be turned into a trap by the probe.
-#[cdk::update(
-    guard = "crate::transport::admit::<140>",
-    decode_with = "crate::transport::decode::<_, 140>",
-    encode_with = "crate::transport::encode::<_, 140>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "migration_capacity",
+    guard = crate::transport::admit::<140>,
+    decode = crate::transport::decode::<_, 140>,
+    encode = crate::transport::encode::<_, 140>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity(
     (operation, first, limit, bytes, deny_growth, stop_after): (u8, u16, u8, u32, bool, u64),
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     faults::arm(stop_after, deny_growth, false);
     let result = control(operation, first, limit, bytes).map_err(|error| match error {
         Failure::Database(Error::Limit) => 1,
         Failure::Database(Error::RowTooLarge) => 2,
         Failure::Database(Error::Storage(_)) => 3,
         Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
-        Failure::Runtime(error) => {
-            cdk::println!("runtime refusal: {error:?}");
-            4
-        }
+        Failure::Runtime => 4,
     });
     let (writes, grows) = faults::finish();
     (
         result,
         writes,
         grows,
-        cdk::api::instruction_counter() - start,
+        ic_platform_runtime::raw::instruction_counter() - start,
     )
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
-#[cdk::query(
-    guard = "crate::transport::admit::<141>",
-    decode_with = "crate::transport::decode::<_, 141>",
-    encode_with = "crate::transport::encode::<_, 141>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "migration_capacity_raw",
+    guard = crate::transport::admit::<141>,
+    decode = crate::transport::decode::<_, 141>,
+    encode = crate::transport::encode::<_, 141>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
     assert!(after.as_ref().is_none_or(|key| key.len() <= 512));

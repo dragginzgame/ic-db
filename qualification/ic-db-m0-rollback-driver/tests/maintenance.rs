@@ -160,7 +160,7 @@ async fn identified_maintenance() {
             let before = pic.get_stable_memory(canister).await;
             let error = if scenario == "missing" { 1 } else { 2 };
             assert_eq!(read(0, 0).await, Err(error));
-            pic.upgrade_canister(canister, b.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
                 .await
                 .unwrap();
             assert_eq!(call((0, 0, 0, 0)).await, Err(error));
@@ -172,10 +172,10 @@ async fn identified_maintenance() {
             call((6, 6, 12, 0)).await.unwrap();
         }
         let before_upgrade = pic.get_stable_memory(canister).await;
-        let rejection = pic
-            .upgrade_canister(canister, bad.clone(), vec![], None)
-            .await
-            .unwrap_err();
+        let rejection =
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, bad.clone(), vec![], None)
+                .await
+                .unwrap_err();
         assert!(
             rejection
                 .reject_message
@@ -186,21 +186,21 @@ async fn identified_maintenance() {
             read(0, 0).await.is_ok(),
             "failed upgrade must leave A installed"
         );
-        pic.upgrade_canister(canister, b.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
             .await
             .unwrap();
         assert_eq!(read(0, 0).await, Err(2));
         trap(0, 1).await;
         let frozen = call((0, 0, 0, 0)).await.unwrap();
         assert_eq!((frozen[1], frozen[2], frozen[3]), (1, 1, 7));
-        pic.upgrade_canister(canister, a.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, a.clone(), vec![], None)
             .await
             .unwrap();
         assert_eq!(read(0, 0).await, Err(3));
         let frozen_backing = pic.get_stable_memory(canister).await;
         assert_eq!(call((6, 1, 90, 0)).await, Err(3));
         assert!(frozen_backing == pic.get_stable_memory(canister).await);
-        pic.upgrade_canister(canister, b.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
             .await
             .unwrap();
         for boundary in 2..=4 {
@@ -208,13 +208,13 @@ async fn identified_maintenance() {
         }
         let partial = call((1, 0, 0, 0)).await.unwrap();
         assert_eq!((partial[4], partial[6], partial[7]), (2, 2, 2));
-        pic.upgrade_canister(canister, bprime.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, bprime.clone(), vec![], None)
             .await
             .unwrap();
         let before = pic.get_stable_memory(canister).await;
         assert_eq!(call((1, 0, 0, 0)).await, Err(4));
         assert!(before == pic.get_stable_memory(canister).await);
-        pic.upgrade_canister(canister, b.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
             .await
             .unwrap();
         if scenario != "success" {
@@ -239,7 +239,7 @@ async fn identified_maintenance() {
                 Err(2),
                 "B's maintenance decoder cannot serve source"
             );
-            pic.upgrade_canister(canister, a.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, a.clone(), vec![], None)
                 .await
                 .unwrap();
             assert_eq!(read(0, 0).await.unwrap().0, vec![(1, 11), (2, 20), (3, 31)]);
@@ -266,12 +266,12 @@ async fn identified_maintenance() {
         assert_eq!((published[1], published[2]), (2, 4));
         refuse_reuse().await; // Publication does not authorize discarding retained source.
         assert_eq!(read(0, 0).await.unwrap().0, vec![(1, 1), (2, 2), (3, 3)]);
-        pic.upgrade_canister(canister, a.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, a.clone(), vec![], None)
             .await
             .unwrap();
         assert_eq!(read(0, 0).await, Err(2));
         assert_eq!(call((6, 1, 90, 0)).await, Err(2));
-        pic.upgrade_canister(canister, b.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
             .await
             .unwrap();
         trap(3, 6).await;
@@ -287,7 +287,7 @@ async fn identified_maintenance() {
             cleaned[8], published[8],
             "logical cleanup does not shrink stable memory"
         );
-        pic.upgrade_canister(canister, b.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, b.clone(), vec![], None)
             .await
             .unwrap();
         assert_eq!(read(3, 0).await.unwrap().0, vec![(4, 4), (5, 5), (6, 6)]);
@@ -380,9 +380,15 @@ async fn identified_maintenance() {
                     Ok(())
                 );
                 if chunk == 0 {
-                    pic.upgrade_canister(canister, b.clone(), vec![], None)
-                        .await
-                        .unwrap();
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        b.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
                     assert_eq!(&inspect(0, 0).await.0[2..], &[2, 2, 1]);
                 }
             }

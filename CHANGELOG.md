@@ -28,6 +28,71 @@ Expect format `ICDBMF02`; this command inspects a fresh temporary fixture.
 
 ### 🔧 Qualification
 
+- Adopt Platform Types 0.21.1 and Runtime/macros/guard 0.23.12. Qualification
+  hosts declare guards, codecs, bounds and trapping policy explicitly; upgrades
+  stop the local canister before replacing its executable and restart it afterward.
+  Cross-runtime identity preservation, endpoint refusal, commit rollback and
+  maintenance probes pass. Schema syntax and durable encodings are unchanged.
+  Storage and frozen IcyDB retain their older raw-import dependency; Canic's
+  separate integration is not upgraded by this change.
+  [Receipt](qualification/README.md#platform-adoption-019).
+
+- Qualify and move the typed database adapter into Canic. Its focused `db-test`
+  checks actual-caller authorization, bounded pages/cursors, atomic refusal,
+  five upgrades, maintenance/cancellation and reply-encoding rollback. Retire
+  IC DB's temporary adapter patch/runner; Canic owns the sole implementation.
+  The IC DB engine and durable format are unchanged; remote CLI access remains
+  pending. [Receipt](qualification/README.md#canic-typed-application-integration-019).
+
+```sh
+make -C ../canic db-test
+```
+
+- Add isolated `make m2-prefix-candidate`. Prototype first-component counters
+  in a disposable source copy, retaining scanned counts and the main engine's
+  format. At 512 rows the selected count falls from 7.80M to 0.67M instructions;
+  inserts add 7.31%, category-changing replacement 12.06%, same-category replacement
+  1.13%, and the host adds 7,955 raw Wasm bytes. Native invariants, upgrades and
+  IC rollback probes qualify the narrow candidate. Opt-in schema declarations,
+  broader type/fan-out coverage and bounded publication validation remain before
+  product adoption. This candidate is now parked while application integration
+  and engine maturity take priority; see the [receipt](qualification/README.md#maintained-prefix-count-candidate-019).
+
+```sh
+make m2-prefix-candidate
+```
+
+- Add `make m2-aggregate-paths` to compare primary scans and explicit-index
+  grouping over the same balanced/skewed datasets. All 3,072 executions pass.
+  Missing-category grouping becomes about 7× cheaper, but full grouping becomes
+  4.1–4.2× more expensive through the index. Keep the planner default unchanged.
+
+```sh
+make m2-aggregate-paths
+```
+
+- Add `make m2-query-matrix`: 195 query cases across balanced/skewed populations
+  of 32/128/511 rows, before and after upgrade. All 4,680 executions pass their
+  result/refusal checks; retain 1,908 successful matched pairs and exclude 432
+  legacy sort refusals. Record per-query CSV and family summaries. IC DB wins
+  most selected cases, but populated prefix counts cost up to 14.4× and selective
+  grouped queries up to 2.6× legacy instructions. No product optimization is made.
+
+```sh
+make m2-query-matrix
+```
+
+- Add `make m4-lifecycle`: an independent map model checks 153 attempted batches,
+  612 complete read checks, exact-job invalidation, six upgrades and a bounded
+  schema copy after accumulated writes. Cover unique swaps, reference chains,
+  repointing, refused/no-op backing preservation and target cleanup. Record full
+  read/modify/write instructions and observed cycle deltas; this is scoped
+  qualification, not a matched IcyDB performance comparison.
+
+```sh
+make m4-lifecycle
+```
+
 - Qualify the adopted count format through native invariants, real IC write traps,
   growth refusal/retry, retained-job invalidation and copy/cutover/recovery. The
   final matched host adds 967 Wasm bytes, with about 0.11% extra instructions on

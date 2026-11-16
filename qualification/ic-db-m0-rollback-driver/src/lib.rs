@@ -10,6 +10,25 @@ use ic_testkit::{
 use ic_wire::Limits;
 use std::{path::PathBuf, time::Duration};
 
+/// Upgrade a local fixture only after the IC has completed its stop request.
+/// Platform's suspended futures are heap-local; they are never migrated.
+/// Restart also follows a refused atomic upgrade so callers can inspect the
+/// preserved predecessor. Testkit/PocketIC owns each management operation.
+/// # Errors
+/// Returns stop/start or upgrade refusal without retrying the upgrade.
+pub async fn upgrade_stopped(
+    pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
+    canister: ic_testkit::pocket_ic::CanisterId,
+    wasm: Vec<u8>,
+    args: Vec<u8>,
+    sender: Option<ic_testkit::pocket_ic::CanisterId>,
+) -> Result<(), ic_testkit::pocket_ic::RejectResponse> {
+    pic.stop_canister(canister, sender).await?;
+    let result = pic.upgrade_canister(canister, wasm, args, sender).await;
+    pic.start_canister(canister, sender).await?;
+    result
+}
+
 /// Transport bounds for the fixed probe controls.
 pub const LIMITS: Limits = Limits {
     bytes: 65_536,

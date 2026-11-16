@@ -38,6 +38,52 @@ before deletion. The focused `enum_collections` Wasm test checks persistence,
 no-op/refusal invariance, whole-message rollback, upgrade, replacement and deletion.
 Inspect this fixture with `db schema EnumCollectionsRow`.
 
+## Platform adoption (0.19)
+
+On 2026-11-16 the product adopted Platform Types 0.21.1; all seven private Wasm
+hosts adopted Runtime/macros/guard 0.23.12. Each export declares its guard, codecs,
+request bound and non-returning error policy. The private transport retains its
+existing Wire frames and installs an explicit IC-trapping panic hook. Product
+schema declarations, durable codecs and stored formats do not change.
+
+The local driver uses Testkit's stop → upgrade → start operations, including
+restart after a refused upgrade so the preserved predecessor remains inspectable.
+It adds no retry, reset or migration policy. Storage 0.74.1 and frozen IcyDB retain
+Runtime 0.22.5 for raw IC imports; Testkit retains its independent older native
+Platform facade/types. Only the new Runtime guard owns the Wasm executor. The
+separate Canic checkout and its pinned integration cohort are not updated here.
+
+Focused checks passed with Rust 1.100.0: 23 native Account/scalar-key tests,
+all-feature Wasm checks/Clippy for the seven hosts and transport, native driver
+test compilation and selected Clippy, installed endpoint admission/reply rollback,
+Account/Principal primary keys, instruction exhaustion, all 137 backing-write
+trap positions, growth refusal and identified maintenance/cancellation/reopen.
+Safe failure and subsequent progress are checked separately. These are correctness
+checks; the comparison measurements below retain their original supplier cohorts.
+
+The cross-runtime `platform_upgrade` test installs the predecessor built with
+Runtime 0.22.5 and Types 0.20.4, writes identity records, then upgrades to the new
+cohort. It checks identical backing bytes and responses, canonical default-account
+uniqueness, rollback of a later write and a successful new write. It requires both
+artifacts explicitly; rebuilding both with the current lock is not this test.
+The local receipt in `target/evidence/platform-upgrade/` has SHA-256 identities:
+
+| Input | SHA-256 |
+| --- | --- |
+| `previous.wasm` | `ea7b7ca8bbd169e49a45451ad242348fd8ce7afc6de27a0af4a18cb48ef2cae1` |
+| `current.wasm` | `d5a0807855ae98cf04b00de881f37d0e9de0ada263a18e226b791ee0f601cc45` |
+| Product lock | `362ec29fb46bf3a3a1dd01946b7a53d1acde5256bd8fbcde7687b6073740ebf9` |
+| Qualification lock | `5c7ccec75858e63a7f3e0acd51fe4e321291d33e968c9088404929f366f20048` |
+
+With those retained local artifacts and the prepared PocketIC server:
+
+```sh
+IC_DB_PREVIOUS_PLATFORM_WASM="$PWD/qualification/target/evidence/platform-upgrade/previous.wasm" \
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/platform-upgrade/current.wasm" \
+cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test platform_upgrade
+```
+
 ## Comparison with frozen IcyDB
 
 Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
@@ -106,12 +152,15 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
+| Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
+| Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows, plus existing retained-job witnesses | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
-| Canic endpoints and full applications | Direct-library qualification hosts and temporary CLI | No matched integration benchmark | Adapter composition and real application acceptance remain M4 work |
+| Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
+| Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Adapter is in Canic's working checkout; delivery and application CLI remain M4 work. [Receipt](#canic-typed-application-integration-019) |
 
 ### Product structure and functionality
 
@@ -2047,6 +2096,392 @@ IC DB artifact SHA-256:
 `9f91fab79dbf0d2ff590dcf1dc6ffe4cefcfdb2b826ae167aee86bb574bcb475`.
 The earlier scan and candidate artifacts retain their separate identities above.
 No frozen IcyDB code, metadata or release was changed.
+
+### Canic typed application integration (0.19)
+
+Canic now owns the optional adapter and `qualification/canic-db-witness`.
+Its focused `make db-test` qualifies a real application in local PocketIC,
+building normal and fault-enabled Wasm through the current Canic workspace.
+The witness consumes IC DB Git revision
+`a8b2b8406e8388619e0836ad9785939209cd13e1`; it does not use the prefix-count
+candidate. The adapter was first qualified against isolated Canic revision
+`e84702b3bdcf4eb209476aadd053df21f18dd8eb`, then moved into Canic and requalified
+with its existing Wire 0.24.2 selection. Unrelated pending Auth work is preserved.
+Canic's adapter changes are local and uncommitted; no release or push is claimed.
+
+```sh
+make -C ../canic db-test
+```
+
+Prepare Canic's simulator with its `make qualification-setup`, or explicitly
+select an already prepared directory through `IC_TESTKIT_SERVER_DIRECTORY`.
+The adoption run used IC DB's prepared `.tools/m0-pocketic` directory. No
+deployment, initialization of a live database or simulator download is implicit.
+The temporary IC DB adapter patch and runner are removed; do not maintain a second
+adapter or fixture protocol here.
+
+The candidate mounts `db_inspect`, `db_query` and `db_write`. Their passive types
+and Wire identities belong to the application. Canic captures the actual caller,
+invokes synchronous application authorization before payload copying/decoding,
+then delegates framed transport to Wire and execution to Platform. The application
+explicitly initializes its owner allocation and IC DB allocation, declares `Item`
+with named `id`/`score` fields and a `score,id` index, and constructs existing fluent
+operations. No engine dependency, endpoint registry, schema compiler, authorization
+store, migration controller or dynamic query executor is added to the adapter.
+
+The installed test passes these externally observable checks:
+
+| Boundary | Observed result |
+| --- | --- |
+| Inspection | Actual declared entity, field types and index names; current admitted row count |
+| Authorization and framing | Wrong caller denied before malformed payload decoding; wrong method/direction and oversized frames refuse; rejected writes leave the database empty |
+| Batch interactions | A conflict with an existing key and duplicate targets refuse the complete batch |
+| Sparse listing | Two nonmatches produce an empty page with progress; continuation returns the expected later rows; completion is explicit |
+| Continuation admission | Changed predicate and malformed cursor refuse; work outside the application's bound refuses |
+| Upgrade | Five upgrades preserve stored owner/data; unchanged query continuation works after the first upgrade |
+| Reply failure | An oversized application reply traps after successful mutation; row count remains unchanged and the same inserts succeed on retry |
+| Maintenance | Reads/writes refuse while frozen, including after reinstalling the ordinary source executable; explicit supported cancellation restores access |
+| Fault isolation | Ordinary Wasm has no private fault/maintenance endpoint |
+
+Requests permit 1–3 results and 1–4 examined candidates; writes contain at most
+four rows. Engine output is bounded to 1 KiB and transport to 64 KiB. These are
+witness envelopes, not new product limits. Authorization is deliberately one
+installation-owned principal; tenant/row policy, multi-application composition,
+schema graph growth, complete migration workflows and a deployed application CLI
+are not established by this test. The normal `db` CLI still uses its local fixture.
+No performance comparison with legacy Canic/IcyDB is claimed.
+
+Canic's current `target/db/` contains the source archive, lockfile/compiler/features, Cargo
+artifact messages, normal/fault Wasm and passing installed run log. Historical
+isolated evidence remains under IC DB's
+`qualification/target/evidence/canic-db-integration/`, including the original
+patch and source snapshot. Historical artifact SHA-256 (not the adoption build):
+
+- Normal: `5083e0f1c5018ffa6cb78e9e228de3c2ace1978563390f1e96d705ae1375f525`.
+- Fault: `dd39dc5e850085286f8ef811a58c3107e66a7c5e6dcd82f6c23d4c9bcc138924`.
+
+Ownership review: IC DB retains its existing executor, codecs, schemas and durable
+format. Canic's established Blob mounting pattern supplies the adapter mechanics;
+IcyDB's frozen `guards/mod.rs` supplies the retained authorization-before-request
+lesson, not copied SQL or session machinery. The witness's owner record is
+application state, not a new database representation. Canic is now the sole
+source/test owner. The application-specific request types do not establish a
+generic remote CLI contract; common inspection and explicit application-query
+selection must be settled before connecting `db` to deployed databases.
+
+### Maintained prefix-count candidate (0.19)
+
+Parked by maintainer sequencing: application integration and engine maturity take
+priority over further optimization. Retain this evidence without adopting the
+candidate format or its additional durable counter obligations.
+
+`make m2-prefix-candidate` copies the current source to an ignored evidence
+directory and applies the reviewed [candidate patch](experiments/prefix-counts.patch)
+only there. It builds a current control, the candidate and frozen IcyDB, then runs
+native invariants, matched count/write journeys and real IC rollback checks.
+The existing engine under `crates/`, its format and public API remain unchanged.
+Source copies, exact patch, archives, locks, feature graphs and artifacts are
+retained in `target/evidence/prefix-count-candidate/`; this is a disposable
+experiment, not an alternate supported engine or an automatically applied patch.
+
+The candidate maintains one exact first-component count for compound indexes
+whose first field is required Nat64 and is not the primary key. These narrow
+eligibility rules select the experiment, not the eventual product type surface.
+Each nonzero prefix has one record in the existing map: tag/entity/index/value
+key (17 bytes) and a little-endian u64 count (8 bytes). Zero removes the record;
+an absent record means zero only under the admitted, completely maintained
+candidate format. Old `ICDBMF02` data refuses intact; isolated live/maintenance/
+copy markers are `ICDBPFX1`, `ICDBPM01` and `ICDBPC01`, with no converter/reset.
+
+Preparation folds old/new index memberships into signed net deltas, checks
+underflow/overflow and publishes counts with the existing atomic row/index
+commit. Same-prefix replacements have zero net count change. Private migration
+inserts rebuild counts rather than copying source counters. The explicit
+experimental `prefix_cardinality` lookup does not inspect row integrity; normal
+fluent `count()` remains reachable and keeps its row-validating behavior. Both
+paths are measured, preventing executor deletion from masquerading as savings.
+
+IcyDB research at the frozen revision:
+[`index/cardinality`](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/cardinality/mod.rs)
+and its [regressions](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/cardinality/tests.rs)
+require synchronized ownership, checked signed changes, nonzero retained
+multiplicity and invalidation of incomplete evidence. Its optional heap projection
+is bounded at 4,096 retained prefixes and can become unavailable rather than
+rejecting writes. The candidate independently applies the signed-delta algorithm
+to durable counters in one live state; it does not copy the heap cache, overlay,
+watermark or generation machinery. It also does not inherit the optional-cache
+space guarantee: durable space grows with distinct prefixes and there is no
+eviction. Adding eviction would require an explicit availability contract.
+
+Measured 2026-11-16, matched three-Nat64-field / one-index fixture, with the same
+locked supplier graph and complete opening/admission/result-conversion interval:
+
+| Operation | Current IC DB instructions | Candidate instructions | Change |
+| --- | ---: | ---: | ---: |
+| 32 individual inserts, total | 22,727,917 | 24,390,060 | +7.31% |
+| Read/modify/replace, category changes | 831,021 | 931,209 | +12.06% |
+| Read/modify/replace, same category | 827,013 | 836,347 | +1.13% |
+| Read/modify/replace, identical value | 537,252 | 541,081 | +0.71% |
+| Primary hit | 472,769 | 480,520 | +1.64% |
+| First indexed listing | 773,046 | 785,459 | +1.61% |
+| 512 rows, category-0 count (129 matches) | 7,795,079 scanned | 669,448 metadata | 11.64× fewer |
+
+Legacy's metadata count for the same prefix costs 1,503,444 instructions: the
+candidate uses 55.5% fewer in this fixture. Candidate metadata lookup grows from
+482,928 at 32 rows to 669,448 at 512, so this is not a constant complete-call cost.
+Scanned counts are still exercised separately against independent expected rows.
+Insert overhead ranges from 3.07% to 13.82% across the 32 samples. Cycle debits
+are in the logs; for the category-changing replacement they are 7,845,517 versus
+7,945,705, including platform/transport costs. Query cycles are not inferred.
+
+The candidate host is 287,548 raw / 262,459 code bytes versus control 279,593 /
+255,692: **+7,955 raw / +6,767 code bytes**, including the extra metadata-query
+endpoint and retaining scanned counts. Per-entity growth is not measured here.
+At 512 rows both allocate 1,703,936 stable bytes; fitting four 25-byte counters
+into existing allocation does not make them free. A separate native witness
+stores 512 distinct counters, checks 12,800 logical key/value bytes and removes
+them on last-row deletion. Physical reclamation or shrink is not inferred.
+
+Four native tests pass final-state exchanges, same-prefix and changing-prefix
+writes, last-row deletion, no-op/refusal backing preservation, exact counter bytes,
+malformed/zero/missing-underflow/overflow cases, incompatible-format refusal,
+reopen, high prefix cardinality and a chunked migration that changes categories
+and row encoding. The target's independently expected counters match after
+publication. Both control and candidate Wasm count journeys pass before/after
+upgrades. The candidate also passes full-backing rollback at all 218 writes of
+the selected replacement, real instruction exhaustion, growth refusal at ID 1700
+and successful retry; the retry grows from 26 to 34 pages. No ordinary-write WAL
+or second mutation executor is introduced.
+
+**This is not ready for automatic adoption.** Product work still needs an explicit
+counted-prefix declaration and schema identity, supported key/equality semantics,
+and broader fan-out/growth envelopes. The candidate's maintenance pass validates
+counter record shape, while the probe independently checks rebuilt multiplicities;
+it does not yet supply a bounded, independent publication proof for every prefix
+counter. Missing or well-formed but wrong metadata is not an integrity scan result.
+Resolve that admission/validation contract before shipping the format. The
+evidence supports investigating opt-in counts, not maintaining every possible
+prefix or silently replacing fluent `count()`.
+
+Final artifact SHA-256:
+
+- Control: `586867f82339aef0a94d098048db728eb39c809cac22d5ddb9661b4257180759`.
+- Candidate: `14c3960ea23fc41dbfecb860b7489d9ab6ec731721eb41ca051e5482c1429c12`.
+- Legacy: `1ed815dfb58ef7e50747c163fbec2c1c7ed3c159bb8d2c6c3b7e926f77814b89`.
+
+### Aggregate access-path control (0.19)
+
+`make m2-aggregate-paths` retains the query matrix's populations, distributions,
+thresholds, result oracle and upgrade checks. It compares the default primary
+scan with explicit `using_index("category,id", &[])` for each IC DB aggregate.
+Legacy executes its same public, automatically indexed query in both arms; the
+private operation selector does not substitute another legacy execution lane.
+All **3,072 executions / 1,536 matched pairs** pass. Both IC DB paths return
+identical complete groups, and the backing remains unchanged.
+
+Selected grouped-count instructions at 511 rows, amount threshold zero:
+
+| Distribution / selection | Primary scan | Explicit index | Index / scan |
+| --- | ---: | ---: | ---: |
+| Balanced, all categories | 6,965,800 | 28,891,096 | 4.15× |
+| Balanced, category 0 (127 rows) | 5,742,943 | 8,038,537 | 1.40× |
+| Balanced, missing category | 5,404,490 | 758,725 | 0.14× |
+| Skewed, all categories | 6,814,298 | 28,755,858 | 4.22× |
+| Skewed, category 0 (415 rows) | 6,498,990 | 23,607,628 | 3.63× |
+| Skewed, category 3 (32 rows) | 5,492,566 | 2,605,029 | 0.47× |
+| Skewed, missing category | 5,403,706 | 753,820 | 0.14× |
+
+This rules out an unconditional switch to the index, including for every category
+equality predicate. The non-covering index fetches and validates owner rows;
+the primary scan reads rows directly. The measured crossover depends on input
+selectivity, layout and supplier, so it is not a constant to hard-code into the
+planner. Keep explicit access selection and the current default. Any later
+automatic choice needs a bounded information source and evidence across both
+sparse and dense cases, while preserving admitted semantics and continuation.
+
+Measured 2026-11-16 with the same compiler/locked graph as the query matrix.
+The original matrix artifacts remain intact. New evidence lives in
+`target/evidence/aggregate-paths/`, including `queries.csv`, `summary.tsv`, raw
+results and source/build receipts. Hosts are 321,866 raw / 296,887 code bytes and
+3,293,226 / 3,181,702 respectively. SHA-256:
+
+- IC DB: `854dc15dfa3103429449034818d5c912bddc387ec53e27b122c8321b8a10981d`.
+- IcyDB: `5402e8ab13bc2b714a160fd7ae9afaf09ea8fba1c5540c86d29180ca6f8fd295`.
+
+### Broad query matrix (0.19)
+
+`make m2-query-matrix` explicitly builds both existing scalar hosts with fluent,
+grouped and count endpoints together. It uses frozen IcyDB
+`6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`, with SQL disabled, and the current IC DB
+working tree. No product implementation, frozen source or supplier is modified.
+The new host feature explicitly gives IC DB queries a 512-candidate work budget;
+its normal 128-candidate default and older comparison builds are unchanged.
+
+Measured 2026-11-16: **4,680 executions** cover 195 cases at each combination of
+population (32/128/511), distribution (balanced/skewed), engine and phase (settled
+before/after upgrade). Every result agrees with independent source tuples, sorting
+and arithmetic; each complete read matrix preserves stable backing. Of 2,340
+paired cases, 432 have the expected IcyDB public-lane sort refusal (code 174).
+Those are excluded from speed comparisons. Of the remaining **1,908 successful
+pairs**, IC DB uses fewer instructions in 1,796 and legacy in 112. These frequencies
+reflect the selected matrix, not application query frequencies or independent
+random trials.
+
+The schema has three Nat64 fields (`id`, `category`, `amount`) and one
+`(category,id)` index. IDs are sequential. Amount is `(id * 37 % 101) * 10`, giving
+non-monotonic values and repeated ties. Balanced categories use `id % 4`; skewed
+categories use zero when `id % 16 < 13`, otherwise `id % 4`. Thus category zero
+contains 415 of the largest skewed fixture's 511 rows. Amount thresholds
+0/500/950/1001 exercise dense, selective, sparse and empty results.
+
+The 195 cases comprise four primary hit/miss requests, three first-ten index
+listings, four exact counts, 120 fluent listing/sort requests and 64 grouped
+count/sum/min/max requests. Fluent limits are 1/8/32; category selections include
+0/3/missing 99 and all categories. Ordering is ID ascending/descending, compound
+category/ID, or amount descending with ID tie-breaking. This compares first
+results, not cursor compatibility. The 511-row ceiling leaves room to establish
+scan exhaustion within IC DB's 512-work bound; it does not qualify large retained
+jobs, arbitrary datasets, rich types, DISTINCT, averages or projection costs.
+
+The table gives **IC DB / IcyDB instruction ratios**: below 1 is cheaper for IC DB.
+Each population's p50 is the upper median of paired ratios across both
+distributions, all selected parameters and both phases. The range preserves
+the fastest and slowest relative cases instead of hiding them in one average.
+
+| Query family | 32-row p50 | 128-row p50 | 511-row p50 | 511-row range |
+| --- | ---: | ---: | ---: | ---: |
+| Primary hit | 0.434 | 0.435 | 0.455 | 0.391–0.497 |
+| Primary miss | 0.446 | 0.445 | 0.507 | 0.467–0.507 |
+| First ten index matches | 0.250 | 0.234 | 0.235 | 0.218–0.264 |
+| Empty index listing | 0.260 | 0.258 | 0.314 | 0.308–0.314 |
+| Filtered ID ascending | 0.270 | 0.272 | 0.326 | 0.083–0.600 |
+| Filtered ID descending | 0.271 | 0.272 | 0.327 | 0.076–0.587 |
+| Compound ordered listing | 0.290 | 0.262 | 0.258 | 0.012–0.384 |
+| Whole-entity maintained count | 0.394 | 0.390 | 0.392 | 0.348–0.393 |
+| Populated prefix count | 0.679 | 1.553 | 5.115 | 1.605–14.441 |
+| Empty prefix count | 0.427 | 0.424 | 0.497 | 0.480–0.498 |
+| Grouped count | 0.335 | 0.455 | 0.543 | 0.150–2.608 |
+| Grouped sum | 0.327 | 0.431 | 0.503 | 0.150–2.571 |
+| Grouped minimum | 0.331 | 0.452 | 0.542 | 0.150–2.571 |
+| Grouped maximum | 0.331 | 0.451 | 0.541 | 0.150–2.571 |
+
+Two losses deserve separate interpretation:
+
+- Skewed category-zero count at 511 rows costs **22,425,798** IC DB instructions
+  versus **1,553,142** legacy instructions before upgrade. IC DB performs an
+  indexed, row-validating count; legacy reads synchronized prefix metadata.
+  Their exact logical answers agree, but their integrity work and write-side
+  obligations differ. The earlier [count profile](#count-cost-decomposition-019)
+  identifies owner-row fetch cost; this is not primarily opening overhead.
+- Missing-category grouped count at 511 balanced rows costs **5,404,276** versus
+  **2,072,550**. IC DB's unordered default uses the primary scan; legacy chooses
+  the category index. By contrast, grouping all 511 balanced rows costs 6.97M
+  versus 40.61M for count and 7.07M versus 44.30M for sum. These results expose
+  access-path/selectivity tradeoffs, not a universal reducer advantage. Explicit
+  index selection exists in IC DB but is not substituted for its default in this
+  matrix. No planner or counter is added merely to improve these numbers.
+
+Instruction intervals include opening/session construction, admission, query
+execution and result conversion, excluding Wire decode/encode. Direct listing
+uses IC DB's index-prefix API and legacy's fluent API. Grouped integer sums in
+legacy return Decimal and undergo exact in-range conversion in its host. The
+group-state ceilings remain different (legacy four groups / 64 KiB, IC DB 32 /
+128 KiB); both produce at most four small groups here. Legacy startup and journal
+settling happen explicitly after each seed write. Upgrade readiness is measured
+separately before either engine's post-upgrade queries; this is not a cold versus
+heap-cache benchmark. Query cycles are not inferred from instructions or a
+delayed query charge. Startup/reopen call counts, instructions and observed cycle
+debits remain in the raw log.
+
+Combined reachable hosts: **321,798 raw / 296,819 code bytes** for IC DB versus
+**3,293,215 / 3,181,691** for legacy: 90.2% less raw Wasm in this fixture. This
+does not establish complete product parity, entity growth savings or SQL-removal
+savings; SQL is already excluded from both builds. Rust 1.100.0 / LLVM 23.1.5,
+locked release builds and PocketIC 16.1.0 are used. Artifact SHA-256:
+
+- IC DB: `1ad869f84cd36506fbf1115fc1641c10fb747b3e74c1f4510bd926879d93bbed`.
+- IcyDB: `3056bfc82d31d63572328480e1071c95e4eb7c30742a74bd49387b006bc8eb43`.
+
+Evidence is in `target/evidence/query-matrix/`: `queries.csv` contains every
+measurement/refusal; `summary.tsv` contains family p50/ranges; `results.log`
+contains readiness costs and exact-result checks. Source HEAD/diff/hashes, the
+driver, lock, feature graphs, compiler/build receipts and both artifacts identify
+the run. The qualified lock SHA-256 is
+`0344fcaf2a4482df6935a9e70a146622095086f329ca594f6bb070ffcd078f1a`.
+
+### Mixed-history qualification (0.19)
+
+Run `make m4-lifecycle` after the existing `make m0-setup`. This selects only the
+`mixed-lifecycle` host feature and one driver test; it does not run the full
+qualification suite or expose fault controls in ordinary builds. Product crates,
+formats and public APIs are unchanged. The model uses ordinary `BTreeMap`s and
+full-state uniqueness/reference checks, without an IC DB dependency, codecs,
+schema metadata or product query helpers.
+
+The three synthetic entities are parents with unique codes, items with indexed
+scores and references to parents, and links referencing items. Twelve fixed
+rounds change keys, values and batch order. Initial population is 28 records,
+peak population 31; the largest batch has 24 commands. Queries return complete
+results within 32 rows, retained jobs advance two candidates per call, and copy
+uses two rows / 4,096 encoded bytes per chunk. These names are fixture data, not
+a proposed application schema or public request protocol.
+
+The 2026-11-16 run passes:
+
+- 153 attempted batches, including three-record chain insertion/deletion,
+  read/modify/replace, reference repointing and unique-value swaps. Every attempt
+  is followed by four complete observations compared with independently expected
+  rows, counts, revisions, parent-prefix filtering, score-index order and grouping.
+- 73 refused batches and 13 no-ops preserve the complete stable backing. Missing
+  targets, duplicate commands, unique collisions and surviving references refuse
+  without applying an earlier valid command in the same batch.
+- An incomplete exact count survives unrelated writes, no-ops, a refused write
+  and upgrade, then explicitly invalidates after its source changes. A completed
+  count retains its original answer after another row is inserted. Jobs are
+  explicitly cancelled afterward, without adding a scheduler.
+- Six upgrades preserve stable backing, including interruptions during copy and
+  validation. Copy transforms the accumulated 28 records, widening indexed score
+  values from Nat64 to Nat128 and adding 1,000. Source and target ordinary access
+  remain closed before publication. Rebuilt counts, both index orders and groups
+  match the transformed model; target writes and reads remain valid through
+  bounded retired-source cleanup and another upgrade.
+
+The fixture found no product defect in this envelope. It supplements the separate
+backing-write trap, instruction-exhaustion, growth-refusal and migration-cancellation
+probes; it does not replace them. It does not establish random-history coverage,
+continuous-write aggregate completion, rich-type parity or large-dataset bounds.
+
+Selected complete update measurements (opening, preparation, commit and the
+caller-side read for read/modify included; Wire decoding/encoding excluded from
+the instruction counter):
+
+| Journey | Samples | Instructions | Observed cycle-balance decrease |
+| --- | ---: | ---: | ---: |
+| Insert three-record reference chain | 12 | 905,594–1,386,827 | 7,941,761–8,424,930 |
+| Delete entire chain in one batch | 12 | 1,049,291–1,119,600 | 8,083,387–8,153,826 |
+| Read item, change score, replace | 13 | 659,373–774,069 | 7,668,499–7,783,195 |
+| Repoint an item to another parent | 12 | 683,288–736,553 | 7,692,414–7,745,680 |
+| Exchange two unique codes | 12 | 726,491–767,428 | 7,751,221–7,792,288 |
+| Identical replacement | 13 | 238,672–253,553 | 7,247,801–7,262,679 |
+
+The 612 complete read checks cost 598,714–2,041,805 instructions each. One check
+includes all three entity scans, metadata, two item-index queries and grouping;
+it is not the cost of a single lookup. These samples follow update calls with an
+initialized host runtime. Post-upgrade reopening is checked separately, without
+claiming a cold/warm performance comparison. Cycle-balance deltas also include
+transport/platform costs and potentially periodic query charging; they are not
+isolated commit-compute costs. For example, one refused-delete sample has a larger
+cycle debit despite comparable execution instructions. No matched legacy run or
+general speedup is claimed.
+
+The feature-enabled host is 1,069,948 raw / 1,017,816 code bytes, including existing
+unrelated qualification endpoints, both schemas, jobs and maintenance. This is
+not comparable with the small scalar/count host. SHA-256:
+`2b9a39df550b30f4a73ba2d5ccb41be89e24030840c676991967f36fcaa3a4e8`.
+`target/evidence/mixed-lifecycle/` retains the host, compiler/build receipt, selected
+lock, source HEAD/diff, explicit fixture sources and test log. The frozen IcyDB
+count regressions and final-batch uniqueness rule inform these checks; no legacy
+executor or journal code is copied, and neither IcyDB nor Canic is modified.
 
 ## Numeric and schema contracts
 

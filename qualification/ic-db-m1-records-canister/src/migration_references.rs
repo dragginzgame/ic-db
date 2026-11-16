@@ -9,7 +9,6 @@ use ic_db::{
     SchemaTransition,
 };
 use ic_db_m1_records_schema::OptionalLink;
-use ic_platform_runtime::cdk;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
@@ -151,15 +150,19 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
     }
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<144>",
-    decode_with = "crate::transport::decode::<_, 144>",
-    encode_with = "crate::transport::encode::<_, 144>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "migration_references",
+    guard = crate::transport::admit::<144>,
+    decode = crate::transport::decode::<_, 144>,
+    encode = crate::transport::encode::<_, 144>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn migration_references(
     (operation, first, limit, bad, stop): (u8, u16, u8, bool, u64),
 ) -> (Result<(u32, bool), u8>, u64, u64) {
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     faults::arm(if stop == u64::MAX { 0 } else { stop }, false, false);
     let result = control(operation, first, limit, bad).map_err(|error| match error {
         Error::ReferenceViolation => 1,
@@ -169,17 +172,25 @@ fn migration_references(
         other => panic!("unexpected reference migration refusal: {other:?}"),
     });
     if stop == u64::MAX {
-        cdk::api::trap("reference migration trap after operation");
+        ic_platform_runtime::system::trap("reference migration trap after operation");
     }
     let (writes, _) = faults::finish();
-    (result, writes, cdk::api::instruction_counter() - start)
+    (
+        result,
+        writes,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
-#[cdk::query(
-    guard = "crate::transport::admit::<145>",
-    decode_with = "crate::transport::decode::<_, 145>",
-    encode_with = "crate::transport::encode::<_, 145>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "migration_references_raw",
+    guard = crate::transport::admit::<145>,
+    decode = crate::transport::decode::<_, 145>,
+    encode = crate::transport::encode::<_, 145>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage {
     assert!(after.as_ref().is_none_or(|key| key.len() <= 512));

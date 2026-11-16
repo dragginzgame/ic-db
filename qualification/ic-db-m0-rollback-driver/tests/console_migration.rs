@@ -82,7 +82,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
     assert_eq!(call(2).await.unwrap(), (false, vec![vec!["2".into()]]));
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let mut copied = 2;
@@ -138,7 +138,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
         "cleanup does not authorize resetting the source"
     );
     assert_eq!(pic.get_stable_memory(canister).await, backing);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(call(6).await.unwrap().1, target);

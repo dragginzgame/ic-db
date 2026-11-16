@@ -172,7 +172,7 @@ async fn revision_aggregation() {
         );
         assert!(backing == pic.get_stable_memory(canister).await);
     }
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     assert_eq!(inspect().await, first);

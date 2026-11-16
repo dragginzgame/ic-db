@@ -1,5 +1,5 @@
 //! Cross-entity Account/Subaccount identities through the ordinary product API.
-use super::{Batch, Principal, cdk, open, runtime};
+use super::{Batch, Principal, open, runtime};
 use ic_db::{Account, Error, Subaccount};
 use ic_db_m1_records_schema::{AccountKey, SubaccountKey};
 
@@ -25,10 +25,14 @@ fn identity(value: Account) -> Identity {
     (value.owner.as_slice().to_vec(), value.subaccount)
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<86>",
-    decode_with = "crate::transport::decode::<_, 86>",
-    encode_with = "crate::transport::encode::<_, 86>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "account_keys_write",
+    guard = crate::transport::admit::<86>,
+    decode = crate::transport::decode::<_, 86>,
+    encode = crate::transport::encode::<_, 86>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn account_keys_write(
     (mode, accounts, subs, trap): (u8, Vec<AccountRow>, Vec<SubaccountRow>, bool),
@@ -74,15 +78,19 @@ fn account_keys_write(
         Err(error) => panic!("unexpected Account key refusal: {error:?}"),
     }
     if trap {
-        cdk::api::trap("after Account key commit");
+        ic_platform_runtime::system::trap("after Account key commit");
     }
     Ok(())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<87>",
-    decode_with = "crate::transport::decode::<_, 87>",
-    encode_with = "crate::transport::encode::<_, 87>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "account_keys_page",
+    guard = crate::transport::admit::<87>,
+    decode = crate::transport::decode::<_, 87>,
+    encode = crate::transport::encode::<_, 87>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn account_keys_page(
     (after, sub_after, limit, rank): (Option<Identity>, Option<Subaccount>, u8, u64),

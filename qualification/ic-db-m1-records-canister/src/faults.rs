@@ -1,7 +1,7 @@
 //! Feature-selected backing faults around the unmodified product commit path.
 //! No persistent fault state, allocator replacement or product testing API.
 
-use super::{Batch, DefaultMemoryImpl, Document, Entry, cdk, open, runtime};
+use super::{Batch, DefaultMemoryImpl, Document, Entry, open, runtime};
 use ic_storage::{BackingIdentity, Memory, MemoryBacking};
 use std::cell::Cell;
 
@@ -84,11 +84,11 @@ impl Memory for FaultMemory {
                         // do not simulate exhaustion with an application trap.
                         let mut work = [0_u8; 4096];
                         loop {
-                            work.fill(cdk::api::instruction_counter() as u8);
+                            work.fill(ic_platform_runtime::raw::instruction_counter() as u8);
                             std::hint::black_box(&work);
                         }
                     }
-                    cdk::api::trap("M1 injected trap after backing write");
+                    ic_platform_runtime::system::trap("M1 injected trap after backing write");
                 }
             }
         });
@@ -98,10 +98,14 @@ impl Memory for FaultMemory {
 // first=0 changes two entries and repoints their dependent. Otherwise insert
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<6>",
-    decode_with = "crate::transport::decode::<_, 6>",
-    encode_with = "crate::transport::encode::<_, 6>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "fault_batch",
+    guard = crate::transport::admit::<6>,
+    decode = crate::transport::decode::<_, 6>,
+    encode = crate::transport::encode::<_, 6>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fault_batch(
     (first, stop_after, deny_growth, exhaust_instructions): (u64, u64, bool, bool),
@@ -141,12 +145,16 @@ fn fault_batch(
     finish()
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<240>",
-    decode_with = "crate::transport::decode::<_, 240>",
-    encode_with = "crate::transport::encode::<_, 240>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fault_status",
+    guard = crate::transport::admit::<240>,
+    decode = crate::transport::decode::<_, 240>,
+    encode = crate::transport::encode::<_, 240>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn fault_status() -> ([u8; 32], [u8; 16], u64, u64, u64, u64) {
+fn fault_status((): ()) -> ([u8; 32], [u8; 16], u64, u64, u64, u64) {
     let host = runtime();
     let db = open(&host);
     let (schema, identity, revision, pages) = super::status(&db, &host);

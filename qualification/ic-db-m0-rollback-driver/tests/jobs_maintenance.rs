@@ -19,7 +19,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     let upgrade = async |bytes: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, bytes.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, bytes.clone(), vec![], None)
             .await
             .unwrap();
     };
@@ -243,7 +243,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
     let upgrade = async || {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
     };

@@ -1,4 +1,5 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 
 //! Fixed six-row copy/index migration, plus read-only controls for the M0 console.
 //! No production manifest, query engine or general migration executor is implemented.
@@ -7,7 +8,6 @@ mod capacity;
 
 use ic_db_qualification_transport as transport;
 
-use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
@@ -110,12 +110,18 @@ fn normalized(bytes: [u8; 16]) -> u64 {
 
 fn fail_at(selected: u8, boundary: u8) {
     if selected == boundary {
-        cdk::api::trap("M0 injected maintenance failure");
+        ic_platform_runtime::system::trap("M0 injected maintenance failure");
     }
 }
 
-#[cdk::init]
-fn initialize() {
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
     let host = runtime();
     for slot in [0, 1, 3] {
         drop(
@@ -144,10 +150,16 @@ fn initialize() {
     }
 }
 
-#[cdk::post_upgrade]
-fn post_upgrade() {
+#[ic_platform_runtime::post_upgrade(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn post_upgrade((): ()) {
     if cfg!(feature = "bad-upgrade") {
-        cdk::api::trap("M0 injected upgrade failure");
+        ic_platform_runtime::system::trap("M0 injected upgrade failure");
     }
 }
 
@@ -166,21 +178,29 @@ fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
     ]
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "inspect",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn inspect() -> Status {
+fn inspect((): ()) -> Status {
     status(&runtime())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<2>",
-    decode_with = "crate::transport::decode::<_, 2>",
-    encode_with = "crate::transport::encode::<_, 2>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "schema",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn schema() -> (Status, String) {
+fn schema((): ()) -> (Status, String) {
     let description = if SCHEMA == 1 {
         "M0 SourceRow v1: id:u64 primary key; value:u64; IDs 1..6. No secondary indexes."
     } else {
@@ -190,10 +210,14 @@ fn schema() -> (Status, String) {
 }
 
 // Three candidates maximum per page, including residual nonmatches; IDs are bounded.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "query",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
     if after > 6 || !(1..=3).contains(&limit) {
@@ -234,10 +258,14 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
 // start, copy, publish, cleanup, cancel, cancel-cleanup, source-write, damage-manifest.
 // Errors: missing manifest=1, incompatible schema=2, closed phase=3,
 // unsupported transformation=4, invalid bounds=5, unique/validation refusal=6.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<4>",
-    decode_with = "crate::transport::decode::<_, 4>",
-    encode_with = "crate::transport::encode::<_, 4>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "command",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Status, u8> {
     let host = runtime();

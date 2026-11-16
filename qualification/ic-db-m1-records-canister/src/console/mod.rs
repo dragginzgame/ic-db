@@ -67,24 +67,32 @@ type Page = (
 // An update permits complete-call cycle accounting; the driver verifies that
 // both successful and refused reads preserve the backing bytes.
 #[cfg(feature = "query-measurements")]
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<147>",
-    decode_with = "crate::transport::decode::<_, 147>",
-    encode_with = "crate::transport::encode::<_, 147>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "measured_query",
+    guard = crate::transport::admit::<147>,
+    decode = crate::transport::decode::<_, 147>,
+    encode = crate::transport::encode::<_, 147>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn measured_query(request: Request) -> (Result<Page, String>, u64) {
-    let start = ic_platform_runtime::cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let result = query(request);
     (
         result,
-        ic_platform_runtime::cdk::api::instruction_counter() - start,
+        ic_platform_runtime::raw::instruction_counter() - start,
     )
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "query",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn query(
     (

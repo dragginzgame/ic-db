@@ -24,7 +24,7 @@ bad-upgrade = ["target"]
 
 [dependencies]
 ic-db-qualification-transport.workspace = true
-ic-platform-runtime = { workspace = true, features = ["cdk"] }
+ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-storage.workspace = true
 
 [lints]

@@ -2,7 +2,6 @@
 //! Rows encode score * 65536 + price; score zero is the optional value None.
 
 use super::{NAMES, open, runtime};
-use ic_platform_runtime::cdk;
 use ic_wire::{Direction, Encoding, Limits};
 use std::ops::Bound::{Excluded, Unbounded};
 
@@ -19,7 +18,9 @@ const LIMITS: Limits = Limits {
 
 fn cursor(incarnation: u64, mode: u64, price: u64, position: u64) -> Cursor {
     (
-        cdk::api::canister_self().as_slice().to_vec(),
+        ic_platform_runtime::system::canister_self()
+            .as_slice()
+            .to_vec(),
         [incarnation, 1, mode, price, position],
     )
 }
@@ -28,7 +29,7 @@ fn position(token: Option<&Cursor>, incarnation: u64, mode: u64, price: u64) -> 
     let Some((canister, fields)) = token else {
         return Ok(0);
     };
-    if canister != cdk::api::canister_self().as_slice()
+    if canister != ic_platform_runtime::system::canister_self().as_slice()
         || fields[..4] != [incarnation, 1, mode, price]
     {
         return Err(2);
@@ -46,12 +47,16 @@ fn optional(score: u64) -> Option<u64> {
     (score != 0).then_some(score)
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<4>",
-    decode_with = "crate::transport::decode::<_, 4>",
-    encode_with = "crate::transport::encode::<_, 4>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "seed_reads",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn seed_reads() -> u64 {
+fn seed_reads((): ()) -> u64 {
     let host = runtime();
     let mut rows = open(&host, NAMES[0]);
     let mut metadata = open(&host, NAMES[1]);
@@ -87,10 +92,14 @@ fn seed_reads() -> u64 {
     incarnation
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<5>",
-    decode_with = "crate::transport::decode::<_, 5>",
-    encode_with = "crate::transport::encode::<_, 5>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "change_read_row",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u8> {
     if !(1..=8).contains(&id)
@@ -112,10 +121,14 @@ fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u
 }
 
 // Errors: bounds=1, cursor mismatch=2, oversized row=3, unsupported order/path=4.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<6>",
-    decode_with = "crate::transport::decode::<_, 6>",
-    encode_with = "crate::transport::encode::<_, 6>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "bounded_page",
+    guard = crate::transport::admit::<6>,
+    decode = crate::transport::decode::<_, 6>,
+    encode = crate::transport::encode::<_, 6>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn bounded_page(
     (order, access, maximum_price, token, work, limit, bytes): (
@@ -233,10 +246,14 @@ fn bounded_page(
 }
 
 // Only the unfiltered ordered-key DISTINCT witness is admitted here.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<7>",
-    decode_with = "crate::transport::decode::<_, 7>",
-    encode_with = "crate::transport::encode::<_, 7>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "distinct_page",
+    guard = crate::transport::admit::<7>,
+    decode = crate::transport::decode::<_, 7>,
+    encode = crate::transport::encode::<_, 7>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn distinct_page(
     (token, work, limit): (Option<Cursor>, u64, u64),

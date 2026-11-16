@@ -130,7 +130,7 @@ async fn typed_entity_growth() {
                 "host={variant} entities={count} after_mode={mode} read_opening_stages_work_cycles={reads:?}"
             );
         }
-        pic.upgrade_canister(canister, wasm, vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
             .await
             .unwrap();
         // The first execution after upgrade constructs cold heap state, mutates

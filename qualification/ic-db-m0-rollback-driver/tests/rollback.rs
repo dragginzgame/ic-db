@@ -159,7 +159,7 @@ async fn message_rollback() {
                 Err(1)
             );
             assert!(after == pic.get_stable_memory(canister).await);
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
             let reply = pic

@@ -197,7 +197,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             changes -= 1;
             pic.advance_time(std::time::Duration::from_secs(600)).await;
             pic.tick().await;
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }

@@ -40,10 +40,14 @@ fn transform(row: Before, _: &[u8]) -> Result<After, Error> {
 // seed, freeze, copy, validate, publish, cleanup, target read, source read.
 type Reply = (bool, Vec<Vec<String>>);
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<142>",
-    decode_with = "crate::transport::decode::<_, 142>",
-    encode_with = "crate::transport::encode::<_, 142>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "migration_demo",
+    guard = crate::transport::admit::<142>,
+    decode = crate::transport::decode::<_, 142>,
+    encode = crate::transport::encode::<_, 142>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn migration_demo(action: u8) -> Result<Reply, String> {
     run(action).map_err(|error| error.to_string())

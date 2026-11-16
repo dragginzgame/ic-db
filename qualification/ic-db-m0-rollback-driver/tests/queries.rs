@@ -161,7 +161,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
     assert_eq!(descending.1.as_ref().unwrap()[1], 1);
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(
@@ -229,7 +229,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
     assert_eq!(pic.get_stable_memory(canister).await, before);
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for (direction, first, expected) in [
@@ -310,7 +310,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, backing);
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for (direction, first, expected) in [
@@ -404,7 +404,7 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
         if upgraded {
             pic.advance_time(std::time::Duration::from_secs(600)).await;
             pic.tick().await;
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }
@@ -511,9 +511,15 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
             if present {
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
             }
             let done = call(present, Some(cursor)).await.unwrap();
             assert!(done.0.is_empty());
@@ -615,7 +621,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
         );
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
         let mut examined = first.2;
@@ -768,9 +774,15 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
                     assert_eq!(call(mode, needle, None, 1).await.unwrap_err(), 2);
                     pic.advance_time(std::time::Duration::from_secs(600)).await;
                     pic.tick().await;
-                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                        .await
-                        .unwrap();
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        wasm.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 }
                 let finished = call(mode, needle, Some(cursor), 80).await.unwrap();
                 assert!(finished.0.is_empty());
@@ -847,9 +859,15 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
                 );
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
             }
         }
         let mut expected = vec![(2, 20), (5, 51)];
@@ -923,7 +941,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
     // Let the IC install-code rate allowance recover between synthetic upgrades.
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let resumed = call(false, (page.1, false, None, 20, 1, 128, 4096))
@@ -960,9 +978,15 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
                     );
                     pic.advance_time(std::time::Duration::from_secs(600)).await;
                     pic.tick().await;
-                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                        .await
-                        .unwrap();
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        wasm.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
             let mut expected = vec![(1, 11), (2, 20), (5, 51), (6, 60)];
@@ -1502,7 +1526,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     // install-code rate limiter. Advance virtual time, not wall-clock time.
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(complete_distinct(2, 7, 16, false).await.unwrap(), collected);
@@ -1833,7 +1857,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
     write(vec!["1.25".into(), "2.50".into(), "-0.75".into()]).await;
     for upgraded in [false, true] {
         if upgraded {
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }
@@ -1908,9 +1932,15 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
         write(aliases.into_iter().map(str::to_owned).collect()).await;
         for upgraded in [false, true] {
             if upgraded {
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
             }
             let before = pic.get_stable_memory(canister).await;
             for (select, expected) in [

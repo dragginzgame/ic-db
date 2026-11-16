@@ -168,9 +168,15 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                 assert_eq!(pic.get_stable_memory(canister).await, before);
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
             }
             if done {
                 complete = true;
@@ -207,9 +213,15 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
             if step == 1 {
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
-                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                    .await
-                    .unwrap();
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
             }
         }
         assert_eq!((validated, refused), (!bad, bad));
@@ -278,9 +290,15 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                 if first == 0 {
                     pic.advance_time(std::time::Duration::from_secs(600)).await;
                     pic.tick().await;
-                    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                        .await
-                        .unwrap();
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        wasm.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
             // The final 32-row batch removes the target and every remaining edge.

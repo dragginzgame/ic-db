@@ -23,10 +23,14 @@ fn eligible(control: &Map) -> Result<(), u8> {
 
 // Start/reset or copy at most two rows. Width is an explicit fixed probe input.
 // Errors reuse the fixture's closed-phase=3 and invalid-bounds=5 codes.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<5>",
-    decode_with = "crate::transport::decode::<_, 5>",
-    encode_with = "crate::transport::encode::<_, 5>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "capacity_step",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
     if failure > 3 || (start && !matches!(width, 8192 | 98_304)) || (!start && width != 0) {
@@ -81,10 +85,14 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
 }
 
 // Full row bytes are independently checked in <=8 KiB pieces by the driver.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<6>",
-    decode_with = "crate::transport::decode::<_, 6>",
-    encode_with = "crate::transport::encode::<_, 6>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "capacity_inspect",
+    guard = crate::transport::admit::<6>,
+    decode = crate::transport::decode::<_, 6>,
+    encode = crate::transport::encode::<_, 6>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
     if id > 6 || offset > 98_304 || (id == 0 && offset != 0) {

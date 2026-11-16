@@ -128,7 +128,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
     assert!(error.reject_message.contains("after managed commit"));
     assert!(pic.get_stable_memory(canister).await == before);
     let before = state(200).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(state(200).await, before);

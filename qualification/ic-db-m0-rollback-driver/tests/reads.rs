@@ -335,7 +335,7 @@ async fn bounded_reads() {
         .unwrap(),
         Err(2)
     );
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(

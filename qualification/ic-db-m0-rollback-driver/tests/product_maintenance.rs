@@ -30,7 +30,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
     let upgrade = async |bytes: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, bytes.clone(), vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, bytes.clone(), vec![], None)
             .await
             .unwrap();
     };

@@ -64,7 +64,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
     let empty = vec![0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     assert!(call(3, empty.clone()).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(decode(&call(0, vec![]).await.unwrap()), Ok((golden, 1)));

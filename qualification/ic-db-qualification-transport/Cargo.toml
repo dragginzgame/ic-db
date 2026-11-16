@@ -15,7 +15,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
-ic-platform-runtime = { workspace = true, features = ["cdk"] }
+ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-wire.workspace = true
 serde.workspace = true
 

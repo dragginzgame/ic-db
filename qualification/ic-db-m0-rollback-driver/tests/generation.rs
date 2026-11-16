@@ -104,7 +104,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         u128::from_be_bytes(consumed) + 1
     );
     assert!(pic.get_stable_memory(canister).await == before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(

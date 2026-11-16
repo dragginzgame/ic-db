@@ -1,19 +1,23 @@
 //! Read-only cost decomposition for this fixed fixture, never an alternate executor.
-use super::{Entry, KEY, cdk, database, runtime, transport};
+use super::{Entry, KEY, database, runtime, transport};
 use ic_db::{Comparison, Entity, Error};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
-#[ic_platform_runtime::cdk::query(
-    guard = "transport::admit::<9>",
-    decode_with = "transport::decode::<_, 9>",
-    encode_with = "transport::encode::<_, 9>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "count_profile",
+    guard = transport::admit::<9>,
+    decode = transport::decode::<_, 9>,
+    encode = transport::encode::<_, 9>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     if mode <= 1 {
         let db = database();
-        let opened = cdk::api::instruction_counter();
+        let opened = ic_platform_runtime::raw::instruction_counter();
         let mut query = db.query::<Entry>().work_limit(512);
         if let Some(category) = category {
             query = query.filter("category", Comparison::Eq, category);
@@ -29,7 +33,7 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
         return (
             result,
             opened - start,
-            cdk::api::instruction_counter() - opened,
+            ic_platform_runtime::raw::instruction_counter() - opened,
         );
     }
 
@@ -42,7 +46,7 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
     )
     .unwrap();
-    let opened = cdk::api::instruction_counter();
+    let opened = ic_platform_runtime::raw::instruction_counter();
     let mut prefix = vec![if mode == 2 { 2 } else { 3 }];
     prefix.extend(Entry::ID.to_be_bytes());
     if mode == 2 {
@@ -74,6 +78,6 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
     (
         Some(count),
         opened - start,
-        cdk::api::instruction_counter() - opened,
+        ic_platform_runtime::raw::instruction_counter() - opened,
     )
 }

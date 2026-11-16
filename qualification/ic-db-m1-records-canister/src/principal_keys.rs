@@ -1,15 +1,19 @@
 //! Principal identities use the ordinary typed batch, references and page path.
-use super::{Batch, Principal, cdk, open, runtime};
+use super::{Batch, Principal, open, runtime};
 use ic_db::Error;
 use ic_db_m1_records_schema::PrincipalKey;
 
 type Row = (Vec<u8>, Option<Vec<u8>>, u64);
 type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<84>",
-    decode_with = "crate::transport::decode::<_, 84>",
-    encode_with = "crate::transport::encode::<_, 84>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "principal_keys_write",
+    guard = crate::transport::admit::<84>,
+    decode = crate::transport::decode::<_, 84>,
+    encode = crate::transport::encode::<_, 84>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn principal_keys_write((mode, rows, trap): (u8, Vec<Row>, bool)) -> Result<(), u8> {
     if rows.len() > 32 {
@@ -44,15 +48,19 @@ fn principal_keys_write((mode, rows, trap): (u8, Vec<Row>, bool)) -> Result<(), 
         Err(error) => panic!("unexpected Principal write refusal: {error:?}"),
     }
     if trap {
-        cdk::api::trap("after Principal key commit");
+        ic_platform_runtime::system::trap("after Principal key commit");
     }
     Ok(())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<85>",
-    decode_with = "crate::transport::decode::<_, 85>",
-    encode_with = "crate::transport::encode::<_, 85>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "principal_keys_page",
+    guard = crate::transport::admit::<85>,
+    decode = crate::transport::decode::<_, 85>,
+    encode = crate::transport::encode::<_, 85>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn principal_keys_page((after, limit, rank): (Option<Vec<u8>>, u8, u64)) -> Page {
     let host = runtime();

@@ -228,7 +228,7 @@ async fn final_state_batches() {
     let mut mappings: Vec<_> = (1..=9).map(|id| (id, 1, id)).collect();
     mappings.push((10, 1, 0));
     check(&[1], &mappings).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     check(&[1], &mappings).await;

@@ -5,7 +5,6 @@
 //! present-only unique-index membership. References still include absent values.
 
 use super::{NAMES, open, runtime};
-use ic_platform_runtime::cdk;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_COMMANDS: usize = 8;
@@ -14,17 +13,21 @@ type Command = (u8, u64, u64, u64);
 
 fn fail_at(selected: u8, boundary: u8) {
     if selected == boundary {
-        cdk::api::trap("M0 injected batch failure");
+        ic_platform_runtime::system::trap("M0 injected batch failure");
     }
 }
 
 // Kinds: insert user, delete user, put mapping, delete mapping.
 // Errors: bounds=1, duplicate target=2, existence=3, uniqueness=4, reference=5.
 // Success reports examined reverse-index candidates, independently of row count.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "batch",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
     if commands.is_empty() || commands.len() > MAX_COMMANDS || failure > 5 {

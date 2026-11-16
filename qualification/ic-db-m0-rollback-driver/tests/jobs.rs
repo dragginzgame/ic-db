@@ -76,7 +76,7 @@ async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(14, first.0, 1).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     let mut sequence = first.0;
@@ -259,7 +259,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert!(control(5, &vec![], 0, 0).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
 
-    pic.upgrade_canister(canister, grouped_predecessor, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, grouped_predecessor, vec![], None)
         .await
         .unwrap();
     let grouped = handle(start(3, 0).await.unwrap());
@@ -278,7 +278,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(&grouped, 3, 1, 2, 0, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, distinct_predecessor, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, distinct_predecessor, vec![], None)
         .await
         .unwrap();
     let grouped_sum = handle(start(4, 0).await.unwrap());
@@ -293,7 +293,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         assert!(advance(job, operation, 1, 2, 0, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let group_distinct = handle(start(9, 0).await.unwrap());
@@ -304,7 +304,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(&group_distinct, 9, 1, 2, 0, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for (job, operation) in [
@@ -506,7 +506,7 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
         assert_eq!((step.0, step.2, step.4, step.5), (1, 1, 0, None));
         jobs.push((operation, handle));
     }
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for (operation, handle) in jobs {
@@ -592,7 +592,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
     .unwrap()
     .unwrap();
     assert_eq!((old.4, old.5.as_deref()), (1, Some("0:3,1:3")));
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let page = async |handle: &Vec<u8>,
@@ -670,7 +670,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
     )
     .await
     .unwrap();
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for _ in 0..2 {
@@ -771,7 +771,7 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
         let retry = decode(advance(handle, op, 0, 0, false).await.unwrap());
         assert_eq!((retry.0, retry.2, retry.4), (1, 2, 0));
     }
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     let mut completed = Vec::new();
@@ -922,7 +922,7 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
         let retry = decode(advance(handle, op, 0, None, 1, 0, false).await.unwrap());
         assert_eq!((retry.0, retry.1, retry.5), (1, 0, 2));
     }
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let mut completed = Vec::new();
@@ -978,7 +978,7 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
         decode(advance(&running, 12, 1, None, 3, 0, false).await.unwrap()).1,
         2
     );
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     for (handle, op, sequence, cursor, revision, expected) in completed {

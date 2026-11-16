@@ -113,7 +113,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
     let ascending = [values[6], "-0.01", "0", "0.01", "1", values[7]];
     for upgraded in [false, true] {
         if upgraded {
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }
@@ -388,7 +388,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
     );
     pic.advance_time(std::time::Duration::from_secs(600)).await;
     pic.tick().await;
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     assert_eq!(
@@ -482,7 +482,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             eprintln!("sort-cost phase=511-rows upgraded={upgraded}");
         }
         if upgraded {
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }
@@ -598,7 +598,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
     write(32, 32, 320, 0).await;
     for upgraded in [false, true] {
         if upgraded {
-            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
         }

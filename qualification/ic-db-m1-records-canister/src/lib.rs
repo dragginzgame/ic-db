@@ -1,4 +1,5 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
@@ -21,11 +22,12 @@ mod managed;
 mod migration_capacity;
 #[cfg(feature = "maintenance-faults")]
 mod migration_references;
+#[cfg(feature = "mixed-lifecycle")]
+mod mixed_lifecycle;
 mod principal_keys;
 mod queries;
 
 use ic_db::{Batch, Database, Entity, FieldType, Principal};
-use ic_platform_runtime::cdk;
 
 // Treat framed unit as one reply value for the generic encoder hook.
 type EmptyReply = ();
@@ -89,6 +91,12 @@ fn new_runtime() -> MemoryRuntime<Backing> {
         );
         requests
     };
+    #[cfg(feature = "mixed-lifecycle")]
+    let requests = {
+        let mut requests = requests;
+        requests.extend(mixed_lifecycle::KEYS.map(|key| MemoryRequest::new("m1", key).unwrap()));
+        requests
+    };
     let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
     let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
@@ -102,8 +110,14 @@ fn open(host: &MemoryRuntime<Backing>) -> Database<Backing> {
     )
     .unwrap()
 }
-#[cdk::init]
-fn initialize() {
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
     let host = runtime();
     // Fixed fixture identity only. A real host supplies a fresh database incarnation.
     let mut db = Database::create(
@@ -177,6 +191,8 @@ fn initialize() {
     db.commit(batch).unwrap();
     #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
     aggregate_store::initialize(&host);
+    #[cfg(feature = "mixed-lifecycle")]
+    mixed_lifecycle::initialize(&host);
 }
 fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
     (
@@ -186,12 +202,16 @@ fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
         host.diagnostics().unwrap().physical_pages,
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "inspect",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn inspect() -> Status {
+fn inspect((): ()) -> Status {
     let host = runtime();
     let db = open(&host);
     status(&db, &host)
@@ -201,14 +221,18 @@ type FieldView = (String, String, bool, String, Option<(String, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<2>",
-    decode_with = "crate::transport::decode::<_, 2>",
-    encode_with = "crate::transport::encode::<_, 2>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "schema",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport endpoint requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
@@ -393,10 +417,14 @@ fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&
         _ => {}
     }
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<4>",
-    decode_with = "crate::transport::decode::<_, 4>",
-    encode_with = "crate::transport::encode::<_, 4>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "write",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     if mode > 3 {
@@ -417,17 +445,21 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 3)?;
     if mode == 2 {
-        cdk::api::trap("M1 application trap after successful database commit");
+        ic_platform_runtime::system::trap("M1 application trap after successful database commit");
     }
     if mode == 3 {
         return Err(4);
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<5>",
-    decode_with = "crate::transport::decode::<_, 5>",
-    encode_with = "crate::transport::encode::<_, 5>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "category",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn category(category: u64) -> Vec<(u64, u64)> {
     let host = runtime();
@@ -440,12 +472,16 @@ fn category(category: u64) -> Vec<(u64, u64)> {
 }
 
 type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<7>",
-    decode_with = "crate::transport::decode::<_, 7>",
-    encode_with = "crate::transport::encode::<_, 7>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "document",
+    guard = crate::transport::admit::<7>,
+    decode = crate::transport::decode::<_, 7>,
+    encode = crate::transport::encode::<_, 7>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn document() -> (DocumentValue, u64) {
+fn document((): ()) -> (DocumentValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<Document>(1).unwrap().unwrap();
@@ -461,10 +497,14 @@ fn document() -> (DocumentValue, u64) {
         db.revision::<Document>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<8>",
-    decode_with = "crate::transport::decode::<_, 8>",
-    encode_with = "crate::transport::encode::<_, 8>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "replace_document",
+    guard = crate::transport::admit::<8>,
+    decode = crate::transport::decode::<_, 8>,
+    encode = crate::transport::encode::<_, 8>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn replace_document(
     (title, note, published, priority, score, previous_score): DocumentValue,
@@ -487,10 +527,14 @@ fn replace_document(
     db.commit(batch).map_err(|_| 2)
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<9>",
-    decode_with = "crate::transport::decode::<_, 9>",
-    encode_with = "crate::transport::encode::<_, 9>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "document_reference",
+    guard = crate::transport::admit::<9>,
+    decode = crate::transport::decode::<_, 9>,
+    encode = crate::transport::encode::<_, 9>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn document_reference(id: u64) -> Option<u64> {
     let host = runtime();
@@ -500,10 +544,14 @@ fn document_reference(id: u64) -> Option<u64> {
         .map(|row| row.entry_id)
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<10>",
-    decode_with = "crate::transport::decode::<_, 10>",
-    encode_with = "crate::transport::encode::<_, 10>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "reference_batch",
+    guard = crate::transport::admit::<10>,
+    decode = crate::transport::decode::<_, 10>,
+    encode = crate::transport::encode::<_, 10>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn reference_batch(mode: u8) -> Result<(), u8> {
     let host = runtime();
@@ -563,12 +611,16 @@ fn reference_batch(mode: u8) -> Result<(), u8> {
 }
 
 type WideValue = (i128, u128, Option<i128>, Option<u128>);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<11>",
-    decode_with = "crate::transport::decode::<_, 11>",
-    encode_with = "crate::transport::encode::<_, 11>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "wide_numbers",
+    guard = crate::transport::admit::<11>,
+    decode = crate::transport::decode::<_, 11>,
+    encode = crate::transport::encode::<_, 11>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn wide_numbers() -> (WideValue, u64) {
+fn wide_numbers((): ()) -> (WideValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<WideNumbers>(1).unwrap().unwrap();
@@ -582,10 +634,14 @@ fn wide_numbers() -> (WideValue, u64) {
         db.revision::<WideNumbers>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<12>",
-    decode_with = "crate::transport::decode::<_, 12>",
-    encode_with = "crate::transport::encode::<_, 12>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "replace_wide_numbers",
+    guard = crate::transport::admit::<12>,
+    decode = crate::transport::decode::<_, 12>,
+    encode = crate::transport::encode::<_, 12>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn replace_wide_numbers(
     ((signed, unsigned, optional_signed, optional_unsigned), trap): (WideValue, bool),
@@ -604,7 +660,7 @@ fn replace_wide_numbers(
         .unwrap();
     db.commit(batch).unwrap();
     if trap {
-        cdk::api::trap("M1 wide-number application trap");
+        ic_platform_runtime::system::trap("M1 wide-number application trap");
     }
 }
 
@@ -620,12 +676,16 @@ type NarrowOptional = (
 );
 type NarrowValue = (NarrowRequired, NarrowOptional);
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<16>",
-    decode_with = "crate::transport::decode::<_, 16>",
-    encode_with = "crate::transport::encode::<_, 16>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "narrow_numbers",
+    guard = crate::transport::admit::<16>,
+    decode = crate::transport::decode::<_, 16>,
+    encode = crate::transport::encode::<_, 16>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn narrow_numbers() -> (NarrowValue, u64) {
+fn narrow_numbers((): ()) -> (NarrowValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<NarrowNumbers>(1).unwrap().unwrap();
@@ -652,10 +712,14 @@ fn narrow_numbers() -> (NarrowValue, u64) {
     )
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<17>",
-    decode_with = "crate::transport::decode::<_, 17>",
-    encode_with = "crate::transport::encode::<_, 17>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "replace_narrow_numbers",
+    guard = crate::transport::admit::<17>,
+    decode = crate::transport::decode::<_, 17>,
+    encode = crate::transport::encode::<_, 17>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
     let (
@@ -691,30 +755,38 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
         .unwrap();
     db.commit(batch).unwrap();
     if trap {
-        cdk::api::trap("M1 narrow-number application trap");
+        ic_platform_runtime::system::trap("M1 narrow-number application trap");
     }
 }
 
 // Private decoder probe: transport carries opaque bytes, never decodes a row.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<15>",
-    decode_with = "crate::transport::decode::<_, 15>",
-    encode_with = "crate::transport::encode::<_, 15>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "binary_decodes",
+    guard = crate::transport::admit::<15>,
+    decode = crate::transport::decode::<_, 15>,
+    encode = crate::transport::encode::<_, 15>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "endpoint decoding owns the request; the database decoder borrows its bytes"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
     BinaryObject::decode(bytes.as_ref()).is_ok()
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<13>",
-    decode_with = "crate::transport::decode::<_, 13>",
-    encode_with = "crate::transport::encode::<_, 13>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "binary_object",
+    guard = crate::transport::admit::<13>,
+    decode = crate::transport::decode::<_, 13>,
+    encode = crate::transport::encode::<_, 13>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn binary_object() -> (BinaryValue, u64) {
+fn binary_object((): ()) -> (BinaryValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<BinaryObject>(1).unwrap().unwrap();
@@ -723,10 +795,14 @@ fn binary_object() -> (BinaryValue, u64) {
         db.revision::<BinaryObject>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<14>",
-    decode_with = "crate::transport::decode::<_, 14>",
-    encode_with = "crate::transport::encode::<_, 14>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "replace_binary_object",
+    guard = crate::transport::admit::<14>,
+    decode = crate::transport::decode::<_, 14>,
+    encode = crate::transport::encode::<_, 14>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Result<(), u8> {
     let host = runtime();
@@ -741,7 +817,7 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
         .map_err(|_| 1)?;
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        cdk::api::trap("M1 binary application trap");
+        ic_platform_runtime::system::trap("M1 binary application trap");
     }
     Ok(())
 }
@@ -749,12 +825,16 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
 // Bytes cross the test transport; Principal admission and persistence belong to
 // their respective owners, never Wire's representation of an identity.
 type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<18>",
-    decode_with = "crate::transport::decode::<_, 18>",
-    encode_with = "crate::transport::encode::<_, 18>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "principal_record",
+    guard = crate::transport::admit::<18>,
+    decode = crate::transport::decode::<_, 18>,
+    encode = crate::transport::encode::<_, 18>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn principal_record() -> (PrincipalValue, u64) {
+fn principal_record((): ()) -> (PrincipalValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<IdentityRow>(1).unwrap().unwrap();
@@ -766,10 +846,14 @@ fn principal_record() -> (PrincipalValue, u64) {
         db.revision::<IdentityRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<19>",
-    decode_with = "crate::transport::decode::<_, 19>",
-    encode_with = "crate::transport::encode::<_, 19>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "replace_principal_record",
+    guard = crate::transport::admit::<19>,
+    decode = crate::transport::decode::<_, 19>,
+    encode = crate::transport::encode::<_, 19>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -> Result<(), u8> {
     let row = IdentityRow {
@@ -787,18 +871,22 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
     if trap {
-        cdk::api::trap("M1 principal application trap");
+        ic_platform_runtime::system::trap("M1 principal application trap");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<20>",
-    decode_with = "crate::transport::decode::<_, 20>",
-    encode_with = "crate::transport::encode::<_, 20>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "principal_decodes",
+    guard = crate::transport::admit::<20>,
+    decode = crate::transport::decode::<_, 20>,
+    encode = crate::transport::encode::<_, 20>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "endpoint owns transport input; database decoder borrows it"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
     IdentityRow::decode(bytes.as_ref()).is_ok()
@@ -806,10 +894,14 @@ fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
 
 // Private qualification controls; product endpoints remain adapter-owned.
 type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<21>",
-    decode_with = "crate::transport::decode::<_, 21>",
-    encode_with = "crate::transport::encode::<_, 21>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "indexed_batch",
+    guard = crate::transport::admit::<21>,
+    decode = crate::transport::decode::<_, 21>,
+    encode = crate::transport::encode::<_, 21>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     let host = runtime();
@@ -840,20 +932,24 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
-        cdk::api::trap("M1 indexed batch application trap");
+        ic_platform_runtime::system::trap("M1 indexed batch application trap");
     }
     Ok(())
 }
 
 type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<22>",
-    decode_with = "crate::transport::decode::<_, 22>",
-    encode_with = "crate::transport::encode::<_, 22>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "typed_indexes",
+    guard = crate::transport::admit::<22>,
+    decode = crate::transport::decode::<_, 22>,
+    encode = crate::transport::encode::<_, 22>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "endpoint owns transport input"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     let principal = Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?;
@@ -873,10 +969,14 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     ))
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<23>",
-    decode_with = "crate::transport::decode::<_, 23>",
-    encode_with = "crate::transport::encode::<_, 23>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "text_index_batch",
+    guard = crate::transport::admit::<23>,
+    decode = crate::transport::decode::<_, 23>,
+    encode = crate::transport::encode::<_, 23>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<(), u8> {
     let host = runtime();
@@ -898,15 +998,19 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        cdk::api::trap("M1 text index application trap");
+        ic_platform_runtime::system::trap("M1 text index application trap");
     }
     Ok(())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<24>",
-    decode_with = "crate::transport::decode::<_, 24>",
-    encode_with = "crate::transport::encode::<_, 24>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "text_index",
+    guard = crate::transport::admit::<24>,
+    decode = crate::transport::decode::<_, 24>,
+    encode = crate::transport::encode::<_, 24>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String, u64)>, u8> {
     let host = runtime();
@@ -922,10 +1026,14 @@ fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String,
 
 type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
 type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<25>",
-    decode_with = "crate::transport::decode::<_, 25>",
-    encode_with = "crate::transport::encode::<_, 25>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "optional_index_batch",
+    guard = crate::transport::admit::<25>,
+    decode = crate::transport::decode::<_, 25>,
+    encode = crate::transport::encode::<_, 25>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> {
     let host = runtime();
@@ -963,19 +1071,23 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
-        cdk::api::trap("M1 optional index application trap");
+        ic_platform_runtime::system::trap("M1 optional index application trap");
     }
     Ok(())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<26>",
-    decode_with = "crate::transport::decode::<_, 26>",
-    encode_with = "crate::transport::encode::<_, 26>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "optional_indexes",
+    guard = crate::transport::admit::<26>,
+    decode = crate::transport::decode::<_, 26>,
+    encode = crate::transport::encode::<_, 26>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "endpoint owns transport input"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
     let host = runtime();
@@ -1000,10 +1112,14 @@ fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
 
 // Optional relationships share the product batch; these are private probe controls.
 type OptionalLinks = Vec<(u64, Option<u64>)>;
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<27>",
-    decode_with = "crate::transport::decode::<_, 27>",
-    encode_with = "crate::transport::encode::<_, 27>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "optional_reference_batch",
+    guard = crate::transport::admit::<27>,
+    decode = crate::transport::decode::<_, 27>,
+    encode = crate::transport::encode::<_, 27>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn optional_reference_batch(
     (rows, deletes, trap): (OptionalLinks, Vec<u64>, bool),
@@ -1025,15 +1141,19 @@ fn optional_reference_batch(
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        cdk::api::trap("M1 optional reference application trap");
+        ic_platform_runtime::system::trap("M1 optional reference application trap");
     }
     Ok(())
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<28>",
-    decode_with = "crate::transport::decode::<_, 28>",
-    encode_with = "crate::transport::encode::<_, 28>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "optional_references",
+    guard = crate::transport::admit::<28>,
+    decode = crate::transport::decode::<_, 28>,
+    encode = crate::transport::encode::<_, 28>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
     let host = runtime();
@@ -1062,10 +1182,14 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
 
 // Private enum qualification controls. Transport uses ordinals solely to exercise
 // the typed database boundary; it does not define the persisted enum codec.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<29>",
-    decode_with = "crate::transport::decode::<_, 29>",
-    encode_with = "crate::transport::encode::<_, 29>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "enum_write",
+    guard = crate::transport::admit::<29>,
+    decode = crate::transport::decode::<_, 29>,
+    encode = crate::transport::encode::<_, 29>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>, u64), u8> {
     fn lifecycle(ordinal: u8) -> Result<schema::Lifecycle, ic_db::Error> {
@@ -1091,7 +1215,7 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
         .map_err(|_| 2_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            cdk::api::trap("after enum replacement");
+            ic_platform_runtime::system::trap("after enum replacement");
         }
     }
     Ok((
@@ -1132,14 +1256,18 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
         db.revision::<EnumRow>().unwrap(),
     ))
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<30>",
-    decode_with = "crate::transport::decode::<_, 30>",
-    encode_with = "crate::transport::encode::<_, 30>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "enum_decode",
+    guard = crate::transport::admit::<30>,
+    decode = crate::transport::decode::<_, 30>,
+    encode = crate::transport::encode::<_, 30>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport endpoint requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn enum_decode(bytes: Vec<u8>) -> bool {
     schema::EnumRow::decode(&bytes).is_ok()
@@ -1192,10 +1320,14 @@ fn joined_info(bound: String, nested: &str) -> String {
     }
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<31>",
-    decode_with = "crate::transport::decode::<_, 31>",
-    encode_with = "crate::transport::encode::<_, 31>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "nested_write",
+    guard = crate::transport::admit::<31>,
+    decode = crate::transport::decode::<_, 31>,
+    encode = crate::transport::encode::<_, 31>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{Branch, Details, NestedPayload, NestedRow};
@@ -1240,7 +1372,7 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            cdk::api::trap("after nested replacement");
+            ic_platform_runtime::system::trap("after nested replacement");
         }
     }
     Ok((
@@ -1251,23 +1383,31 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
         db.revision::<NestedRow>().unwrap(),
     ))
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<32>",
-    decode_with = "crate::transport::decode::<_, 32>",
-    encode_with = "crate::transport::encode::<_, 32>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "nested_decodes",
+    guard = crate::transport::admit::<32>,
+    decode = crate::transport::decode::<_, 32>,
+    encode = crate::transport::encode::<_, 32>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn nested_decodes(bytes: Vec<u8>) -> bool {
     schema::NestedRow::decode(&bytes).is_ok()
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<33>",
-    decode_with = "crate::transport::decode::<_, 33>",
-    encode_with = "crate::transport::encode::<_, 33>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "list_write",
+    guard = crate::transport::admit::<33>,
+    decode = crate::transport::decode::<_, 33>,
+    encode = crate::transport::encode::<_, 33>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{ListNode, ListRow};
@@ -1315,7 +1455,7 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            cdk::api::trap("after list replacement");
+            ic_platform_runtime::system::trap("after list replacement");
         }
     }
     Ok((
@@ -1326,23 +1466,31 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<ListRow>().unwrap(),
     ))
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<34>",
-    decode_with = "crate::transport::decode::<_, 34>",
-    encode_with = "crate::transport::encode::<_, 34>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "list_decodes",
+    guard = crate::transport::admit::<34>,
+    decode = crate::transport::decode::<_, 34>,
+    encode = crate::transport::encode::<_, 34>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn list_decodes(bytes: Vec<u8>) -> bool {
     schema::ListRow::decode(&bytes).is_ok()
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<35>",
-    decode_with = "crate::transport::decode::<_, 35>",
-    encode_with = "crate::transport::encode::<_, 35>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "set_write",
+    guard = crate::transport::admit::<35>,
+    decode = crate::transport::decode::<_, 35>,
+    encode = crate::transport::encode::<_, 35>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{Scores, SetRow};
@@ -1366,7 +1514,7 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            cdk::api::trap("after set replacement");
+            ic_platform_runtime::system::trap("after set replacement");
         }
     }
     Ok((
@@ -1377,23 +1525,31 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
         db.revision::<SetRow>().unwrap(),
     ))
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<36>",
-    decode_with = "crate::transport::decode::<_, 36>",
-    encode_with = "crate::transport::encode::<_, 36>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "set_decodes",
+    guard = crate::transport::admit::<36>,
+    decode = crate::transport::decode::<_, 36>,
+    encode = crate::transport::encode::<_, 36>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn set_decodes(bytes: Vec<u8>) -> bool {
     schema::SetRow::decode(&bytes).is_ok()
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<37>",
-    decode_with = "crate::transport::decode::<_, 37>",
-    encode_with = "crate::transport::encode::<_, 37>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "map_write",
+    guard = crate::transport::admit::<37>,
+    decode = crate::transport::decode::<_, 37>,
+    encode = crate::transport::encode::<_, 37>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     use schema::{MapRow, Rates};
@@ -1426,7 +1582,7 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            cdk::api::trap("after map replacement");
+            ic_platform_runtime::system::trap("after map replacement");
         }
     }
     Ok((
@@ -1437,23 +1593,31 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<MapRow>().unwrap(),
     ))
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<38>",
-    decode_with = "crate::transport::decode::<_, 38>",
-    encode_with = "crate::transport::encode::<_, 38>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "map_decodes",
+    guard = crate::transport::admit::<38>,
+    decode = crate::transport::decode::<_, 38>,
+    encode = crate::transport::encode::<_, 38>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn map_decodes(bytes: Vec<u8>) -> bool {
     schema::MapRow::decode(&bytes).is_ok()
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<39>",
-    decode_with = "crate::transport::decode::<_, 39>",
-    encode_with = "crate::transport::encode::<_, 39>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "map_tree_encode",
+    guard = crate::transport::admit::<39>,
+    decode = crate::transport::decode::<_, 39>,
+    encode = crate::transport::encode::<_, 39>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     use schema::{MapTree, MapTreeRow};
@@ -1467,24 +1631,32 @@ fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     };
     MapTreeRow { id: 1, tree }.encode().map_err(|_| 1)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<40>",
-    decode_with = "crate::transport::decode::<_, 40>",
-    encode_with = "crate::transport::encode::<_, 40>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "map_tree_decodes",
+    guard = crate::transport::admit::<40>,
+    decode = crate::transport::decode::<_, 40>,
+    encode = crate::transport::encode::<_, 40>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn map_tree_decodes(bytes: Vec<u8>) -> bool {
     schema::MapTreeRow::decode(&bytes).is_ok()
 }
 
 type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<41>",
-    decode_with = "crate::transport::decode::<_, 41>",
-    encode_with = "crate::transport::encode::<_, 41>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "u256_batch",
+    guard = crate::transport::admit::<41>,
+    decode = crate::transport::decode::<_, 41>,
+    encode = crate::transport::encode::<_, 41>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     use schema::BigNumbers;
@@ -1507,16 +1679,20 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after U256 batch");
+        ic_platform_runtime::system::trap("after U256 batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<42>",
-    decode_with = "crate::transport::decode::<_, 42>",
-    encode_with = "crate::transport::encode::<_, 42>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "u256_rows",
+    guard = crate::transport::admit::<42>,
+    decode = crate::transport::decode::<_, 42>,
+    encode = crate::transport::encode::<_, 42>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn u256_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::BigNumbers;
     let host = runtime();
     let db = open(&host);
@@ -1529,10 +1705,14 @@ fn u256_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<BigNumbers>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<43>",
-    decode_with = "crate::transport::decode::<_, 43>",
-    encode_with = "crate::transport::encode::<_, 43>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "u256_lookup",
+    guard = crate::transport::admit::<43>,
+    decode = crate::transport::decode::<_, 43>,
+    encode = crate::transport::encode::<_, 43>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
     let host = runtime();
@@ -1547,24 +1727,32 @@ fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<44>",
-    decode_with = "crate::transport::decode::<_, 44>",
-    encode_with = "crate::transport::encode::<_, 44>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "u256_decodes",
+    guard = crate::transport::admit::<44>,
+    decode = crate::transport::decode::<_, 44>,
+    encode = crate::transport::encode::<_, 44>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn u256_decodes(bytes: Vec<u8>) -> bool {
     schema::BigNumbers::decode(&bytes).is_ok()
 }
 
 type FloatInput = (u64, Option<u64>, u32, u64);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<45>",
-    decode_with = "crate::transport::decode::<_, 45>",
-    encode_with = "crate::transport::encode::<_, 45>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "float_batch",
+    guard = crate::transport::admit::<45>,
+    decode = crate::transport::decode::<_, 45>,
+    encode = crate::transport::encode::<_, 45>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     use ic_db::{Float32, Float64};
@@ -1592,14 +1780,18 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after float batch");
+        ic_platform_runtime::system::trap("after float batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<46>",
-    decode_with = "crate::transport::decode::<_, 46>",
-    encode_with = "crate::transport::encode::<_, 46>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "float_rows",
+    guard = crate::transport::admit::<46>,
+    decode = crate::transport::decode::<_, 46>,
+    encode = crate::transport::encode::<_, 46>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::FloatRow;
@@ -1619,10 +1811,14 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<FloatRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<47>",
-    decode_with = "crate::transport::decode::<_, 47>",
-    encode_with = "crate::transport::encode::<_, 47>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "float_lookup",
+    guard = crate::transport::admit::<47>,
+    decode = crate::transport::decode::<_, 47>,
+    encode = crate::transport::encode::<_, 47>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
     let value = ic_db::Float64::try_new(f64::from_bits(bits)).ok_or(1_u8)?;
@@ -1634,14 +1830,18 @@ fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<48>",
-    decode_with = "crate::transport::decode::<_, 48>",
-    encode_with = "crate::transport::encode::<_, 48>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "float_decodes",
+    guard = crate::transport::admit::<48>,
+    decode = crate::transport::decode::<_, 48>,
+    encode = crate::transport::encode::<_, 48>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn float_decodes(bytes: Vec<u8>) -> bool {
     schema::FloatRow::decode(&bytes).is_ok()
@@ -1655,10 +1855,14 @@ fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account,
         subaccount,
     })
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<49>",
-    decode_with = "crate::transport::decode::<_, 49>",
-    encode_with = "crate::transport::encode::<_, 49>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "account_batch",
+    guard = crate::transport::admit::<49>,
+    decode = crate::transport::decode::<_, 49>,
+    encode = crate::transport::encode::<_, 49>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     use schema::AccountRow;
@@ -1682,14 +1886,18 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after account batch");
+        ic_platform_runtime::system::trap("after account batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<50>",
-    decode_with = "crate::transport::decode::<_, 50>",
-    encode_with = "crate::transport::encode::<_, 50>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "account_rows",
+    guard = crate::transport::admit::<50>,
+    decode = crate::transport::decode::<_, 50>,
+    encode = crate::transport::encode::<_, 50>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::AccountRow;
@@ -1705,10 +1913,14 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<AccountRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<51>",
-    decode_with = "crate::transport::decode::<_, 51>",
-    encode_with = "crate::transport::encode::<_, 51>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "account_lookup",
+    guard = crate::transport::admit::<51>,
+    decode = crate::transport::decode::<_, 51>,
+    encode = crate::transport::encode::<_, 51>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
     let value = admitted_account(value)?;
@@ -1720,24 +1932,32 @@ fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<52>",
-    decode_with = "crate::transport::decode::<_, 52>",
-    encode_with = "crate::transport::encode::<_, 52>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "account_decodes",
+    guard = crate::transport::admit::<52>,
+    decode = crate::transport::decode::<_, 52>,
+    encode = crate::transport::encode::<_, 52>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn account_decodes(bytes: Vec<u8>) -> bool {
     schema::AccountRow::decode(&bytes).is_ok()
 }
 
 type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<53>",
-    decode_with = "crate::transport::decode::<_, 53>",
-    encode_with = "crate::transport::encode::<_, 53>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "ulid_batch",
+    guard = crate::transport::admit::<53>,
+    decode = crate::transport::decode::<_, 53>,
+    encode = crate::transport::encode::<_, 53>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     use schema::UlidRow;
@@ -1760,16 +1980,20 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after Ulid batch");
+        ic_platform_runtime::system::trap("after Ulid batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<54>",
-    decode_with = "crate::transport::decode::<_, 54>",
-    encode_with = "crate::transport::encode::<_, 54>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "ulid_rows",
+    guard = crate::transport::admit::<54>,
+    decode = crate::transport::decode::<_, 54>,
+    encode = crate::transport::encode::<_, 54>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn ulid_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::UlidRow;
     let host = runtime();
     let db = open(&host);
@@ -1782,10 +2006,14 @@ fn ulid_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<UlidRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<55>",
-    decode_with = "crate::transport::decode::<_, 55>",
-    encode_with = "crate::transport::encode::<_, 55>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "ulid_lookup",
+    guard = crate::transport::admit::<55>,
+    decode = crate::transport::decode::<_, 55>,
+    encode = crate::transport::encode::<_, 55>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
     let host = runtime();
@@ -1800,27 +2028,35 @@ fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<56>",
-    decode_with = "crate::transport::decode::<_, 56>",
-    encode_with = "crate::transport::encode::<_, 56>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "ulid_decodes",
+    guard = crate::transport::admit::<56>,
+    decode = crate::transport::decode::<_, 56>,
+    encode = crate::transport::encode::<_, 56>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn ulid_decodes(bytes: Vec<u8>) -> bool {
     schema::UlidRow::decode(&bytes).is_ok()
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<57>",
-    decode_with = "crate::transport::decode::<_, 57>",
-    encode_with = "crate::transport::encode::<_, 57>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "ulid_text",
+    guard = crate::transport::admit::<57>,
+    decode = crate::transport::decode::<_, 57>,
+    encode = crate::transport::encode::<_, 57>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
     let value = text.parse::<ic_db::Ulid>().map_err(|_| 1_u8)?;
@@ -1828,10 +2064,14 @@ fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
 }
 
 type DateInput = (u64, Option<i32>, i32);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<58>",
-    decode_with = "crate::transport::decode::<_, 58>",
-    encode_with = "crate::transport::encode::<_, 58>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "date_batch",
+    guard = crate::transport::admit::<58>,
+    decode = crate::transport::decode::<_, 58>,
+    encode = crate::transport::encode::<_, 58>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     use schema::DateRow;
@@ -1857,16 +2097,20 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after Date batch");
+        ic_platform_runtime::system::trap("after Date batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<59>",
-    decode_with = "crate::transport::decode::<_, 59>",
-    encode_with = "crate::transport::encode::<_, 59>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "date_rows",
+    guard = crate::transport::admit::<59>,
+    decode = crate::transport::decode::<_, 59>,
+    encode = crate::transport::encode::<_, 59>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn date_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::DateRow;
     let host = runtime();
     let db = open(&host);
@@ -1879,10 +2123,14 @@ fn date_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<DateRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<60>",
-    decode_with = "crate::transport::decode::<_, 60>",
-    encode_with = "crate::transport::encode::<_, 60>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "date_lookup",
+    guard = crate::transport::admit::<60>,
+    decode = crate::transport::decode::<_, 60>,
+    encode = crate::transport::encode::<_, 60>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
     let host = runtime();
@@ -1902,24 +2150,32 @@ fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
         .map(|row| row.id)
         .collect())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<61>",
-    decode_with = "crate::transport::decode::<_, 61>",
-    encode_with = "crate::transport::encode::<_, 61>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "date_decodes",
+    guard = crate::transport::admit::<61>,
+    decode = crate::transport::decode::<_, 61>,
+    encode = crate::transport::encode::<_, 61>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn date_decodes(bytes: Vec<u8>) -> bool {
     schema::DateRow::decode(&bytes).is_ok()
 }
 
 type TimeInput = (u64, Option<u64>, u64, Option<i64>, i64);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<62>",
-    decode_with = "crate::transport::decode::<_, 62>",
-    encode_with = "crate::transport::encode::<_, 62>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "time_batch",
+    guard = crate::transport::admit::<62>,
+    decode = crate::transport::decode::<_, 62>,
+    encode = crate::transport::encode::<_, 62>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     use schema::TimeRow;
@@ -1944,14 +2200,18 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after time batch");
+        ic_platform_runtime::system::trap("after time batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<63>",
-    decode_with = "crate::transport::decode::<_, 63>",
-    encode_with = "crate::transport::encode::<_, 63>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "time_rows",
+    guard = crate::transport::admit::<63>,
+    decode = crate::transport::decode::<_, 63>,
+    encode = crate::transport::encode::<_, 63>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::TimeRow;
@@ -1971,22 +2231,30 @@ fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<TimeRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<64>",
-    decode_with = "crate::transport::decode::<_, 64>",
-    encode_with = "crate::transport::encode::<_, 64>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "time_decodes",
+    guard = crate::transport::admit::<64>,
+    decode = crate::transport::decode::<_, 64>,
+    encode = crate::transport::encode::<_, 64>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn time_decodes(bytes: Vec<u8>) -> bool {
     schema::TimeRow::decode(&bytes).is_ok()
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<65>",
-    decode_with = "crate::transport::decode::<_, 65>",
-    encode_with = "crate::transport::encode::<_, 65>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "time_text",
+    guard = crate::transport::admit::<65>,
+    decode = crate::transport::decode::<_, 65>,
+    encode = crate::transport::encode::<_, 65>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> {
     Ok((
@@ -1999,10 +2267,14 @@ fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> 
     ))
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<66>",
-    decode_with = "crate::transport::decode::<_, 66>",
-    encode_with = "crate::transport::encode::<_, 66>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "time_math",
+    guard = crate::transport::admit::<66>,
+    decode = crate::transport::decode::<_, 66>,
+    encode = crate::transport::encode::<_, 66>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64) {
     let duration = ic_db::Duration::from_millis(duration);
@@ -2016,10 +2288,14 @@ fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64)
 
 // Strings are private transport inputs; the database receives exact Decimal values.
 type DecimalInput = (u64, Option<String>, String);
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<67>",
-    decode_with = "crate::transport::decode::<_, 67>",
-    encode_with = "crate::transport::encode::<_, 67>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "decimal_batch",
+    guard = crate::transport::admit::<67>,
+    decode = crate::transport::decode::<_, 67>,
+    encode = crate::transport::encode::<_, 67>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     use schema::DecimalRow;
@@ -2042,16 +2318,20 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after decimal batch");
+        ic_platform_runtime::system::trap("after decimal batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<68>",
-    decode_with = "crate::transport::decode::<_, 68>",
-    encode_with = "crate::transport::encode::<_, 68>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "decimal_rows",
+    guard = crate::transport::admit::<68>,
+    decode = crate::transport::decode::<_, 68>,
+    encode = crate::transport::encode::<_, 68>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn decimal_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
+fn decimal_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::DecimalRow;
     let host = runtime();
     let db = open(&host);
@@ -2064,14 +2344,18 @@ fn decimal_rows() -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<DecimalRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<69>",
-    decode_with = "crate::transport::decode::<_, 69>",
-    encode_with = "crate::transport::encode::<_, 69>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "decimal_decodes",
+    guard = crate::transport::admit::<69>,
+    decode = crate::transport::decode::<_, 69>,
+    encode = crate::transport::encode::<_, 69>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "transport requires owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn decimal_decodes(bytes: Vec<u8>) -> bool {
     schema::DecimalRow::decode(&bytes).is_ok()
@@ -2086,10 +2370,14 @@ type KeyBatchInput = (
     Vec<u64>,
     bool,
 );
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<70>",
-    decode_with = "crate::transport::decode::<_, 70>",
-    encode_with = "crate::transport::encode::<_, 70>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "key_batch",
+    guard = crate::transport::admit::<70>,
+    decode = crate::transport::decode::<_, 70>,
+    encode = crate::transport::encode::<_, 70>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> Result<(), u8> {
     use schema::{KeyRow, Numbered};
@@ -2131,14 +2419,18 @@ fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> R
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after ULID primary-key batch");
+        ic_platform_runtime::system::trap("after ULID primary-key batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<71>",
-    decode_with = "crate::transport::decode::<_, 71>",
-    encode_with = "crate::transport::encode::<_, 71>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "key_page",
+    guard = crate::transport::admit::<71>,
+    decode = crate::transport::decode::<_, 71>,
+    encode = crate::transport::encode::<_, 71>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u8; 16]>, u64) {
     use schema::KeyRow;
@@ -2156,10 +2448,14 @@ fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u
         db.revision::<KeyRow>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<72>",
-    decode_with = "crate::transport::decode::<_, 72>",
-    encode_with = "crate::transport::encode::<_, 72>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "key_lookup",
+    guard = crate::transport::admit::<72>,
+    decode = crate::transport::decode::<_, 72>,
+    encode = crate::transport::encode::<_, 72>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn key_lookup((id, value): ([u8; 16], u64)) -> (Option<KeyInput>, Vec<KeyInput>) {
     use schema::KeyRow;
@@ -2187,10 +2483,14 @@ type IntegerKeyBatch = (
     Vec<[u8; 32]>,
     bool,
 );
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<73>",
-    decode_with = "crate::transport::decode::<_, 73>",
-    encode_with = "crate::transport::encode::<_, 73>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "integer_key_batch",
+    guard = crate::transport::admit::<73>,
+    decode = crate::transport::decode::<_, 73>,
+    encode = crate::transport::encode::<_, 73>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn integer_key_batch(
     (signed, wide, delete_signed, delete_wide, trap): IntegerKeyBatch,
@@ -2235,14 +2535,18 @@ fn integer_key_batch(
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        cdk::api::trap("after integer-key batch");
+        ic_platform_runtime::system::trap("after integer-key batch");
     }
     Ok(())
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<74>",
-    decode_with = "crate::transport::decode::<_, 74>",
-    encode_with = "crate::transport::encode::<_, 74>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "signed_key_page",
+    guard = crate::transport::admit::<74>,
+    decode = crate::transport::decode::<_, 74>,
+    encode = crate::transport::encode::<_, 74>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Option<i128>, u64) {
     use schema::SignedKey;
@@ -2258,10 +2562,14 @@ fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Opt
         db.revision::<SignedKey>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<75>",
-    decode_with = "crate::transport::decode::<_, 75>",
-    encode_with = "crate::transport::encode::<_, 75>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "wide_key_page",
+    guard = crate::transport::admit::<75>,
+    decode = crate::transport::decode::<_, 75>,
+    encode = crate::transport::encode::<_, 75>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn wide_key_page(
     (after, limit): (Option<[u8; 32]>, u8),
@@ -2281,10 +2589,14 @@ fn wide_key_page(
         db.revision::<WideKey>().unwrap(),
     )
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<76>",
-    decode_with = "crate::transport::decode::<_, 76>",
-    encode_with = "crate::transport::encode::<_, 76>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "integer_key_lookup",
+    guard = crate::transport::admit::<76>,
+    decode = crate::transport::decode::<_, 76>,
+    encode = crate::transport::encode::<_, 76>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn integer_key_lookup(rank: u64) -> (Vec<SignedInput>, Vec<WideInput>) {
     use schema::{SignedKey, WideKey};

@@ -102,7 +102,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
     decode(call(3, 0, false).await.unwrap()).unwrap();
     assert_eq!(state().await.1, vec![3]);
     let before = state().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(state().await, before);

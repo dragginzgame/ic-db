@@ -210,7 +210,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
     eprintln!("envelope replacement: instructions={work} cycles={cycles}");
     audit(Some(1)).await;
     let updated = pic.get_stable_memory(canister).await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(read(0, 1).await.1, 2);

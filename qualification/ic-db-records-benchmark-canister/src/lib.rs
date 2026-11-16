@@ -1,4 +1,5 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 //! One-entity host matching the frozen IcyDB scalar workload, without fault controls.
 
 #[cfg(feature = "count-profile")]
@@ -7,7 +8,6 @@ mod count_profile;
 use ic_db_qualification_transport as transport;
 
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
-use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
@@ -50,13 +50,22 @@ fn row(value: &Entry) -> Row {
 // Include runtime construction, schema admission, database work and result mapping.
 // Wire decode/encode is outside this interval, as in the frozen IcyDB host.
 fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let result = operation();
-    (result, cdk::api::instruction_counter() - start)
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[cdk::init]
-fn initialize() {
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
     let host = runtime();
     // Fixed test identity only; this is not an application incarnation policy.
     Database::create(
@@ -67,22 +76,30 @@ fn initialize() {
     .unwrap();
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "advance_startup",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn advance_startup() -> (bool, u64) {
+fn advance_startup((): ()) -> (bool, u64) {
     measure(|| {
         let _ = database();
         true
     })
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<2>",
-    decode_with = "crate::transport::decode::<_, 2>",
-    encode_with = "crate::transport::encode::<_, 2>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "insert",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn insert((id, category, amount): Row) -> (bool, u64) {
     measure(|| {
@@ -103,19 +120,27 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "lookup",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| database().get::<Entry>(id).unwrap().as_ref().map(row))
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<4>",
-    decode_with = "crate::transport::decode::<_, 4>",
-    encode_with = "crate::transport::encode::<_, 4>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "read_modify_write",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     measure(|| {
@@ -130,10 +155,14 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<5>",
-    decode_with = "crate::transport::decode::<_, 5>",
-    encode_with = "crate::transport::encode::<_, 5>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "listing",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn listing(category: u64) -> (Vec<Row>, u64) {
     // The index yields complete ID order within one category. This measures the
@@ -149,10 +178,14 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
 }
 
 #[cfg(feature = "fluent-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<6>",
-    decode_with = "crate::transport::decode::<_, 6>",
-    encode_with = "crate::transport::encode::<_, 6>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_listing",
+    guard = crate::transport::admit::<6>,
+    decode = crate::transport::decode::<_, 6>,
+    encode = crate::transport::encode::<_, 6>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_listing(
     (mode, category, minimum, limit): (u8, u64, u64, u32),
@@ -179,6 +212,8 @@ fn fluent_listing(
             ]),
             _ => panic!("unsupported comparison shape"),
         };
+        #[cfg(feature = "query-matrix")]
+        let query = query.work_limit(512);
         Ok(query.fetch().unwrap().rows.iter().map(row).collect())
     })
 }
@@ -192,10 +227,14 @@ struct AmountOnly {}
 struct CategoryOnly {}
 
 #[cfg(feature = "aggregate-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<7>",
-    decode_with = "crate::transport::decode::<_, 7>",
-    encode_with = "crate::transport::encode::<_, 7>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "grouped_aggregate",
+    guard = crate::transport::admit::<7>,
+    decode = crate::transport::decode::<_, 7>,
+    encode = crate::transport::encode::<_, 7>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn grouped_aggregate(
     (operation, category, minimum): (u8, Option<u64>, u64),
@@ -215,6 +254,18 @@ fn grouped_aggregate(
                 category.unwrap_or(0),
             )
             .filter("amount", Comparison::Ge, minimum);
+        #[cfg(feature = "query-matrix")]
+        let query = query.work_limit(512);
+        #[cfg(feature = "query-matrix")]
+        let (query, operation) = {
+            assert!(operation < 8);
+            let query = if operation >= 4 {
+                query.using_index("category,id", &[])
+            } else {
+                query
+            };
+            (query, operation % 4)
+        };
         if operation == 0 {
             return query
                 .group_count::<CategoryOnly>()
@@ -240,10 +291,14 @@ fn grouped_aggregate(
 }
 
 #[cfg(feature = "count-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<8>",
-    decode_with = "crate::transport::decode::<_, 8>",
-    encode_with = "crate::transport::encode::<_, 8>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "count_rows",
+    guard = crate::transport::admit::<8>,
+    decode = crate::transport::decode::<_, 8>,
+    encode = crate::transport::encode::<_, 8>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     measure(|| {

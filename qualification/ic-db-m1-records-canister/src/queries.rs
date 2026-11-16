@@ -26,42 +26,62 @@ enum Shape {
     Membership,
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<95>",
-    decode_with = "crate::transport::decode::<_, 95>",
-    encode_with = "crate::transport::encode::<_, 95>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_query",
+    guard = crate::transport::admit::<95>,
+    decode = crate::transport::decode::<_, 95>,
+    encode = crate::transport::encode::<_, 95>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_query(request: Request) -> Result<Page, u8> {
     read(request, Shape::Entity)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<96>",
-    decode_with = "crate::transport::decode::<_, 96>",
-    encode_with = "crate::transport::encode::<_, 96>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_projection",
+    guard = crate::transport::admit::<96>,
+    decode = crate::transport::decode::<_, 96>,
+    encode = crate::transport::encode::<_, 96>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_projection(request: Request) -> Result<Page, u8> {
     read(request, Shape::Projection)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<98>",
-    decode_with = "crate::transport::decode::<_, 98>",
-    encode_with = "crate::transport::encode::<_, 98>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_ordered",
+    guard = crate::transport::admit::<98>,
+    decode = crate::transport::decode::<_, 98>,
+    encode = crate::transport::encode::<_, 98>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_ordered(request: Request) -> Result<Page, u8> {
     read(request, Shape::Ordered)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<123>",
-    decode_with = "crate::transport::decode::<_, 123>",
-    encode_with = "crate::transport::encode::<_, 123>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_any",
+    guard = crate::transport::admit::<123>,
+    decode = crate::transport::decode::<_, 123>,
+    encode = crate::transport::encode::<_, 123>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_any(request: Request) -> Result<Page, u8> {
     read(request, Shape::Any)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<124>",
-    decode_with = "crate::transport::decode::<_, 124>",
-    encode_with = "crate::transport::encode::<_, 124>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_membership",
+    guard = crate::transport::admit::<124>,
+    decode = crate::transport::decode::<_, 124>,
+    encode = crate::transport::encode::<_, 124>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_membership(request: Request) -> Result<Page, u8> {
     read(request, Shape::Membership)
@@ -69,26 +89,38 @@ fn fluent_membership(request: Request) -> Result<Page, u8> {
 
 type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
 type TextRequest = (String, Option<Vec<u8>>, u32, u32);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<125>",
-    decode_with = "crate::transport::decode::<_, 125>",
-    encode_with = "crate::transport::encode::<_, 125>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_text_prefix",
+    guard = crate::transport::admit::<125>,
+    decode = crate::transport::decode::<_, 125>,
+    encode = crate::transport::encode::<_, 125>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_text_prefix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::StartsWith)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<126>",
-    decode_with = "crate::transport::decode::<_, 126>",
-    encode_with = "crate::transport::encode::<_, 126>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_text_suffix",
+    guard = crate::transport::admit::<126>,
+    decode = crate::transport::decode::<_, 126>,
+    encode = crate::transport::encode::<_, 126>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_text_suffix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::EndsWith)
 }
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<127>",
-    decode_with = "crate::transport::decode::<_, 127>",
-    encode_with = "crate::transport::encode::<_, 127>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_text_contains",
+    guard = crate::transport::admit::<127>,
+    decode = crate::transport::decode::<_, 127>,
+    encode = crate::transport::encode::<_, 127>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_text_contains(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::Contains)
@@ -97,10 +129,14 @@ fn fluent_text_contains(request: TextRequest) -> Result<TextPage, u8> {
 type SparseRequest = (bool, bool, Option<Vec<u8>>, u32);
 type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
 type TextSeekRequest = (String, bool, Option<Vec<u8>>, u32, u32);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<132>",
-    decode_with = "crate::transport::decode::<_, 132>",
-    encode_with = "crate::transport::encode::<_, 132>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_text_seek",
+    guard = crate::transport::admit::<132>,
+    decode = crate::transport::decode::<_, 132>,
+    encode = crate::transport::encode::<_, 132>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_text_seek(
     (needle, descending, after, work, bytes): TextSeekRequest,
@@ -135,20 +171,28 @@ fn fluent_text_seek(
 }
 
 type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<130>",
-    decode_with = "crate::transport::decode::<_, 130>",
-    encode_with = "crate::transport::encode::<_, 130>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_primary_range",
+    guard = crate::transport::admit::<130>,
+    decode = crate::transport::decode::<_, 130>,
+    encode = crate::transport::encode::<_, 130>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_primary_range(request: PrimaryRangeRequest) -> Result<IdPage, u8> {
     range_read(request, None, "id")
 }
 
 type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<131>",
-    decode_with = "crate::transport::decode::<_, 131>",
-    encode_with = "crate::transport::encode::<_, 131>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_index_range",
+    guard = crate::transport::admit::<131>,
+    decode = crate::transport::decode::<_, 131>,
+    encode = crate::transport::encode::<_, 131>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_index_range(
     (after, descending, category, lower, upper, work, bytes): IndexRangeRequest,
@@ -197,10 +241,14 @@ fn range_read(
     ))
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<128>",
-    decode_with = "crate::transport::decode::<_, 128>",
-    encode_with = "crate::transport::encode::<_, 128>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_sparse_presence",
+    guard = crate::transport::admit::<128>,
+    decode = crate::transport::decode::<_, 128>,
+    encode = crate::transport::encode::<_, 128>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_sparse_presence(
     (include_absent, descending, after, bytes): SparseRequest,
@@ -245,10 +293,14 @@ fn fluent_sparse_presence(
     ))
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<129>",
-    decode_with = "crate::transport::decode::<_, 129>",
-    encode_with = "crate::transport::encode::<_, 129>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_list_presence",
+    guard = crate::transport::admit::<129>,
+    decode = crate::transport::decode::<_, 129>,
+    encode = crate::transport::encode::<_, 129>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_list_presence((present, after): (bool, Option<Vec<u8>>)) -> Result<IdPage, u8> {
     let host = runtime();
@@ -318,7 +370,7 @@ fn read(
     (cursor, descending, category, minimum, limit, work, bytes): Request,
     shape: Shape,
 ) -> Result<Page, u8> {
-    let start = ic_platform_runtime::cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let host = runtime();
     let db = open(&host);
     let cursor = cursor
@@ -386,7 +438,7 @@ fn read(
         page.examined as u32,
         page.fetched as u32,
         page.output_bytes as u32,
-        ic_platform_runtime::cdk::api::instruction_counter() - start,
+        ic_platform_runtime::raw::instruction_counter() - start,
     ))
 }
 
@@ -399,15 +451,19 @@ fn query_error(error: &ic_db::Error) -> u8 {
 }
 
 // Same source, predicate, result and warm open; only materialization differs.
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<97>",
-    decode_with = "crate::transport::decode::<_, 97>",
-    encode_with = "crate::transport::encode::<_, 97>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_binary_projection",
+    guard = crate::transport::admit::<97>,
+    decode = crate::transport::decode::<_, 97>,
+    encode = crate::transport::encode::<_, 97>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     let host = runtime();
     let db = open(&host);
-    let start = ic_platform_runtime::cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let query = db
         .query::<crate::schema::BinaryObject>()
         .filter("id", Comparison::Eq, 1_u64);
@@ -427,6 +483,6 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     (
         rows,
         bytes as u32,
-        ic_platform_runtime::cdk::api::instruction_counter() - start,
+        ic_platform_runtime::raw::instruction_counter() - start,
     )
 }

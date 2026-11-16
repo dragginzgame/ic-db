@@ -314,7 +314,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
     );
     let before = pic.get_stable_memory(canister).await;
     let prior = status().await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert!(pic.get_stable_memory(canister).await == before);

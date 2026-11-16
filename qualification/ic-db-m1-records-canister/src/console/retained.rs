@@ -16,7 +16,7 @@ use ic_db::{
 };
 
 fn now() -> Timestamp {
-    Timestamp::from_millis((ic_platform_runtime::cdk::api::time() / 1_000_000) as i64)
+    Timestamp::from_millis((ic_platform_runtime::system::time() / 1_000_000) as i64)
 }
 
 // Reconstructed on every call; product admission binds these semantics to the job.
@@ -41,14 +41,18 @@ fn configured<'a, E: Entity>(
     )
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<120>",
-    decode_with = "crate::transport::decode::<_, 120>",
-    encode_with = "crate::transport::encode::<_, 120>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_start",
+    guard = crate::transport::admit::<120>,
+    decode = crate::transport::decode::<_, 120>,
+    encode = crate::transport::encode::<_, 120>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "Platform's decoder supplies an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
     let host = runtime();
@@ -188,10 +192,14 @@ fn values<K, R>(
         page.next.map(|c| c.to_bytes()),
     )
 }
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<121>",
-    decode_with = "crate::transport::decode::<_, 121>",
-    encode_with = "crate::transport::encode::<_, 121>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_resume",
+    guard = crate::transport::admit::<121>,
+    decode = crate::transport::decode::<_, 121>,
+    encode = crate::transport::encode::<_, 121>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn aggregate_resume(
     (selection, handle, sequence, work, bytes, page_size, after): Request,
@@ -364,14 +372,18 @@ fn resume_entry(
     }
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<122>",
-    decode_with = "crate::transport::decode::<_, 122>",
-    encode_with = "crate::transport::encode::<_, 122>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_cancel",
+    guard = crate::transport::admit::<122>,
+    decode = crate::transport::decode::<_, 122>,
+    encode = crate::transport::encode::<_, 122>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "Platform's decoder supplies an owned request"
+    reason = "Platform entrypoints receive an owned decoded request"
 )]
 fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
     let host = runtime();

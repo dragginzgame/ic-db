@@ -1,6 +1,6 @@
 //! Maximum structural write shape using ordinary product APIs and the real supplier.
 //! Raw inspection is private qualification transport, never a product query lane.
-use super::{Batch, Entity, KEY, cdk, open, runtime};
+use super::{Batch, Entity, KEY, open, runtime};
 use ic_db::Error;
 use ic_db_m1_records_schema::EnvelopeRow;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
@@ -57,17 +57,21 @@ fn write(
     db.commit(batch)
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<88>",
-    decode_with = "crate::transport::decode::<_, 88>",
-    encode_with = "crate::transport::encode::<_, 88>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "envelope_write",
+    guard = crate::transport::admit::<88>,
+    decode = crate::transport::decode::<_, 88>,
+    encode = crate::transport::encode::<_, 88>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_write(
     (mode, count, generation, oversized, trap): (u8, u8, u8, bool, bool),
 ) -> (Result<(), u8>, u64) {
     // Includes reopen, row construction, batch preparation and commit. Transport
     // decode/encode is outside this interval; the driver measures whole-call cycles.
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let result = match write(mode, count, generation, oversized, 60) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
@@ -75,19 +79,26 @@ fn envelope_write(
         Err(error) => panic!("unexpected envelope refusal: {error:?}"),
     };
     if trap {
-        cdk::api::trap("after envelope commit");
+        ic_platform_runtime::system::trap("after envelope commit");
     }
-    (result, cdk::api::instruction_counter() - start)
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<89>",
-    decode_with = "crate::transport::decode::<_, 89>",
-    encode_with = "crate::transport::encode::<_, 89>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_read",
+    guard = crate::transport::admit::<89>,
+    decode = crate::transport::decode::<_, 89>,
+    encode = crate::transport::encode::<_, 89>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
     assert!(index < 8 && generation <= 1);
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let host = runtime();
     let db = open(&host);
     let index = &EnvelopeRow::SCHEMA.indexes[usize::from(index)];
@@ -103,13 +114,21 @@ fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
         .unwrap();
     let ids = rows.into_iter().map(|row| row.id).collect();
     let revision = db.revision::<EnvelopeRow>().unwrap();
-    (ids, revision, cdk::api::instruction_counter() - start)
+    (
+        ids,
+        revision,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<91>",
-    decode_with = "crate::transport::decode::<_, 91>",
-    encode_with = "crate::transport::encode::<_, 91>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_row",
+    guard = crate::transport::admit::<91>,
+    decode = crate::transport::decode::<_, 91>,
+    encode = crate::transport::encode::<_, 91>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_row(id: u64) -> (String, String, String, String) {
     let host = runtime();
@@ -119,28 +138,39 @@ fn envelope_row(id: u64) -> (String, String, String, String) {
     (row.a, row.b, row.c, row.d)
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<93>",
-    decode_with = "crate::transport::decode::<_, 93>",
-    encode_with = "crate::transport::encode::<_, 93>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "envelope_comparison_write",
+    guard = crate::transport::admit::<93>,
+    decode = crate::transport::decode::<_, 93>,
+    encode = crate::transport::encode::<_, 93>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_comparison_write(
     (mode, generation, text_len): (u8, u8, u16),
 ) -> (Result<(), u16>, u64) {
     assert!(mode <= 1 && matches!(text_len, 48 | 61 | 1018));
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let result = match write(mode, 32, generation, false, usize::from(text_len)) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
         Err(error) => panic!("unexpected comparison refusal: {error:?}"),
     };
-    (result, cdk::api::instruction_counter() - start)
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<92>",
-    decode_with = "crate::transport::decode::<_, 92>",
-    encode_with = "crate::transport::encode::<_, 92>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_listing",
+    guard = crate::transport::admit::<92>,
+    decode = crate::transport::decode::<_, 92>,
+    encode = crate::transport::encode::<_, 92>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_listing(generation: u8) -> Vec<u64> {
     assert!(generation <= 1);
@@ -162,10 +192,14 @@ fn envelope_listing(generation: u8) -> Vec<u64> {
 }
 
 type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<90>",
-    decode_with = "crate::transport::decode::<_, 90>",
-    encode_with = "crate::transport::encode::<_, 90>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "envelope_raw",
+    guard = crate::transport::admit::<90>,
+    decode = crate::transport::decode::<_, 90>,
+    encode = crate::transport::encode::<_, 90>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
     assert!(matches!(tag, 2 | 3));

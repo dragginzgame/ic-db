@@ -186,7 +186,7 @@ async fn fluent_shapes_and_mapping_growth() {
         // upgrade; compare cold opening separately from repeated warm execution.
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
-        pic.upgrade_canister(canister, wasm, vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
             .await
             .unwrap();
         let mode = if last_mode == 0 { 0 } else { 10 };

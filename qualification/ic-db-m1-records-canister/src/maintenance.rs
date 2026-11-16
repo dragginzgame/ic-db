@@ -4,7 +4,6 @@ use ic_db::{
     Batch, Database, Entity, Error, Maintenance, QueryCursor, RetiredSource, Schema, SchemaCopy,
     SchemaTransition, Timestamp,
 };
-use ic_platform_runtime::cdk;
 use ic_storage::StableKey;
 
 #[cfg(feature = "aggregate-jobs")]
@@ -46,10 +45,14 @@ fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
     Ok((source, transition))
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<133>",
-    decode_with = "crate::transport::decode::<_, 133>",
-    encode_with = "crate::transport::encode::<_, 133>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_control",
+    guard = crate::transport::admit::<133>,
+    decode = crate::transport::decode::<_, 133>,
+    encode = crate::transport::encode::<_, 133>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_control((operation, inputs, trap): (u8, Vec<u8>, bool)) -> Result<(), String> {
     let (source, transition) = declaration(&inputs)?;
@@ -71,17 +74,21 @@ fn maintenance_control((operation, inputs, trap): (u8, Vec<u8>, bool)) -> Result
         _ => return Err("unsupported maintenance control".into()),
     }
     if trap {
-        cdk::api::trap("maintenance fixture trap after operation");
+        ic_platform_runtime::system::trap("maintenance fixture trap after operation");
     }
     Ok(())
 }
 
 type SourcePage = (Vec<(u64, u64, u64)>, Option<Vec<u8>>);
 
-#[cdk::query(
-    guard = "crate::transport::admit::<134>",
-    decode_with = "crate::transport::decode::<_, 134>",
-    encode_with = "crate::transport::encode::<_, 134>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "maintenance_source",
+    guard = crate::transport::admit::<134>,
+    decode = crate::transport::decode::<_, 134>,
+    encode = crate::transport::encode::<_, 134>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_source(
     (after, rows, bytes): (Option<Vec<u8>>, u8, u32),
@@ -190,15 +197,19 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
     }
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<135>",
-    decode_with = "crate::transport::decode::<_, 135>",
-    encode_with = "crate::transport::encode::<_, 135>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_copy",
+    guard = crate::transport::admit::<135>,
+    decode = crate::transport::decode::<_, 135>,
+    encode = crate::transport::encode::<_, 135>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_copy((operation, limit, trap): (u8, u8, bool)) -> Result<(u64, bool), String> {
     let result = copy_control(operation, limit).map_err(|error| format!("{error:?}"))?;
     if trap {
-        cdk::api::trap("copy fixture trap after operation");
+        ic_platform_runtime::system::trap("copy fixture trap after operation");
     }
     Ok(result)
 }
@@ -206,10 +217,14 @@ fn maintenance_copy((operation, limit, trap): (u8, u8, bool)) -> Result<(u64, bo
 // Independent supplier inspection, not a product escape hatch for candidate reads.
 type CopyEntries = (bool, Vec<(Vec<u8>, Vec<u8>)>);
 
-#[cdk::query(
-    guard = "crate::transport::admit::<136>",
-    decode_with = "crate::transport::decode::<_, 136>",
-    encode_with = "crate::transport::encode::<_, 136>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "maintenance_copy_entries",
+    guard = crate::transport::admit::<136>,
+    decode = crate::transport::decode::<_, 136>,
+    encode = crate::transport::encode::<_, 136>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_copy_entries(target: bool) -> CopyEntries {
     let host = runtime();
@@ -350,15 +365,19 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
     Ok((complete, vec![]))
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<137>",
-    decode_with = "crate::transport::decode::<_, 137>",
-    encode_with = "crate::transport::encode::<_, 137>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_managed_copy",
+    guard = crate::transport::admit::<137>,
+    decode = crate::transport::decode::<_, 137>,
+    encode = crate::transport::encode::<_, 137>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_managed_copy((operation, trap): (u8, bool)) -> Result<ManagedCopyReply, String> {
     let result = managed_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        cdk::api::trap("managed copy fixture trap");
+        ic_platform_runtime::system::trap("managed copy fixture trap");
     }
     Ok(result)
 }
@@ -498,15 +517,19 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<138>",
-    decode_with = "crate::transport::decode::<_, 138>",
-    encode_with = "crate::transport::encode::<_, 138>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_whole_copy",
+    guard = crate::transport::admit::<138>,
+    decode = crate::transport::decode::<_, 138>,
+    encode = crate::transport::encode::<_, 138>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_whole_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
     let result = whole_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        cdk::api::trap("whole database copy fixture trap");
+        ic_platform_runtime::system::trap("whole database copy fixture trap");
     }
     Ok(result)
 }
@@ -631,15 +654,19 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
 }
 
-#[cdk::update(
-    guard = "crate::transport::admit::<139>",
-    decode_with = "crate::transport::decode::<_, 139>",
-    encode_with = "crate::transport::encode::<_, 139>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_next_copy",
+    guard = crate::transport::admit::<139>,
+    decode = crate::transport::decode::<_, 139>,
+    encode = crate::transport::encode::<_, 139>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn maintenance_next_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
     let result = next_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        cdk::api::trap("successive database copy fixture trap");
+        ic_platform_runtime::system::trap("successive database copy fixture trap");
     }
     Ok(result)
 }

@@ -15,6 +15,8 @@ pub async fn run(
     let aggregate = compare_reads && std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
     let profile = compare_reads && std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
     let counts = compare_reads && std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
+    let prefix_candidate = label == "ic-db" && std::env::var_os("IC_DB_PREFIX_CANDIDATE").is_some();
+    assert!(!prefix_candidate || (counts && !profile));
     assert!(
         [fluent, aggregate, counts]
             .into_iter()
@@ -49,6 +51,9 @@ pub async fn run(
     if profile {
         assert!(counts && label == "ic-db");
         expected_methods.insert(0, "canister_query count_profile");
+    }
+    if prefix_candidate {
+        expected_methods.insert(3, "canister_query prefix_count");
     }
     assert_eq!(
         methods, expected_methods,
@@ -317,6 +322,53 @@ pub async fn run(
         );
     }
     eprintln!("{label} read_modify_replace_instructions={instructions} cycles={cycles}");
+    if std::env::var_os("IC_DB_PREFIX_WRITE_PROFILE").is_some() {
+        assert!(counts && !profile);
+        for (name, value) in [
+            ("same_prefix", (7_u64, 0_u64, 708_u64)),
+            ("no_op", (7, 0, 708)),
+        ] {
+            let backing = pic.get_stable_memory(canister).await;
+            let before = pic.cycle_balance(canister).await;
+            let reply = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "read_modify_write",
+                    ic_wire::encode(
+                        &value,
+                        Encoding::Frame {
+                            method: 4,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let cycles = before - pic.cycle_balance(canister).await;
+            let (actual, instructions): (Option<Row>, u64) = ic_wire::decode(
+                &reply,
+                Encoding::Frame {
+                    method: 4,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            assert_eq!(actual, Some(value));
+            eprintln!(
+                "{label} {name}_replace_instructions={instructions} cycles={cycles} settling={:?}",
+                settle().await
+            );
+            if name == "no_op" && !needs_settling {
+                assert_eq!(pic.get_stable_memory(canister).await, backing);
+            }
+            *source.iter_mut().find(|row| row.0 == 7).unwrap() = value;
+            assert_eq!(lookup(7).await.0, Some(value));
+        }
+    }
 
     let compare_fluent = async |phase: &str| {
         if !fluent {
@@ -508,6 +560,40 @@ pub async fn run(
                 "{label} exact_count phase={phase} rows={} category={category:?} expected={expected} result={result:?} instructions={instructions}",
                 expected_rows.len()
             );
+            if prefix_candidate && let Some(category) = category {
+                let reply = pic
+                    .query_call(
+                        canister,
+                        canister,
+                        "prefix_count",
+                        ic_wire::encode(
+                            &category,
+                            Encoding::Frame {
+                                method: 9,
+                                direction: Direction::Request,
+                            },
+                            LIMITS,
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let (result, instructions): (u64, u64) = ic_wire::decode(
+                    &reply,
+                    Encoding::Frame {
+                        method: 9,
+                        direction: Direction::Response,
+                    },
+                    LIMITS,
+                )
+                .unwrap();
+                assert_eq!(result, expected);
+                assert_eq!(pic.get_stable_memory(canister).await, backing);
+                eprintln!(
+                    "ic-db prefix_metadata phase={phase} rows={} category={category} expected={expected} instructions={instructions}",
+                    expected_rows.len()
+                );
+            }
             if profile {
                 let modes: &[u8] = if category.is_none() {
                     &[0, 2]
@@ -562,7 +648,7 @@ pub async fn run(
     compare_counts("settled", &source).await;
     compare_aggregates("settled").await;
     compare_fluent("settled").await;
-    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     eprintln!(
@@ -596,7 +682,7 @@ pub async fn run(
             }
             compare_counts("grown", &source).await;
         }
-        pic.upgrade_canister(canister, wasm, vec![], None)
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
             .await
             .unwrap();
         eprintln!(

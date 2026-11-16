@@ -419,9 +419,15 @@ async fn main() -> Result<(), String> {
                         if action == 2 {
                             println!("{}", render_bordered(&["Copied rows"], &rows));
                             if call == 1 {
-                                pic.upgrade_canister(canister, wasm.clone(), vec![], None)
-                                    .await
-                                    .map_err(|e| format!("{e:?}"))?;
+                                ic_db_m0_rollback_driver::upgrade_stopped(
+                                    pic,
+                                    canister,
+                                    wasm.clone(),
+                                    vec![],
+                                    None,
+                                )
+                                .await
+                                .map_err(|e| format!("{e:?}"))?;
                                 println!("Upgrade: complete");
                             }
                         }

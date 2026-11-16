@@ -1,4 +1,5 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 
 //! Frozen IcyDB measurement host. These Wire exports are private test controls.
 //! Startup is advanced explicitly by the harness; no Canic lifecycle is measured.
@@ -9,7 +10,6 @@ use ic_db_qualification_transport as transport;
 mod envelope;
 
 use ic_db_icydb_baseline_schema::{Entry, EntryInsert, EntryReplace};
-use ic_platform_runtime::cdk;
 use icydb::{db::WriteCell, types::Id};
 
 icydb::__icydb_start_actor!();
@@ -45,18 +45,25 @@ fn row(value: &Entry) -> Row {
 // Wire decode/encode. The driver separately records complete update cycle cost.
 fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
     assert!(!__icydb_host::RECOVERY_PENDING.get(), "drive startup first");
-    let start = cdk::api::instruction_counter();
+    let start = ic_platform_runtime::raw::instruction_counter();
     let result = icydb::db::with_request_execution(operation);
-    (result, cdk::api::instruction_counter() - start)
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "advance_startup",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn advance_startup() -> (bool, u64) {
-    let start = cdk::api::instruction_counter();
+fn advance_startup((): ()) -> (bool, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
     // Deliberately fixed test entropy, never a production identity source.
     icydb::db::provide_boot_entropy([41; 32]).unwrap();
     let ready =
@@ -64,13 +71,20 @@ fn advance_startup() -> (bool, u64) {
     if ready {
         __icydb_host::RECOVERY_PENDING.set(false);
     }
-    (ready, cdk::api::instruction_counter() - start)
+    (
+        ready,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<2>",
-    decode_with = "crate::transport::decode::<_, 2>",
-    encode_with = "crate::transport::encode::<_, 2>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "insert",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn insert((id, category, amount): Row) -> (bool, u64) {
     measure(|| {
@@ -87,10 +101,14 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<3>",
-    decode_with = "crate::transport::decode::<_, 3>",
-    encode_with = "crate::transport::encode::<_, 3>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "lookup",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| {
@@ -102,10 +120,14 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<4>",
-    decode_with = "crate::transport::decode::<_, 4>",
-    encode_with = "crate::transport::encode::<_, 4>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "read_modify_write",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     measure(|| {
@@ -126,10 +148,14 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<5>",
-    decode_with = "crate::transport::decode::<_, 5>",
-    encode_with = "crate::transport::encode::<_, 5>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "listing",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn listing(category: u64) -> (Vec<Row>, u64) {
     measure(|| {
@@ -149,10 +175,14 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
 }
 
 #[cfg(feature = "fluent-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<6>",
-    decode_with = "crate::transport::decode::<_, 6>",
-    encode_with = "crate::transport::encode::<_, 6>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_listing",
+    guard = crate::transport::admit::<6>,
+    decode = crate::transport::decode::<_, 6>,
+    encode = crate::transport::encode::<_, 6>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn fluent_listing(
     (mode, category, minimum, limit): (u8, u64, u64, u32),
@@ -186,10 +216,14 @@ fn fluent_listing(
 }
 
 #[cfg(feature = "aggregate-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<7>",
-    decode_with = "crate::transport::decode::<_, 7>",
-    encode_with = "crate::transport::encode::<_, 7>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "grouped_aggregate",
+    guard = crate::transport::admit::<7>,
+    decode = crate::transport::decode::<_, 7>,
+    encode = crate::transport::encode::<_, 7>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn grouped_aggregate(
     (operation, category, minimum): (u8, Option<u64>, u64),
@@ -198,6 +232,13 @@ fn grouped_aggregate(
         use icydb::{
             db::query::{FieldRef, count, max_by, min_by, sum},
             value::PublicValue,
+        };
+        // The paired IC DB control selects an index explicitly. Legacy already
+        // selects its category index; retain that same public query for both arms.
+        #[cfg(feature = "query-matrix")]
+        let operation = {
+            assert!(operation < 8);
+            operation % 4
         };
         let aggregate = match operation {
             0 => count(),
@@ -249,10 +290,14 @@ fn grouped_aggregate(
 }
 
 #[cfg(feature = "count-comparison")]
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<8>",
-    decode_with = "crate::transport::decode::<_, 8>",
-    encode_with = "crate::transport::encode::<_, 8>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "count_rows",
+    guard = crate::transport::admit::<8>,
+    decode = crate::transport::decode::<_, 8>,
+    encode = crate::transport::encode::<_, 8>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     measure(|| {

@@ -1,11 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// Platform narrowly permits the generated IC export attribute; handlers remain safe.
 
 //! One fixed, bounded grouped sum to probe revision invalidation and durable progress.
 //! This fixture is not a query API, schema admission implementation or job framework.
 
 use ic_db_qualification_transport as transport;
 
-use ic_platform_runtime::cdk;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
@@ -50,8 +50,14 @@ fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
     Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap()).unwrap()
 }
 
-#[cdk::init]
-fn initialize() {
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
     let host = runtime();
     for name in NAMES {
         drop(Map::create(host.open_memory(&StableKey::parse(name).unwrap()).unwrap()).unwrap());
@@ -74,7 +80,7 @@ fn get(state: &Map, key: u64) -> u64 {
 
 fn fail_at(selected: u8, boundary: u8) {
     if selected == boundary {
-        cdk::api::trap("M0 injected aggregation failure");
+        ic_platform_runtime::system::trap("M0 injected aggregation failure");
     }
 }
 
@@ -102,10 +108,14 @@ fn response(state: &Map) -> Response {
 
 // Commands: start, advance(job, sequence), put(id, value), cancel(job), delete(id).
 // Errors: input bound, wrong job, future sequence, not running, capacity, contract.
-#[ic_platform_runtime::cdk::update(
-    guard = "crate::transport::admit::<1>",
-    decode_with = "crate::transport::decode::<_, 1>",
-    encode_with = "crate::transport::encode::<_, 1>"
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "command",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
 fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u8> {
     let host = runtime();
@@ -229,12 +239,16 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
     Ok(response(&state))
 }
 
-#[ic_platform_runtime::cdk::query(
-    guard = "crate::transport::admit::<2>",
-    decode_with = "crate::transport::decode::<_, 2>",
-    encode_with = "crate::transport::encode::<_, 2>"
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "inspect",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
 )]
-fn inspect() -> Response {
+fn inspect((): ()) -> Response {
     let host = runtime();
     response(&open(&host, NAMES[1]))
 }
