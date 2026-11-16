@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.19.0] - Unreleased
+
+### ➕ Added
+
+- Add `Database::cardinality::<E>()` for exact whole-entity counts from maintained
+  metadata. Update counts atomically with revisions, rows and indexes; validate
+  rebuilt counts before schema-copy publication. Fluent `count()` still validates
+  rows and supports filtering. No schema attribute changes or prefix counters.
+
+### ⚠️ Changed
+
+- Hard-cut stored formats to `ICDBMF02`, `ICDBMT02` and `ICDBCP02`. Entity metadata
+  now contains revision and count (16 bytes). Earlier live or maintenance formats
+  refuse intact; this experimental cut supplies no converter or automatic reset.
+  Schema fingerprints and row/index encodings are unchanged. `db status` shows
+  the new live format.
+
+After rebuilding the local fixture CLI:
+
+```sh
+make db
+db status
+```
+
+Expect format `ICDBMF02`; this command inspects a fresh temporary fixture.
+
+### 🔧 Qualification
+
+- Qualify the adopted count format through native invariants, real IC write traps,
+  growth refusal/retry, retained-job invalidation and copy/cutover/recovery. The
+  final matched host adds 967 Wasm bytes, with about 0.11% extra instructions on
+  the sampled read/modify/replace journey; whole-entity count remains 574,791
+  instructions at 512 rows. See the [adoption receipt](qualification/README.md#maintained-count-adoption-019).
+- Add isolated `make m2-count-profile` to separate opening, raw traversal,
+  owner-row fetches and validated counting. Owner fetches dominate the sampled
+  indexed-count increment; caching opening does not fix its scaling. Record the
+  [decomposition](qualification/README.md#count-cost-decomposition-019),
+  preserving the existing integrity contract and original comparison artifacts.
+- Add `make m2-count-comparison` at 32/128/256/512 rows. Compare maintained
+  whole-entity counts and scanned category counts with legacy's metadata path.
+  Preserve the initial [scan tradeoff](qualification/README.md#exact-count-scaling-019)
+  separately from the adopted metadata results. Check backing and exact results
+  across upgrades. Correct the earlier grouped receipt's access-path
+  description: IC DB used its unordered primary scan, not automatic index selection.
+- Add `make m2-aggregate-comparison` using the existing 32-row scalar hosts.
+  Compare public fluent category grouping with count, sum, minimum and maximum,
+  including residual filtering, multiple groups, empty results and upgrade.
+  Keep independent expected tuples and unchanged-backing checks. Exact legacy
+  Decimal sum conversion belongs to the benchmark adapter; product code and
+  frozen IcyDB remain unchanged. Four-group queries use 74.0–76.0% fewer
+  instructions in this fixture; see the
+  [comparison receipt](qualification/README.md#matched-grouped-aggregates-019).
+- Correct stale private-release wording in `make help` and the design's 0.18
+  release status.
+
 ## [0.18.0] - 2026-11-16
 
 ### ▶️ Try it

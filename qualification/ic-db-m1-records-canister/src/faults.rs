@@ -140,3 +140,22 @@ fn fault_batch(
         .expect("product commit must complete or trap after mutation");
     finish()
 }
+
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<240>",
+    decode_with = "crate::transport::decode::<_, 240>",
+    encode_with = "crate::transport::encode::<_, 240>"
+)]
+fn fault_status() -> ([u8; 32], [u8; 16], u64, u64, u64, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let (schema, identity, revision, pages) = super::status(&db, &host);
+    (
+        schema,
+        identity,
+        revision,
+        pages,
+        db.cardinality::<Entry>().unwrap(),
+        db.cardinality::<Document>().unwrap(),
+    )
+}

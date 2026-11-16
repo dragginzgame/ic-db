@@ -3,7 +3,7 @@ use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
 
-type Status = ([u8; 32], [u8; 16], u64, u64);
+type Status = ([u8; 32], [u8; 16], u64, u64, u64, u64);
 
 #[tokio::test]
 async fn backing_writes_and_growth_failures_roll_back() {
@@ -22,11 +22,11 @@ async fn backing_writes_and_growth_failures_roll_back() {
             .query_call(
                 canister,
                 canister,
-                "inspect",
+                "fault_status",
                 ic_wire::encode(
                     &(),
                     Encoding::Frame {
-                        method: 1,
+                        method: 240,
                         direction: Direction::Request,
                     },
                     LIMITS,
@@ -38,7 +38,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
         ic_wire::decode::<Status>(
             &reply,
             Encoding::Frame {
-                method: 1,
+                method: 240,
                 direction: Direction::Response,
             },
             LIMITS,
@@ -92,6 +92,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
     };
 
     let original = status().await;
+    assert_eq!(original.4, 6);
     let reference = async || {
         let reply = pic
             .query_call(
@@ -174,6 +175,10 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 assert_eq!(writes + 1, stop_after);
                 assert!(writes > 1);
                 assert_eq!(status().await.2, original.2 + 1);
+                assert_eq!(
+                    (status().await.4, status().await.5),
+                    (original.4, original.5)
+                );
                 assert_eq!(reference().await, Some(2));
                 assert_eq!(category(9).await, vec![(1, 901), (2, 902)]);
                 assert_eq!(category(1).await, vec![(3, 31), (5, 51)]);
@@ -212,6 +217,10 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 .unwrap();
                 assert_eq!(grows, 0, "grow refusal must not be ignored");
                 assert_eq!(status().await.2, prior.2 + 1);
+                assert_eq!(
+                    (status().await.4, status().await.5),
+                    (prior.4 + 32, prior.5)
+                );
             }
             Err(error) => {
                 assert!(
@@ -241,6 +250,10 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 );
                 assert!(status().await.3 > prior.3);
                 assert_eq!(status().await.2, prior.2 + 1);
+                assert_eq!(
+                    (status().await.4, status().await.5),
+                    (prior.4 + 32, prior.5)
+                );
                 let reply = pic
                     .query_call(
                         canister,

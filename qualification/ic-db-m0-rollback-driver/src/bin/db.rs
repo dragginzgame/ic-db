@@ -285,7 +285,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
 
 fn print_status((schema, incarnation, revision, pages): Status) {
     let rows = vec![
-        vec!["Format".into(), "ICDBMF01".into()],
+        vec!["Format".into(), "ICDBMF02".into()],
         vec!["Schema admission".into(), "Exact match".into()],
         vec![
             "Schema fingerprint".into(),

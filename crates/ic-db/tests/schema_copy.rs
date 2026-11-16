@@ -559,7 +559,7 @@ fn empty_source_completes_and_cancels_within_one_entry() {
 
 #[test]
 fn malformed_and_future_copy_checkpoints_refuse_intact() {
-    for case in 0..3 {
+    for case in 0..4 {
         let memory = VectorMemory::default();
         let runtime = host(memory.clone());
         drop(begin(&runtime));
@@ -573,6 +573,7 @@ fn malformed_and_future_copy_checkpoints_refuse_intact() {
                 frame.pop();
             }
             1 => frame.push(0),
+            3 => frame[..8].copy_from_slice(b"ICDBCP01"),
             _ => {
                 let phase = frame.len() - 5;
                 frame[phase] = 255;
@@ -1367,11 +1368,8 @@ fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
             ));
         } else {
             let mut copy = multi_resume(&runtime);
-            assert!(!copy.validate_next(32).unwrap());
-            let before_validation = memory.borrow().clone();
+            // The paired metadata check sees a missing target entry immediately.
             assert!(copy.validate_next(32).is_err());
-            assert_eq!(*memory.borrow(), before_validation);
-            continue;
         }
         assert_eq!(*memory.borrow(), before);
     }

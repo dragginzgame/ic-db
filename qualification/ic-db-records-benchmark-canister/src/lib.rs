@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 //! One-entity host matching the frozen IcyDB scalar workload, without fault controls.
 
+#[cfg(feature = "count-profile")]
+mod count_profile;
+
 use ic_db_qualification_transport as transport;
 
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
@@ -177,5 +180,90 @@ fn fluent_listing(
             _ => panic!("unsupported comparison shape"),
         };
         Ok(query.fetch().unwrap().rows.iter().map(row).collect())
+    })
+}
+
+// Output records only; no additional stored entity or index.
+#[cfg(feature = "aggregate-comparison")]
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+struct AmountOnly {}
+#[cfg(feature = "aggregate-comparison")]
+#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+struct CategoryOnly {}
+
+#[cfg(feature = "aggregate-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<7>",
+    decode_with = "crate::transport::decode::<_, 7>",
+    encode_with = "crate::transport::encode::<_, 7>"
+)]
+fn grouped_aggregate(
+    (operation, category, minimum): (u8, Option<u64>, u64),
+) -> (Vec<(u64, u64)>, u64) {
+    measure(|| {
+        use ic_db::Comparison;
+        let db = database();
+        let query = db
+            .query::<Entry>()
+            .filter(
+                "category",
+                if category.is_some() {
+                    Comparison::Eq
+                } else {
+                    Comparison::Ge
+                },
+                category.unwrap_or(0),
+            )
+            .filter("amount", Comparison::Ge, minimum);
+        if operation == 0 {
+            return query
+                .group_count::<CategoryOnly>()
+                .unwrap()
+                .value
+                .into_iter()
+                .map(|row| (row.key.category, row.count))
+                .collect();
+        }
+        let result = match operation {
+            1 => query.group_sum::<CategoryOnly, AmountOnly>(),
+            2 => query.group_min::<CategoryOnly, AmountOnly>(),
+            3 => query.group_max::<CategoryOnly, AmountOnly>(),
+            _ => panic!("unsupported comparison aggregate"),
+        }
+        .unwrap();
+        result
+            .value
+            .into_iter()
+            .map(|row| (row.key.category, row.value.unwrap().amount))
+            .collect()
+    })
+}
+
+#[cfg(feature = "count-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<8>",
+    decode_with = "crate::transport::decode::<_, 8>",
+    encode_with = "crate::transport::encode::<_, 8>"
+)]
+fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
+    measure(|| {
+        let db = database();
+        if category.is_none() {
+            return Some(db.cardinality::<Entry>().unwrap());
+        }
+        let mut query = db.query::<Entry>().work_limit(512);
+        if let Some(category) = category {
+            query = query.using_index("category,id", &[category.into()]).filter(
+                "category",
+                ic_db::Comparison::Eq,
+                category,
+            );
+        }
+        match query.count() {
+            Ok(result) => Some(result.value),
+            // Explicit work refusal, never a successful partial count.
+            Err(Error::Limit) => None,
+            Err(error) => panic!("unexpected count refusal: {error:?}"),
+        }
     })
 }

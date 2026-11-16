@@ -254,7 +254,7 @@ fn freeze_closes_access_and_cancellation_restores_source_rows_indexes_and_revisi
     drop(maintenance);
     let frozen = entries(&runtime);
     assert_eq!(frozen[1..], original[1..]); // independent complete row/index/revision oracle
-    let mut expected = b"ICDBMT01".to_vec();
+    let mut expected = b"ICDBMT02".to_vec();
     expected.extend(source().fingerprint());
     expected.extend(target().fingerprint());
     expected.extend([7; 16]);
@@ -347,6 +347,9 @@ fn malformed_or_future_maintenance_records_never_reopen_or_cancel() {
     drop(create(&runtime).begin_maintenance(&transition).unwrap());
     let valid = entries(&runtime)[0].1.clone();
     let mut cases = Vec::new();
+    let mut old = valid.clone();
+    old[..8].copy_from_slice(b"ICDBMT01");
+    cases.push(old);
     for end in 8..valid.len() {
         cases.push(valid[..end].to_vec());
     }

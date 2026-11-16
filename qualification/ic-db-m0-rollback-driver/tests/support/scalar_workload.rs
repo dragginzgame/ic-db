@@ -5,7 +5,24 @@ use ic_wire::{Direction, Encoding};
 
 type Row = (u64, u64, u64);
 
-pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool, fluent: bool) {
+pub async fn run(
+    label: &str,
+    wasm_path: &std::ffi::OsStr,
+    needs_settling: bool,
+    compare_reads: bool,
+) {
+    let fluent = compare_reads && std::env::var_os("IC_DB_FLUENT_COMPARISON").is_some();
+    let aggregate = compare_reads && std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
+    let profile = compare_reads && std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
+    let counts = compare_reads && std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
+    assert!(
+        [fluent, aggregate, counts]
+            .into_iter()
+            .filter(|selected| *selected)
+            .count()
+            <= 1,
+        "select one comparison workload"
+    );
     let (wasm, facts) = crate::artifact::read(std::fs::File::open(wasm_path).unwrap()).unwrap();
     let methods: Vec<_> = facts
         .exports
@@ -22,6 +39,16 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool,
     ];
     if fluent {
         expected_methods.insert(0, "canister_query fluent_listing");
+    }
+    if aggregate {
+        expected_methods.insert(0, "canister_query grouped_aggregate");
+    }
+    if counts {
+        expected_methods.insert(0, "canister_query count_rows");
+    }
+    if profile {
+        assert!(counts && label == "ic-db");
+        expected_methods.insert(0, "canister_query count_profile");
     }
     assert_eq!(
         methods, expected_methods,
@@ -362,8 +389,180 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool,
             );
         }
     };
+    let compare_aggregates = async |phase: &str| {
+        if !aggregate {
+            return;
+        }
+        for (category, minimum) in [
+            (Some(3_u64), 0_u64),
+            (Some(3), 200),
+            (Some(0), 700),
+            (Some(3), 999),
+            (Some(99), 0),
+            (None, 0),
+            (None, 700),
+            (None, 999),
+        ] {
+            // Independent source tuples and arithmetic, not either engine's reducer.
+            let mut groups = std::collections::BTreeMap::<u64, Vec<u64>>::new();
+            for row in &source {
+                if category.is_none_or(|category| row.1 == category) && row.2 >= minimum {
+                    groups.entry(row.1).or_default().push(row.2);
+                }
+            }
+            for operation in 0..4_u8 {
+                let expected: Vec<(u64, u64)> = groups
+                    .iter()
+                    .map(|(&key, values)| {
+                        let result = match operation {
+                            0 => values.len() as u64,
+                            1 => values.iter().sum(),
+                            2 => *values.iter().min().unwrap(),
+                            3 => *values.iter().max().unwrap(),
+                            _ => unreachable!(),
+                        };
+                        (key, result)
+                    })
+                    .collect();
+                let backing = pic.get_stable_memory(canister).await;
+                let reply = pic
+                    .query_call(
+                        canister,
+                        canister,
+                        "grouped_aggregate",
+                        ic_wire::encode(
+                            &(operation, category, minimum),
+                            Encoding::Frame {
+                                method: 7,
+                                direction: Direction::Request,
+                            },
+                            LIMITS,
+                        )
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let (result, instructions): (Vec<(u64, u64)>, u64) = ic_wire::decode(
+                    &reply,
+                    Encoding::Frame {
+                        method: 7,
+                        direction: Direction::Response,
+                    },
+                    LIMITS,
+                )
+                .unwrap();
+                assert_eq!(
+                    result, expected,
+                    "{label}: {phase}, aggregate {operation}, category {category:?}, minimum {minimum}"
+                );
+                assert_eq!(pic.get_stable_memory(canister).await, backing);
+                eprintln!(
+                    "{label} aggregate phase={phase} operation={operation} category={category:?} minimum={minimum} result={result:?} instructions={instructions}"
+                );
+            }
+        }
+    };
+    let compare_counts = async |phase: &str, expected_rows: &[Row]| {
+        if !counts {
+            return;
+        }
+        for category in [None, Some(0_u64), Some(3), Some(99)] {
+            let expected = expected_rows
+                .iter()
+                .filter(|row| category.is_none_or(|category| row.1 == category))
+                .count() as u64;
+            let backing = pic.get_stable_memory(canister).await;
+            let reply = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "count_rows",
+                    ic_wire::encode(
+                        &category,
+                        Encoding::Frame {
+                            method: 8,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (result, instructions): (Option<u64>, u64) = ic_wire::decode(
+                &reply,
+                Encoding::Frame {
+                    method: 8,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            let expected_result = Some(expected);
+            assert_eq!(
+                result, expected_result,
+                "{label}: {phase}, count {category:?}"
+            );
+            assert_eq!(pic.get_stable_memory(canister).await, backing);
+            eprintln!(
+                "{label} exact_count phase={phase} rows={} category={category:?} expected={expected} result={result:?} instructions={instructions}",
+                expected_rows.len()
+            );
+            if profile {
+                let modes: &[u8] = if category.is_none() {
+                    &[0, 2]
+                } else {
+                    &[0, 1, 3, 4]
+                };
+                for &mode in modes {
+                    let reply = pic
+                        .query_call(
+                            canister,
+                            canister,
+                            "count_profile",
+                            ic_wire::encode(
+                                &(mode, category),
+                                Encoding::Frame {
+                                    method: 9,
+                                    direction: Direction::Request,
+                                },
+                                LIMITS,
+                            )
+                            .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let (result, opening, work): (Option<u64>, u64, u64) = ic_wire::decode(
+                        &reply,
+                        Encoding::Frame {
+                            method: 9,
+                            direction: Direction::Response,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap();
+                    let expected_result = if mode == 0 && expected_rows.len() >= 512 {
+                        None
+                    } else {
+                        Some(expected)
+                    };
+                    assert_eq!(
+                        result, expected_result,
+                        "profile mode {mode}, {phase}, {category:?}"
+                    );
+                    assert_eq!(pic.get_stable_memory(canister).await, backing);
+                    eprintln!(
+                        "ic-db count_profile phase={phase} rows={} mode={mode} category={category:?} result={result:?} opening={opening} work={work}",
+                        expected_rows.len()
+                    );
+                }
+            }
+        }
+    };
+    compare_counts("settled", &source).await;
+    compare_aggregates("settled").await;
     compare_fluent("settled").await;
-    pic.upgrade_canister(canister, wasm, vec![], None)
+    pic.upgrade_canister(canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     eprintln!(
@@ -371,6 +570,8 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool,
         startup().await
     );
     compare_fluent("settled-after-upgrade").await;
+    compare_aggregates("settled-after-upgrade").await;
+    compare_counts("settled-after-upgrade", &source).await;
     // Independent expected tuples survive heap loss and durable startup recovery.
     for expected in &source {
         assert_eq!(lookup(expected.0).await.0, Some(*expected));
@@ -384,6 +585,32 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool,
                 .filter(|row| row.1 == category)
                 .collect::<Vec<_>>()
         );
+    }
+    if counts {
+        for population in [128, 256, 512] {
+            for id in source.len() as u64 + 1..=population {
+                let value = (id, id % 4, id * 10);
+                assert!(insert(value).await.0);
+                settle().await;
+                source.push(value);
+            }
+            compare_counts("grown", &source).await;
+        }
+        pic.upgrade_canister(canister, wasm, vec![], None)
+            .await
+            .unwrap();
+        eprintln!(
+            "{label} count_reopen_steps_instructions_cycles={:?}",
+            startup().await
+        );
+        compare_counts("grown-after-upgrade", &source).await;
+        // Independent row witnesses, in addition to the count oracle.
+        for id in [7, 33, 128, 256, 512] {
+            assert_eq!(
+                lookup(id).await.0,
+                source.iter().copied().find(|row| row.0 == id)
+            );
+        }
     }
     eprintln!(
         "{label} stable_memory_bytes={}",

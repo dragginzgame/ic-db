@@ -776,8 +776,15 @@ separates delivered M1–M3 capabilities from remaining qualification and integr
 work. `make m0-icydb-baseline` provides the first
 SQL-disabled comparison workload: persistent writes, indexed reads and unchanged
 upgrade/reopen. It measures the frozen engine only; the separate
-`make m1-records-comparison` provides the matched scalar results. Broader workload
-budgets remain outstanding.
+`make m1-records-comparison` provides the matched scalar results.
+`make m2-aggregate-comparison` compares fluent category counts, sums and extrema;
+the [receipt](qualification/README.md#matched-grouped-aggregates-019) records its
+32-row scope and result-type differences. `make m2-count-comparison` compares
+maintained whole-entity counts and indexed-prefix counts as rows grow; see
+[the adopted count receipt](qualification/README.md#maintained-count-adoption-019).
+The earlier scan-only comparison is retained separately; legacy still has the
+measured populated-prefix count advantage.
+Broader workload budgets remain outstanding.
 
 The authoring comparison is complete. M1 keeps the familiar attribute-owned
 entity/record declarations with empty struct bodies; alternatives may be explored

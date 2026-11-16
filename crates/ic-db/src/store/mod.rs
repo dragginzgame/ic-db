@@ -19,7 +19,7 @@ pub use query::{
     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage, SortDirection,
 };
 
-const MANIFEST: &[u8] = b"ICDBMF01";
+const MANIFEST: &[u8] = b"ICDBMF02";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
 type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
@@ -299,7 +299,7 @@ impl<M: Memory> Database<M> {
             live_manifest(schema.fingerprint, incarnation),
         );
         for entity in &schema.entities {
-            map.insert(revision_key(entity.id), 0_u64.to_le_bytes().to_vec());
+            map.insert(entity_state_key(entity.id), EntityState::default().encode());
         }
         Ok(Self {
             map,
@@ -308,7 +308,7 @@ impl<M: Memory> Database<M> {
         })
     }
     /// Open only an exact manifest/compiled-contract match, without mutation.
-    /// This is not a whole-database integrity scan. Entity revisions are checked
+    /// This is not a whole-database integrity scan. Entity metadata is checked
     /// when read explicitly or when preparing a write to that entity.
     /// # Errors
     /// Refuses active maintenance, missing/corrupt manifests, foreign contracts or supplier formats.
@@ -352,6 +352,17 @@ impl<M: Memory> Database<M> {
     pub fn revision<E: Entity>(&self) -> Result<u64, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
         read_revision(&self.map, entity.id)
+    }
+    /// Read the exact maintained whole-entity row count without scanning rows.
+    /// This trusts atomic entity metadata; it does not validate row/index integrity.
+    /// Filtered counts and row-validating enumeration use the fluent query API.
+    /// # Errors
+    /// Refuses unadmitted entities and missing or malformed entity metadata.
+    /// # Panics
+    /// Supplier corruption may trap; this operation never repairs storage.
+    pub fn cardinality<E: Entity>(&self) -> Result<u64, Error> {
+        let entity = self.schema.admits(E::SCHEMA)?;
+        Ok(read_entity_state(&self.map, entity.id)?.count)
     }
     fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
         if !self.schema.entities.iter().any(|value| value.id == entity) {
@@ -478,7 +489,7 @@ impl<M: Memory> Database<M> {
         Ok(rows)
     }
 
-    /// Prepare the complete final state, then synchronously apply rows/indexes/revisions.
+    /// Prepare final state, then synchronously apply rows, indexes, revisions and counts.
     /// A normal refusal occurs before persistent writes. Success is not a separate
     /// durability point from the surrounding IC message. Empty/no-op batches preserve revisions.
     /// # Errors
@@ -491,9 +502,9 @@ impl<M: Memory> Database<M> {
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();
         let mut unique = BTreeSet::new();
-        // Per-batch preparation only: observed revision and whether any row
-        // actually changes. Nothing is retained between calls.
-        let mut revisions = BTreeMap::new();
+        // Observe each entity once, then apply its final net row delta. A balanced
+        // delete/insert batch must not depend on mutation order. No state survives calls.
+        let mut entities = BTreeMap::new();
         let mut required = BTreeSet::new();
         let mut deleted = Vec::new();
         for mut mutation in batch.mutations {
@@ -541,11 +552,13 @@ impl<M: Memory> Database<M> {
                 }
                 Kind::Delete => Vec::new(),
             };
-            let (_, changed) = match revisions.entry(mutation.entity.id) {
+            let (_, changed, delta) = match entities.entry(mutation.entity.id) {
                 std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((self.revision_by_id(mutation.entity.id)?, false))
-                }
+                std::collections::btree_map::Entry::Vacant(entry) => entry.insert((
+                    read_entity_state(&self.map, mutation.entity.id)?,
+                    false,
+                    0_i64,
+                )),
             };
             if let (Kind::Replace(bytes, _), Some(old)) = (&mutation.kind, &old)
                 && bytes == old
@@ -565,6 +578,11 @@ impl<M: Memory> Database<M> {
                 }
             }
             *changed = true;
+            *delta += match &mutation.kind {
+                Kind::Insert(..) | Kind::CopyInsert(..) => 1,
+                Kind::Delete => -1,
+                Kind::Replace(..) => 0,
+            };
             // Private migration inserts may precede their targets. The frozen
             // complete target validates references before it can be published.
             let copy_insert = matches!(&mutation.kind, Kind::CopyInsert(..));
@@ -596,10 +614,18 @@ impl<M: Memory> Database<M> {
             }
         }
         self.validate_references(&required, &deleted, &removes, &writes)?;
-        for (entity, (current, changed)) in revisions {
+        for (entity, (mut state, changed, delta)) in entities {
             if changed {
-                let next = current.checked_add(1).ok_or(Error::Limit)?;
-                writes.insert(revision_key(entity), next.to_le_bytes().to_vec());
+                state.revision = state.revision.checked_add(1).ok_or(Error::Limit)?;
+                state.count = if delta >= 0 {
+                    state.count.checked_add(delta as u64).ok_or(Error::Limit)?
+                } else {
+                    state
+                        .count
+                        .checked_sub((-delta) as u64)
+                        .ok_or(Error::Corrupt)?
+                };
+                writes.insert(entity_state_key(entity), state.encode());
             }
         }
         // Proven IC rollback boundary: no recoverable Result branch below this line.
@@ -678,14 +704,35 @@ fn prefix(tag: u8, entity: u32) -> Vec<u8> {
     key.extend(entity.to_be_bytes());
     key
 }
-fn revision_key(entity: u32) -> StoreKey {
-    StoreKey::new(prefix(1, entity)).expect("revision key fits")
+fn entity_state_key(entity: u32) -> StoreKey {
+    StoreKey::new(prefix(1, entity)).expect("entity state key fits")
 }
 fn read_revision<M: Memory>(map: &Map<M>, entity: u32) -> Result<u64, Error> {
-    let bytes = map.get(&revision_key(entity)).ok_or(Error::Corrupt)?;
-    Ok(u64::from_le_bytes(
-        bytes.as_slice().try_into().map_err(|_| Error::Corrupt)?,
-    ))
+    Ok(read_entity_state(map, entity)?.revision)
+}
+
+/// One atomic metadata record; neither value is reconstructed during ordinary open.
+#[derive(Default)]
+struct EntityState {
+    revision: u64,
+    count: u64,
+}
+impl EntityState {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.revision.to_le_bytes().to_vec();
+        bytes.extend(self.count.to_le_bytes());
+        bytes
+    }
+}
+fn read_entity_state<M: Memory>(map: &Map<M>, entity: u32) -> Result<EntityState, Error> {
+    let bytes = map.get(&entity_state_key(entity)).ok_or(Error::Corrupt)?;
+    if bytes.len() != 16 {
+        return Err(Error::Corrupt);
+    }
+    Ok(EntityState {
+        revision: u64::from_le_bytes(bytes[..8].try_into().map_err(|_| Error::Corrupt)?),
+        count: u64::from_le_bytes(bytes[8..].try_into().map_err(|_| Error::Corrupt)?),
+    })
 }
 fn row_key(entity: u32, id: RowKey) -> StoreKey {
     let mut key = prefix(2, entity);

@@ -184,3 +184,84 @@ fn fluent_listing(
         }
     })
 }
+
+#[cfg(feature = "aggregate-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<7>",
+    decode_with = "crate::transport::decode::<_, 7>",
+    encode_with = "crate::transport::encode::<_, 7>"
+)]
+fn grouped_aggregate(
+    (operation, category, minimum): (u8, Option<u64>, u64),
+) -> (Vec<(u64, u64)>, u64) {
+    measure(|| {
+        use icydb::{
+            db::query::{FieldRef, count, max_by, min_by, sum},
+            value::PublicValue,
+        };
+        let aggregate = match operation {
+            0 => count(),
+            1 => sum("amount"),
+            2 => min_by("amount"),
+            3 => max_by("amount"),
+            _ => panic!("unsupported comparison aggregate"),
+        };
+        let database = db().unwrap();
+        // Public typed fluent admission; no SQL, trusted fallback or client reducer.
+        let output = database
+            .query::<Entry>()
+            .unwrap()
+            .filter(match category {
+                Some(value) => FieldRef::new("category").eq(value),
+                None => FieldRef::new("category").gte(0_u64),
+            })
+            .filter(FieldRef::new("amount").gte(minimum))
+            .group_by("category")
+            .aggregate(aggregate)
+            .grouped_limits(4, 65_536)
+            .execute_grouped()
+            .unwrap();
+        assert!(output.next_cursor.is_none());
+        output
+            .rows
+            .iter()
+            .map(|row| {
+                let key = match row.group_key() {
+                    [key] => match key.as_public() {
+                        PublicValue::Nat64(value) => *value,
+                        value => panic!("unexpected group key: {value:?}"),
+                    },
+                    _ => panic!("unexpected group key shape"),
+                };
+                let value = match row.aggregate_values() {
+                    [value] => match value.as_public() {
+                        PublicValue::Nat64(value) => *value,
+                        // Legacy SUM produces Decimal. Reject rounding or range loss.
+                        PublicValue::Decimal(value) if operation == 1 => value.to_u64().unwrap(),
+                        value => panic!("unexpected aggregate value: {value:?}"),
+                    },
+                    _ => panic!("unexpected aggregate output shape"),
+                };
+                (key, value)
+            })
+            .collect()
+    })
+}
+
+#[cfg(feature = "count-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<8>",
+    decode_with = "crate::transport::decode::<_, 8>",
+    encode_with = "crate::transport::encode::<_, 8>"
+)]
+fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
+    measure(|| {
+        let database = db().unwrap();
+        let mut query = database.query::<Entry>().unwrap();
+        if let Some(category) = category {
+            query = query.filter(icydb::db::query::FieldRef::new("category").eq(category));
+        }
+        // Maintained cardinality metadata; no scan fallback or substituted reducer.
+        Some(query.execute_exact_count().unwrap())
+    })
+}

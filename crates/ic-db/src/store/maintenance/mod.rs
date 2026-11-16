@@ -9,7 +9,7 @@ pub use copy::{CopyStep, RetiredSource, SchemaCopy};
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
 use sha2::{Digest, Sha256};
 
-pub(super) const MAGIC: &[u8; 8] = b"ICDBMT01";
+pub(super) const MAGIC: &[u8; 8] = b"ICDBMT02";
 const MAX_NAME: usize = 64;
 const MAX_INPUTS: usize = 256;
 const MAX_FRAME: usize = 421;

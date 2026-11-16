@@ -37,9 +37,12 @@ help:
 	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make m2-query-growth            Measure fluent shapes, maps and entity growth' \
+	  'make m2-count-profile           Separate count opening, scan and row-fetch costs' \
+	  'make m2-count-comparison        Compare entity and indexed-prefix count costs' \
+	  'make m2-aggregate-comparison    Compare grouped IC DB/IcyDB aggregate costs' \
 	  'make m2-fluent-comparison       Compare fluent IC DB/IcyDB listings and sorting' \
 	  'make db                         Install db; run db to open the console' \
-	  'make release-patch/minor/major   Qualify and deliver a private source release' \
+	  'make release-patch/minor/major   Qualify and deliver a public source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
 	  'make deps-list / deps-update     Inspect / update Cargo dependencies' \
 	  'make install-tools / tools-check Prepare / admit development tools' \
@@ -91,12 +94,21 @@ m0-icydb-baseline:
 	  export IC_DB_ICYDB_BASELINE_WASM && \
 	  cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
 
-.PHONY: m1-records-comparison m2-fluent-comparison
+.PHONY: m1-records-comparison m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
 m1-records-comparison:
 	bash scripts/measure-records.sh
 
 m2-fluent-comparison:
 	bash scripts/measure-records.sh fluent
+
+m2-aggregate-comparison:
+	bash scripts/measure-records.sh aggregate
+
+m2-count-comparison:
+	bash scripts/measure-records.sh count
+
+m2-count-profile:
+	bash scripts/measure-records.sh count-profile
 
 .PHONY: m1-envelope-comparison
 m1-envelope-comparison:
@@ -167,7 +179,7 @@ m1-records-artifact:
 
 m1-records:
 	cargo test --locked -p ic-db --test enum_collections
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test cardinality --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact

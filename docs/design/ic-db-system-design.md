@@ -1,7 +1,8 @@
 # IC DB system design
 
-Status reviewed 2026-11-16: this design includes the 0.18.0 local migration CLI,
-bounded-sort and comparison increments. The changelog and Git tags record releases.
+Status reviewed 2026-11-16: this design includes the 0.19 maintained-count hard
+cut and the 0.18.0 migration CLI, bounded-sort and comparison increments.
+The changelog and Git tags record releases.
 Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration
@@ -399,6 +400,12 @@ inherit IcyDB's accepted-snapshot architecture as a requirement of the new produ
 The compiled schema owns the current executable's type and operation semantics.
 The durable manifest identifies the database incarnation, admitted format/schema
 identity and physical collection/layout identities needed to open its records.
+The 0.19 hard cut uses live format `ICDBMF02`, frozen-maintenance `ICDBMT02`
+and copy/retired `ICDBCP02`. These physical-format versions admit the 16-byte
+entity revision/count record; schema declarations and their canonical fingerprint
+are unchanged. Prior formats refuse intact, including in-progress maintenance.
+The maintainer explicitly waived an old-format converter for this experimental
+cut. There is no automatic reset, backfill or historical reader.
 Its purpose is admission, not a second editable copy of the schema. Exact schema
 identity must cover every behavior relevant to decoding and index consistency;
 its definition cannot be just a source name or an unstable Rust hash.
@@ -1013,11 +1020,12 @@ decoder for an otherwise unsupported historical codec. Name and inputs retain
 their exact bytes. Transformation behavior/version discipline remains explicit.
 
 `Database::begin_maintenance` consumes the live database and replaces its sole
-manifest with a bounded `ICDBMT01` record after preparation. The source-frozen
+manifest with a bounded `ICDBMT02` record after preparation. The source-frozen
 record is at most 421 bytes: magic, source/target fingerprints, original incarnation,
 phase zero, transformation version, name and inputs. Variable fields reuse the
-owned codec's fixed-u32 framing and strict bounded decoding. The live `ICDBMF01`
-format is unchanged. The longer frozen record is refused even by 0.15's ordinary
+owned codec's fixed-u32 framing and strict bounded decoding. These formats were
+introduced as version 01 in 0.16; 0.19 versions both frozen and live metadata.
+The longer frozen record is refused even by 0.15's ordinary
 manifest reader; adding a separate marker that old code would ignore is insufficient.
 Current ordinary open validates the gate and returns `Maintenance`. No normal
 read/write API is exposed on the maintenance handle, which retains the supplier's
@@ -1097,7 +1105,7 @@ its runtime planner or accepted-source lineage catalog. Native and Wasm witnesse
 preserve distinct creation/update times through renaming, index reconstruction,
 interruption and cutover, then check ordinary update policy on the published target.
 
-`SchemaCopy` retains both exclusive leases. Its bounded `ICDBCP01` envelopes carry
+`SchemaCopy` retains both exclusive leases. Its bounded `ICDBCP02` envelopes carry
 the existing exact transition/source identity frame, target incarnation and role.
 The source role is immutable during copying; the target records copying plus a
 bounded entity position/cursor, copied, validation progress, ready, cancelling or cancelled;
@@ -1268,6 +1276,13 @@ checks the installed command and independent wrong-phase/upgrade behavior; this
 is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
+
+`Database::cardinality::<E>()` reads the maintained whole-entity count without
+enumeration. It admits the entity and requires well-formed metadata; it does not
+validate stored rows/indexes or detect an arbitrary well-formed counter corruption.
+Fluent `count()` retains its bounded, row-validating query semantics, including
+filters. Prefix metadata counts remain unimplemented. A work limit is never
+silently reinterpreted as a partial exact result.
 
 Fluent Rust builders construct one admitted operation representation. There is
 no SQL parser, SQL adapter or separate public dynamic query API. Runtime values
@@ -1750,6 +1765,52 @@ and derived-index changes. Read required current rows once, validate types and
 constraints, calculate changes, then commit. Distinct user commands retain their
 semantics; they do not each get a staging/validation engine.
 
+Each entity's existing metadata record holds revision and row count together.
+Preparation checks the final net insert/delete delta once per changed entity;
+replacement leaves count unchanged and a no-op leaves both values unchanged.
+Count overflow refuses with `Limit`; underflow or missing/malformed metadata
+refuses with `Corrupt`, before mutation. Commit publishes both values with rows
+and indexes, adding eight payload bytes per entity and no extra metadata key or
+write per changed entity. Copy targets start at zero and private inserts rebuild
+their counts; validation requires source/target agreement for the current
+key-preserving transition. No online count builder or ordinary-write journal is added.
+
+**Maintained-count design review (2026-11-16).** The reason for this metadata is
+to make whole-entity cardinality available without work proportional to the row
+population, under the IC's per-message execution bounds. The invariant is
+`count(E) = number of live primary rows of E`: initialization establishes zero;
+the only live mutation owner applies the final presence delta atomically; copy
+inserts rebuild target counts through that owner. Cancelled targets and retired
+sources may be physically cleaned without maintaining counts because they cannot
+serve ordinary access. Storage is bounded by declared entities (currently at most
+32), not by distinct field values. The mechanism has no fixture entity, field,
+population threshold, supplier-node assumption or measured-query special case.
+Measurements assess its cost; they do not establish its correctness or justify
+extending it automatically to filtered counts.
+
+Read-only review of frozen IcyDB `6d421e3` found the same core behavior in
+[`EntityCardinality` and its write/reopen tests](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/data/store/tests.rs),
+and a separate [metadata-only exact-count terminal](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/query/exact_count.rs)
+that refuses unsupported shapes or unavailable evidence without scanning. Its
+journaled store combines a validated durable generation with post-watermark
+overlay deltas. Those mechanisms solve real visibility/recovery obligations.
+The [0.230 closeout](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/archive/0.230-durable-exact-cardinality-generations/0.230-closeout-audit.md)
+records a critical cache shortcut that bypassed durable identity/readiness proof,
+and a schema-publication gap that exposed stale counts. Retain the one-authority,
+no-partial-as-exact lesson; IC DB's single live state, closed maintenance and
+same-message commit remove the need for those overlay/fold mechanisms.
+
+This is not a universal database optimization: snapshot visibility can require
+different counts for concurrent transactions, as documented for
+[InnoDB](https://dev.mysql.com/doc/refman/8.4/en/aggregate-functions.html).
+Adding snapshots, deferred writes, online rebuilding, bulk import or another live
+mutation path must re-establish the count invariant and admission boundary.
+Metadata counting is not an integrity scan or a guarantee about later messages;
+arbitrary well-formed metadata corruption remains undetected by that read alone.
+Future prefix counts need their own state-size, write-fan-out and invalidation
+contract. Broader mixed-operation/write-heavy qualification remains necessary
+before general performance claims; the current fixture is evidence of cost only.
+
 The initial API uses reads of current state followed by one explicit atomic batch
 within the same synchronous message. It has no general transaction closure or
 read-your-own-staged-writes context. Crossing a message boundary between reads
@@ -1963,9 +2024,13 @@ retained capability scope. Later detail explains the implementation and evidence
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
 The CLI demonstrates product schemas, bounded queries and aggregates against a
-temporary local fixture. The unreleased 0.18 increment adds `db migration-demo`
+temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. Deployed-database CLI access
 and production endpoint composition remain M4 integration work.
+
+The 0.19 increment adds maintained whole-entity cardinality under the explicit
+format hard cut described in section 4. It does not change schema authoring or
+replace fluent counting, and provides no conversion of earlier stored formats.
 
 The next qualification emphasis is realistic combinations and operational bounds:
 larger/reference-heavy datasets, aggregate contention, entity/query/endpoint
@@ -3362,8 +3427,8 @@ source renames preserving explicit names, ambiguous reverse paths, and old-forma
 refusal have focused regression witnesses. Broader future index forms must extend
 this contract deliberately, rather than silently changing derived names.
 
-Manifest key `[0]` stores `ICDBMF01`, fingerprint and 16-byte nonzero incarnation.
-Revision/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
+Manifest key `[0]` stores `ICDBMF02`, fingerprint and 16-byte nonzero incarnation.
+Entity-metadata/row/index keys start with tags 1/2/3, then the big-endian generated entity handle; rows add
 the exact ordered primary-key bytes (declared-width integer, 16-byte ULID or
 length-framed Principal/Account or 32-byte Subaccount). Index keys
 add the generated index handle and declared components.
@@ -3375,7 +3440,8 @@ index key is capped at **512 bytes**, counting the namespace, components and
 primary-key suffix where present. Query prefixes reserve the minimum valid
 completion for unknown components and owner identity; per-field bounds apply
 independently. Nonunique indexes append the primary key. Index values are the exact encoded primary
-key; revisions are little-endian `u64`. Row values are database-encoded fields in
+key; entity metadata is little-endian `u64` revision followed by `u64` row count.
+Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
 width; signed values use two's complement. Booleans and optional presence use
@@ -3496,6 +3562,57 @@ before and after upgrade. IC DB uses 64.8–73.7% fewer instructions for those
 successful cases. Legacy public-lane scan/sort refusals and differing limit/cursor
 contracts are recorded separately; no broad fluent parity or successful-sort
 speedup follows. The probe reuses the scalar hosts/oracle without product changes.
+
+The 0.19 [grouped comparison](../../qualification/README.md#matched-grouped-aggregates-019)
+adds count/sum/min/max over required Nat64 categories to those same hosts. All 32
+cases agree with independent results before/after upgrade and preserve backing.
+Four-group queries use 74.0–76.0% fewer IC DB instructions. Legacy integer sums
+return Decimal; exact adapter conversion is included. Zero-key field aggregates
+were refused by the frozen public lane, so both final queries use explicit group
+keys. No product mechanism or frozen code is copied or changed. Rich types,
+averages, retained jobs, resource ceilings and contention remain unmatched.
+
+The [exact-count scaling probe](../../qualification/README.md#exact-count-scaling-019)
+records a counterexample to blanket performance claims. IC DB scans and legacy
+reads maintained cardinality: by 128 rows legacy is cheaper for populated entity
+and category counts in this fixture. At 512 rows, IC DB's whole-entity synchronous
+count refuses its work bound while legacy completes; an explicit category prefix
+with 129 matches costs 7.80M versus 1.50M instructions. Missing prefixes remain
+cheaper in IC DB. Both engines preserve expected counts across upgrades. Retained
+count is IC DB's existing larger-input option, with cost still unmeasured here.
+Do not import legacy's cardinality-build/fold machinery on the strength of this
+probe. Any selected counter addition must justify write/storage costs and preserve
+atomic updates, format admission and maintenance; this original scan probe changed
+no product mechanism. The preceding grouped receipt now explicitly
+records IC DB's default primary scan versus legacy's selected index.
+
+The [count decomposition](../../qualification/README.md#count-cost-decomposition-019)
+separates opening from real query execution and fixed-fixture raw supplier
+controls. With 512 rows/129 category matches, indexed work is 7.38M instructions;
+raw index traversal is 1.08M and adding owner-row fetches raises it to 5.58M.
+Opening adds 0.46M. The main cost is population-dependent traversal and owner
+fetching, with row/index validation still required by current `count` semantics.
+Caching opening or raising work limits does not solve that scaling. Index-only
+counting would weaken corruption detection; supplier-specific storage redesign
+and a new statistics planner are not justified by this fixture.
+
+The isolated [entity-count candidate](../../qualification/README.md#maintained-entity-count-candidate-019)
+adds eight bytes to the existing revision record, with final batch deltas and no
+extra metadata key/write or WAL. At 512 rows its metadata count costs 574,791
+instructions versus legacy's 1,413,832; the host adds 1,159 Wasm bytes and sampled
+read/modify/replace adds about 0.20% instructions. Native and Wasm probes cover
+selected refusal, rollback, same-format copy and executable-reopen boundaries.
+The maintainer subsequently authorized adoption as a format hard cut for 0.19.
+It inherits legacy's fail-closed metadata lesson, not its online builder,
+generation/folding or general statistics machinery. Current row-validating
+`count` semantics remain unchanged. No old-format converter is required for this
+cut; earlier formats refuse intact. The adopted physical format versions all
+live/frozen/copy records instead of changing the schema fingerprint. Prefix
+counts require their own bounded storage/write-fan-out decision;
+the addition does not resolve that measured gap. The
+[adopted receipt](../../qualification/README.md#maintained-count-adoption-019)
+records the final +967 Wasm bytes and about 0.11% sampled write-journey overhead,
+plus product fault and maintenance checks; candidate figures above remain historical.
 
 The figures below are an evidence history, tied to their recorded source,
 supplier graph and reachable workload. Successive runs do not form a benchmark

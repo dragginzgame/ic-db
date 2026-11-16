@@ -1,0 +1,79 @@
+//! Read-only cost decomposition for this fixed fixture, never an alternate executor.
+use super::{Entry, KEY, cdk, database, runtime, transport};
+use ic_db::{Comparison, Entity, Error};
+use ic_storage::{StableKey, adapter::StableBTreeMap};
+use std::ops::Bound;
+
+#[ic_platform_runtime::cdk::query(
+    guard = "transport::admit::<9>",
+    decode_with = "transport::decode::<_, 9>",
+    encode_with = "transport::encode::<_, 9>"
+)]
+fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
+    let start = cdk::api::instruction_counter();
+    if mode <= 1 {
+        let db = database();
+        let opened = cdk::api::instruction_counter();
+        let mut query = db.query::<Entry>().work_limit(512);
+        if let Some(category) = category {
+            query = query.filter("category", Comparison::Eq, category);
+            if mode == 1 {
+                query = query.using_index("category,id", &[category.into()]);
+            }
+        }
+        let result = match query.count() {
+            Ok(value) => Some(value.value),
+            Err(Error::Limit) => None,
+            Err(error) => panic!("unexpected profile refusal: {error:?}"),
+        };
+        return (
+            result,
+            opened - start,
+            cdk::api::instruction_counter() - opened,
+        );
+    }
+
+    // Raw supplier controls deliberately omit database integrity/admission work.
+    // Fixed physical prefixes and owner bytes are specific to this Nat64 fixture.
+    // The driver checks their totals independently and verifies backing preservation.
+    assert!((2..=4).contains(&mode));
+    let host = runtime();
+    let map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let opened = cdk::api::instruction_counter();
+    let mut prefix = vec![if mode == 2 { 2 } else { 3 }];
+    prefix.extend(Entry::ID.to_be_bytes());
+    if mode == 2 {
+        assert!(category.is_none());
+    } else {
+        prefix.extend(Entry::SCHEMA.indexes[0].id.to_be_bytes());
+        prefix.extend(category.unwrap().to_be_bytes());
+    }
+    let mut end = prefix.clone();
+    while end.last() == Some(&255) {
+        end.pop();
+    }
+    *end.last_mut().unwrap() += 1;
+    let mut count = 0;
+    for entry in map.range((Bound::Included(prefix), Bound::Excluded(end))) {
+        // Reading payloads is intentional: key-only iteration is a different cost.
+        let bytes = entry.value();
+        assert!(!bytes.is_empty());
+        if mode == 4 {
+            assert_eq!(bytes.len(), 8);
+            let mut owner = vec![2];
+            owner.extend(Entry::ID.to_be_bytes());
+            owner.extend(bytes);
+            assert!(!map.get(&owner).unwrap().is_empty());
+        }
+        count += 1;
+        assert!(count <= 512, "fixture-only raw traversal bound");
+    }
+    (
+        Some(count),
+        opened - start,
+        cdk::api::instruction_counter() - opened,
+    )
+}

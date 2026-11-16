@@ -2,8 +2,8 @@
 use super::{Maintenance, SchemaTransition, decode as decode_source};
 use crate::codec::{Decoder, Encoder};
 use crate::store::{
-    Map, collect_references, index_entries, live_manifest, manifest_key, read_revision,
-    revision_key, row_key, validate_index_entry, validate_reference_target,
+    EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
+    manifest_key, read_entity_state, row_key, validate_index_entry, validate_reference_target,
 };
 use crate::{
     Batch, Database, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema, primary::RowKey,
@@ -13,7 +13,7 @@ use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
 use std::collections::BTreeSet;
 use std::ops::Bound;
 
-pub(super) const MAGIC: &[u8; 8] = b"ICDBCP01";
+pub(super) const MAGIC: &[u8; 8] = b"ICDBCP02";
 const MAX_FRAME: usize = 8 + 4 + super::MAX_FRAME + 20 + 2 + 4 + QueryCursor::MAX_ENCODED_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,15 +210,15 @@ impl<M: Memory> Maintenance<M> {
         let source_gate = identity.encode(&Phase::Source)?;
         let phase = Phase::Copying(0, None);
         let target_gate = identity.encode(&phase)?;
-        let revisions: Vec<_> = target
+        let metadata: Vec<_> = target
             .entities()
             .iter()
-            .map(|entity| revision_key(entity.id))
+            .map(|entity| entity_state_key(entity.id))
             .collect();
         let mut map = Map::create(memory).map_err(Error::Storage)?;
         map.insert(manifest_key(), target_gate);
-        for revision in revisions {
-            map.insert(revision, 0_u64.to_le_bytes().to_vec());
+        for key in metadata {
+            map.insert(key, EntityState::default().encode());
         }
         self.map.insert(manifest_key(), source_gate);
         Ok(SchemaCopy {
@@ -569,11 +569,16 @@ fn validate_page<M: Memory>(
     after: Option<&StoreKey>,
     limit: usize,
 ) -> Result<Option<StoreKey>, Error> {
-    // At most 32 declared entities; also find missing revision entries, which a
-    // physical scan alone cannot observe. Frozen allocations cannot change mid-pass.
+    // At most 32 entities. Check missing metadata and equal counts for this
+    // key-preserving copy; target counts were rebuilt by atomic private inserts.
+    // Frozen allocations cannot change mid-pass.
     if after.is_none() {
         for entity in schema.entities() {
-            read_revision(map, entity.id)?;
+            if read_entity_state(map, entity.id)?.count
+                != read_entity_state(peer.0, entity.id)?.count
+            {
+                return Err(Error::Corrupt);
+            }
         }
     }
     let lower = after.map_or(Bound::Unbounded, |key| Bound::Excluded(key.clone()));
@@ -595,8 +600,8 @@ fn validate_page<M: Memory>(
                 .find(|entity| entity.id == id)
                 .ok_or(Error::Corrupt)?;
             match key.first() {
-                Some(1) if *key == revision_key(entity.id) => {
-                    if bytes.len() != 8 {
+                Some(1) if *key == entity_state_key(entity.id) => {
+                    if bytes.len() != 16 {
                         return Err(Error::Corrupt);
                     }
                 }

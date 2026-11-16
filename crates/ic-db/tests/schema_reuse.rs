@@ -98,7 +98,9 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
                 raw.insert(revision_key.clone(), vec![0; 7]);
             }
             3 => {
-                raw.insert(revision_key.clone(), u64::MAX.to_le_bytes().to_vec());
+                let mut exhausted = revision.clone();
+                exhausted[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+                raw.insert(revision_key.clone(), exhausted);
             }
             _ => unreachable!(),
         }

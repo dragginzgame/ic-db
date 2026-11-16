@@ -18,6 +18,9 @@ category = "tests"
 crate-type = ["cdylib"]
 
 [features]
+aggregate-comparison = []
+count-comparison = []
+count-profile = ["count-comparison"]
 fluent-comparison = []
 
 [dependencies]

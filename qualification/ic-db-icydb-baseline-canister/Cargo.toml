@@ -19,6 +19,8 @@ crate-type = ["cdylib"]
 
 [features]
 envelope = ["ic-db-icydb-baseline-schema/envelope"]
+aggregate-comparison = []
+count-comparison = []
 fluent-comparison = []
 
 [dependencies]

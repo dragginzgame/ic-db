@@ -43,8 +43,9 @@ Inspect this fixture with `db schema EnumCollectionsRow`.
 Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
 IcyDB `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (package 0.310.2).
 Keep measured comparisons, historical reference points and unmeasured gaps
-separate. Scalar and first-page fluent measurements cover current 0.18 work on
-2026-11-16; the fan-out measurements remain the earlier recorded run. Both
+separate. Scalar and first-page fluent measurements cover 0.18 work; grouped
+and count measurements cover the 0.19 qualification increment on 2026-11-16. The fan-out
+measurements remain the earlier recorded run. Both
 measured engines have SQL disabled, and neither host includes Canic.
 
 ### Recorded matched measurements
@@ -72,14 +73,29 @@ at `59ed763` plus captured changes; both engines execute their typed fluent APIs
 | Fluent indexed category listing, instructions | 843,180 | 3,208,262 | 73.7% fewer; seven rows after the fixture's index-changing replacement |
 | Fluent category plus residual filter, instructions | 834,529 | 2,980,596 | 72.0% fewer; three rows |
 | Fluent indexed scan with one residual match, instructions | 1,787,308 | 5,078,704 | 64.8% fewer; 32-row dataset |
+| Whole-entity count at 256 rows, instructions | 2,690,976 | 1,295,035 | IC DB scans; legacy maintained metadata is cheaper. [Receipt](#exact-count-scaling-019) |
+| Category count at 512 rows (129 matches), instructions | 7,795,044 | 1,503,444 | IC DB explicitly traverses index prefix; legacy reads metadata |
+| Whole-entity synchronous count at 512 rows | Work-limit refusal | Exact result: 512 | Different completion bounds; refusal is not a speed result |
+| Maintained whole-entity cardinality at 512 rows, instructions (0.19) | 574,791 | 1,413,832 | 59.3% fewer; metadata contract, not a row-integrity scan. [Adoption](#maintained-count-adoption-019) |
+| Four-group count, instructions | 926,034 | 3,657,854 | 74.7% fewer; required Nat64 category key |
+| Four-group sum, instructions | 939,805 | 3,914,882 | 76.0% fewer; small Nat64 inputs, exact legacy Decimal result conversion |
 | 32-row, eight-index insert, instructions | 76,139,333 | 461,923,130 | 83.5% fewer including settling; 58.7% fewer before settling |
 | Same batch replacement, instructions | 149,570,696 | 1,190,386,058 | 87.4% fewer including settling; 71.7% fewer before settling |
 
+The [adopted maintained count](#maintained-count-adoption-019) completes the
+512-row whole-entity count in 574,791 instructions versus legacy's 1,413,832,
+with 967 added Wasm bytes and small measured write overhead. The authorized hard
+cut requires no old-format converter; incompatible data remains intact.
+It does not improve prefix counts. The scan-count rows above retain the original
+comparison, before the metadata terminal was introduced.
+
 The [scalar](#scalar-comparison-refresh-018),
-[fluent](#matched-fluent-first-pages-018) and
-[fan-out](#matched-high-fan-out-writes) receipts own the exact conditions and
+[fluent](#matched-fluent-first-pages-018),
+[grouped](#matched-grouped-aggregates-019),
+[count](#exact-count-scaling-019) and [fan-out](#matched-high-fan-out-writes) receipts own the exact conditions and
 historical increments. Scalar data is one three-Nat64 entity, one secondary
-index and 32 rows. Fan-out data uses four 48-byte Text fields and eight indexes;
+index and 32 rows; the count probe grows that fixture to 512 rows. Fan-out data
+uses four 48-byte Text fields and eight indexes;
 the two hosts have different surrounding schemas, so their Wasm sizes are not
 compared. Settling follows the harness's explicit per-write policy, not a measured
 production scheduler. Smaller mechanisms and narrower reachable obligations both
@@ -92,7 +108,8 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
-| Grouping, sums/averages/extrema and retained aggregation | Native/Wasm correctness, upgrade and contention witnesses | No matched cost or complete semantic-parity matrix | Preserve bounds and invalidate on source changes; measure equivalent legacy operations where available. [Receipt](#product-retained-aggregates) |
+| Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
+| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows, plus existing retained-job witnesses | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Canic endpoints and full applications | Direct-library qualification hosts and temporary CLI | No matched integration benchmark | Adapter composition and real application acceptance remain M4 work |
 
@@ -129,6 +146,9 @@ The first M2 fluent-read probe is selected separately:
 make m2-queries
 make m2-jobs
 make m2-fluent-comparison
+make m2-aggregate-comparison
+make m2-count-comparison
+make m2-count-profile
 ```
 
 `make m2-sort-costs` selects the sorting oracle with a measurement-only update
@@ -1670,6 +1690,363 @@ artifacts and every observation. No SQL is enabled. Artifact SHA-256:
 This closes the small first-page fluent comparison gap. Large populations,
 projected results, grouping/aggregation, matched successful sorting, cursor
 semantics, resource-refusal envelopes and Canic composition remain separate work.
+
+### Matched grouped aggregates (0.19)
+
+`make m2-aggregate-comparison` enables only `aggregate-comparison` in the existing
+scalar hosts. One `grouped_aggregate` query endpoint per host executes count,
+sum, minimum or maximum grouped by the required Nat64 category. Both use public
+fluent APIs and the same 32-row dataset, including ID 7's replacement `(0, 707)`.
+IcyDB selects the existing `(category, id)` index for category equality or
+`category >= 0`. IC DB retains the default unordered primary scan because this
+probe does not select an index explicitly. Both apply `amount >= minimum` as
+a filter. These are equivalent results, not matched physical access paths.
+No SQL, trusted fallback or client reducer is used.
+
+Eight selections cover one category, sparse matches, a missing category, all four
+groups and empty results. All 32 cases agree with an independent tuple/arithmetic
+oracle before and after upgrade, and every query preserves the raw stable backing.
+There are no null operands in this fixture. Empty input yields no groups. The
+normal scalar host's export set stays unchanged; the shared driver's scalar and
+fluent regressions also pass using preserved artifacts.
+
+Measured 2026-11-16. Query instruction intervals include open/session creation,
+admission, execution and output mapping, excluding transport encode/decode.
+Query cycles are not inferred. Four-group output is count `(9, 8, 8, 7)`, sum
+`(2147, 1200, 1280, 1290)`, min `(40, 10, 20, 30)` and max `(707, 290, 300, 310)`
+in category order 0–3.
+
+| Selection / terminal | IC DB instructions | IcyDB instructions | Reduction |
+| --- | ---: | ---: | ---: |
+| All rows, grouped count | 926,034 | 3,657,854 | 74.7% |
+| All rows, grouped sum | 939,805 | 3,914,882 | 76.0% |
+| All rows, grouped minimum | 967,024 | 3,784,791 | 74.4% |
+| All rows, grouped maximum | 984,100 | 3,789,956 | 74.0% |
+| Category 3, amount >= 200, count | 830,800 | 2,491,948 | 66.7% |
+| Category 3, amount >= 200, sum | 834,059 | 2,546,204 | 67.2% |
+| All categories, amount >= 700, sum | 851,682 | 3,565,598 | 76.1% |
+| All categories, amount >= 999, sum (empty) | 843,328 | 3,540,281 | 76.2% |
+
+Across all 32 settled cases the instruction reduction is 55.7–76.2%. IC DB's
+post-upgrade counts are identical; legacy four-group counts are 3,657,651 /
+3,912,529 / 3,782,438 / 3,787,603. These are settled reads after startup, not cold
+startup measurements. Aggregate-enabled hosts are 296,900 raw / 272,519 code
+bytes versus 3,262,572 / 3,151,697: 90.9% smaller raw Wasm for this reachable
+workload, not a whole-product comparison. Added bytes relative to the recorded
+scalar artifacts are 63,662 / 60,556 versus 175,208 / 173,323; shared reachability
+and different result representations prevent interpreting these as per-query costs.
+
+IcyDB returns Decimal for integer sums. Its host converts only exact, in-range
+integers to the common tuple; IC DB uses a declared Nat64 result record. Small
+fixture totals fit both contracts. This does not compare overflow, rounding,
+optional inputs, rich keys, averages, DISTINCT, retained jobs or contention.
+Legacy requests allow four groups / 64 KiB state, within its public cap; IC DB
+retains its standard 32-group / 128 KiB bounds. Actual output has at most four
+small groups; this is not a matched maximum-state or memory comparison.
+
+The first candidate requested 128 KiB from legacy and correctly refused with
+code 176. After correcting that harness limit, plain zero-key field aggregates
+refused with code 3. Frozen
+[zero-key regressions](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/tests/cardinality_tiebreak/zero_key_aggregates.rs)
+document that route's special DISTINCT/expression policy. Both final hosts use
+explicit category groups instead. Neither refusal is counted as a speed result;
+this is not a claim that legacy lacks scalar aggregates through other lanes.
+Its metadata-only exact count is also outside this workload. No frozen code was
+copied or changed; the retained lesson is to establish admitted shape, complete
+input and empty-result semantics before comparing reducer costs.
+
+Evidence: `target/evidence/aggregate-comparison/`, source `88dca75` plus captured
+working diff, Rust 1.100.0 / LLVM 23.1.5, locked release-profile Wasm builds and
+PocketIC 16.1.0. SQL is disabled in both feature graphs. Qualification lock SHA-256:
+`74eb27791daf83bf5ee173d770290c323ed961bc4d809565f27df7417ddfa16d`.
+Artifact SHA-256:
+
+- IC DB: `481d59fed658cd5fd9413b77e39ec6fd15605af0efd8f031e00326bdf63d8e69`.
+- IcyDB: `8afaafec05a234b8d63292515df04088526bf5484ae775a233889a5478858c57`.
+
+Earlier attempts remain in `aggregate-comparison-initial/` and
+`aggregate-comparison-zero-key-refusal/`. No product code, durable state, new
+workspace package or dependency is added. Broader grouped and retained-job
+comparisons remain open.
+
+### Exact count scaling (0.19)
+
+The original `make m2-count-comparison` selected a separate `count-comparison` feature in the
+same scalar hosts. It compares equivalent whole-entity and category-equality
+counts using IC DB `query.work_limit(512).count()` and frozen IcyDB
+`execute_exact_count()`. IC DB explicitly selects `category,id` for category
+counts; the legacy terminal reads maintained cardinality metadata and refuses
+unavailable metadata instead of falling back to a scan. No grouped aggregate,
+SQL or client reduction substitutes for either terminal.
+
+The existing 32-row workload first rejects a duplicate insert and moves ID 7
+from category 3 to 0. The driver then grows the population to 128, 256 and 512
+using individual inserts, explicitly settling each legacy write. Counts cover
+the whole entity, categories 0/3 and missing category 99; an independent source
+vector supplies expected cardinalities. Upgrade checks repeat at 32 and 512
+rows. All 24 requests per engine return the expected count or explicit work
+refusal and preserve backing. Sampled rows survive the final upgrade. This
+qualifies settled counts, not reads during legacy recovery or metadata rebuild.
+
+Measured 2026-11-16; intervals include host opening/session construction,
+admission, execution and result conversion, excluding transport. These are
+instructions, not inferred query cycles or isolated metadata-lookup costs.
+
+| Population / count request | IC DB instructions | IcyDB instructions | Result |
+| --- | ---: | ---: | --- |
+| 32, whole entity | 771,727 | 1,193,000 | Both 32 |
+| 32, category 0 | 886,654 | 1,281,586 | Both 9 |
+| 128, whole entity | 1,564,302 | 1,265,471 | Both 128 |
+| 128, category 0 | 2,176,558 | 1,355,299 | Both 33 |
+| 256, whole entity | 2,690,976 | 1,295,035 | Both 256 |
+| 256, category 0 | 4,014,959 | 1,387,102 | Both 65 |
+| 512, whole entity | 4,856,372 (refused) | 1,413,832 | IC DB `Limit`; legacy 512 |
+| 512, category 0 | 7,795,044 | 1,503,444 | Both 129 |
+| 512, category 3 | 7,328,021 | 1,496,075 | Both 127 |
+| 512, missing category | 746,763 | 1,511,632 | Both zero |
+
+IC DB's populated counts grow with scanned rows; legacy's complete-call cost
+still grows somewhat despite avoiding row enumeration. This fixture's crossover
+is between 32 and 128 rows for populated selections, not a universal threshold.
+An empty explicit prefix remains cheaper in IC DB. At 512 whole-entity rows,
+IC DB cannot observe exhaustion inside its 512-candidate budget and refuses;
+subsequent prefix counts still succeed. It never returns a prefix total.
+Post-upgrade IC DB counts are identical; legacy's 512-row whole/category-0/category-3/
+missing counts use 1,415,167 / 1,503,188 / 1,495,819 / 1,511,376 instructions.
+IC DB retained count is available but its cost is not measured here.
+
+The initial candidate omitted `using_index`; IC DB's default unordered primary
+scan also exhausted work for category counts at 512 rows. Evidence remains in
+`count-comparison-primary-scan/`. The successful probe explicitly selects the
+index for those queries. The preceding grouped receipt is corrected to record
+its actual primary-scan/index distinction without changing historical numbers.
+
+This demonstrates useful legacy functionality, not a mandate to port its
+cardinality subsystem. Frozen
+[exact-count admission](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/query/exact_count.rs)
+and [prefix-cardinality regressions](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/cardinality/tests.rs)
+require complete, synchronized metadata and refuse partial projections after
+capacity loss. Historical cardinality-build progress also had to survive journal
+folds. IC DB had no such counts in this run; introducing them adds write and durable
+identity obligations. No product/frozen code, durable metadata or
+ordinary-write responsibility changes in this probe. Counter maintenance overhead
+and larger/other index distributions remain unmeasured.
+
+Evidence: `target/evidence/count-comparison-before-maintained-count/`, source `88dca75` plus captured
+working diff, Rust 1.100.0 / LLVM 23.1.5, locked release Wasm and PocketIC 16.1.0;
+SQL disabled. Qualification lock SHA-256:
+`74eb27791daf83bf5ee173d770290c323ed961bc4d809565f27df7417ddfa16d`.
+IC DB is 278,637 raw / 254,734 code bytes; legacy 3,111,171 / 3,002,089.
+These are the scalar controls plus one count endpoint, not whole-product sizes.
+Artifact SHA-256:
+
+- IC DB: `2e69499ddec2203f5e45ab28ed1e4ec24996b9677f99b17b5478990ac0ec1ddf`.
+- IcyDB: `8ba4b59598ec565f9ad2395ef2771050d270f9b28b2b63a01ecdae881b022a35`.
+
+### Count cost decomposition (0.19)
+
+`make m2-count-profile` builds only the IC DB host with `count-profile`, which
+includes the original count endpoint and one read-only diagnostic endpoint.
+The ordinary comparison and CLI do not expose it. The same driver grows the
+fixture through 32/128/256/512 rows and checks counts, refusal, unchanged backing
+and upgrades. The original matched-count artifacts remain separate and unchanged.
+
+Two modes execute real product counts (primary scan or explicit category index)
+with instruction timestamps around database opening and query execution. Three
+controls read the supplier map directly: primary rows; index entries and owner
+bytes; and index entries plus owner-row fetches. Raw controls use fixed physical
+prefixes for this Nat64 fixture, omit integrity/admission/reducer work, and are
+not supported database queries. They read actual payloads, validate expected
+counts independently and cap traversal at the 512-row fixture envelope. Passing
+them does not authorize skipping product integrity checks.
+
+Measured 2026-11-16, after settled writes:
+
+| Population / category-0 matches | Product opening | Raw index traversal | Raw index plus row fetches | Validated indexed count work |
+| --- | ---: | ---: | ---: | ---: |
+| 256 / 65 | 458,557 | 582,060 | 2,655,531 | 3,577,438 |
+| 512 / 129 | 461,341 | 1,083,725 | 5,580,445 | 7,377,587 |
+
+Work columns exclude opening; raw-map opening is 394,324 instructions. At 512
+rows the incremental owner-fetch control accounts for about 4.50M instructions,
+while the difference between that control and the full engine is about 1.80M.
+These are controlled comparisons, not exact additive profiling samples: raw keys
+use `Vec<u8>` rather than the product's bounded key wrapper, and the controls
+omit admission and validation. Nevertheless, fetching scattered owner rows is
+the largest observed indexed-count increment; opening is only about 6% of the
+full indexed call. Caching opening cannot remove its population-dependent work.
+
+At 256 rows the validated primary scan with category filtering costs 2,490,126
+work instructions versus the indexed count's 3,577,438, despite examining all
+256 rather than 65 candidates. Whole-entity validated scanning costs 2,236,393
+versus 1,533,773 for raw primary traversal. At 512 rows the primary count refuses
+at its work boundary after 4,404,913 work instructions; raw traversal completes
+at 3,021,394. Raising the bound only moves that boundary. These supplier-version
+observations do not justify changing storage structure around its current tree
+implementation or adding a statistical planner.
+
+The query path loads the owner row, validates its complete encoding and primary
+key, reconstructs row/index consistency, evaluates predicates and then counts.
+That invariant also detects missing owners and stale/wrong entries. Index-only
+counting would reduce work but would change that guarantee. Durable cardinality
+would avoid enumeration, with different obligations: atomic counter deltas,
+missing/corrupt metadata refusal, rollback, initialization and supported format
+migration. The current same-schema transition refusal means an internal-format
+upgrade must be admitted deliberately, not smuggled in as ordinary reopen.
+
+The resulting experiment is one maintained whole-entity count per entity, using
+the existing bounded preparation/commit boundary, and an explicit metadata-count
+contract distinct from row-validating `count`; its findings follow below.
+The subsequent hard-cut decision waives an old-format converter. Indexed-prefix counts are a separate
+extension because their number and write fan-out depend on distinct prefixes.
+Do not copy legacy's online cardinality build, journal folding, broad statistics
+or fallback framework. Retain its lesson that unavailable/partial metadata must
+never masquerade as an exact count. No product counter or integrity behavior is
+changed by this investigation; retained counts remain available for larger scans.
+
+Evidence: `target/evidence/count-profile/`, source `88dca75` plus captured diff,
+Rust 1.100.0 / LLVM 23.1.5, PocketIC 16.1.0, the same locked supplier graph as the
+matched count run. The instrumented host is 283,837 raw / 259,418 code bytes,
+SHA-256 `a6afbab9fafd0001024f664f4acde551e58ef85315c5d67be39a5705cb355483`.
+Its extra reachable measurement code shifts instruction costs slightly, so its
+numbers are not replacements for the original matched-count receipt. Every
+profile case passes before/after upgrade with stable backing unchanged.
+
+### Maintained entity-count candidate (0.19)
+
+Investigated 2026-11-16 in a disposable source copy, with no product source or
+shipped format change. The candidate extends the existing per-entity revision
+record from 8 to 16 bytes: revision plus exact row count. Preparation accumulates
+the final insert/delete delta per entity, checks arithmetic, and publishes count,
+revision, rows and indexes in the existing synchronous rollback boundary. Replaces
+leave the count unchanged; no-op writes leave the entire backing unchanged.
+This adds eight logical payload bytes per entity, no additional metadata key or
+per-batch metadata lookup/write, and no journal or cardinality-build lifecycle.
+
+The experimental `cardinality::<E>()` reads admitted metadata without inspecting
+rows. It is not a transparent replacement for the row-validating fluent `count`.
+Missing or malformed metadata refuses; arbitrary well-formed count corruption
+cannot be detected by a metadata-only read. The benchmark substitutes this call
+only for whole-entity counts; category counts retain ordinary indexed execution.
+
+| Whole-entity population | Current IC DB scan, instructions | Candidate metadata, instructions | Frozen IcyDB metadata, instructions |
+| --- | ---: | ---: | ---: |
+| 32 | 771,727 | 475,919 | 1,193,000 |
+| 128 | 1,564,302 | 483,637 | 1,265,471 |
+| 256 | 2,690,976 | 489,214 | 1,295,035 |
+| 512 | Refuses after 4,856,372 | 574,791 | 1,413,832 |
+
+The candidate completes all expected counts and preserves them across executable
+upgrade. It uses 59.3% fewer instructions than legacy at 512 rows, including
+database opening and the public call's work. One metadata lookup still has tree
+and opening costs; this is not a promise of constant instructions at every size.
+The scan refusal is not a successful performance comparator. Prefix counting is
+not solved: category 0 at 512 rows costs 7,824,202 instructions, versus the
+unchanged engine's 7,795,044 and legacy's 1,503,444.
+
+Against the original IC DB count artifact, the 32 sampled inserts each add 1,146
+instructions/cycles; the complete read/modify/replace adds 1,638 (830,081 to
+831,719 instructions, about 0.20%; cycles 7,844,600 to 7,846,238). Rejected insert
+adds 172 instructions/cycles; a primary hit adds 44 instructions. These small
+regressions belong in the tradeoff, not a claim of free counts. The host grows
+from 278,637 to 279,796 uncompressed Wasm bytes (+1,159), and from 254,734 to
+255,796 code bytes (+1,062). Both end at 1,703,936 allocated stable-memory bytes;
+allocation granularity hides the extra metadata payload. High fan-out and
+multi-entity Wasm write costs remain unmeasured for this candidate.
+
+Four native tests cover empty/multiple entities, final net-zero deltas, replacement,
+no-op preservation, late batch refusal, missing/malformed metadata, checked
+overflow/underflow, reopen, interrupted same-format copy, and refusal to publish
+when source/target counts differ. Target counts are rebuilt through private copy
+inserts. This uses the existing key-preserving, whole-database copy contract; it
+does not support transformations that add or remove records.
+
+A separate fault-enabled Wasm artifact proves successful insert/delete/replace
+and net-zero batches, no-op and late-refusal backing preservation, and full
+message rollback after a successful database commit. It also proves same-format
+upgrade and bidirectional old/new format refusal with backing unchanged and
+service restored by reinstalling the matching executable. The measurement host
+has no fault endpoint. These checks do not replace supplier-write-boundary trap
+coverage or qualify the entire maintenance lifecycle for the candidate.
+
+**Historical candidate limitation:** this prototype used a distinct manifest and
+canonical contract version. It safely refused old data but could not convert it.
+The maintainer subsequently authorized a hard cut without a converter. The
+adopted form below versions all physical manifests, retaining schema fingerprints.
+Ordinary open must not synthesize missing metadata.
+Prefix counts remain a separate bounded fan-out/storage proposal. Legacy's
+fail-closed exact-cardinality behavior is the lesson retained from
+`executor/aggregate/exact_terminal` at `6d421e3`; its generation, online build,
+journal folding and publication framework are not copied. The prototype is
+independently implemented within IC DB's existing batch/copy boundaries.
+
+Receipt: `target/evidence/entity-count-candidate/`, based on `88dca75` plus
+captured pending qualification changes and `candidate.patch`. The final patch
+SHA-256 is `e9d594ca658687f12647fff7d906c2bfae8b208e294e00dc05ecc893bee136ae`.
+Compiler, locks and PocketIC match the count comparison. Measurement artifact:
+`802dfcadd39f1e394e5e5d1c531205a73c83cd58c7057d70349a891b23488526`;
+separate proof artifact:
+`12843ca741f5e05fcd80f621ecaba791fea0fc5053536e1fd0fa061365f3e541`.
+Native invariants, PocketIC count workload and rollback/format proof pass;
+focused Clippy covers the candidate library/test, Wasm host and proof driver.
+The durable outcome of this disposable experiment is this contract/cost finding,
+not a second maintained engine or a new product API.
+
+### Maintained-count adoption (0.19)
+
+The maintainer authorized a hard cut after the experiment: no old-format
+conversion or backfill is required. `Database::cardinality::<E>()` now reads the
+16-byte revision/count record under live format `ICDBMF02`. Frozen maintenance
+and copy/retired records also version to `ICDBMT02`/`ICDBCP02`, preventing old
+in-progress work from resuming under the new layout. Old records refuse intact;
+there is no reset path. Schema fingerprints and row/index encoding are unchanged.
+This replaces the prototype's schema-grammar bump with the existing physical
+format admission boundary.
+
+One named entity-state record owns encoding, count and revision. Writes compute
+final net deltas during preparation and publish both values in the same existing
+metadata write. Missing/malformed metadata, count overflow and underflow refuse
+before mutation. Metadata-only counts do not inspect row/index integrity; fluent
+`count()` retains its existing semantics. No prefix counters, journals, background
+builders, new package or dependency are introduced.
+
+`make m2-count-comparison` now uses `cardinality` for whole-entity requests and
+the ordinary explicit index for category counts. `make m2-count-profile` still
+profiles real scanning modes independently. The preserved scan receipt above
+must not be relabelled as a metadata result.
+
+Native `cardinality`, `schema_reuse`, `maintenance`, `schema_copy` and `records`
+tests cover deltas, refusal, corruption-contract separation, physical format
+rejection, copy/cancellation/publication and retained metadata admission. The
+focused retained-job invalidation test keeps revision behavior explicit. The
+existing Wasm commit-failure host exposes count observations only under its fault
+feature; its driver checks counts alongside revision and backing restoration at
+every injected write trap, real instruction exhaustion, growth refusal/retry and
+upgrade. Ordinary hosts do not acquire these fault controls.
+
+Final adopted measurement, 2026-11-16: the whole-entity count costs 574,791
+instructions at 512 rows, unchanged from the prototype. Category-0 counting still
+costs 7,795,079 versus legacy's 1,503,444. The final host is 279,604 raw / 255,700
+code bytes: +967 / +966 over the original scanned-count host. Each of the 32
+sampled inserts adds 649 instructions/cycles; read/modify/replace adds 940
+(831,021 instructions, 7,845,540 cycles), about 0.11% instructions. Duplicate
+refusal adds 30 instructions/cycles and primary-hit instructions are unchanged.
+Allocated stable memory remains 1,703,936 bytes. These measurements include the
+same reachable scalar/query controls; they do not establish general write costs.
+
+The matched count workload passes for both engines. Supplier fault qualification
+passes all 137 replacement backing-write traps, actual instruction exhaustion,
+growth refusal at the batch beginning at ID 1700, successful retry, and unchanged
+reopen. Six Wasm copy tests pass cancellation, publication, managed values,
+successive migrations, intervening writes and retired cleanup under the new
+formats. Native revision-invalidation behavior remains unchanged.
+
+Evidence: `target/evidence/count-comparison/` for final performance and captured
+source/locks; `target/evidence/entity-count-adoption/` for focused qualification.
+IC DB artifact SHA-256:
+`9f91fab79dbf0d2ff590dcf1dc6ffe4cefcfdb2b826ae167aee86bb574bcb475`.
+The earlier scan and candidate artifacts retain their separate identities above.
+No frozen IcyDB code, metadata or release was changed.
 
 ## Numeric and schema contracts
 

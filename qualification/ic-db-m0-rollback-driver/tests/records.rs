@@ -104,7 +104,7 @@ fn console_inspects_and_queries() {
     ] {
         assert!(stdout.contains(entity));
     }
-    assert!(stdout.contains("ICDBMF01"));
+    assert!(stdout.contains("ICDBMF02"));
     assert!(stdout.contains("Exact match"));
     assert!(stdout.contains("Membership"));
     assert!(stdout.contains("Enum: Lifecycle"));
