@@ -72,8 +72,8 @@ enum Command {
         /// Both bounds are inclusive and apply before ordering or output limits.
         #[arg(long, allow_hyphen_values = true)]
         group_max: Option<String>,
-        /// Order completed groups; aggregate ties use ascending keys.
-        #[arg(long, value_parser=["key", "asc", "desc"])]
+        /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
+        #[arg(long, value_parser=["key", "key-desc", "asc", "desc"])]
         group_order: Option<String>,
         #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=512))]
         work: u32,
@@ -84,7 +84,7 @@ enum Command {
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it sorts the full matching result (at most 32 rows, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; duplicates still count toward the 32-input-row bound. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; non-identity results retain at most 32 distinct tuples. Duplicates consume scan work; a 33rd distinct tuple refuses even with --limit 1. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow"])]
@@ -121,6 +121,7 @@ enum Command {
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
+        /// value/maybe project DecimalRow fields, optionally with --distinct.
         /// DecimalRow supports count/distinct-count/min/max/sum:value or :maybe,
         /// optionally grouped by zone. DISTINCT includes one absent value.
         /// avg:amount/category,avg:amount for Entry; avg:value/avg:maybe with optional
@@ -142,8 +143,8 @@ enum Command {
         /// Both bounds are inclusive and apply before ordering or output limits.
         #[arg(long, allow_hyphen_values = true)]
         group_max: Option<String>,
-        /// Order completed groups by key or aggregate value; ties use ascending keys.
-        #[arg(long, value_parser=["key", "asc", "desc"])]
+        /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
+        #[arg(long, value_parser=["key", "key-desc", "asc", "desc"])]
         group_order: Option<String>,
     },
     /// Display command help.

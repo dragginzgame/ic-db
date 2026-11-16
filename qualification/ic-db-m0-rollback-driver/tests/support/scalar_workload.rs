@@ -5,7 +5,7 @@ use ic_wire::{Direction, Encoding};
 
 type Row = (u64, u64, u64);
 
-pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool) {
+pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool, fluent: bool) {
     let (wasm, facts) = crate::artifact::read(std::fs::File::open(wasm_path).unwrap()).unwrap();
     let methods: Vec<_> = facts
         .exports
@@ -13,15 +13,18 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
         .map(String::as_str)
         .filter(|name| name.starts_with("canister_query ") || name.starts_with("canister_update "))
         .collect();
+    let mut expected_methods = vec![
+        "canister_query listing",
+        "canister_query lookup",
+        "canister_update advance_startup",
+        "canister_update insert",
+        "canister_update read_modify_write",
+    ];
+    if fluent {
+        expected_methods.insert(0, "canister_query fluent_listing");
+    }
     assert_eq!(
-        methods,
-        [
-            "canister_query listing",
-            "canister_query lookup",
-            "canister_update advance_startup",
-            "canister_update insert",
-            "canister_update read_modify_write",
-        ],
+        methods, expected_methods,
         "unexpected reachable endpoint in {label} benchmark"
     );
     eprintln!(
@@ -288,6 +291,78 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
     }
     eprintln!("{label} read_modify_replace_instructions={instructions} cycles={cycles}");
 
+    let compare_fluent = async |phase: &str| {
+        if !fluent {
+            return;
+        }
+        // Compare only the first requested rows on unchanged data. The engines'
+        // cursor/limit contracts differ; this is not a continuation parity test.
+        for (mode, category, minimum, limit) in [
+            (0_u8, 3_u64, 0_u64, 8_u32),
+            (0, 3, 200, 8),
+            (0, 99, 0, 8),
+            (1, 3, 200, 8),
+            (2, 0, 700, 8),
+            (2, 0, 999, 8),
+            (3, 0, 0, 8),
+            (3, 0, 200, 1),
+            (3, 0, 0, 32),
+        ] {
+            let mut expected: Vec<Row> = source
+                .iter()
+                .copied()
+                // For mode 2, category >= 0 includes the full Nat64 domain.
+                .filter(|row| row.2 >= minimum && (mode == 2 || row.1 == category))
+                .collect();
+            expected.sort_by(|left, right| match mode {
+                1 => right.0.cmp(&left.0),
+                2 => (left.1, left.0).cmp(&(right.1, right.0)),
+                3 => right.2.cmp(&left.2).then(left.0.cmp(&right.0)),
+                _ => left.0.cmp(&right.0),
+            });
+            expected.truncate(limit as usize);
+            let backing = pic.get_stable_memory(canister).await;
+            let reply = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "fluent_listing",
+                    ic_wire::encode(
+                        &(mode, category, minimum, limit),
+                        Encoding::Frame {
+                            method: 6,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (result, instructions): (Result<Vec<Row>, u16>, u64) = ic_wire::decode(
+                &reply,
+                Encoding::Frame {
+                    method: 6,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            if label == "icydb" && mode == 3 {
+                // PublicRead forbids this materialized order. Do not silently
+                // switch to a trusted lane or count refusal as query savings.
+                assert_eq!(result, Err(174), "legacy materialization admission");
+            } else {
+                assert_eq!(result, Ok(expected), "{label}: {phase}, shape {mode}");
+            }
+            assert_eq!(pic.get_stable_memory(canister).await, backing);
+            eprintln!(
+                "{label} fluent phase={phase} mode={mode} category={category} minimum={minimum} limit={limit} result={:?} instructions={instructions}",
+                result.as_ref().map(Vec::len)
+            );
+        }
+    };
+    compare_fluent("settled").await;
     pic.upgrade_canister(canister, wasm, vec![], None)
         .await
         .unwrap();
@@ -295,6 +370,7 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
         "{label} reopen_steps_instructions_cycles={:?}",
         startup().await
     );
+    compare_fluent("settled-after-upgrade").await;
     // Independent expected tuples survive heap loss and durable startup recovery.
     for expected in &source {
         assert_eq!(lookup(expected.0).await.0, Some(*expected));

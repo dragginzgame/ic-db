@@ -309,6 +309,7 @@ pub(super) fn group_binding(
             GroupOrder::Key => 0,
             GroupOrder::AggregateAscending => 1,
             GroupOrder::AggregateDescending => 2,
+            GroupOrder::KeyDescending => 3,
         },
     ]);
     hash.update([groups.selection.predicates.len() as u8]);

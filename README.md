@@ -16,6 +16,10 @@ Start with the [proposed system design](docs/design/ic-db-system-design.md):
 capability contracts, authoritative state, schema evolution,
 query/write paths, experiments and conditions for proceeding.
 
+The [IcyDB comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
+collects measured costs, crate/functionality differences and unmeasured gaps.
+Recorded benchmark wins are scoped to their workloads, not whole-product parity.
+
 IcyDB's local checkout and private [icydb-legacy](https://github.com/dragginzgame/icydb-legacy)
 repository are frozen by maintainer decision pending this experiment.
 Read-only research remains allowed; development and
@@ -197,9 +201,10 @@ let page = db.query::<Entry>()
 `order_by` accepts up to four distinct ordered fields and adds the primary key as
 the final tie-breaker. All fields share the selected direction. Equality filters
 can fix index components; the engine prefers a path that proves the complete
-order. Without one, it scans the complete input and sorts at most 32 matching
-rows, then applies `limit`. Work exhaustion or more matches returns `Limit`,
-even for `limit(1)`. Sort keys are capped at 4096 bytes and retained key/output
+order. Without one, it scans the complete input, retains the best requested
+1–32 rows, then sorts them. Work exhaustion returns `Limit` even for `limit(1)`;
+the maximum work allowance permits 511 candidates plus observing exhaustion.
+Sort keys are capped at 4096 bytes and retained key/output
 buffers at 128 KiB. This fallback returns no continuation and refuses `after`;
 an explicit `using_index` still has to supply the requested order.
 Both entity and projected results are supported, including ordering by fields
@@ -213,8 +218,9 @@ order. Constant fields may have different directions without preventing index
 traversal. Otherwise mixed directions use the same bounded complete sorter.
 Sorted `distinct()` accepts inherently unique results or an explicit order covering
 exactly the projected fields. It removes duplicates before applying `limit` and
-output bytes. The sorter still retains at most 32 matching input rows, including
-duplicates; it does not inherit the larger-input allowance of unordered DISTINCT.
+output bytes. Retain at most 32 distinct tuples within 128 KiB, using the existing
+sort-key prefixes for equality. Duplicate input still consumes scan work; a 33rd
+distinct tuple refuses even with `limit(1)`. No additional set or cursor is stored.
 
 Sparse indexes (`present_only`) can supply order when filters exclude absence
 for every optional indexed field. For example, `Ne` with `IndexValue::Absent`,
@@ -501,7 +507,10 @@ type; sums require the declared result type. Absent extrema support equality/ine
 presence. `.order_groups(GroupOrder::AggregateAscending)` or
 `AggregateDescending` sorts completed groups, breaking ties by ascending group key.
 Absent extrema sort first ascending, last descending. `GroupOrder::Key` is the
-default. These modifiers refuse on row queries and scalar aggregates.
+default ascending canonical tuple order; `KeyDescending` reverses that tuple,
+including absence ordering, before output limits or completed-output pages.
+The CLI exposes these as `--group-order key` and `--group-order key-desc`.
+These modifiers refuse on row queries and scalar aggregates.
 
 ```rust
 let groups = db.query::<Entry>()

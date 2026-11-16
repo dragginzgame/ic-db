@@ -17,6 +17,9 @@ category = "tests"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+fluent-comparison = []
+
 [dependencies]
 ic-db.workspace = true
 ic-db-qualification-transport.workspace = true

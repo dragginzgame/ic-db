@@ -330,10 +330,11 @@ impl<'a> Request<'a> {
     }
 
     fn primary_descending(&self, entity: &EntitySchema) -> bool {
-        self.order.as_ref().is_some_and(|fields| {
-            fields.last() == Some(&entity.primary_key)
-                && self.order_descending & (1 << (fields.len() - 1)) != 0
-        })
+        self.order_descending != 0
+            && self.order.as_ref().is_some_and(|fields| {
+                fields.last() == Some(&entity.primary_key)
+                    && self.order_descending & (1 << (fields.len() - 1)) != 0
+            })
     }
 }
 
@@ -385,7 +386,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// returns `Limit` if work, result count or combined bytes cannot fit; it
     /// never returns a partial result. An individually oversized row returns
     /// `RowTooLarge`. Comparison keys are bounded to 4096 bytes.
-    /// Complete sorting instead retains at most 32 matching input rows. Its order
+    /// Non-identity sorted DISTINCT retains at most 32 distinct tuples. Its order
     /// must cover exactly the projected fields (unless the result is inherently
     /// unique); remove duplicates before applying `limit` and output bytes.
     #[must_use]
@@ -465,8 +466,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Order by 1..=4 distinct top-level ordered fields, then the primary key.
     /// An explicitly listed primary key must be last. All fields share one
     /// direction, reversed by `descending`. Prefer a complete ordered path.
-    /// Otherwise collect at most 32 matches within 128 KiB of key/output buffers,
-    /// sort the complete result and apply `limit`. Work exhaustion refuses; no
+    /// Otherwise scan to completion while retaining the best `limit` rows within
+    /// 128 KiB of key/output buffers, then sort them. Non-identity DISTINCT retains
+    /// at most 32 distinct tuples before output selection. Work exhaustion refuses; no
     /// cursor is supported by this fallback. DISTINCT requires an identity result
     /// or an order covering exactly the projected fields. Equality terms may fix
     /// leading index components. With `using_index`, require that path's order.
@@ -957,7 +959,10 @@ fn execute_inner<M: Memory>(
     } else {
         None
     };
-    let mut sorted = plan.sort.as_ref().map(|_| sort::Collection::default());
+    let mut sorted = plan
+        .sort
+        .as_ref()
+        .map(|_| sort::Collection::new(request, plan.distinct == distinct::Strategy::Sorted));
     let mut component = Vec::new();
     // Each processed equivalence class is either wholly rejected or already
     // emitted. Inclusive byte retries point at an unreturned class instead.
@@ -1099,11 +1104,7 @@ fn execute_inner<M: Memory>(
         page.rows = collection.rows;
     }
     if let Some(collection) = sorted {
-        collection.finish(
-            request,
-            plan.distinct == distinct::Strategy::Sorted,
-            &mut page,
-        )?;
+        collection.finish(request.bytes, &mut page)?;
     }
     Ok(page)
 }

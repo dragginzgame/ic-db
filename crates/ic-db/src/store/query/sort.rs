@@ -1,16 +1,16 @@
 //! Complete bounded sorting; no prefix answers, cursor state or generic sorter.
 use super::{
-    MAX_COMPARISON_KEY, MAX_STATE_BYTES, Plan, QueryPage, Request, admit_output, copy_projection,
-    projection_size,
+    MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Plan, QueryPage, Request,
+    admit_output, copy_projection, projection_size,
 };
 use crate::{EntitySchema, Error, IndexValue};
 
-const MAX_ROWS: usize = 32;
-
-#[derive(Default)]
 pub(super) struct Collection {
     rows: Vec<Row>,
     state_bytes: usize,
+    limit: usize,
+    descending: bool,
+    distinct: bool,
 }
 
 struct Row {
@@ -22,6 +22,16 @@ struct Row {
 }
 
 impl Collection {
+    pub(super) fn new(request: &Request<'_>, distinct: bool) -> Self {
+        Self {
+            rows: Vec::new(),
+            state_bytes: 0,
+            limit: request.rows,
+            descending: request.descending,
+            distinct,
+        }
+    }
+
     pub(super) fn push(
         &mut self,
         entity: &EntitySchema,
@@ -30,9 +40,6 @@ impl Collection {
         bytes: &[u8],
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
-        if self.rows.len() == MAX_ROWS {
-            return Err(Error::Limit);
-        }
         let mut key = Vec::new();
         let mut projected_key_end = 0;
         for &(position, descending) in plan.sort.as_ref().ok_or(Error::InvalidQuery)? {
@@ -51,6 +58,49 @@ impl Collection {
                     *byte = !*byte;
                 }
             }
+        }
+        if self.distinct {
+            // Admission makes this prefix exactly the projected tuple, regardless
+            // of field directions. Reuse retained keys; duplicate input consumes
+            // scan work, but no additional state or output buffer.
+            if self
+                .rows
+                .iter()
+                .any(|row| row.key[..row.projected_key_end] == key[..projected_key_end])
+            {
+                return Ok(());
+            }
+            if self.rows.len() == MAX_DISTINCT_VALUES {
+                return Err(Error::Limit);
+            }
+        } else if self.rows.len() == self.limit {
+            // At most 32 retained rows: find the worst cached key directly. The
+            // primary tie-breaker makes selection deterministic in either direction.
+            let (worst, row) = self
+                .rows
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    if self.descending {
+                        b.key.cmp(&a.key)
+                    } else {
+                        a.key.cmp(&b.key)
+                    }
+                })
+                .ok_or(Error::InvalidQuery)?;
+            let better = if self.descending {
+                key > row.key
+            } else {
+                key < row.key
+            };
+            if !better {
+                return Ok(());
+            }
+            // Release the losing output before copying its replacement. A later
+            // refusal drops the whole collection, never exposing a partial answer.
+            let removed = self.rows.swap_remove(worst);
+            self.state_bytes -= removed.key.capacity() + removed.bytes.capacity();
+            drop(removed);
         }
         let size = plan
             .projection
@@ -79,24 +129,18 @@ impl Collection {
     // primary tie-breaker; compare admitted bytes without decoding inside the sort.
     pub(super) fn finish(
         mut self,
-        request: &Request<'_>,
-        distinct: bool,
+        byte_limit: usize,
         page: &mut QueryPage<Vec<u8>>,
     ) -> Result<(), Error> {
         self.rows.sort_unstable_by(|left, right| {
-            if request.descending {
+            if self.descending {
                 right.key.cmp(&left.key)
             } else {
                 left.key.cmp(&right.key)
             }
         });
-        if distinct {
-            self.rows.dedup_by(|left, right| {
-                left.key[..left.projected_key_end] == right.key[..right.projected_key_end]
-            });
-        }
-        for row in self.rows.into_iter().take(request.rows) {
-            admit_output(row.bytes.len(), request.bytes, &mut page.output_bytes)?;
+        for row in self.rows.into_iter().take(self.limit) {
+            admit_output(row.bytes.len(), byte_limit, &mut page.output_bytes)?;
             page.rows.push(row.bytes);
         }
         Ok(())

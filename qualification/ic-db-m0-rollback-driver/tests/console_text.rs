@@ -1,4 +1,4 @@
-//! Text aggregate thresholds use the same typed semantics in both console modes.
+//! Console group selection uses the same typed semantics in both execution modes.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -301,4 +301,204 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+
+    // Independent results for the fixture's alternating categories and six amounts.
+    for (select, odd, even) in [
+        ("category,count", "3", "3"),
+        ("category,min:amount", "11", "20"),
+        ("category,max:amount", "51", "60"),
+        ("category,sum:amount", "93", "120"),
+        ("category,avg:amount", "31", "40"),
+        ("category,distinct-count:amount", "3", "3"),
+    ] {
+        let request = (
+            "Entry",
+            None::<Vec<u8>>,
+            2_u32,
+            None::<u64>,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            128_u32,
+            4096_u32,
+            select,
+            (false, (None::<String>, None::<String>), Some("key-desc")),
+        );
+        let before = pic.get_stable_memory(canister).await;
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 3,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let page = ic_wire::decode::<Result<Page, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 3,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+        .unwrap();
+        let expected = vec![
+            vec!["1".to_string(), odd.into()],
+            vec!["0".to_string(), even.into()],
+        ];
+        assert_eq!(page.1, expected, "{select}");
+        assert!(page.2.is_none());
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    }
+
+    let selection = (
+        "Entry",
+        "category,count",
+        (None::<u64>, None::<u64>, None::<u64>),
+        2_u32,
+        (None::<String>, None::<String>),
+        Some("key-desc"),
+    );
+    let reply = pic
+        .update_call(
+            canister,
+            canister,
+            "aggregate_start",
+            ic_wire::encode(
+                &selection,
+                Encoding::Frame {
+                    method: 120,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
+        &reply,
+        Encoding::Frame {
+            method: 120,
+            direction: Direction::Response,
+        },
+        LIMITS,
+    )
+    .unwrap()
+    .unwrap();
+    let mut sequence = 0_u64;
+    let mut cursor = None::<Vec<u8>>;
+    let mut rows = Vec::new();
+    let mut finished = false;
+    for step_number in 0..8 {
+        let request = (
+            &selection, &handle, sequence, 2_u32, 4096_u32, 1_u32, &cursor,
+        );
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "aggregate_resume",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 121,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let step = ic_wire::decode::<Result<Progress, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 121,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+        .unwrap();
+        sequence = step.0;
+        cursor = step.5.2;
+        if step.1 == "Complete" {
+            assert_eq!(step.5.1.len(), 1);
+            rows.extend(step.5.1);
+            if cursor.is_none() {
+                finished = true;
+                break;
+            }
+        } else {
+            assert_eq!(step.1, "Running");
+            assert!(step.5.1.is_empty());
+            assert!(cursor.is_none());
+        }
+        if step_number == 0 || cursor.is_some() {
+            // Recover both accumulation and already-selected output after upgrade.
+            pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+            let mut changed = selection.clone();
+            changed.5 = Some("key");
+            let request = (&changed, &handle, sequence, 2_u32, 4096_u32, 1_u32, &cursor);
+            let before = pic.get_stable_memory(canister).await;
+            let reply = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "aggregate_resume",
+                    ic_wire::encode(
+                        &request,
+                        Encoding::Frame {
+                            method: 121,
+                            direction: Direction::Request,
+                        },
+                        LIMITS,
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                ic_wire::decode::<Result<Progress, String>>(
+                    &reply,
+                    Encoding::Frame {
+                        method: 121,
+                        direction: Direction::Response
+                    },
+                    LIMITS,
+                )
+                .unwrap()
+                .is_err()
+            );
+            assert_eq!(pic.get_stable_memory(canister).await, before);
+        }
+    }
+    assert!(finished, "bounded input and completed pages must finish");
+    assert_eq!(rows, vec![vec!["1", "3"], vec!["0", "3"]]);
 }

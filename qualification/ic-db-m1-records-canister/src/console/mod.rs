@@ -63,6 +63,24 @@ type Page = (
     u32,
 );
 
+// Measure the exact console path, including open/admission/result formatting.
+// An update permits complete-call cycle accounting; the driver verifies that
+// both successful and refused reads preserve the backing bytes.
+#[cfg(feature = "query-measurements")]
+#[ic_platform_runtime::cdk::update(
+    guard = "crate::transport::admit::<147>",
+    decode_with = "crate::transport::decode::<_, 147>",
+    encode_with = "crate::transport::encode::<_, 147>"
+)]
+fn measured_query(request: Request) -> (Result<Page, String>, u64) {
+    let start = ic_platform_runtime::cdk::api::instruction_counter();
+    let result = query(request);
+    (
+        result,
+        ic_platform_runtime::cdk::api::instruction_counter() - start,
+    )
+}
+
 #[ic_platform_runtime::cdk::query(
     guard = "crate::transport::admit::<3>",
     decode_with = "crate::transport::decode::<_, 3>",
@@ -234,6 +252,7 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
     match order {
         None => Ok(None),
         Some("key") => Ok(Some(GroupOrder::Key)),
+        Some("key-desc") => Ok(Some(GroupOrder::KeyDescending)),
         Some("asc") => Ok(Some(GroupOrder::AggregateAscending)),
         Some("desc") => Ok(Some(GroupOrder::AggregateDescending)),
         _ => Err("unsupported group order".into()),
@@ -539,6 +558,12 @@ fn execute<'a, E: Entity>(
         "category" => query
             .fetch_as::<CategoryOnly>()
             .map(|p| display(p, &["category"], |r| vec![r.category.to_string()])),
+        "value" => query
+            .fetch_as::<TotalDecimal>()
+            .map(|p| display(p, &["value"], |r| vec![r.value.to_string()])),
+        "maybe" => query
+            .fetch_as::<OptionalDecimal>()
+            .map(|p| display(p, &["maybe"], |r| vec![optional(r.maybe)])),
         _ => return Err("unsupported projection or aggregate".into()),
     }
     .map_err(message)

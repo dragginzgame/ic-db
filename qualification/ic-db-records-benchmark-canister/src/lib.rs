@@ -134,7 +134,7 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
 )]
 fn listing(category: u64) -> (Vec<Row>, u64) {
     // The index yields complete ID order within one category. This measures the
-    // delivered direct read, not a fluent planner that IC DB has yet to implement.
+    // direct read. The optional fluent comparison below measures planner work.
     measure(|| {
         database()
             .index_prefix::<Entry>("category,id", &[category.into()], 10)
@@ -142,5 +142,40 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
             .iter()
             .map(row)
             .collect()
+    })
+}
+
+#[cfg(feature = "fluent-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<6>",
+    decode_with = "crate::transport::decode::<_, 6>",
+    encode_with = "crate::transport::encode::<_, 6>"
+)]
+fn fluent_listing(
+    (mode, category, minimum, limit): (u8, u64, u64, u32),
+) -> (Result<Vec<Row>, u16>, u64) {
+    measure(|| {
+        use ic_db::{Comparison, SortDirection};
+        let db = database();
+        let mut query = db
+            .query::<Entry>()
+            .filter("amount", Comparison::Ge, minimum)
+            .limit(limit as usize);
+        if mode != 2 {
+            query = query.filter("category", Comparison::Eq, category);
+        } else {
+            query = query.filter("category", Comparison::Ge, 0_u64);
+        }
+        query = match mode {
+            0 => query.order_by(&["id"]),
+            1 => query.order_by(&["id"]).descending(),
+            2 => query.order_by(&["category", "id"]),
+            3 => query.order_by_each(&[
+                ("amount", SortDirection::Descending),
+                ("id", SortDirection::Ascending),
+            ]),
+            _ => panic!("unsupported comparison shape"),
+        };
+        Ok(query.fetch().unwrap().rows.iter().map(row).collect())
     })
 }

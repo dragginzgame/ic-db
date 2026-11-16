@@ -179,13 +179,15 @@ fn satisfies(
     }
     // Current physical keys share one direction. Constant fields do not affect
     // ordering, but every varying field must agree with the primary tie-breaker.
-    let descending = request.primary_descending(entity);
-    if order
-        .iter()
-        .enumerate()
-        .any(|(i, name)| !fixed(name) && (request.order_descending & (1 << i) != 0) != descending)
-    {
-        return false;
+    // The ordinary all-ascending order already has uniform directions. For
+    // explicit directions, only a disagreement needs a fixed-field proof.
+    if request.order_descending != 0 {
+        let descending = request.primary_descending(entity);
+        if order.iter().enumerate().any(|(i, name)| {
+            (request.order_descending & (1 << i) != 0) != descending && !fixed(name)
+        }) {
+            return false;
+        }
     }
     // The primary key uniquely determines all later components. Compare both
     // sequences only up to it, stripping fields constant across matching rows.

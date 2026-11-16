@@ -44,8 +44,8 @@ pub(super) fn admit(
     }
     admit_ordered_fields(entity, remaining)?;
     if sorted {
-        // Complete projected tuples must be contiguous after sorting. Requiring
-        // exactly the projection avoids choosing an order from hidden row values.
+        // The sort-key prefix must identify exactly the projected tuple. This
+        // also avoids choosing a result order from hidden row values.
         let mut ordered = 0;
         for name in request.order.as_ref().ok_or(Error::InvalidQuery)? {
             ordered |= 1 << position(name)?;

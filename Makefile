@@ -37,6 +37,7 @@ help:
 	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make m2-query-growth            Measure fluent shapes, maps and entity growth' \
+	  'make m2-fluent-comparison       Compare fluent IC DB/IcyDB listings and sorting' \
 	  'make db                         Install db; run db to open the console' \
 	  'make release-patch/minor/major   Qualify and deliver a private source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
@@ -90,9 +91,12 @@ m0-icydb-baseline:
 	  export IC_DB_ICYDB_BASELINE_WASM && \
 	  cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
 
-.PHONY: m1-records-comparison
+.PHONY: m1-records-comparison m2-fluent-comparison
 m1-records-comparison:
 	bash scripts/measure-records.sh
+
+m2-fluent-comparison:
+	bash scripts/measure-records.sh fluent
 
 .PHONY: m1-envelope-comparison
 m1-envelope-comparison:
@@ -170,10 +174,19 @@ m1-records-wasm: m1-records-artifact
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys --test sorting -- --nocapture
 
 .PHONY: m1-commit-failures
-.PHONY: m2-queries
+.PHONY: m2-queries m2-sort-costs m2-sort-costs-artifact
 m2-queries: m1-records-artifact
 	cargo test --locked -p ic-db --test queries
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting -- --nocapture
+
+m2-sort-costs-artifact:
+	@mkdir -p qualification/target/evidence/m2
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features query-measurements --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/sort-costs-build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/sort-costs-build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/m2/sort-costs.wasm
+
+m2-sort-costs: m2-sort-costs-artifact
+	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
 
 .PHONY: m2-jobs m2-jobs-artifact m2-contention
 m2-jobs: m2-jobs-artifact

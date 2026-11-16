@@ -19,6 +19,7 @@ crate-type = ["cdylib"]
 
 [features]
 envelope = ["ic-db-icydb-baseline-schema/envelope"]
+fluent-comparison = []
 
 [dependencies]
 ic-db-icydb-baseline-schema.workspace = true

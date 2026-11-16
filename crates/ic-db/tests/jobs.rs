@@ -1,7 +1,7 @@
 //! Exact retained aggregates: independent results, retries, invalidation and reclamation.
 use ic_db::{
-    AggregateJobs, Batch, Comparison, Database, Entity, Error, JobHandle, JobOutcome, Schema,
-    Timestamp, entity,
+    AggregateJobs, Batch, Comparison, Database, Entity, Error, GroupOrder, JobHandle, JobOutcome,
+    Schema, Timestamp, entity,
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -1214,6 +1214,120 @@ struct Flag {}
     field(name = "flag", value(item(prim = "Nat8")))
 ))]
 struct GroupKey {}
+
+#[test]
+fn descending_group_keys_select_and_page_after_complete_accumulation() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(
+        &runtime,
+        &[Some(1), None, Some(2), Some(1), None, Some(2)],
+        0,
+    );
+    let expected = vec![
+        (Some(2), 1),
+        (Some(2), 0),
+        (Some(1), 1),
+        (Some(1), 0),
+        (None, 1),
+    ];
+    let query = || {
+        db.query::<Row>()
+            .filter_groups(Comparison::Ge, 1_u64)
+            .order_groups(GroupOrder::KeyDescending)
+            .limit(5)
+    };
+    let complete = query().group_count::<GroupKey>().unwrap();
+    assert_eq!(
+        complete
+            .value
+            .iter()
+            .map(|r| (r.key.amount, r.key.flag))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(complete.value.iter().all(|r| r.count == 1));
+    let ascending = query()
+        .order_groups(GroupOrder::Key)
+        .group_count::<GroupKey>()
+        .unwrap();
+    assert_eq!(
+        (ascending.value[0].key.amount, ascending.value[0].key.flag),
+        (None, 0)
+    );
+    let handle = query()
+        .start_group_count::<GroupKey>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query()
+        .work_limit(2)
+        .resume_group_count::<GroupKey>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert_eq!(first.output_bytes, 0);
+    drop((db, jobs, runtime));
+    let runtime = host(backing.clone());
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema(),
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let query = || {
+        db.query::<Row>()
+            .filter_groups(Comparison::Ge, 1_u64)
+            .order_groups(GroupOrder::KeyDescending)
+            .limit(5)
+    };
+    let before = backing.borrow().clone();
+    for order in [
+        GroupOrder::Key,
+        GroupOrder::AggregateAscending,
+        GroupOrder::AggregateDescending,
+    ] {
+        assert!(matches!(
+            query().order_groups(order).resume_group_count::<GroupKey>(
+                &mut jobs,
+                &handle,
+                first.sequence,
+                time(2)
+            ),
+            Err(Error::InvalidJob)
+        ));
+        assert_eq!(*backing.borrow(), before);
+    }
+    let mut sequence = first.sequence;
+    let mut cursor = None;
+    let mut actual = Vec::new();
+    for _ in 0..8 {
+        let step = query()
+            .work_limit(2)
+            .group_page(2, cursor.as_ref())
+            .resume_group_count::<GroupKey>(&mut jobs, &handle, sequence, time(2))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => assert_eq!(step.output_bytes, 0),
+            JobOutcome::Complete(page) => {
+                assert_eq!(step.examined, 6);
+                actual.extend(page.rows.into_iter().map(|r| (r.key.amount, r.key.flag)));
+                cursor = page.next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    assert_eq!(actual, expected);
+    assert!(cursor.is_none());
+}
 
 #[test]
 fn grouped_jobs_count_complete_input_before_filtering_order_and_limit() {

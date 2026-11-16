@@ -147,3 +147,40 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
             .collect()
     })
 }
+
+#[cfg(feature = "fluent-comparison")]
+#[ic_platform_runtime::cdk::query(
+    guard = "crate::transport::admit::<6>",
+    decode_with = "crate::transport::decode::<_, 6>",
+    encode_with = "crate::transport::encode::<_, 6>"
+)]
+fn fluent_listing(
+    (mode, category, minimum, limit): (u8, u64, u64, u32),
+) -> (Result<Vec<Row>, u16>, u64) {
+    measure(|| {
+        use icydb::db::query::{FieldRef, asc, desc};
+        let database = db().unwrap();
+        let mut query = database
+            .query::<Entry>()
+            .unwrap()
+            .filter(FieldRef::new("amount").gte(minimum))
+            .limit(limit);
+        if mode != 2 {
+            query = query.filter(FieldRef::new("category").eq(category));
+        } else {
+            query = query.filter(FieldRef::new("category").gte(0_u64));
+        }
+        query = match mode {
+            0 => query.order_by(asc("id")),
+            1 => query.order_by(desc("id")),
+            2 => query.order_by(asc("category")).order_by(asc("id")),
+            3 => query.order_by(desc("amount")).order_by(asc("id")),
+            _ => panic!("unsupported comparison shape"),
+        };
+        match query.execute_live_page(None) {
+            Ok(page) => Ok(page.rows.iter().map(row).collect()),
+            Err(icydb::db::TypedOperationError::Database(error)) => Err(error.code().raw()),
+            Err(error) => panic!("unexpected typed adapter refusal: {error}"),
+        }
+    })
+}

@@ -4,11 +4,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
 workload="${1:-scalar}"
+unset IC_DB_FLUENT_COMPARISON
 case "$workload" in
     scalar)
         evidence="$PWD/qualification/target/evidence/records-comparison"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
+        ;;
+    fluent)
+        evidence="$PWD/qualification/target/evidence/fluent-comparison"
+        engines=(records-benchmark icydb-baseline)
+        test_name=records_comparison
+        export IC_DB_FLUENT_COMPARISON=1
         ;;
     envelope)
         evidence="$PWD/qualification/target/evidence/envelope-comparison"
@@ -25,7 +32,7 @@ case "$workload" in
         engines=(direct direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
-    *) printf 'Expected scalar, envelope, growth or queries workload\n' >&2; exit 2 ;;
+    *) printf 'Expected scalar, fluent, envelope, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
 rustc -Vv > "$evidence/compiler.txt"
@@ -50,6 +57,9 @@ printf 'RUSTFLAGS=%s\nCARGO_ENCODED_RUSTFLAGS=%s\n' \
 for engine in "${engines[@]}"; do
     package="ic-db-$engine-canister"
     build_features=""
+    if [[ "$workload" == fluent ]]; then
+        build_features=fluent-comparison
+    fi
     if [[ "$workload" == growth ]]; then
         package=ic-db-entity-growth-canister
         count="${engine##*-}"

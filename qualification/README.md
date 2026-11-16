@@ -38,6 +38,89 @@ before deletion. The focused `enum_collections` Wasm test checks persistence,
 no-op/refusal invariance, whole-message rollback, upgrade, replacement and deletion.
 Inspect this fixture with `db schema EnumCollectionsRow`.
 
+## Comparison with frozen IcyDB
+
+Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
+IcyDB `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (package 0.310.2).
+Keep measured comparisons, historical reference points and unmeasured gaps
+separate. Scalar and first-page fluent measurements cover current 0.18 work on
+2026-11-16; the fan-out measurements remain the earlier recorded run. Both
+measured engines have SQL disabled, and neither host includes Canic.
+
+### Recorded matched measurements
+
+Scalar rows use the 0.18 refresh, not the much smaller initial M1 artifact.
+Its IC DB source receipt is `59ed763` plus the captured working diff;
+source/lock/artifact identities and observations are retained in
+`target/evidence/records-comparison/`. The previous scalar run is preserved in
+`target/evidence/records-comparison-before-018-refresh/`. Fan-out rows use the separately recorded
+0.7 workload and `target/evidence/envelope-comparison/` receipt (`b3f8ed0` plus
+captured diff). These are different reachable workloads, not additive savings.
+The optional fluent run has its own `target/evidence/fluent-comparison/` receipt
+at `59ed763` plus captured changes; both engines execute their typed fluent APIs.
+
+| Measure | IC DB | Legacy IcyDB | Observed difference / qualification |
+| --- | ---: | ---: | --- |
+| Scalar host, uncompressed Wasm | 233,238 B | 3,087,364 B | 92.4% smaller; fluent execution is unreachable in the IC DB scalar host |
+| Same host, code section | 211,963 B | 2,978,374 B | 92.9% smaller; not whole-product size |
+| Primary-key hit, instructions | 472,287 | 1,098,766 | 57.0% fewer |
+| Primary-key miss, instructions | 477,808 | 1,072,929 | 55.5% fewer |
+| Eight-row indexed listing, instructions | 771,729 | 3,084,039 | 75.0% fewer; IC DB direct prefix versus IcyDB fluent planning |
+| Complete read/modify/replace, instructions | 829,457 | 7,023,846 | 88.2% fewer, including IcyDB's settling work |
+| Same complete journey, cycles | 7,843,732 | 21,197,965 | 63.0% fewer; immediate-call reduction alone is 21.8% |
+| Fluent-enabled host, uncompressed Wasm | 277,595 B | 3,093,437 B | 91.0% smaller; selected first-page queries reachable, not full capability parity |
+| Fluent indexed category listing, instructions | 843,180 | 3,208,262 | 73.7% fewer; seven rows after the fixture's index-changing replacement |
+| Fluent category plus residual filter, instructions | 834,529 | 2,980,596 | 72.0% fewer; three rows |
+| Fluent indexed scan with one residual match, instructions | 1,787,308 | 5,078,704 | 64.8% fewer; 32-row dataset |
+| 32-row, eight-index insert, instructions | 76,139,333 | 461,923,130 | 83.5% fewer including settling; 58.7% fewer before settling |
+| Same batch replacement, instructions | 149,570,696 | 1,190,386,058 | 87.4% fewer including settling; 71.7% fewer before settling |
+
+The [scalar](#scalar-comparison-refresh-018),
+[fluent](#matched-fluent-first-pages-018) and
+[fan-out](#matched-high-fan-out-writes) receipts own the exact conditions and
+historical increments. Scalar data is one three-Nat64 entity, one secondary
+index and 32 rows. Fan-out data uses four 48-byte Text fields and eight indexes;
+the two hosts have different surrounding schemas, so their Wasm sizes are not
+compared. Settling follows the harness's explicit per-write policy, not a measured
+production scheduler. Smaller mechanisms and narrower reachable obligations both
+contribute; this is not evidence of blanket feature parity or SQL-removal savings.
+
+### Current coverage and comparison gaps
+
+| Area | IC DB evidence | Legacy comparison | What remains |
+| --- | --- | --- | --- |
+| Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
+| Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
+| Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
+| Grouping, sums/averages/extrema and retained aggregation | Native/Wasm correctness, upgrade and contention witnesses | No matched cost or complete semantic-parity matrix | Preserve bounds and invalidate on source changes; measure equivalent legacy operations where available. [Receipt](#product-retained-aggregates) |
+| Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
+| Canic endpoints and full applications | Direct-library qualification hosts and temporary CLI | No matched integration benchmark | Adapter composition and real application acceptance remain M4 work |
+
+### Product structure and functionality
+
+| Area | Frozen IcyDB | IC DB now / deliberate boundary |
+| --- | --- | --- |
+| Product crates | Six database crates: facade, core, diagnostic-code, model, model-macros, schema; separate CLI | Two: `ic-db` and `ic-db-macros`; `db` currently lives in the independent qualification workspace |
+| Public query frontends | Typed/structural and dynamic APIs; optional SQL | Fluent Rust only; runtime inputs construct fluent queries. SQL and separate dynamic frontend excluded |
+| Useful query capabilities | Filtering, ordering, projection, grouping, DISTINCT and aggregates | These families retained and implemented within explicit bounds; broader combinations remain open, not automatic parity |
+| Read admission | Public typed lane requires an admitted indexed route and restricts materialized sorts; trusted lanes are separate | Explicit work/state/output bounds admit selected complete scans and sorting; no implicit trusted fallback |
+| Schema authoring | Attributes, shared model, host-side schema/actor generation | Attributes and two-stage path resolution retained; no author-supplied numeric field IDs; generated host registration stays out of Wasm |
+| Ordinary writes | Journaled writes with follow-up work in the measured host | Synchronous bounded final-state batches, preparation before mutation, IC message rollback; no ordinary-write WAL |
+| Durable schema authority | Accepted schema snapshots and runtime binding/admission | Compiled contract admitted against a minimal manifest; explicit versioned maintenance, no runtime DDL or online activation |
+| Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. Current CLI targets disposable local fixtures |
+| Codec boundary | Owned codec/runtime plus a product `ic-wire` dependency | Database-owned durable codec; no product Wire dependency. Qualification transport may use Wire |
+
+Structural findings are from the frozen
+[workspace manifest](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/Cargo.toml),
+[facade](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb/src/lib.rs)
+and [product overview](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/README.md),
+checked against the read-only checkout. IC DB's
+[delivery table](../docs/design/ic-db-system-design.md#9-delivery-and-deletion-gates)
+owns implemented scope. Fewer crates alone do not prove lower complexity;
+endpoints move to Canic, while SQL removal and maintenance-only evolution reduce
+scope. Shared execution and removal of ordinary-write journaling simplify retained
+behavior under the selected contracts. Full replacement readiness remains unproven.
+
 ## Standalone endpoint hooks
 
 The first M2 fluent-read probe is selected separately:
@@ -45,7 +128,11 @@ The first M2 fluent-read probe is selected separately:
 ```sh
 make m2-queries
 make m2-jobs
+make m2-fluent-comparison
 ```
+
+`make m2-sort-costs` selects the sorting oracle with a measurement-only update
+wrapper; see the [bounded sorting receipt](#bounded-sorting-execution-envelope-018).
 
 It exercises exact scalar filters, primary/index-prefix traversal, reverse order,
 empty sparse pages, byte-limit retry, oversized-row refusal, cursor identity and
@@ -140,7 +227,7 @@ aggregate ties, absent-value ordering and output limits after sorting. Refused
 modifiers on scalar/row terminals and work/state caps remain covered. Wasm
 repeats selected group output across upgrade with unchanged backing bytes.
 The installed CLI exposes inclusive `--group-min VALUE`/`--group-max VALUE`
-bounds and `--group-order key|asc|desc`;
+bounds and `--group-order key|key-desc|asc|desc`;
 these construct fluent operations, without client-side filtering or sorting.
 
 Scalar integer sums add every supported integer width, explicit same-family
@@ -184,7 +271,7 @@ and 9,406 code bytes, including two new endpoints and their output codecs; this
 does not isolate executor or per-output-type growth. Projection-increment fixture SHA-256:
 `fcd716b40d9a7858d75bad7898476517addf419554399dc8aa08f22719a29225`.
 
-The scalar benchmark isolates shared-code overhead, with fluent execution
+The earlier scalar benchmark isolates shared-code overhead, with fluent execution
 unreachable: 224,548 total/203,915 code bytes, SHA-256
 `091b9f0f02c298036443c8b383b8e64fe83342de2bf719187296fb48506c4c54`.
 Projection support adds 14 total/code bytes; hit/miss use 471,728/477,249 instructions
@@ -192,7 +279,8 @@ Projection support adds 14 total/code bytes; hit/miss use 471,728/477,249 instru
 about 0.003%) with 7,842,397 cycles (+25).
 The shared borrowed reader fills its bounded field view in place; a temporary
 copy found during measurement was removed. These costs remain below the matched
-IcyDB ceilings. No direct-to-fluent performance parity is claimed.
+IcyDB ceilings. The [0.18 refresh](#scalar-comparison-refresh-018) records the
+current scalar measurements. No direct-to-fluent performance parity is claimed.
 
 All six canister hosts use Platform's generic `guard`, `decode_with` and
 `encode_with` hooks with the [fixed fixture codecs](ic-db-qualification-transport/src/lib.rs), shared
@@ -1254,6 +1342,106 @@ The original fixture is restored; the only retained product changes in this
 increment are the result-type decoding boundary and duplicate revision-lookup
 removal. No experimental entity-fetch helper or request context remains.
 
+### Expanded sorting costs and direction admission (0.18)
+
+Re-run the unchanged six-subject `make m2-query-growth` fixture after per-field
+directions, bounded winner selection and sorted DISTINCT. Compiler, profile,
+feature trees and fixture sources match the earlier ordinary entity-page run.
+The tooling/driver lock updates do not alter the measured Wasm dependency graph.
+This measures their combined reachable cost, not each feature independently.
+
+| Subject | Earlier raw / code bytes | Final raw / code bytes | Change raw / code |
+| --- | ---: | ---: | ---: |
+| Direct, one entity | 232,572 / 211,133 | 232,575 / 211,136 | +3 / +3 |
+| Direct, eight entities | 252,122 / 230,228 | 252,125 / 230,231 | +3 / +3 |
+| One fluent shape | 270,317 / 246,738 | 272,543 / 248,766 | +2,226 / +2,028 |
+| Eight fluent shapes | 271,637 / 248,038 | 273,862 / 250,065 | +2,225 / +2,027 |
+| Mapping closures | 273,428 / 249,829 | 275,653 / 251,856 | +2,225 / +2,027 |
+| Eight entities and shapes | 301,725 / 277,730 | 303,960 / 279,751 | +2,235 / +2,021 |
+
+The increment is predominantly shared. Raw growth per added entity moves from
+4,298.3 to 4,299.7 bytes; code growth moves from 4,241.7 to 4,240.9. The roughly
+4 KB working ceiling remains unmet. Total/code bytes use the existing validated
+Wasm artifact reader; no post-link optimizer or changed build recipe is involved.
+
+The first run exposed 1,074–1,227 extra instructions on common ordered reads.
+Avoid proving fixed fields when directions already agree: skip the uniform
+ascending case, and inspect equality only for terms disagreeing with the primary
+direction. Also skip primary-field name lookup when no direction bit is set.
+These checks use the existing request bits; no cached proof or planner object is
+added. The refinement costs 21 raw/code bytes per fluent artifact and saves
+913–1,073 instructions on the affected ordered shapes relative to that first run.
+
+| Warm workload | Earlier work instructions / call cycles | Final work instructions / call cycles | Change |
+| --- | ---: | ---: | ---: |
+| One entity, primary order | 123,497 / 7,232,476 | 123,658 / 7,232,637 | +161 / +161 |
+| One entity, complete sort | 159,589 / 7,268,513 | 157,771 / 7,266,695 | -1,818 / -1,818 |
+| Eight entities, primary order | 155,622 / 7,274,102 | 155,776 / 7,274,256 | +154 / +154 |
+| Eight entities, complete sort | 192,253 / 7,310,733 | 190,476 / 7,308,956 | -1,777 / -1,777 |
+
+Retain the measured tradeoff for the broader query contract: sampled non-sort
+queries still add 125–161 instructions/cycles against the earlier baseline.
+Direct reads, inserts and complete read/replace journeys are unchanged in these
+samples. The sort selects two results from eight scalar rows; it does not measure
+511-row execution costs, rich-key worst cases, DISTINCT execution or Canic.
+Frozen IcyDB's uniform-order contracts and bounded-selection regressions inform
+the proof obligations; no normalized order object or heap-index machinery is copied.
+
+Raw before/expanded/intermediate/final artifacts, source receipts and logs are
+preserved under `target/evidence/0.18/sorter-growth/`, including `comparison.json`.
+The final six-subject run passes entity isolation, all reachable query/map oracles,
+warm calls and cold upgrade checks. The existing native query and Wasm sorting
+checks cover mixed directions, fixed fields, live cursors and bounded DISTINCT.
+
+### Bounded sorting execution envelope (0.18)
+
+`make m2-sort-costs` builds the records host with `query-measurements` and runs
+the existing independent sorting oracle through `measured_query`. The wrapper
+calls the exact console query function; no second executor or input fixture is
+introduced. Its instruction interval includes open, admission, scanning,
+selection, final sorting and display conversion, but excludes transport decoding
+and encoding. Cycle deltas cover the complete update. This measures reads inside
+an update, not replicated-query billing or an isolated comparator. Every measured
+call, including refusals, preserves all stable-memory bytes.
+
+Rust 1.100.0, the qualification release profile and current locked dependencies
+produce 984,844 raw / 934,955 code-section bytes for this broad qualification host
+(SHA-256 `72d22ea4dde18b9964ca91a12f16e9135af83814d552eae77710d87a911536d3`).
+That is a measurement artifact identity, not the library's Wasm footprint or a
+new comparison against IcyDB. The wrapper is absent from the normal CLI artifact;
+the same regression checks the export boundary and ordinary query results there.
+
+All rows have Nat64 ID, category and amount. Amounts increase with ID; category
+alternates. Work 512 admits 511 candidates plus exhaustion. Selected pre-upgrade
+warm observations are:
+
+| Operation over 511 rows | Instructions | Complete-call cycles |
+| --- | ---: | ---: |
+| Mixed category ascending / amount descending, retain 1 | 6,581,565 | 13,712,066 |
+| Same order, retain 32 | 13,859,773 | 21,113,724 |
+| Sorted DISTINCT, two repeated categories | 5,774,489 | 12,879,692 |
+| One qualifying final row | 5,106,561 | 12,204,290 |
+| No qualifying rows | 5,098,469 | 12,192,280 |
+| Refuse work 511 without observing exhaustion | 5,537,510 | 12,622,423 |
+| Refuse 511 output bytes for 32 16-byte results | 9,973,873 | 17,060,809 |
+
+After upgrade, the first two-value DISTINCT call includes reopening and uses
+7,130,830 instructions / 14,237,848 cycles. Subsequent mixed-order 32-row selection
+uses 13,861,051 / 21,114,979. A later dataset retaining exactly 32 distinct categories
+uses 8,397,483 / 15,578,287; adding a 33rd distinct value refuses even for limit 1.
+Results, live cursor refusals, sparse/empty scans and unchanged backing all pass
+before and after upgrade. Build inputs and full observations are retained in
+`qualification/target/evidence/m2/sort-costs-build.jsonl`, `sort-costs.wasm` and
+`sort-costs.log`.
+
+This carries the cost-envelope lesson from frozen IcyDB `6d421e3`'s
+`bounded_large_window_stays_within_sort_comparison_budget` regression into IC
+execution measurements. It does not copy IcyDB's heap index or resource tracker:
+the current bound remains 32 retained rows, and no product change is justified
+by this sample. Long escaped keys, large projected payloads, maximum retained
+bytes and larger populations still need separate cost evidence. Native witnesses
+cover selected rich-key correctness/refusals; they are not IC performance proof.
+
 ## Frozen IcyDB baseline
 
 ```sh
@@ -1358,6 +1546,130 @@ The later Principal increment is measured separately in the design: it adds a
 canonical identity dependency and codec branch. The scalar host grows by 410
 Wasm bytes; measured operations rise by 6–10 instructions, staying below the
 IcyDB comparison ceilings. This does not measure principal-heavy query workloads.
+
+### Scalar comparison refresh (0.18)
+
+On 2026-11-16, rerun `make m1-records-comparison` against current IC DB and frozen
+IcyDB `6d421e3`, preserving the previous complete evidence directory as
+`target/evidence/records-comparison-before-018-refresh/`. The shared workload,
+schemas, host sources and independent tuple oracle are unchanged: 32 inserts,
+duplicate refusal, primary hit/miss, an eight-row index listing, index-changing
+read/modify/replace and all row/index results after upgrade. Both engines pass.
+Every IC DB insert has fewer measured instructions and complete-call cycles
+than its IcyDB counterpart, even before journal settling.
+
+The [comparison matrix](#recorded-matched-measurements) carries the refreshed
+headline values. Compared with the preceding scalar run:
+
+| Observation | IC DB change | Frozen IcyDB host change |
+| --- | ---: | ---: |
+| Total / code bytes | +8,690 / +8,048 | +4,310 / +3,516 |
+| Hit / miss instructions | +559 / +559 | -240 / -240 |
+| Listing instructions | +68 | +291 |
+| Immediate read/modify/replace instructions | +835 | +1,330 |
+| Complete replacement cycles, including settling | +1,335 | +392 |
+
+IC DB's lookup increase is about 0.12%, replacement about 0.10%, and listing
+under 0.01%. This refresh includes accumulated product and dependency changes;
+it does not isolate which change owns each byte or instruction. Retain the
+current shared implementation with these measured costs; no new optimization,
+cache, separate scalar path or relaxed bound was introduced for this run.
+Frozen IcyDB source is unchanged; its different artifact reflects the refreshed
+dependency/transport graph, not a legacy engine modification.
+
+IC DB individual inserts span 612,576–750,489 instructions and
+7,601,377–7,741,335 cycles. IcyDB spans 1,909,389–2,339,699 instructions and
+8,978,031–9,410,504 cycles before settling. For replacement, IcyDB's immediate
+call is 2,933,651 instructions / 10,027,899 cycles, followed by
+4,090,195 / 11,170,066 settling. IC DB uses 829,457 / 7,843,732 with no settling.
+Reopen uses one explicit advance for IC DB (453,236 instructions), versus two
+for IcyDB (5,842,738). These are the harness's startup advances, not the entire
+upgrade/install cost or a production scheduler. Stable allocation remains
+1,703,936 versus 20,578,304 bytes, including supplier reservations.
+
+Both artifacts use Rust 1.100.0/LLVM 23.1.5, the same qualification release
+profile, Storage 0.74.1, Runtime 0.22.5, Types 0.20.4 and Wire 0.24.1 host
+transport. The driver uses Testkit 0.106.0 with PocketIC 16.1.0. IcyDB separately
+retains its product Wire 0.22.4 dependency; IC DB has none. SQL remains disabled.
+The scalar IC DB host reaches direct reads/writes, not its fluent, aggregate or
+maintenance engines. No current whole-product Wasm ratio follows from this run.
+
+Evidence is under `target/evidence/records-comparison/`, including raw samples,
+features, compiler, dirty diff and source hashes (`59ed763` plus captured changes).
+Qualification lock SHA-256:
+`a9bafdab1aeab887808d7d5f4e6e71a4bfd51540fbc3b556525981cc46dea6be`.
+Artifact SHA-256:
+
+- IC DB: `14a2dd78638a1ab3bcdf41d402e399dd6daf28dc361fac799fc086d4789b3b27`.
+- IcyDB: `3e835bcad39666ead432abd9fbdfbf2c16286a9104df1277d285ee5e388683cc`.
+
+### Matched fluent first pages (0.18)
+
+`make m2-fluent-comparison` enables `fluent-comparison` only in the two existing
+scalar hosts. They expose the same additional `fluent_listing` query endpoint,
+construct typed fluent requests and return complete entity tuples through the
+same transport. The original scalar controls and independent tuple oracle remain
+in use. No product implementation or frozen IcyDB source changes are involved.
+The ordinary scalar build keeps its five query/update exports; its regression
+also passes after this shared-driver extension.
+
+The dataset is the existing 32 three-Nat64 records with `(category, id)` index,
+after replacing ID 7's category/amount with `(0, 707)`. This leaves seven rows
+in category 3 and nine in category 0. Cases run on identical data before and
+after an unchanged executable upgrade, after each engine's explicit startup
+advances. Every returned tuple and order agrees with an independent Rust oracle;
+every successful or refused query leaves stable memory unchanged.
+
+Measured on 2026-11-16 under the scalar refresh's compiler, locked suppliers,
+release profile and PocketIC setup. These are query instruction intervals,
+including the existing host's open/session/admission, execution and typed result
+mapping; transport encoding is outside the interval. Query cycles are not inferred.
+
+| Fluent request over 32 rows | Rows | IC DB instructions | IcyDB instructions | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Category 3, amount >= 0, ID ascending, limit 8 | 7 | 843,180 | 3,208,262 | 73.7% |
+| Category 3, amount >= 200, ID ascending, limit 8 | 3 | 834,529 | 2,980,596 | 72.0% |
+| Missing category 99, ID ascending, limit 8 | 0 | 558,551 | 2,052,511 | 72.8% |
+| Category 3, amount >= 200, ID descending, limit 8 | 3 | 826,958 | 2,990,207 | 72.3% |
+| Category >= 0, amount >= 700, category/ID ascending, limit 8 | 1 | 1,787,308 | 5,078,704 | 64.8% |
+| Same indexed range, amount >= 999 | 0 | 1,786,237 | 6,287,630 | 71.6% |
+
+IC DB's post-upgrade instruction counts are identical. IcyDB's corresponding
+counts are 3,205,359 / 2,981,667 / 2,050,826 / 2,990,708 / 5,065,122 / 6,267,659.
+These are settled-after-upgrade reads, not measurements of cold startup itself.
+Both complete hosts include the original direct read/write controls. IC DB is
+277,595 raw / 253,945 code bytes; IcyDB is 3,093,437 / 2,983,940. The increment
+over their scalar-only artifacts is 44,357 / 41,982 and 6,073 / 5,566 bytes
+respectively. IcyDB already reached its fluent planner in the scalar listing;
+these deltas are not comparable first-use ownership costs or general entity growth.
+
+Two contract differences are part of the result:
+
+- IcyDB's typed `limit` caps the traversal across resumed pages; IC DB's row limit
+  caps each page. This test compares only the first requested rows on fixed input,
+  without claiming continuation or mutation parity.
+- Legacy `PublicRead` refuses an unbounded residual scan (code 173), and the
+  primary ID-range candidate also refused its index requirement (172). The final
+  matched scan uses `category >= 0` with category/ID order on both sides, following
+  the legacy [complete indexed-range contract](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/contracts/READ_ADMISSION.md).
+  Sorting category 0 by amount descending / ID ascending is a separate capability
+  probe: IC DB returns the correct top 8, top 1 and all 9 rows at limits 8/1/32;
+  IcyDB consistently returns `QUERY_READ_SORT_REQUIRES_MATERIALIZATION` (174).
+  The driver asserts this typed refusal before and after upgrade. It never swaps
+  to trusted execution, and no speedup is computed against refused work. This
+  does not mean IcyDB cannot sort through other supported lanes.
+
+Initial refusal evidence is preserved under `fluent-comparison-unbounded-refusal/`
+and `fluent-comparison-primary-range-refusal/`. The successful complete run is
+under `target/evidence/fluent-comparison/`, with source diff/hashes, feature graphs,
+artifacts and every observation. No SQL is enabled. Artifact SHA-256:
+
+- IC DB: `e6e7b6944f785ddcab98494b332ddc6649a4e7488271db220c252214d01e9a3c`.
+- IcyDB: `8059181d7a6da78c2f1b3c42adabf9eea44ce0bae9077431fa091cc9aea922dd`.
+
+This closes the small first-page fluent comparison gap. Large populations,
+projected results, grouping/aggregation, matched successful sorting, cursor
+semantics, resource-refusal envelopes and Canic composition remain separate work.
 
 ## Numeric and schema contracts
 
@@ -2203,7 +2515,12 @@ order or a bounded complete sort, `--desc` reverses it, and `--select id` or `--
 projection (the latter is Entry-only). Full entities are the default result.
 For example, `db query Entry --order-by amount --desc --limit 2 --select id,amount`
 scans all six entries and returns IDs 6 and 5 with no continuation. Complete sorting
-retains at most 32 matches and refuses work/state/output exhaustion and `--after`.
+retains the best requested 1–32 matches and refuses work/state/output exhaustion
+and `--after`. The Wasm sorting witness scans 511 candidates, selects the best
+one or 32 with mixed directions, and repeats across upgrade. Native full-sort
+oracles also exercise primary ties, identity DISTINCT and capacity recovery as
+losing rows are replaced. An exact 511-candidate work budget refuses; 512 permits
+the exhaustion check. Non-identity sorted DISTINCT retains at most 32 distinct tuples.
 `make m2-queries` includes its Wasm console-boundary check for
 global selection, limits, unchanged backing and indexed cursors across upgrade;
 no fixture endpoint or client sorting engine is added.
@@ -2219,9 +2536,22 @@ Sorted DISTINCT can use `db query Entry --order-by category:desc --select catego
 the six matching rows become two sorted categories before selecting category 1.
 Non-identity projections require exactly their projected fields in the explicit
 order. Native tuple/text oracles and Wasm upgrade checks cover duplicate removal
-before limits, hidden-order refusal, complete-input work bounds and refusal at
-33 matching rows despite only two categories. This reuses the sorter, not the
+before limits, hidden-order refusal and complete-input work bounds. The Wasm
+witness reduces 511 rows to two categories across upgrade, accepts exactly
+32 distinct categories and refuses a 33rd even with a one-row output limit.
+Native mixed-direction tuple oracles fill all 32 retained slots and then revisit
+them with duplicates. This reuses the sorter, not the
 unordered DISTINCT set or a new replay mechanism.
+DecimalRow also supports `--select value` and `--select maybe`, including sorted
+DISTINCT; its default console population is empty. The sorting Wasm test seeds
+eight rows with scale aliases, zero, signed fractions and both fixed-scale i128
+extremes. Both directions retain exact values across upgrade: six distinct
+required decimals fit exactly 102 output bytes, while 101 bytes refuses; eight
+candidates require a work allowance of nine to observe exhaustion. Eight absent
+optional values collapse to one byte without using the sparse index. Native
+integer-cent oracles also check optional mixed-direction ordering, primary ties,
+grouping agreement and equality filters. Refusals and successful reads preserve
+complete backing. These are correctness bounds, not a new performance claim.
 Entry also supports `--select category`; combine it with
 `--order-by category --distinct` for the ordered-DISTINCT path. `--category` is
 supported; `--min` varies within a category and refuses with this projection.

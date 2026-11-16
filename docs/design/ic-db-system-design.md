@@ -1,7 +1,7 @@
 # IC DB system design
 
-Status reviewed 2026-11-16: 0.17.0 is released to the private source repository;
-the 0.18.0 local migration CLI and bounded-sort increments are not released.
+Status reviewed 2026-11-16: this design includes the 0.18.0 local migration CLI,
+bounded-sort and comparison increments. The changelog and Git tags record releases.
 Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration
@@ -2198,7 +2198,7 @@ a general cost-based planner.
 
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply
 the requested order, the same scanner traverses the primary range and retains
-at most 32 matching rows. It checks all scanned rows and residual predicates,
+the best requested 1–32 matching rows. It checks all scanned rows and residual predicates,
 including records after the eventual output limit would have been filled.
 Observe input exhaustion before sorting; reaching the work bound refuses even
 when the last allowed candidate happens to be the final row. Never return a
@@ -2207,13 +2207,27 @@ sorted input prefix as a globally ordered result.
 Retain only encoded output bytes and comparison keys in requested field order,
 including the unique primary tie-breaker. Use the existing component codec and
 projection spans, with a 4096-byte key cap and 128 KiB total retained key/output
-buffer capacity; the separate 32-row cap also bounds container overhead. Full
+buffer capacity; the separate 32-retained-row cap also bounds container overhead. Full
 entity and projected output share this concrete collector, without generic
 execution specialization. After complete sorting, apply `limit` and then output
 byte admission; discarded rows do not consume response bytes. Any refusal drops
 the whole result. Return `next: None`; no cursor or explicit-index
 fallback is admitted. Aggregate input ordering still refuses. Indexed live pages
-and their bindings are unchanged. Larger/top-K sorting needs separate evidence.
+and their bindings are unchanged. The existing work cap admits at most 511
+candidates plus observation of exhaustion; larger or resumable sorting remains work.
+
+Bounded selection compares each candidate with the worst retained key and drops
+the loser before copying a replacement output. At most 32 retained keys are
+examined per candidate; no heap index, value cache or generic comparator is added.
+All matching candidates still obey the comparison-key bound, even when discarded.
+The retained buffer cap applies throughout selection, so oversized intermediate
+winners may refuse even if later winners would be smaller. Native full-sort
+oracles and Wasm upgrade checks cover 511 candidates, mixed directions, ties,
+projection, exact work/output refusal and unchanged backing. This adapts frozen
+IcyDB `6d421e3`'s bounded-selection invariant and regression oracle from
+`db/executor/order`; its heap-index optimization serves larger windows and is
+not copied for this 32-row envelope. These are scoped correctness checks, not
+whole-product performance evidence.
 
 Frozen IcyDB `6d421e3`'s `db/executor/order` and its
 `bounded_selection_matches_sorted_prefixes_in_both_directions` regression supply
@@ -2230,17 +2244,29 @@ resource refusal and direction-bound cursors across upgrades.
 
 Sorted DISTINCT accepts inherently unique entity/primary-bearing projections.
 For other projections, require the explicit order to contain exactly the projected
-fields; the appended primary key chooses the first ordered representative. The
-complete sort makes equal projected tuples adjacent. Compare the already retained
-key prefix before that primary suffix, remove duplicates, then apply result count
-and bytes. No second key set or output buffer is needed; one bounded prefix offset
-per retained row identifies equality. All matching rows still consume the existing
-32-input-row/128-KiB sorter envelope, even if many are duplicates. Ambiguous hidden
+fields. During scanning, compare each candidate's encoded prefix before the
+primary suffix with the retained tuples; keep only the first representative.
+After input exhaustion, sort the unique tuples and apply result count and bytes.
+No second key set or output buffer is needed; one bounded prefix offset per
+retained row identifies equality. Retain at most 32 distinct tuples within
+128 KiB; duplicates consume scan work but no additional retained capacity.
+A 33rd distinct tuple refuses even with `limit(1)`. Only identity results can
+discard worse candidates before finalization. Ambiguous hidden
 ordering and incomplete projected orders refuse. This retains IcyDB's projected
 equivalence and post-deduplication window rules from
 `db/executor/projection/materialize/distinct` at `6d421e3`, without its global replay,
 canonical value/hash state or cursor machinery. Existing live and unsorted complete
 DISTINCT modes keep their contracts.
+
+Decimal sorting now has independent fixed-scale integer-cent oracles for both
+directions, primary ties, signed extremes, absence, DISTINCT and grouping agreement.
+The Wasm console witness checks `1`, `1.0` and `1.00` collapse together, absent
+values survive sparse-index fallback, and exact work/output refusals preserve
+backing across upgrade. It reuses the existing Decimal projection records; no
+product codec, executor or persisted state changes. This carries the canonical
+decimal-equality invariant from frozen IcyDB's
+`projection/materialize/distinct/tests/canonical_keys.rs` at `6d421e3`, without
+its general value/hash representation. It does not qualify all retained types.
 
 `limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
 (1–512), and `byte_limit` bounds summed encoded output-row bytes (1–131072).
@@ -2473,7 +2499,10 @@ group modifiers, including an explicit default key order.
 
 The stages are input filtering, complete accumulation, group filtering, group
 ordering, output limit and byte admission. Builder call order cannot change these
-stages. Default `GroupOrder::Key` uses canonical keys. AggregateAscending and
+stages. Default `GroupOrder::Key` uses ascending canonical keys; `KeyDescending`
+reverses the complete tuple in canonical field-name order, with absence last.
+It reverses the existing completed-group buffer before selecting limits/pages;
+no additional comparator, buffer or execution path is needed. AggregateAscending and
 AggregateDescending compare completed values and always break ties with ascending
 keys; absent extrema sort first ascending, last descending. The last order call
 wins. Input work and retained group/state caps still apply to groups later excluded;
@@ -2504,8 +2533,16 @@ value per group and the accepted small synchronous cap. Native witnesses cover
 stage composition, ties, absence, exact operand refusal and resource bounds;
 Wasm repeats group filtering/order after upgrade with unchanged backing bytes.
 The local CLI maps `--group-min`/`--group-max` (inclusive exact typed bounds) and
-`--group-order key|asc|desc` to these fluent methods without local result sorting.
-No durable state, schema contract, cursor format or macro changes are introduced.
+`--group-order key|key-desc|asc|desc` to these fluent methods without local result sorting.
+Descending key order retains the same IcyDB finalization lesson: choose the
+canonical direction before applying the output window. Native witnesses cover
+optional compound keys, filtering, limits and reopen; the console witness covers
+all six grouped reducer families and retained count pages across upgrade.
+Retained query identities bind descending key order with a new tag; the three
+existing order tags remain unchanged. A different order refuses without changing
+the checkpoint. No durable payload, schema contract, cursor format or macro
+changes are introduced. Exhaustive Rust matches on `GroupOrder` must handle the
+new `KeyDescending` variant.
 
 Scalar integer `sum::<Record>()` now returns `Aggregate<Option<Record>>` through
 the same scanner. The single-field record names the source field, preserves its
@@ -3449,11 +3486,24 @@ later delivery gates.
 
 ## 10. Measurement and qualification
 
+The [IcyDB comparison matrix](../../qualification/README.md#comparison-with-frozen-icydb)
+is the cross-product summary of recorded matched costs, structural differences
+and gaps. The detailed receipts below and in qualification own their evidence.
+
+The [matched first-page fluent probe](../../qualification/README.md#matched-fluent-first-pages-018)
+now checks six indexed/residual query cases on both typed APIs over 32 rows,
+before and after upgrade. IC DB uses 64.8–73.7% fewer instructions for those
+successful cases. Legacy public-lane scan/sort refusals and differing limit/cursor
+contracts are recorded separately; no broad fluent parity or successful-sort
+speedup follows. The probe reuses the scalar hosts/oracle without product changes.
+
 The figures below are an evidence history, tied to their recorded source,
 supplier graph and reachable workload. Successive runs do not form a benchmark
 of the entire current engine. Preserve those identities and limitations; current
-delivery status belongs in section 9. No measurements were rerun for this
-2026-11-16 documentation reconciliation.
+delivery status belongs in section 9. The
+[2026-11-16 scalar refresh](../../qualification/README.md#scalar-comparison-refresh-018)
+reruns the existing matched workload against current IC DB and frozen IcyDB;
+earlier receipts below remain historical rather than being silently replaced.
 
 Before claiming an improvement, capture the same workload/data and comparable
 semantics against a fixed IcyDB candidate. Record source revision plus dirty-file
@@ -4004,6 +4054,19 @@ not a new improvement on 4,294. The [projection/revision evidence](../../qualifi
 owns scope and costs. A more aggressive entity-fetch admission split was rejected
 for increased request-handling costs. No authoring, codec, stored representation
 or public builder contract changes; the combined ceiling remains unmet.
+
+After the expanded ordering/selection/DISTINCT work, the unchanged composition
+fixture measures 273,862 raw / 250,065 code bytes for one entity with eight shapes
+and 303,960 / 279,751 for eight entities. The one-entity build adds 2,225 module /
+2,027 code bytes, with essentially unchanged 4.30 KB raw growth per entity. Direction admission
+now avoids unnecessary equality proofs for already agreeing directions. This
+recovers most of an observed ordinary-read regression, with 125–161 additional
+sampled instructions/cycles retained for the broader contract relative to the
+earlier baseline; the eight-row sorted case saves 1,777–1,818. Direct reads and
+write journeys remain unchanged in these samples. The
+[expanded-sort measurement](../../qualification/README.md#expanded-sorting-costs-and-direction-admission-018)
+records exact total/code bytes, costs and limitations. No new proof object, cache
+or persisted representation is added; this does not resolve the entity-growth ceiling.
 
 The performance objective is improved efficiency relative to comparable IcyDB,
 not a fresh arbitrary size-versus-speed preference. Reuse relevant existing

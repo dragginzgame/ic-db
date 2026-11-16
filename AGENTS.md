@@ -80,6 +80,9 @@ Read the owning design contract before changing its behavior:
 - Measures are total uncompressed Wasm/code bytes, IC cycles and instructions;
   native wall-clock timings are not IC performance proof. Keep matched workloads,
   complete write journeys, cold/post-upgrade and warm costs separate.
+- Keep the [IcyDB comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
+  current when comparison evidence or delivered scope changes. Link exact receipts;
+  distinguish matched measurements, historical references and unmeasured gaps.
 - The maintainer's entity-growth objective is roughly 2 KB per added entity;
   roughly 4 KB from IcyDB is the working comparison ceiling. Reachable entity
   growth remains above that ceiling; the design owns current measurements. Do not

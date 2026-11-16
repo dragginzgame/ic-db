@@ -15,9 +15,11 @@ Install the updated console and run the disposable local demonstration:
 ```sh
 make db
 db migration-demo
-db query Entry --order-by amount --desc --limit 2 --select id,amount
+db query Entry --order-by amount --desc --limit 2 --work 512 --select id,amount
 db query Entry --order-by category:asc,amount:desc --limit 3 --select id,amount
 db query Entry --order-by category:desc --select category --distinct --limit 1
+db query Entry --select category,count --group-order key-desc --limit 1
+db aggregate Entry --select category,count --group-order key-desc --page-size 1
 ```
 
 Expect six source rows, bounded copy/validation/cleanup progress, a real local
@@ -27,13 +29,39 @@ The query scans all six entries and returns IDs 6 and 5 by descending amount,
 with no continuation, using the engine's bounded complete sort.
 The mixed-direction query returns IDs 6, 4 and 2, also with no continuation.
 The sorted DISTINCT query removes duplicate categories before selecting category 1.
+Descending group keys select category 1 first (count 3); the retained command
+then returns category 0 (count 3) on its next completed-output page.
+
+Decimal projections are also available. The CLI seeds values 1.25, 2.50 and
+-0.75, with all optional `maybe` values absent:
+
+```sh
+db query DecimalRow --order-by value:desc --select value --distinct
+db query DecimalRow --order-by maybe:desc --select maybe --distinct
+```
 
 ### ➕ Added
 
+- Add `GroupOrder::KeyDescending` and CLI `--group-order key-desc` for synchronous
+  and retained grouped results. Reverse completed canonical keys before output
+  selection, sharing the existing bounded buffer. Existing order bindings stay
+  unchanged; native and Wasm checks cover resume refusal and upgrade pagination.
+  Exhaustive Rust matches on `GroupOrder` must add the new variant.
+
+- Let unindexed ordered queries scan beyond 32 matches while retaining only the
+  best requested rows. Keep the 512-candidate work cap, 128 KiB retained-buffer
+  cap and complete-input requirement.
+
+- Expose DecimalRow's `value` and optional `maybe` projections in the console,
+  including sorting and DISTINCT through the existing fluent engine. Qualify
+  exact decimal extremes, equivalent scales, absence and bounded refusal across upgrade.
+
 - Compose bounded sorting with DISTINCT. Admit identity results or an order
-  covering exactly the projected fields, remove adjacent equal tuples using the
-  existing sort keys, then apply output limits. Retain the 32-matching-input-row
-  bound, including duplicates; add no second key set, cursor or durable state.
+  covering exactly the projected fields. Deduplicate during scanning using the
+  existing sort keys, then sort and apply output limits. Non-identity projections
+  retain at most 32 distinct tuples, so repeated input can exceed 32 rows within
+  the work budget. A 33rd distinct tuple refuses even with `LIMIT 1`; no second
+  key set, cursor or durable state is added.
 
 - Add fluent `order_by_each` with per-field `SortDirection` and CLI `:asc`/`:desc`
   suffixes. Keep the implicit primary tie-breaker ascending; `.descending()` or
@@ -41,8 +69,8 @@ The sorted DISTINCT query removes duplicate categories before selecting category
   removing fixed fields, or reuse the bounded complete sorter. Preserve ordinary
   cursor identities and bind new directions explicitly; no stored-format changes.
 
-- Support `order_by` without a matching ordered path by collecting and sorting the
-  complete input result: at most 32 matches, 4096-byte keys and 128 KiB retained
+- Support `order_by` without a matching ordered path by scanning the
+  complete input result with 4096-byte keys and 128 KiB retained
   key/output buffers. Apply result limits after sorting; work or resource exhaustion
   refuses without partial output. Share the existing scanner, key codec and typed
   projection. No cursor or explicit-index fallback; indexed pages retain
@@ -56,6 +84,34 @@ The sorted DISTINCT query removes duplicate categories before selecting category
   checks, including premature publication, source closure and cleanup retries.
 
 ### ⚡ Performance
+
+- Add `make m2-fluent-comparison`: both engines now execute typed fluent queries
+  over the same 32-row fixture. Six successful first-page cases use 64.8–73.7%
+  fewer IC DB instructions; tuple/order and unchanged-backing checks pass across
+  upgrade. Record legacy public-lane sort refusal and differing pagination limits
+  separately, without counting refused work as a speed comparison. Update the
+  [comparison matrix](qualification/README.md#comparison-with-frozen-icydb).
+
+- Refresh the matched scalar comparison against frozen, SQL-disabled IcyDB.
+  Current IC DB uses 233,238 versus 3,087,364 raw Wasm bytes in this direct-record
+  fixture, 57.0% fewer hit-lookup instructions and 63.0% fewer complete replacement
+  cycles including legacy settling. All row/index and upgrade checks pass.
+  Record IC DB's +8,690 raw bytes and roughly 0.1% lookup/replacement instruction
+  increase since the prior run; this is not a whole-product size comparison.
+
+- Add `make m2-sort-costs` using the existing independent sorting oracle and a
+  measurement-only host wrapper. Qualify 511-row sorting, DISTINCT, sparse/empty
+  matches, resource refusals and upgrades with unchanged backing. Mixed-order
+  selection of 32 rows uses about 13.86M instructions in this scalar fixture;
+  this has no matched IcyDB result. The
+  [comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
+  separates recorded legacy comparisons, current capability and remaining gaps.
+
+- Avoid redundant equality checks during order admission. The matched fluent
+  benchmark recovers 913–1,073 instructions on affected ordered reads for 21
+  additional shared Wasm/code bytes. Recent query capabilities add about 2.2 KB
+  overall while per-entity growth remains about 4.30 KB; see the
+  [measured costs and remaining tradeoffs](qualification/README.md#expanded-sorting-costs-and-direction-admission-018).
 
 - Share projection decoding by output record type. The matched eight-entity
   projection build loses 3,688 raw / 3,686 code bytes; projected growth falls
@@ -94,6 +150,9 @@ The sorted DISTINCT query removes duplicate categories before selecting category
 
 ### 🔧 Qualification
 
+- Adopt Toko Tooling 0.44.5 in both workspaces through its published installer.
+  Synchronize exact pins, lockfiles and the authenticated snapshot receipt;
+  installed tooling payloads and database behavior remain unchanged.
 - Point the frozen comparison dependency at private `dragginzgame/icydb-legacy`
   after its repository rename. Retain revision `6d421e3` and the same baseline
   source; repository access now requires authentication.

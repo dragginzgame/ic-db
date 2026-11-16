@@ -1,8 +1,111 @@
 //! Complete sorting compared with independent Rust tuple/text order.
-use super::{C, Entry, Summary, create, host, ids, row};
+use super::{C, DecimalSale, Entry, OptionalPrice, Summary, create, decimal_sales, host, ids, row};
 use ic_db::SortDirection::{Ascending as Asc, Descending as Desc};
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
 use ic_storage::{StableKey, VectorMemory};
+
+#[test]
+fn decimal_sort_and_distinct_agree_with_integer_cents_and_grouping() {
+    // Fixed-scale integer cents are independent of Decimal comparison/key encoding.
+    let cents = [
+        Some(100),
+        None,
+        Some(-100),
+        Some(i128::MAX),
+        Some(0),
+        Some(101),
+        Some(i128::MIN),
+        Some(100),
+        Some(-101),
+        None,
+        Some(10),
+        Some(-10),
+        Some(0),
+        Some(1),
+        Some(-1),
+    ];
+    let db = decimal_sales(&cents.map(|value| (0, value)));
+    let coefficient =
+        |value: Option<ic_db::Decimal>| value.map(|value| value.coefficient_at_scale(2).unwrap());
+    for price_desc in [false, true] {
+        for id_desc in [false, true] {
+            let mut expected: Vec<_> = cents.iter().enumerate().collect();
+            expected.sort_by(|(ai, a), (bi, b)| {
+                let order = if price_desc { b.cmp(a) } else { a.cmp(b) };
+                order.then_with(|| if id_desc { bi.cmp(ai) } else { ai.cmp(bi) })
+            });
+            let page = db
+                .query::<DecimalSale>()
+                .order_by_each(&[
+                    ("price", if price_desc { Desc } else { Asc }),
+                    ("id", if id_desc { Desc } else { Asc }),
+                ])
+                .fetch()
+                .unwrap();
+            assert_eq!(
+                page.rows
+                    .iter()
+                    .map(|r| (r.id as usize, coefficient(r.price)))
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|(id, value)| (*id, **value))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!((page.examined, page.fetched), (cents.len(), cents.len()));
+            assert!(page.next.is_none());
+        }
+        let mut expected = cents.to_vec();
+        expected.sort();
+        expected.dedup();
+        if price_desc {
+            expected.reverse();
+        }
+        for limit in [1, 4, 32] {
+            let page = db
+                .query::<DecimalSale>()
+                .order_by_each(&[("price", if price_desc { Desc } else { Asc })])
+                .distinct()
+                .limit(limit)
+                .fetch_as::<OptionalPrice>()
+                .unwrap();
+            assert_eq!(
+                page.rows
+                    .iter()
+                    .map(|r| coefficient(r.price))
+                    .collect::<Vec<_>>(),
+                expected.iter().take(limit).copied().collect::<Vec<_>>()
+            );
+            assert_eq!(page.examined, cents.len());
+            assert!(page.next.is_none());
+        }
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for value in cents {
+        *counts.entry(value).or_insert(0_u64) += 1;
+    }
+    let groups = db
+        .query::<DecimalSale>()
+        .group_count::<OptionalPrice>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .iter()
+            .map(|g| (coefficient(g.key.price), g.count))
+            .collect::<Vec<_>>(),
+        counts.into_iter().collect::<Vec<_>>()
+    );
+    for alias in ["1", "1.0", "1.00"] {
+        let page = db
+            .query::<DecimalSale>()
+            .filter("price", C::Eq, alias.parse::<ic_db::Decimal>().unwrap())
+            .order_by_each(&[("price", Desc), ("id", Desc)])
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [7, 0]);
+    }
+}
 
 #[test]
 fn complete_sort_matches_full_oracle_before_limit_and_projection() {
@@ -150,39 +253,81 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
 }
 
 #[test]
-fn complete_sort_matching_row_bound_is_independent_of_output_limit() {
-    let runtime = host(VectorMemory::default());
+fn bounded_selection_matches_full_sort_at_the_work_envelope() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
     let mut db = create(&runtime, 1);
-    let mut batch = Batch::new();
-    for id in 9..=33 {
-        batch.insert(&row(id)).unwrap();
+    let input: Vec<_> = (1..=511)
+        .map(|id| Entry {
+            amount: (id * 37) % 101,
+            ..row(id)
+        })
+        .collect();
+    for chunk in input.chunks(32) {
+        let mut batch = Batch::new();
+        for row in chunk {
+            if row.id <= 8 {
+                batch.replace(row).unwrap();
+            } else {
+                batch.insert(row).unwrap();
+            }
+        }
+        db.commit(batch).unwrap();
     }
-    db.commit(batch).unwrap();
-    assert!(matches!(
-        db.query::<Entry>()
-            .order_by(&["amount", "category"])
-            .limit(1)
-            .fetch(),
-        Err(Error::Limit)
-    ));
+    let before = backing.borrow().clone();
+    for reverse in [false, true] {
+        let mut expected: Vec<_> = input.iter().collect();
+        expected.sort_by_key(|r| (r.category, std::cmp::Reverse(r.amount), r.id));
+        if reverse {
+            expected.reverse();
+        }
+        for limit in [1, 7, 32] {
+            for distinct in [false, true] {
+                let mut query = db
+                    .query::<Entry>()
+                    .order_by_each(&[("category", Asc), ("amount", Desc)])
+                    .limit(limit)
+                    .work_limit(512);
+                if reverse {
+                    query = query.descending();
+                }
+                if distinct {
+                    query = query.distinct();
+                }
+                let page = query.fetch_as::<Summary>().unwrap();
+                assert_eq!(
+                    page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .take(limit)
+                        .map(|r| r.id)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!((page.examined, page.fetched), (511, 511));
+                assert!(page.next.is_none());
+            }
+        }
+    }
     assert!(matches!(
         db.query::<Entry>()
             .order_by_each(&[("category", Asc), ("amount", Desc)])
             .limit(1)
+            .work_limit(511)
             .fetch(),
         Err(Error::Limit)
     ));
-    let page = db
-        .query::<Entry>()
-        .filter("id", C::Le, 32_u64)
-        .order_by(&["amount", "category"])
-        .descending()
-        .limit(1)
-        .fetch()
-        .unwrap();
-    assert_eq!(ids(&page.rows), [32]);
-    assert_eq!(page.examined, 32);
-    assert!(page.next.is_none());
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch.insert(&row(512)).unwrap();
+    db.commit(batch).unwrap();
+    assert!(matches!(
+        db.query::<Entry>()
+            .order_by_each(&[("category", Asc), ("amount", Desc)])
+            .limit(1)
+            .work_limit(512)
+            .fetch(),
+        Err(Error::Limit)
+    ));
 }
 
 #[entity(
@@ -313,15 +458,39 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
         batch
             .insert(&SortRow {
                 id,
-                label: Some("\0".repeat(2000)),
+                label: Some(format!("{}{id:03}", "\0".repeat(1990))),
                 payload: vec![0; 2000],
             })
             .unwrap();
     }
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
+    // Each later long key wins. Replaced buffers must stop consuming the retained
+    // budget, and comparisons must reach beyond their shared escaped-text prefix.
+    assert_eq!(
+        db.query::<SortRow>()
+            .filter("id", C::Ge, 21_u64)
+            .order_by(&["label"])
+            .descending()
+            .limit(1)
+            .fetch()
+            .unwrap()
+            .rows[0]
+            .id,
+        40
+    );
+    assert_eq!(
+        db.query::<SortRow>()
+            .order_by(&["label"])
+            .limit(1)
+            .fetch()
+            .unwrap()
+            .rows[0]
+            .id,
+        1
+    );
     assert!(matches!(
-        db.query::<SortRow>().order_by(&["label"]).limit(1).fetch(),
+        db.query::<SortRow>().order_by(&["label"]).limit(32).fetch(),
         Err(Error::Limit)
     ));
     assert_eq!(*backing.borrow(), before);
@@ -585,12 +754,98 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     }
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
-    // This is still the existing 32-input-row sorter, not a larger distinct collector.
+    // Duplicate input no longer consumes a retained-row slot.
+    let page = db
+        .query::<Entry>()
+        .order_by_each(&[("amount", Desc), ("category", Asc)])
+        .distinct()
+        .limit(1)
+        .fetch_as::<CategoryAmount>()
+        .unwrap();
+    assert_eq!(page.examined, 33);
+    assert_eq!((page.rows[0].category, page.rows[0].amount), (0, 20));
+    assert!(page.next.is_none());
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn sorted_distinct_bounds_unique_tuples_not_matching_rows_or_output_limit() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let mut db = create(&runtime, 1);
+    let rows: Vec<_> = (1..=128)
+        .map(|id| Entry {
+            category: 0,
+            amount: (id - 1) % 32,
+            ..row(id)
+        })
+        .collect();
+    for chunk in rows.chunks(32) {
+        let mut batch = Batch::new();
+        for row in chunk {
+            if row.id <= 8 {
+                batch.replace(row).unwrap();
+            } else {
+                batch.insert(row).unwrap();
+            }
+        }
+        db.commit(batch).unwrap();
+    }
+    let before = backing.borrow().clone();
+    for reverse in [false, true] {
+        for limit in [1, 7, 32] {
+            let query = db
+                .query::<Entry>()
+                .order_by_each(&[("amount", Desc), ("category", Asc)])
+                .distinct()
+                .limit(limit)
+                .byte_limit(limit * 9)
+                .work_limit(129);
+            let page = if reverse { query.descending() } else { query }
+                .fetch_as::<CategoryAmount>()
+                .unwrap();
+            let expected: Vec<_> = (0..32)
+                .map(|n| if reverse { n } else { 31 - n })
+                .take(limit)
+                .map(|amount| (0, amount))
+                .collect();
+            assert_eq!(
+                page.rows
+                    .iter()
+                    .map(|r| (r.category, r.amount))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                (page.examined, page.fetched, page.output_bytes),
+                (128, 128, limit * 9)
+            );
+            assert!(page.next.is_none());
+        }
+    }
     assert!(matches!(
         db.query::<Entry>()
             .order_by_each(&[("amount", Desc), ("category", Asc)])
             .distinct()
             .limit(1)
+            .work_limit(128)
+            .fetch_as::<CategoryAmount>(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let mut extra = row(128);
+    extra.category = 0;
+    extra.amount = 32;
+    let mut batch = Batch::new();
+    batch.replace(&extra).unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Entry>()
+            .order_by_each(&[("amount", Desc), ("category", Asc)])
+            .distinct()
+            .limit(1)
+            .work_limit(129)
             .fetch_as::<CategoryAmount>(),
         Err(Error::Limit)
     ));

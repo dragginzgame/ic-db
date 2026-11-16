@@ -26,6 +26,8 @@ pub enum GroupOrder {
     AggregateAscending,
     /// Descending aggregate value; absent values follow present values.
     AggregateDescending,
+    /// Descending group-key tuple, in canonical field-name order; absence sorts last.
+    KeyDescending,
 }
 
 #[derive(Default)]
@@ -888,7 +890,11 @@ impl Groups {
                     })
                 })
         });
-        if self.selection.order != GroupOrder::Key {
+        if self.selection.order == GroupOrder::KeyDescending {
+            // BTreeMap supplied ascending canonical keys; reverse the completed,
+            // filtered rows before any output limit or page is selected.
+            rows.reverse();
+        } else if self.selection.order != GroupOrder::Key {
             rows.sort_unstable_by(|(ka, (_, a)), (kb, (_, b))| {
                 let (mut sa, mut sb) = ([0; 8], [0; 8]);
                 let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
