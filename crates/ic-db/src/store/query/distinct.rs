@@ -11,6 +11,7 @@ pub(super) enum Strategy {
     Identity,
     Adjacent(usize),
     Complete,
+    Sorted,
 }
 
 fn complete(request: &Request<'_>) -> Result<Strategy, Error> {
@@ -26,6 +27,7 @@ pub(super) fn admit(
     projection: Option<u16>,
     index: Option<&IndexSchema>,
     fixed: usize,
+    sorted: bool,
 ) -> Result<Strategy, Error> {
     let Some(mut remaining) = projection else {
         return Ok(Strategy::Identity);
@@ -41,6 +43,18 @@ pub(super) fn admit(
         return Ok(Strategy::Identity);
     }
     admit_ordered_fields(entity, remaining)?;
+    if sorted {
+        // Complete projected tuples must be contiguous after sorting. Requiring
+        // exactly the projection avoids choosing an order from hidden row values.
+        let mut ordered = 0;
+        for name in request.order.as_ref().ok_or(Error::InvalidQuery)? {
+            ordered |= 1 << position(name)?;
+        }
+        if ordered != remaining {
+            return Err(Error::InvalidQuery);
+        }
+        return Ok(Strategy::Sorted);
+    }
     let Some(index) = index else {
         return complete(request);
     };

@@ -16,6 +16,8 @@ Install the updated console and run the disposable local demonstration:
 make db
 db migration-demo
 db query Entry --order-by amount --desc --limit 2 --select id,amount
+db query Entry --order-by category:asc,amount:desc --limit 3 --select id,amount
+db query Entry --order-by category:desc --select category --distinct --limit 1
 ```
 
 Expect six source rows, bounded copy/validation/cleanup progress, a real local
@@ -23,14 +25,27 @@ canister upgrade during copying, and six target rows read through the new label
 index. All data is temporary; no deployed canister or GitHub credentials are used.
 The query scans all six entries and returns IDs 6 and 5 by descending amount,
 with no continuation, using the engine's bounded complete sort.
+The mixed-direction query returns IDs 6, 4 and 2, also with no continuation.
+The sorted DISTINCT query removes duplicate categories before selecting category 1.
 
 ### ➕ Added
+
+- Compose bounded sorting with DISTINCT. Admit identity results or an order
+  covering exactly the projected fields, remove adjacent equal tuples using the
+  existing sort keys, then apply output limits. Retain the 32-matching-input-row
+  bound, including duplicates; add no second key set, cursor or durable state.
+
+- Add fluent `order_by_each` with per-field `SortDirection` and CLI `:asc`/`:desc`
+  suffixes. Keep the implicit primary tie-breaker ascending; `.descending()` or
+  `--desc` reverses the whole order. Prove one physical traversal direction after
+  removing fixed fields, or reuse the bounded complete sorter. Preserve ordinary
+  cursor identities and bind new directions explicitly; no stored-format changes.
 
 - Support `order_by` without a matching ordered path by collecting and sorting the
   complete input result: at most 32 matches, 4096-byte keys and 128 KiB retained
   key/output buffers. Apply result limits after sorting; work or resource exhaustion
   refuses without partial output. Share the existing scanner, key codec and typed
-  projection. No cursor, DISTINCT or explicit-index fallback; indexed pages retain
+  projection. No cursor or explicit-index fallback; indexed pages retain
   their current behavior and bindings.
 - Add `db migration-demo`: a fixed compiled `Item` transformation widens `amount`
   from Nat64 to Nat128 and adds an indexed label. Resume from product checkpoints
@@ -79,11 +94,25 @@ with no continuation, using the engine's bounded complete sort.
 
 ### 🔧 Qualification
 
+- Point the frozen comparison dependency at private `dragginzgame/icydb-legacy`
+  after its repository rename. Retain revision `6d421e3` and the same baseline
+  source; repository access now requires authentication.
+- Qualify cursor/job refusal after publication for an unchanged entity with the
+  same rows and revision. Native and Wasm checks cover running/completed jobs, unchanged
+  backing on refusal, retired-source closure, independent cleanup and fresh target
+  jobs. The Wasm case adds publication-trap rollback and upgrades across copying,
+  publication and cleanup. Reuse existing identity checks; add no product state
+  or coordinator.
+- Adopt direct `ic-host-artifacts` 0.80.1 bounded reads and byte identities.
+  Replace its removed Wasm-inspection feature with a small benchmark-only
+  `wasmparser` reader, preserving measurement definitions and limits and adding
+  complete-module validation. Keep Testkit's transitive 0.79 dependencies until
+  its separate migration; product dependencies and durable formats stay unchanged.
 - Add `make m3-jobs`: combine existing retained-aggregate and maintenance fixtures.
   Check frozen read refusal, independent cancellation/expiry cleanup under an
   incompatible maintenance executable, rollback of maintenance cancellation,
   unchanged-source resumption and stale-handle refusal after slot reuse. No new
-  product API, endpoint or durable state.
+  product API or durable state; cutover qualification adds one private fixture endpoint.
 - Add `make m3-references`: migrate 256 rows with 128 reference pairs across
   copy chunks and upgrades. Check literal row/index bytes, checkpoint rollback,
   delayed dangling-reference refusal, cancellation, publication and final-batch

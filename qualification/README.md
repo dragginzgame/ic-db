@@ -216,8 +216,17 @@ call, it reverts callback writes while preserving the first execution's writes.
 Valid calls return one correctly framed result. These controls remain separate
 from the two matched benchmark hosts. Both benchmark hosts use the same hooks;
 transport-cost changes are harness changes, not database improvements.
-This implements [IC DB issue #1](https://github.com/dragginzgame/ic-db/issues/1)
-locally; the frozen IcyDB engine and Canic sources are unchanged.
+The migration for [IC DB issue #1](https://github.com/dragginzgame/ic-db/issues/1)
+was delivered in [d6991db](https://github.com/dragginzgame/ic-db/commit/d6991db7f2a72532acb2d6aa9a491b8871432051).
+The 2026-11-16 acceptance review matched all 82 pre-migration endpoint names,
+kinds and protocol IDs across the six hosts to their current Platform hooks.
+No Endpoint dependency remains in the selected graph; both benchmark hosts
+share the same transport owner. The focused endpoint probe passed both request
+admission and synchronous/callback reply-rollback tests again. Existing 0.17
+release evidence covers the installed rollback, aggregation, capacity, records
+and maintenance paths; this review does not label those historical runs as new.
+Later intentional fixture payload changes belong to their own feature increments,
+not the Endpoint migration. The frozen IcyDB engine and Canic sources are unchanged.
 
 ## M1 persistent records
 
@@ -1253,7 +1262,8 @@ make m0-setup
 make m0-icydb-baseline
 ```
 
-Fetching requires read access to `dragginzgame/icydb`. The benchmark itself runs
+Fetching requires read access to the private `dragginzgame/icydb-legacy` repository.
+The repository rename preserves the frozen source revision. The benchmark runs
 offline with the prepared PocketIC server. It uses Git revision
 `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac`, never a moving sibling checkout.
 The two small comparison packages exist because IcyDB's actor generator consumes
@@ -1513,17 +1523,35 @@ owns server and instance lifecycle. Cargo's artifact messages select the compile
 Wasm; the probe does not infer an internal target-directory filename.
 The locked Testkit is 0.106.0 with PocketIC 16.1.0. Calls use raw client methods
 and this workspace's explicit Wire codec/budgets; no `ic-testkit-wire` adapter is
-required. Direct benchmark inspection uses `ic-host-artifacts` 0.79.0; the CLI
-uses `ic-host-text` 0.76.0. Testkit's Artifacts/FS/Process dependencies also
-resolve to 0.79.0, with one Artifacts version. Tests use fresh instances and do
+required. Direct benchmark reads use `ic-host-artifacts` 0.80.1 for bounded
+complete bytes and SHA-256 identity; the CLI uses `ic-host-text` 0.76.0.
+Testkit's Artifacts/FS/Process dependencies still resolve to 0.79.0, so two
+Artifacts versions are intentionally present until that separate API migration.
+Tests use fresh instances and do
 not need the reusable pools retired in Testkit 0.105.0 or the diagnostic reports
 retired in 0.106.0. The CLI uses Text's retained escaping/width/table APIs, not
 its removed domain formatters. No host package enters
 the database product or deployed Wasm.
-The adoption was qualified with native/Wasm Clippy, record/default/generator and
+The earlier Testkit/Text adoption was qualified with native/Wasm Clippy, record/default/generator and
 endpoint-boundary Wasm tests, the schema fingerprint oracle and the matched scalar
 comparison. Earlier probe runs retain their own dependency evidence; this refresh
 does not relabel every historical M0 result as a new run.
+
+Artifacts 0.80 removed the Wasm inspector. The benchmark-only `tests/artifact`
+helper now derives export names and code-section payload bytes with `wasmparser`
+0.263.0 and validates the complete module before returning facts. It retains
+the 32 MiB input, 128-section/export and 32-custom-section limits; byte admission
+now happens while reading rather than after an unbounded file read. No supplier
+inspection framework, mutable file API or product dependency was copied into IC DB.
+Qualification covers independent literal Wasm measurements, malformed/truncated
+and duplicate-export refusals, byte/custom-section limits, affected benchmark
+callers and the six preserved query-growth artifacts. Their raw/code byte counts
+and SHA-256 identities must match the prior receipt; runtime samples do not rewrite
+historical measurement evidence. Run the focused native boundary check with:
+
+```sh
+cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test artifact_admission
+```
 
 The fixture uses published IC Storage collections with one row map and two index
 maps. Wire/Platform exports are private experiment controls, not product endpoints;
@@ -2053,8 +2081,8 @@ API or durable state.
 make m3-jobs
 ```
 
-This focused Wasm test combines the existing `aggregate-jobs` and maintenance
-fixture features, without adding endpoints or product code. It starts running,
+These focused Wasm tests combine the existing `aggregate-jobs` and maintenance
+fixture features. The cancellation case starts running,
 completed, cancelled and expiring sums over the six-row source, then freezes the
 database. Both starting a job and accessing running/completed jobs must remain
 closed across upgrades. These fixture adapters unwrap ordinary database admission,
@@ -2075,6 +2103,31 @@ only drive upgrades. It does not claim survival past expiry, access through a
 closed source, compatibility with changed job formats, or job transfer at cutover.
 `make m3-maintenance-wasm` includes this combination. No new durable state,
 automatic cleanup, retry policy or migration/job coordinator is introduced.
+
+A separate native cutover regression migrates one entity while copying another
+unchanged. The unchanged entity has the same rows and numeric revision in the
+published target. Its source cursor and both running/completed source jobs still
+refuse with `InvalidCursor`/`InvalidJob`, without changing backing. Retired source
+admission remains closed, while independent job cancellation/expiry cleanup and
+a fresh target job succeed after reopening. This tests the existing whole-database
+schema/incarnation binding; it does not provide job transfer. Run just this
+regression with:
+
+```sh
+cargo test --locked -p ic-db --test schema_copy publication_refuses_source_cursors_and_jobs_for_an_unchanged_entity -- --exact
+```
+
+The second `make m3-jobs` Wasm case carries that boundary through real upgrades.
+It reuses the whole-database fixture: two unchanged mapping rows reference two
+entries whose amount type widens. A private feature-gated endpoint starts/resumes
+mapping counts and reads cursors against explicitly selected source/target memory.
+Copying still requires a separate exhaustion call after each full page. Publication
+is first trapped and checked against complete stable backing, then committed.
+Upgrades during copying, after publication and after cleanup retain old-position
+refusal, source closure and independent cleanup. A fresh target count completes
+with two rows at the same numeric revision; removed handles cannot cancel it.
+Both Wasm cases pass. No product code, durable representation, automatic routing
+or new allocation is added; this small fixture is not a capacity measurement.
 
 ### Historical M0 maintenance probe
 
@@ -2150,10 +2203,25 @@ order or a bounded complete sort, `--desc` reverses it, and `--select id` or `--
 projection (the latter is Entry-only). Full entities are the default result.
 For example, `db query Entry --order-by amount --desc --limit 2 --select id,amount`
 scans all six entries and returns IDs 6 and 5 with no continuation. Complete sorting
-retains at most 32 matches and refuses work/state/output exhaustion, `--after`
-and DISTINCT. `make m2-queries` includes its Wasm console-boundary check for
+retains at most 32 matches and refuses work/state/output exhaustion and `--after`.
+`make m2-queries` includes its Wasm console-boundary check for
 global selection, limits, unchanged backing and indexed cursors across upgrade;
 no fixture endpoint or client sorting engine is added.
+Per-field directions use `--order-by category:asc,amount:desc`; the six-row fixture
+returns IDs 6, 4 and 2 with `--limit 3 --select id,amount`. `--desc` reverses this
+entire order. The same Wasm check covers mixed sorting and explicit descending
+primary cursors across upgrade, and the installed-console test covers the syntax.
+Native query tests compare optional text (including NUL and equal labels) against
+independent Rust ordering, exercise equality-fixed index proofs and byte retries,
+and retain all work/row/state/output limits. These checks establish correctness,
+not performance parity for the added direction capability.
+Sorted DISTINCT can use `db query Entry --order-by category:desc --select category --distinct --limit 1`:
+the six matching rows become two sorted categories before selecting category 1.
+Non-identity projections require exactly their projected fields in the explicit
+order. Native tuple/text oracles and Wasm upgrade checks cover duplicate removal
+before limits, hidden-order refusal, complete-input work bounds and refusal at
+33 matching rows despite only two categories. This reuses the sorter, not the
+unordered DISTINCT set or a new replay mechanism.
 Entry also supports `--select category`; combine it with
 `--order-by category --distinct` for the ordered-DISTINCT path. `--category` is
 supported; `--min` varies within a category and refuses with this projection.

@@ -16,7 +16,7 @@ mod query;
 pub use maintenance::{CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition};
 pub use query::{
     Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
-    GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage,
+    GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage, SortDirection,
 };
 
 const MANIFEST: &[u8] = b"ICDBMF01";

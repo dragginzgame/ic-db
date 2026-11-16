@@ -228,3 +228,187 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     }
     owned.close().await;
 }
+
+#[tokio::test]
+async fn publication_invalidates_positions_but_preserves_independent_job_cleanup() {
+    let directory =
+        std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").expect("run make m3-jobs"));
+    let wasm = std::fs::read(directory.join("jobs-maintenance.wasm")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = owned.instance();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let upgrade = async || {
+        pic.advance_time(std::time::Duration::from_secs(600)).await;
+        pic.tick().await;
+        pic.upgrade_canister(canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+    };
+    let copy = async |operation: u8, trap: bool| {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "maintenance_whole_copy",
+                ic_wire::encode(
+                    &(operation, trap),
+                    Encoding::Frame {
+                        method: 138,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await?;
+        Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
+            ic_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
+                &reply,
+                Encoding::Frame {
+                    method: 138,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap(),
+        )
+    };
+    let job = async |operation: u8, target: bool, bytes: &[u8], sequence: u64, work: u32| {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "maintenance_job",
+                ic_wire::encode(
+                    &(operation, target, bytes, sequence, work),
+                    Encoding::Frame {
+                        method: 146,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(
+            &reply,
+            Encoding::Frame {
+                method: 146,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+    let cleanup = async |operation: u8, bytes: &[u8], now: i64| {
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "job_control",
+                ic_wire::encode(
+                    &(operation, bytes, now, 1_u32),
+                    Encoding::Frame {
+                        method: 112,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<Result<u64, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 112,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+
+    copy(10, false).await.unwrap().unwrap();
+    let running = job(0, false, &[], 0, 32).await.unwrap().0;
+    let completed = job(0, false, &[], 0, 32).await.unwrap().0;
+    let first = job(1, false, &running, 0, 1).await.unwrap();
+    assert_eq!((first.1, first.2, first.3, first.4), (1, 1, 1, None));
+    let done = job(1, false, &completed, 0, 32).await.unwrap();
+    assert_eq!((done.2, done.3, done.4), (1, 2, Some(2)));
+    let cursor = job(2, false, &[], 0, 32).await.unwrap().0;
+    assert!(!cursor.is_empty());
+    copy(11, false).await.unwrap().unwrap();
+    assert_eq!(
+        copy(1, false).await.unwrap().unwrap().1.as_deref(),
+        Some("A_Mapping")
+    );
+    upgrade().await;
+    assert_eq!(
+        copy(1, false).await.unwrap().unwrap().1.as_deref(),
+        Some("Entry")
+    );
+    assert_eq!(
+        copy(2, false).await.unwrap().unwrap().1.as_deref(),
+        Some("Entry")
+    );
+    assert_eq!(
+        copy(2, false).await.unwrap().unwrap().1.as_deref(),
+        Some("Z_Empty")
+    );
+    assert!(copy(3, false).await.unwrap().unwrap().0);
+    let mut ready = false;
+    for _ in 0..32 {
+        if copy(4, false).await.unwrap().unwrap().0 {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready);
+    let before = pic.get_stable_memory(canister).await;
+    assert!(copy(5, true).await.is_err());
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    copy(5, false).await.unwrap().unwrap();
+    upgrade().await;
+
+    let before = pic.get_stable_memory(canister).await;
+    // The unchanged entity and its numeric revision match; the new database's
+    // schema/incarnation still forbids both unfinished and completed old jobs.
+    let page = job(2, true, &[], 0, 32).await.unwrap();
+    assert_eq!((page.2, page.3), (first.2, 1));
+    assert_eq!(
+        job(2, true, &cursor, 0, 32).await,
+        Err("InvalidCursor".into())
+    );
+    for (handle, sequence) in [(&running, first.1), (&completed, done.1)] {
+        assert_eq!(
+            job(1, true, handle, sequence, 32).await,
+            Err("InvalidJob".into())
+        );
+        assert_eq!(
+            job(1, false, handle, sequence, 32).await,
+            Err("Maintenance".into())
+        );
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(cleanup(0, &running, 1).await, Ok(0));
+    assert_eq!(cleanup(1, &[], 100).await, Ok(1));
+    assert_eq!(cleanup(1, &[], 100).await, Ok(0));
+    upgrade().await;
+    let fresh = job(0, true, &[], 0, 32).await.unwrap().0;
+    assert_ne!(fresh, running);
+    assert_ne!(fresh, completed);
+    let result = job(1, true, &fresh, 0, 32).await.unwrap();
+    assert_eq!((result.2, result.3, result.4), (1, 2, Some(2)));
+    let before = pic.get_stable_memory(canister).await;
+    for old in [&running, &completed] {
+        assert_eq!(cleanup(0, old, 1).await, Err("InvalidJob".into()));
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(cleanup(0, &fresh, 1).await, Ok(0));
+    owned.close().await;
+}

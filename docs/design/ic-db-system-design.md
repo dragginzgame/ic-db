@@ -22,6 +22,8 @@ work, releases and data. Read-only research remains allowed; further edits,
 commits, pushes, merges, releases or deployments require an explicit maintainer
 decision to lift the freeze or authorize an exception. This records a work freeze,
 not a GitHub archive/branch-protection change or an IcyDB retirement decision.
+The separately authorized rename to private `dragginzgame/icydb-legacy` preserves
+that freeze and the comparison revision; it does not authorize source changes.
 
 IC DB explores a leaner rewrite of IcyDB for Rust applications on the Internet
 Computer, retaining broad fluent query capability and familiar attribute-based
@@ -1687,6 +1689,17 @@ original checkpoint. This does not transfer jobs to a published target or bypass
 schema/algorithm identity; the [qualification receipt](../../qualification/README.md#retained-jobs-during-maintenance-018)
 records the selected lifecycle.
 
+Native and Wasm publication regressions additionally check an unchanged entity whose
+rows and numeric revision match across cutover: source cursors and running or
+completed jobs refuse against the target's schema/incarnation binding without
+changing backing. Known-format jobs remain independently cleanable; fresh target
+jobs work after reopen. The Wasm case traps publication, compares complete stable
+backing and upgrades during copying, after publication and after cleanup. It
+reuses the whole-database fixture with one private job/cursor endpoint; no product
+mechanism or host routing state is added. This qualifies refusal and cleanup, not
+job transfer. It retains frozen IcyDB `6d421e3`'s continuation-semantic binding
+lesson (`db/cursor/signature.rs`) using the existing schema/incarnation checks.
+
 The M0 fixed grouped-sum probe supplies the atomic revision/progress and retry
 precedent. Frozen IcyDB `6d421e3`'s `grouped_fold/count/window` and
 `grouped_fold/generic/page_finalize` distinguish completed-group filtering/paging
@@ -1944,7 +1957,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger/mixed-direction sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Same entity set and keys only; broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; direct-library qualification hosts | Canic adapter integration, broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
@@ -2145,6 +2158,15 @@ duplicates and a nonfinal primary key refuse. With an explicit index the same
 order proof checks that requested path. Without `order_by`, existing primary or
 explicit-index semantics and cursor bindings remain unchanged.
 
+`order_by_each(&[(field, SortDirection), ...])` replaces that field list with
+individual ascending/descending directions. An omitted primary key is appended
+ascending; `descending()` reverses all components. A physical index remains
+eligible only when every varying component agrees with the primary tie-breaker's
+direction. Equality-fixed fields may differ. Incompatible automatic paths use the
+same bounded complete sorter; explicit paths refuse. Existing all-ascending
+orders retain their cursor identity. Other direction lists add a bounded signature
+suffix; changing directions cannot reuse a live cursor.
+
 Selection first admits all predicates, including contradictions. Singleton equality terms
 supply exact leading index operands; all predicates remain residual checks.
 An equality inside a multi-alternative OR clause cannot establish a fixed field
@@ -2171,7 +2193,7 @@ witness covers absence refusal, byte limits and both page directions across upgr
 Newly eligible paths participate in the existing deterministic selection. If a
 physical path changes, old cursor/job bindings refuse and callers must restart;
 unchanged selected paths retain their identities and cleanup remains available.
-Mixed directions, larger sorting and general DISTINCT remain work; this is not
+Larger sorting and general DISTINCT remain work; this is not
 a general cost-based planner.
 
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply
@@ -2189,7 +2211,7 @@ buffer capacity; the separate 32-row cap also bounds container overhead. Full
 entity and projected output share this concrete collector, without generic
 execution specialization. After complete sorting, apply `limit` and then output
 byte admission; discarded rows do not consume response bytes. Any refusal drops
-the whole result. Return `next: None`; no cursor, DISTINCT or explicit-index
+the whole result. Return `next: None`; no cursor or explicit-index
 fallback is admitted. Aggregate input ordering still refuses. Indexed live pages
 and their bindings are unchanged. Larger/top-K sorting needs separate evidence.
 
@@ -2199,6 +2221,26 @@ the cached-key, deterministic-tie and full-sort-oracle lessons. IC DB reuses its
 own exact encoded keys rather than copying IcyDB's slot/value caches, bounded heap,
 resource trackers or expression ordering. Native/Wasm checks exercise late winners,
 projection, absence/text order, resource refusal and unchanged indexed continuation.
+Per-field descending order complements the existing prefix-free component bytes
+before comparison, preserving exact text terminators, absence and later ties.
+No comparator callback, owned value cache or persisted key format is added.
+Native independent tuple/text oracles cover mixed directions and fixed-field
+index proofs; Wasm/CLI checks cover explicit directions, complete selection,
+resource refusal and direction-bound cursors across upgrades.
+
+Sorted DISTINCT accepts inherently unique entity/primary-bearing projections.
+For other projections, require the explicit order to contain exactly the projected
+fields; the appended primary key chooses the first ordered representative. The
+complete sort makes equal projected tuples adjacent. Compare the already retained
+key prefix before that primary suffix, remove duplicates, then apply result count
+and bytes. No second key set or output buffer is needed; one bounded prefix offset
+per retained row identifies equality. All matching rows still consume the existing
+32-input-row/128-KiB sorter envelope, even if many are duplicates. Ambiguous hidden
+ordering and incomplete projected orders refuse. This retains IcyDB's projected
+equivalence and post-deduplication window rules from
+`db/executor/projection/materialize/distinct` at `6d421e3`, without its global replay,
+canonical value/hash state or cursor machinery. Existing live and unsorted complete
+DISTINCT modes keep their contracts.
 
 `limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
 (1–512), and `byte_limit` bounds summed encoded output-row bytes (1–131072).

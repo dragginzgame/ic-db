@@ -11,7 +11,7 @@ use crate::{
 };
 use ic_db::{
     Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
-    QueryPage, Value,
+    QueryPage, SortDirection, Value,
 };
 
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
@@ -90,7 +90,18 @@ fn query(
         .map(QueryCursor::from_bytes)
         .transpose()
         .map_err(message)?;
-    let order: Vec<_> = order.iter().map(String::as_str).collect();
+    let order: Vec<_> = order
+        .iter()
+        .map(|field| {
+            let (name, direction) = field.split_once(':').unwrap_or((field, "asc"));
+            let direction = match direction {
+                "asc" => SortDirection::Ascending,
+                "desc" => SortDirection::Descending,
+                _ => return Err("order direction must be asc or desc".to_owned()),
+            };
+            Ok((name, direction))
+        })
+        .collect::<Result<_, String>>()?;
     let host = runtime();
     let db = open(&host);
     match entity.as_str() {
@@ -197,7 +208,7 @@ fn query(
 fn configure<'a, E: Entity>(
     mut query: Query<'a, E, Backing>,
     cursor: Option<&'a QueryCursor>,
-    order: &[&'a str],
+    order: &[(&'a str, SortDirection)],
     descending: bool,
     limit: u32,
     work: u32,
@@ -208,7 +219,7 @@ fn configure<'a, E: Entity>(
         .work_limit(work as usize)
         .byte_limit(bytes as usize);
     if !order.is_empty() {
-        query = query.order_by(order);
+        query = query.order_by_each(order);
     }
     if descending {
         query = query.descending();

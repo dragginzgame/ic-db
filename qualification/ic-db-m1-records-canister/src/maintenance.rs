@@ -7,6 +7,9 @@ use ic_db::{
 use ic_platform_runtime::cdk;
 use ic_storage::StableKey;
 
+#[cfg(feature = "aggregate-jobs")]
+mod jobs;
+
 pub const COPY_SOURCE: &str = "m1.copy.source.v1";
 pub const COPY_TARGET: &str = "m1.copy.target.v1";
 pub const COPY_NEXT: &str = "m1.copy.next.v1";
@@ -404,7 +407,7 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
         .unwrap();
-    if operation == 0 {
+    if operation == 0 || (cfg!(feature = "aggregate-jobs") && operation == 10) {
         let mut db = Database::create(source_memory, source.clone(), [7; 16])?;
         let mut batch = Batch::new();
         for id in 0..2 {
@@ -419,12 +422,21 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
             })?;
         }
         db.commit(batch)?;
+        if operation == 10 {
+            return Ok((false, None, vec![]));
+        }
         let copy = db.begin_maintenance(&transition)?.begin_copy(
             target_memory,
             source,
             target,
             [8; 16],
         )?;
+        return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
+    }
+    if cfg!(feature = "aggregate-jobs") && operation == 11 {
+        let copy = Database::open(source_memory, source.clone())?
+            .begin_maintenance(&transition)?
+            .begin_copy(target_memory, source, target, [8; 16])?;
         return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
     }
     if operation == 6 {

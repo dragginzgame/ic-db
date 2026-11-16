@@ -1,8 +1,7 @@
 //! Hold host/transport fixed while varying reachable fluent shapes and mapping sites.
+mod artifact;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_host_artifacts::wasm::{InspectionLimits, inspect};
 use ic_wire::{Direction, Encoding};
-use sha2::{Digest, Sha256};
 
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);
@@ -62,29 +61,24 @@ async fn fluent_shapes_and_mapping_growth() {
         ("maps", 1, 27),
         ("entities", 8, 17),
     ] {
-        let wasm = std::fs::read(directory.join(format!("{variant}.wasm"))).unwrap();
-        let facts = inspect(
-            &wasm,
-            InspectionLimits {
-                module_bytes: 32 * 1024 * 1024,
-                sections: 128,
-                exports: 128,
-                custom_sections: 32,
-            },
+        let (wasm, facts) = crate::artifact::read(
+            std::fs::File::open(directory.join(format!("{variant}.wasm"))).unwrap(),
         )
         .unwrap();
         let exports: Vec<_> = facts
             .exports
-            .keys()
-            .copied()
+            .iter()
+            .map(String::as_str)
             .filter(|name| name.starts_with("canister_"))
             .collect();
         assert_eq!(exports, ["canister_init", "canister_update exercise"]);
         eprintln!(
             "variant={variant} entities={count} wasm_bytes={} code_section_bytes={} sha256={}",
-            facts.raw_bytes,
+            facts.identity.bytes,
             facts.code_section_bytes,
-            Sha256::digest(&wasm)
+            facts
+                .identity
+                .sha256
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()

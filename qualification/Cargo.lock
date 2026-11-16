@@ -385,6 +385,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-oid"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,6 +555,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
+ "const-oid",
  "crypto-common 0.2.2",
 ]
 
@@ -1012,7 +1019,7 @@ name = "ic-db-m0-rollback-driver"
 version = "0.0.0"
 dependencies = [
  "clap",
- "ic-host-artifacts",
+ "ic-host-artifacts 0.80.1",
  "ic-host-text",
  "ic-testkit",
  "ic-wire 0.24.1",
@@ -1020,6 +1027,7 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "toko-tooling",
+ "wasmparser",
 ]
 
 [[package]]
@@ -1089,9 +1097,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80c115b14974a670676e62940473886a1b2b289ee1ca1258aae89534f1fddb22"
 dependencies = [
  "flate2",
- "leb128",
  "sha2 0.11.1",
- "wasmparser",
+]
+
+[[package]]
+name = "ic-host-artifacts"
+version = "0.80.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9083e3927eb9649c429a1c8dfeb5b7be844cebf1596e93b077f9908d6289dcc"
+dependencies = [
+ "sha2 0.11.1",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1100,7 +1116,7 @@ version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ef7770c178efe33ca0d9fcb54e78ad45f0c9c3d499f2e1bac70fb1ba5bba182"
 dependencies = [
- "ic-host-artifacts",
+ "ic-host-artifacts 0.79.0",
  "rustix",
  "thiserror 2.0.18",
 ]
@@ -1111,7 +1127,7 @@ version = "0.79.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bfc02220bee55d050f8ebedce5f5ff71764028afcef8b58c1ae2bceb945e650"
 dependencies = [
- "ic-host-artifacts",
+ "ic-host-artifacts 0.79.0",
  "ic-host-fs",
  "libc",
  "rustix",
@@ -1212,7 +1228,7 @@ version = "0.106.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "090cea21af2208dad7a359e99fe803b356fe8daa27cdc52d545df7de3b32c43e"
 dependencies = [
- "ic-host-artifacts",
+ "ic-host-artifacts 0.79.0",
  "ic-host-fs",
  "ic-host-process",
  "ic-platform",
@@ -1371,7 +1387,7 @@ dependencies = [
 [[package]]
 name = "icydb"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "ic-platform-runtime",
  "ic-platform-types",
@@ -1388,7 +1404,7 @@ dependencies = [
 [[package]]
 name = "icydb-core"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -1411,7 +1427,7 @@ dependencies = [
 [[package]]
 name = "icydb-diagnostic-code"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "remain",
 ]
@@ -1419,7 +1435,7 @@ dependencies = [
 [[package]]
 name = "icydb-model"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "convert_case",
  "ctor",
@@ -1439,7 +1455,7 @@ dependencies = [
 [[package]]
 name = "icydb-model-macros"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "convert_case",
  "darling",
@@ -1455,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "icydb-schema"
 version = "0.310.2"
-source = "git+https://github.com/dragginzgame/icydb?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
+source = "git+https://github.com/dragginzgame/icydb-legacy?rev=6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac#6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac"
 dependencies = [
  "ethnum",
  "ic-platform-types",

@@ -181,6 +181,15 @@ fn console_inspects_and_queries() {
         [vec!["6", "60"], vec!["5", "51"]]
     );
     assert!(sorted.contains("Next cursor: none"));
+    let sorted = run_console(
+        &binary,
+        "query Entry --order-by category:asc,amount:desc --limit 3 --select id,amount\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&sorted),
+        [vec!["6", "60"], vec!["4", "40"], vec!["2", "20"]]
+    );
+    assert!(sorted.contains("Next cursor: none"));
     let filtered_distinct = run_console(
         &binary,
         "query Entry --select category --distinct --min 0 --order-by category\nquit\n",

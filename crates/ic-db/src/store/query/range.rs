@@ -127,7 +127,7 @@ pub(super) fn bounds(
     if let Some(cursor) = request.cursor {
         let key = StoreKey::new(cursor.position.clone())?;
         // Old or caller-selected positions must never widen the predicate range.
-        if request.descending {
+        if plan.descending {
             upper.tighten(key, cursor.inclusive, Ordering::Less);
         } else {
             lower.tighten(key, cursor.inclusive, Ordering::Greater);

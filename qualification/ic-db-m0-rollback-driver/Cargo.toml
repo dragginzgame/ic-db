@@ -22,9 +22,10 @@ ic-wire.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
-ic-host-artifacts = { workspace = true, features = ["wasm"] }
+ic-host-artifacts.workspace = true
 serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
+wasmparser.workspace = true
 
 [[test]]
 name = "rollback"

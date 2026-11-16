@@ -1,4 +1,5 @@
 //! Same scalar workload, transport and supplier graph; different engine contracts.
+mod artifact;
 mod support;
 use support::scalar_workload;
 

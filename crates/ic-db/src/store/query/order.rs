@@ -13,7 +13,7 @@ pub(super) struct IndexPath<'a> {
 pub(super) enum Path<'a> {
     Primary,
     Index(IndexPath<'a>),
-    Sort(Vec<usize>),
+    Sort(Vec<(usize, bool)>),
 }
 
 pub(super) fn select<'a>(
@@ -22,7 +22,7 @@ pub(super) fn select<'a>(
 ) -> Result<Path<'a>, Error> {
     // Plan admission bounds the order to four fields. Indexed paths allocate no
     // additional sort metadata; materialize it only for the complete fallback.
-    let mut positions = [0; 4];
+    let mut positions = [(0, false); 4];
     if let Some(order) = &request.order {
         if order.is_empty() {
             return Err(Error::InvalidQuery);
@@ -40,7 +40,7 @@ pub(super) fn select<'a>(
             {
                 return Err(Error::InvalidQuery);
             }
-            positions[i] = position;
+            positions[i] = (position, request.order_descending & (1 << i) != 0);
         }
     }
     if let Some((name, values)) = &request.index {
@@ -104,9 +104,9 @@ pub(super) fn select<'a>(
         return Ok(Path::Primary);
     }
     let Some((index, values)) = best else {
-        // No live cursor or projected DISTINCT semantics are implied by a sort.
-        // Explicit paths above still have to prove their requested order.
-        if request.cursor.is_some() || request.distinct {
+        // Complete sorting never accepts a live cursor. DISTINCT separately
+        // proves projected equivalence after this access path is admitted.
+        if request.cursor.is_some() {
             return Err(Error::InvalidQuery);
         }
         let mut positions =
@@ -116,8 +116,8 @@ pub(super) fn select<'a>(
             .iter()
             .position(|f| f.name == entity.primary_key)
             .ok_or(Error::InvalidQuery)?;
-        if positions.last() != Some(&primary) {
-            positions.push(primary);
+        if positions.last().map(|(position, _)| *position) != Some(primary) {
+            positions.push((primary, false));
         }
         return Ok(Path::Sort(positions));
     };
@@ -176,6 +176,16 @@ fn satisfies(
     // A fixed primary key admits at most one record, so every admitted order fits.
     if fixed(&entity.primary_key) {
         return true;
+    }
+    // Current physical keys share one direction. Constant fields do not affect
+    // ordering, but every varying field must agree with the primary tie-breaker.
+    let descending = request.primary_descending(entity);
+    if order
+        .iter()
+        .enumerate()
+        .any(|(i, name)| !fixed(name) && (request.order_descending & (1 << i) != 0) != descending)
+    {
+        return false;
     }
     // The primary key uniquely determines all later components. Compare both
     // sequences only up to it, stripping fields constant across matching rows.

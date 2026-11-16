@@ -16,8 +16,9 @@ Start with the [proposed system design](docs/design/ic-db-system-design.md):
 capability contracts, authoritative state, schema evolution,
 query/write paths, experiments and conditions for proceeding.
 
-IcyDB's local checkout and GitHub repository are frozen by maintainer decision
-pending this experiment. Read-only research remains allowed; development and
+IcyDB's local checkout and private [icydb-legacy](https://github.com/dragginzgame/icydb-legacy)
+repository are frozen by maintainer decision pending this experiment.
+Read-only research remains allowed; development and
 delivery require an explicit decision to resume. Existing work and data are retained.
 
 The first M1 product slice now lives in `crates/ic-db` (shared runtime) and
@@ -199,12 +200,21 @@ can fix index components; the engine prefers a path that proves the complete
 order. Without one, it scans the complete input and sorts at most 32 matching
 rows, then applies `limit`. Work exhaustion or more matches returns `Limit`,
 even for `limit(1)`. Sort keys are capped at 4096 bytes and retained key/output
-buffers at 128 KiB. This fallback returns no continuation and refuses `after`
-or `distinct`; an explicit `using_index` still has to supply the requested order.
+buffers at 128 KiB. This fallback returns no continuation and refuses `after`;
+an explicit `using_index` still has to supply the requested order.
 Both entity and projected results are supported, including ordering by fields
 outside the projection. Byte limits apply to the selected output after sorting;
 overflow refuses rather than returning a partial result. Without `order_by`,
 the existing primary/explicit-index order remains unchanged.
+
+For individual directions, use `order_by_each` with `(field, SortDirection)` pairs.
+Its implicit primary key is ascending; `.descending()` reverses the complete
+order. Constant fields may have different directions without preventing index
+traversal. Otherwise mixed directions use the same bounded complete sorter.
+Sorted `distinct()` accepts inherently unique results or an explicit order covering
+exactly the projected fields. It removes duplicates before applying `limit` and
+output bytes. The sorter still retains at most 32 matching input rows, including
+duplicates; it does not inherit the larger-input allowance of unordered DISTINCT.
 
 Sparse indexes (`present_only`) can supply order when filters exclude absence
 for every optional indexed field. For example, `Ne` with `IndexValue::Absent`,
@@ -785,6 +795,8 @@ db query Entry --min 100 --work 2
 db query Document --entry-id 1 --order-by score
 db query Document --select id
 db query Entry --order-by amount --desc --limit 2 --select id,amount
+db query Entry --order-by category:asc,amount:desc --limit 3 --select id,amount
+db query Entry --order-by category:desc --select category --distinct --limit 1
 db migration-demo
 db query --help
 ```
@@ -795,6 +807,9 @@ is retired. Limits may change: `--limit` bounds returned rows (1–32), `--work`
 bounds examined candidates (1–512), and `--bytes` bounds encoded results
 (1–131072). An empty page can still have a next cursor. `--order-by` uses a complete
 ordered path or the bounded complete sort above; `--desc` reverses the whole order.
+Each field accepts `:asc` or `:desc`; omitted directions and the implicit primary
+tie-breaker are ascending. The fluent equivalent is
+`.order_by_each(&[("category", SortDirection::Ascending), ("amount", SortDirection::Descending)])`.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 

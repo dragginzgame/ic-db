@@ -1,7 +1,7 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
 use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, RetiredSource, Schema, SchemaCopy,
-    SchemaTransition, Timestamp, entity,
+    AggregateJobs, Batch, Database, Entity, Error, JobOutcome, Maintenance, RetiredSource, Schema,
+    SchemaCopy, SchemaTransition, Timestamp, entity,
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -166,6 +166,123 @@ fn entries(host: &MemoryRuntime<VectorMemory>, name: &str) -> Vec<(Vec<u8>, Vec<
     raw.iter()
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect()
+}
+
+#[test]
+fn publication_refuses_source_cursors_and_jobs_for_an_unchanged_entity() {
+    let memory = VectorMemory::default();
+    let runtime = host(memory.clone());
+    let source = Schema::new(&[Other::SCHEMA, Source::SCHEMA]).unwrap();
+    let target = Schema::new(&[Other::SCHEMA, Target::SCHEMA]).unwrap();
+    let transition = SchemaTransition::new(&source, &target, "widen-with-jobs", 1, &[7]).unwrap();
+    let mut db = Database::create(
+        runtime.open_memory(&key("copy.source.v1")).unwrap(),
+        source.clone(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&Source { id: 1, value: 7 }).unwrap();
+    for id in 1..=5 {
+        batch.insert(&Other { id }).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let revision = db.revision::<Other>().unwrap();
+    let cursor = db.query::<Other>().limit(2).fetch().unwrap().next.unwrap();
+    let mut jobs =
+        AggregateJobs::create(runtime.open_memory(&key("copy.other.v1")).unwrap(), [3; 16])
+            .unwrap();
+    let now = Timestamp::from_millis;
+    let running = db
+        .query::<Other>()
+        .start_count(&mut jobs, now(0), now(100))
+        .unwrap();
+    let first = db
+        .query::<Other>()
+        .work_limit(2)
+        .resume_count(&mut jobs, &running, 0, now(1))
+        .unwrap();
+    assert_eq!(first.examined, 2);
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    let completed = db
+        .query::<Other>()
+        .start_count(&mut jobs, now(0), now(50))
+        .unwrap();
+    let done = db
+        .query::<Other>()
+        .resume_count(&mut jobs, &completed, 0, now(1))
+        .unwrap();
+    assert!(matches!(done.outcome, JobOutcome::Complete(5)));
+    drop(jobs);
+
+    let mut copy = db
+        .begin_maintenance(&transition)
+        .unwrap()
+        .begin_copy(
+            runtime.open_memory(&key("copy.target.v1")).unwrap(),
+            source.clone(),
+            target.clone(),
+            [2; 16],
+        )
+        .unwrap();
+    assert_eq!(copy.next_entity(), Some("Other"));
+    assert_eq!(copy.copy_unchanged::<Other>(32, 4096).unwrap().rows, 5);
+    assert!(copy.copy_next(32, 4096, transform).unwrap().complete);
+    let mut validated = false;
+    for _ in 0..32 {
+        if copy.validate_next(2).unwrap() {
+            validated = true;
+            break;
+        }
+    }
+    assert!(validated);
+    drop(copy.publish().unwrap());
+    drop(runtime);
+
+    let runtime = host(memory.clone());
+    let db = Database::open(runtime.open_memory(&key("copy.target.v1")).unwrap(), target).unwrap();
+    let mut jobs =
+        AggregateJobs::open(runtime.open_memory(&key("copy.other.v1")).unwrap()).unwrap();
+    assert_eq!(db.incarnation(), [2; 16]);
+    // The queried entity, rows and numeric revision match. They cannot confer
+    // authority to reuse a source-bound position or completed historical result.
+    assert_eq!(db.revision::<Other>().unwrap(), revision);
+    assert_eq!(
+        db.query::<Other>().fetch().unwrap().rows,
+        (1..=5).map(|id| Other { id }).collect::<Vec<_>>()
+    );
+    let before = memory.borrow().clone();
+    assert!(matches!(
+        db.query::<Other>().after(&cursor).fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    for (handle, sequence) in [(&running, first.sequence), (&completed, done.sequence)] {
+        assert!(matches!(
+            db.query::<Other>()
+                .resume_count(&mut jobs, handle, sequence, now(2)),
+            Err(Error::InvalidJob)
+        ));
+    }
+    assert!(matches!(
+        Database::open(runtime.open_memory(&key("copy.source.v1")).unwrap(), source),
+        Err(Error::Maintenance)
+    ));
+    assert_eq!(*memory.borrow(), before);
+
+    // Cleanup interprets the supported job frame, not the retired source schema.
+    jobs.cancel(&running).unwrap();
+    assert_eq!(jobs.cleanup_expired(now(50), 1).unwrap(), 1);
+    let fresh = db
+        .query::<Other>()
+        .start_count(&mut jobs, now(50), now(100))
+        .unwrap();
+    assert_ne!(fresh, running);
+    assert_ne!(fresh, completed);
+    let result = db
+        .query::<Other>()
+        .resume_count(&mut jobs, &fresh, 0, now(51))
+        .unwrap();
+    assert!(matches!(result.outcome, JobOutcome::Complete(5)));
 }
 
 #[test]

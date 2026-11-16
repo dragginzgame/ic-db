@@ -23,6 +23,15 @@ const MAX_COMPARISON_KEY: usize = 4096;
 const MAX_DISTINCT_VALUES: usize = 32;
 const MAX_STATE_BYTES: usize = 128 * 1024;
 
+/// Direction of one field in an explicit result order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    /// Smaller values first; absence precedes present values.
+    Ascending,
+    /// Larger values first; absence follows present values.
+    Descending,
+}
+
 /// Exact comparison. Equality distinguishes absent values; ranges and text matches require presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -209,6 +218,7 @@ struct Request<'a> {
     predicates: Vec<Predicate<'a>>,
     index: Option<(&'a str, Vec<IndexValue<'a>>)>,
     order: Option<Vec<&'a str>>,
+    order_descending: u8,
     descending: bool,
     distinct: bool,
     rows: usize,
@@ -225,6 +235,7 @@ impl Default for Request<'_> {
             predicates: Vec::new(),
             index: None,
             order: None,
+            order_descending: 0,
             descending: false,
             distinct: false,
             rows: 32,
@@ -295,11 +306,34 @@ impl<'a> Request<'a> {
 
     #[inline(never)]
     fn order_by(&mut self, fields: &[&'a str]) {
+        self.order_descending = 0;
         if fields.len() > 4 {
             self.over_limit = true;
         } else {
             self.order = Some(fields.to_vec());
         }
+    }
+
+    #[inline(never)]
+    fn order_by_each(&mut self, fields: &[(&'a str, SortDirection)]) {
+        if fields.len() > 4 {
+            self.over_limit = true;
+            return;
+        }
+        self.order = Some(fields.iter().map(|(name, _)| *name).collect());
+        self.order_descending = fields
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (i, (_, direction))| {
+                mask | (u8::from(*direction == SortDirection::Descending) << i)
+            });
+    }
+
+    fn primary_descending(&self, entity: &EntitySchema) -> bool {
+        self.order.as_ref().is_some_and(|fields| {
+            fields.last() == Some(&entity.primary_key)
+                && self.order_descending & (1 << (fields.len() - 1)) != 0
+        })
     }
 }
 
@@ -344,13 +378,16 @@ impl<M: Memory> Database<M> {
     }
 }
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
-    /// Remove duplicate output records. Identity projections and proven leading
-    /// index tuples use live pages. Other ordered-field projections scan to
+    /// Remove duplicate output records. Proven leading index tuples use live
+    /// pages; identity projections need no duplicate tracking. Other projections scan to
     /// completion in one call, retaining at most 32 tuples within 128 KiB.
     /// That fallback preserves first-match traversal order, refuses cursors and
     /// returns `Limit` if work, result count or combined bytes cannot fit; it
     /// never returns a partial result. An individually oversized row returns
     /// `RowTooLarge`. Comparison keys are bounded to 4096 bytes.
+    /// Complete sorting instead retains at most 32 matching input rows. Its order
+    /// must cover exactly the projected fields (unless the result is inherently
+    /// unique); remove duplicates before applying `limit` and output bytes.
     #[must_use]
     pub fn distinct(mut self) -> Self {
         self.request.distinct = true;
@@ -430,11 +467,21 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// direction, reversed by `descending`. Prefer a complete ordered path.
     /// Otherwise collect at most 32 matches within 128 KiB of key/output buffers,
     /// sort the complete result and apply `limit`. Work exhaustion refuses; no
-    /// cursor or DISTINCT is supported by this fallback. Equality terms may fix
+    /// cursor is supported by this fallback. DISTINCT requires an identity result
+    /// or an order covering exactly the projected fields. Equality terms may fix
     /// leading index components. With `using_index`, require that path's order.
     #[must_use]
     pub fn order_by(mut self, fields: &[&'a str]) -> Self {
         self.request.order_by(fields);
+        self
+    }
+    /// Replace the order with 1..=4 fields and their individual directions.
+    /// An explicit primary key must be last; otherwise append it ascending.
+    /// `descending()` reverses every direction, including that tie-breaker.
+    /// The same path proof and complete-sort bounds as `order_by` apply.
+    #[must_use]
+    pub fn order_by_each(mut self, fields: &[(&'a str, SortDirection)]) -> Self {
+        self.request.order_by_each(fields);
         self
     }
     /// Reverse the complete result order, including its unique tie-breaker.
@@ -612,7 +659,8 @@ struct Plan<'a> {
     binding: [u8; 32],
     projection: Option<u16>,
     distinct: distinct::Strategy,
-    sort: Option<Vec<usize>>,
+    sort: Option<Vec<(usize, bool)>>,
+    descending: bool,
 }
 impl<'a> Plan<'a> {
     fn admit(
@@ -662,6 +710,7 @@ impl<'a> Plan<'a> {
                 .transpose()?,
             distinct: distinct::Strategy::Identity,
             sort: None,
+            descending: request.descending ^ request.primary_descending(entity),
         };
         for predicate in &request.predicates {
             let position = entity
@@ -709,7 +758,7 @@ impl<'a> Plan<'a> {
                 plan.fixed_components = path.fixed;
             }
             order::Path::Sort(fields) => {
-                for &position in &fields {
+                for &(position, _) in &fields {
                     plan.selected |= 1 << position;
                 }
                 plan.sort = Some(fields);
@@ -722,6 +771,7 @@ impl<'a> Plan<'a> {
                 plan.projection,
                 plan.index,
                 plan.fixed_components,
+                plan.sort.is_some(),
             )?;
             if plan.distinct == distinct::Strategy::Complete {
                 plan.selected |= plan.projection.ok_or(Error::InvalidQuery)?;
@@ -761,6 +811,10 @@ impl<'a> Plan<'a> {
                     .position(|f| f.name == *name)
                     .ok_or(Error::InvalidQuery)? as u8]);
             }
+        }
+        if request.order_descending != 0 {
+            hash.update(b"order-directions\0");
+            hash.update([request.order_descending]);
         }
         // Preserve existing entity-result cursors. Projected shapes add a
         // domain-separated suffix; output Rust names do not change semantics.
@@ -912,7 +966,7 @@ fn execute_inner<M: Memory>(
     } else {
         None
     };
-    while let Some(entry) = if request.descending {
+    while let Some(entry) = if plan.descending {
         entries.next_back()
     } else {
         entries.next()
@@ -1045,7 +1099,11 @@ fn execute_inner<M: Memory>(
         page.rows = collection.rows;
     }
     if let Some(collection) = sorted {
-        collection.finish(request, &mut page)?;
+        collection.finish(
+            request,
+            plan.distinct == distinct::Strategy::Sorted,
+            &mut page,
+        )?;
     }
     Ok(page)
 }

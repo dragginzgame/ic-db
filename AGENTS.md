@@ -6,9 +6,9 @@ This overlay owns local authority, product boundaries and qualification choices.
 ## Authority and scope
 
 - IC DB is an independent experiment, not an IcyDB replacement deployment.
-  IcyDB's checkout and GitHub repository are frozen: preserve committed and
-  uncommitted work, releases and data. Research is read-only; edits, commits,
-  pushes, merges, releases or deployments require an explicit exception or lift.
+  IcyDB's checkout and private `dragginzgame/icydb-legacy` repository are frozen:
+  preserve committed and uncommitted work, releases and data. Research is read-only;
+  edits, commits, pushes, merges, releases or deployments require an explicit exception or lift.
   Canic is also a read-only research input unless separately authorized.
 - Private source releases to `dragginzgame/ic-db`, branch `main`, are authorized
   when requested. Keep packages private and unpublished. Crates.io publication,

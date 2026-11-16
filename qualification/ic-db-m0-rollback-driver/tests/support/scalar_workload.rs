@@ -1,29 +1,16 @@
 //! One fixed scalar workload and independent tuple oracle for both engines.
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_host_artifacts::wasm::{InspectionLimits, inspect};
 use ic_wire::{Direction, Encoding};
-
-use sha2::{Digest, Sha256};
 
 type Row = (u64, u64, u64);
 
 pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool) {
-    let wasm = std::fs::read(wasm_path).unwrap();
-    let facts = inspect(
-        &wasm,
-        InspectionLimits {
-            module_bytes: 32 * 1024 * 1024,
-            sections: 128,
-            exports: 128,
-            custom_sections: 32,
-        },
-    )
-    .unwrap();
+    let (wasm, facts) = crate::artifact::read(std::fs::File::open(wasm_path).unwrap()).unwrap();
     let methods: Vec<_> = facts
         .exports
-        .keys()
-        .copied()
+        .iter()
+        .map(String::as_str)
         .filter(|name| name.starts_with("canister_query ") || name.starts_with("canister_update "))
         .collect();
     assert_eq!(
@@ -39,13 +26,15 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
     );
     eprintln!(
         "{label} exports={:?}",
-        facts.exports.keys().collect::<Vec<_>>()
+        facts.exports.iter().collect::<Vec<_>>()
     );
     eprintln!(
         "{label} wasm_bytes={} code_section_bytes={} sha256={}",
-        facts.raw_bytes,
+        facts.identity.bytes,
         facts.code_section_bytes,
-        Sha256::digest(&wasm)
+        facts
+            .identity
+            .sha256
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()

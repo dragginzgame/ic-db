@@ -1,4 +1,5 @@
 //! Standalone measurement of frozen SQL-disabled IcyDB using the shared workload.
+mod artifact;
 mod support;
 use support::scalar_workload;
 
