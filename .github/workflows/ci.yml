@@ -10,32 +10,157 @@ concurrency:
 jobs:
   secrets:
     runs-on: ubuntu-24.04
+    # Work steps total 6 minutes; leave 4 for failure evidence and runner cleanup.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        timeout-minutes: 2
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Scan repository history once
+      - name: Prepare secret scanner
+        id: scanner
+        timeout-minutes: 2
         shell: bash
         run: |
-          scanner="$(bash vendor/toko-tooling/scripts/ci/install-ci-tool.sh gitleaks --install-dir "$RUNNER_TEMP/ic-db-ci-tools")"
-          "$scanner" git . --redact=100 --no-banner --no-color --log-level error
+          perl scripts/ci-setup.pl scanner bash -euo pipefail -c '
+            scanner="$(bash vendor/toko-tooling/scripts/ci/install-ci-tool.sh gitleaks --install-dir "$CI_SETUP_ROOT/assets")"
+            printf "SCANNER=%s\n" "$scanner" >> "$GITHUB_ENV"
+          '
+      - name: Scan repository history once
+        id: scan
+        timeout-minutes: 2
+        run: '"$SCANNER" git . --redact=100 --no-banner --no-color --log-level error'
+      - name: Record failure status
+        if: ${{ failure() }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SCANNER_OUTCOME: ${{ steps.scanner.outcome }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          SETUP_EXCERPT: ${{ steps.scanner.outputs.evidence != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ic-db-ci-status"
+          {
+            printf 'checkout=%s (2m)\nscanner=%s (2m)\nscan=%s (2m)\n' "$CHECKOUT_OUTCOME" "$SCANNER_OUTCOME" "$SCAN_OUTCOME"
+            printf 'sanitized_setup_excerpt_available=%s\n' "$SETUP_EXCERPT"
+            printf 'A killed setup process may leave no excerpt. See the runner log for timeout details.\n'
+          } > "$RUNNER_TEMP/ic-db-ci-status/status.txt"
+      - name: Retain failure diagnostics
+        id: setup_evidence
+        if: ${{ failure() }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: setup-secrets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ic-db-ci-status
+            ${{ steps.scanner.outputs.evidence }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Report failure evidence
+        if: ${{ always() && failure() }}
+        timeout-minutes: 1
+        env:
+          EVIDENCE_URL: ${{ steps.setup_evidence.outputs.artifact-url }}
+          UPLOAD_OUTCOME: ${{ steps.setup_evidence.outcome }}
+        run: |
+          if [[ "$UPLOAD_OUTCOME" == success && -n "$EVIDENCE_URL" ]]; then
+            printf '[Failure status and available sanitized setup diagnostics](%s)\n' "$EVIDENCE_URL" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::error::Failure evidence missing or upload failed; inspect the runner log.'
+            exit 1
+          fi
   scaffold:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
+        # Five successful main runs, 2026-11-16: max 2m10s / 3m18s / 9m23s.
+        # Work-step sums leave 5 / 6 / 8 minutes for evidence and runner cleanup.
+        include:
+          - os: ubuntu-24.04
+            job_minutes: 20
+            tools_minutes: 5
+            qualify_minutes: 5
+          - os: macos-15
+            job_minutes: 25
+            tools_minutes: 8
+            qualify_minutes: 6
+          - os: macos-15-intel
+            job_minutes: 35
+            tools_minutes: 14
+            qualify_minutes: 8
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.job_minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        timeout-minutes: 2
         with:
           persist-credentials: false
       - name: Prepare declared compiler
+        id: compiler
+        timeout-minutes: 3
         shell: bash
         run: |
-          version="$(bash vendor/toko-tooling/scripts/ci/read-cargo-workspace-rust-version.sh Cargo.toml)"
-          rustup toolchain install "$version" --profile minimal --component rustfmt --component clippy
+          perl scripts/ci-setup.pl compiler bash -euo pipefail -c '
+            version="$(bash vendor/toko-tooling/scripts/ci/read-cargo-workspace-rust-version.sh Cargo.toml)"
+            rustup toolchain install "$version" --profile minimal --component rustfmt --component clippy
+          '
       - name: Prepare and admit tools
-        run: make install-tools tools-check
+        id: tools
+        timeout-minutes: ${{ matrix.tools_minutes }}
+        run: perl scripts/ci-setup.pl tools make install-tools tools-check
       - name: Qualify scaffold
+        id: qualify
+        timeout-minutes: ${{ matrix.qualify_minutes }}
         run: make ci
+      - name: Record failure status
+        if: ${{ failure() }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          COMPILER_OUTCOME: ${{ steps.compiler.outcome }}
+          TOOLS_OUTCOME: ${{ steps.tools.outcome }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
+          TOOLS_MINUTES: ${{ matrix.tools_minutes }}
+          QUALIFY_MINUTES: ${{ matrix.qualify_minutes }}
+          COMPILER_EXCERPT: ${{ steps.compiler.outputs.evidence != '' }}
+          TOOLS_EXCERPT: ${{ steps.tools.outputs.evidence != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ic-db-ci-status"
+          {
+            printf 'checkout=%s (2m)\ncompiler=%s (3m)\n' "$CHECKOUT_OUTCOME" "$COMPILER_OUTCOME"
+            printf 'tools=%s (%sm)\nqualify=%s (%sm)\n' "$TOOLS_OUTCOME" "$TOOLS_MINUTES" "$QUALIFY_OUTCOME" "$QUALIFY_MINUTES"
+            printf 'sanitized_compiler_excerpt_available=%s\nsanitized_tools_excerpt_available=%s\n' "$COMPILER_EXCERPT" "$TOOLS_EXCERPT"
+            printf 'A killed setup process may leave no excerpt. See the runner log for timeout details.\n'
+          } > "$RUNNER_TEMP/ic-db-ci-status/status.txt"
+      - name: Retain failure diagnostics
+        id: setup_evidence
+        if: ${{ failure() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: setup-scaffold-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ic-db-ci-status
+            ${{ steps.compiler.outputs.evidence }}
+            ${{ steps.tools.outputs.evidence }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Report failure evidence
+        if: ${{ always() && failure() }}
+        timeout-minutes: 1
+        env:
+          EVIDENCE_URL: ${{ steps.setup_evidence.outputs.artifact-url }}
+          UPLOAD_OUTCOME: ${{ steps.setup_evidence.outcome }}
+        run: |
+          if [[ "$UPLOAD_OUTCOME" == success && -n "$EVIDENCE_URL" ]]; then
+            printf '[Failure status and available sanitized setup diagnostics](%s)\n' "$EVIDENCE_URL" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::error::Failure evidence missing or upload failed; inspect the runner log.'
+            exit 1
+          fi

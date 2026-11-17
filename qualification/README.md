@@ -262,13 +262,14 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
+| Blob queries (pending 0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. CLI retained operations aggregate all rows. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
-| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020) |
+| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
 | Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Adapter is in Canic's working checkout; delivery and application CLI remain M4 work. [Receipt](#canic-typed-application-integration-019) |
@@ -3154,6 +3155,99 @@ bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qual
   -p ic-db-m0-rollback-driver --test jobs_contention shared_jobs_ -- --nocapture
 ```
 
+### Retained variable-sized values (0.21.0)
+
+Run only the variable-sized value witness after preparing PocketIC:
+
+```sh
+make m2-jobs-artifact
+IC_DB_M2_JOBS_WASM="$PWD/qualification/target/evidence/m2/jobs.wasm" \
+bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test jobs_envelope retained_text_winners -- --nocapture
+```
+
+`make m2-job-envelope` and `make m2-jobs` also select it. Three private,
+`aggregate-jobs`-only controls write existing fixture entities and construct
+typed product operations. They do not change the ordinary console, authored
+fixture schema or stored format. Native literal tuples and standard string
+comparison provide the independent result oracle; the driver imports no product
+codec or reducer. Whole stable-memory snapshots check refusal/upgrade preservation.
+
+Checked on 2026-11-17:
+
+- Twelve Document rows form six groups containing absent/empty text, an embedded
+  NUL prefix pair, Unicode, equal winners and a 64-byte UTF-8 value. Both grouped
+  minimum and maximum advance two candidates at a time, survive heap-losing
+  upgrades and return three exact pages in descending aggregate/key-tie order.
+  All-absent groups survive with no winner. An output budget of one byte permits
+  accumulation but refuses completion intact; retrying with sufficient output
+  space succeeds from the same saved sequence.
+- Thirty-two EnvelopeRow records use 480-byte text values. The group key includes
+  `id` and that text; the winner is the text itself. Sixteen key/winner pairs fit
+  the 16 KiB checkpoint, while the seventeenth refuses before the 32-group ceiling.
+  A result limit of one does not hide that state exhaustion. Retrying after an
+  upgrade refuses with exactly the same backing and checkpoint.
+- Explicit replacement with 128-byte values invalidates the old run. A new run
+  completes all 32 groups and yields eight four-group pages across another
+  upgrade. An insufficient final-output allowance preserves its initial checkpoint.
+- A Blob maximum containing non-UTF-8 bytes survives a checkpoint and upgrade.
+  Insufficient output space refuses with unchanged backing; retry returns the
+  literal byte vector intact through the existing typed result mapping.
+
+The local receipt is `target/evidence/m2/jobs-values.log`; it records instructions
+and observed whole-call cycle charges for advances and pages. The qualified Wasm
+SHA-256 is `2d6a7786c51a6e0389c2fa630e72f88581d670672caf0e53c79d98799e7e3cfc`.
+Cold accesses follow real upgrades and remain distinguishable in the call sequence.
+These are scoped correctness/resource checks, not a matched IcyDB benchmark or a
+claim about all variable-sized types. Frozen IcyDB `6d421e3`'s text ownership/null
+regressions in `aggregate/value_reducer/tests.rs` and
+`aggregate/contracts/state/grouped/tests.rs` inform the preserved behavior;
+their in-memory reducer implementation is not copied.
+
+### Retained Decimal averages (0.21.0)
+
+```sh
+make m2-cli-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
+bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test console_aggregates -- --nocapture
+```
+
+`make m2-cli` and `make m3-cli` select this witness in their existing console
+rosters. It uses the unmodified `decimal_batch` and console start/resume/cancel
+handlers, the ordinary DecimalRow schema and real product jobs. No endpoint,
+reducer, stored representation or new supplier requirement is introduced.
+
+Checked on 2026-11-17: thirteen four-row datasets, each with scalar and grouped
+averages at result scale 2, survive thirteen real upgrades. Literal input/result
+strings form the independent oracle; no product arithmetic or codecs enter the
+driver. Input advances in unequal 1/2/1-candidate chunks, followed by explicit
+exhaustion. Replaying a pre-upgrade sequence neither rescans nor returns a prefix
+average. Coverage includes:
+
+- Positive and negative ties rounding toward the even final coefficient:
+  1.245 → 1.24, 1.255 → 1.26, -1.245 → -1.24 and -1.255 → -1.26.
+- Half-cent results round to present zero; absent inputs do not enter the
+  denominator. All-absent input yields no scalar result and an absent grouped
+  value, distinct from a present zero.
+- Unequal chunks retain the complete sum/count, rather than averaging rounded
+  chunk averages. Repeated maximum/minimum scale-2 coefficients finish with a
+  fitting average even though the intermediate sum exceeds i128. Opposite large
+  totals cancel across the upgrade and subsequent chunks.
+- A final output refusal preserves all backing bytes; retrying the same sequence
+  with adequate output space completes correctly. Ordinary upgrades preserve
+  backing exactly, and completed jobs are explicitly cancelled.
+
+The local receipt is `target/evidence/m2/console-values.log`. The console
+Wasm SHA-256 is `acb67e37c4e3f03eced5bed095221efd30e1e3d49df2936c501f25c5063ad8b4`.
+This extends retained-operation evidence; earlier synchronous Decimal checks
+remain separate. It is not a performance or full IcyDB-parity comparison.
+Frozen IcyDB `6d421e3`, `db/numeric::average_decimal_terms_checked` and
+`aggregate/value_reducer/tests.rs`, supplies the sum/count, absence and typed
+overflow lessons. IC DB deliberately retains widened totals and the agreed
+declared-scale/ties-to-even result contract rather than copying IcyDB's adaptive
+division precision or bounded Decimal running sum.
+
 ### Retained aggregate envelope (0.20)
 
 ```sh
@@ -3762,3 +3856,60 @@ interactive mistakes return to the prompt. The console never evaluates SQL or
 shell commands. `quit` or EOF closes the Testkit-owned instance. Local fixture
 endpoints are qualification controls, not a shipped Canic adapter or a new public
 dynamic-query API; there is no remote connection or durable CLI session.
+
+### Blob query contract (0.21.0)
+
+Focused native checks:
+
+```sh
+cargo test --offline --locked -p ic-db --test queries --test key_bounds
+cargo test --offline --locked -p ic-db-macros --lib
+```
+
+The Blob cases in `crates/ic-db/tests/queries/blobs.rs` compare scans, indexed
+ranges/pages, projected DISTINCT, groups and extrema with ordinary Rust byte
+vectors and ordered collections. Values cover duplicate/empty payloads, zero
+escaping, proper prefixes and bytes that are not UTF-8. Optional Blob indexes
+preserve absence separately from empty values; unique replacement/deletion
+removes old entries. Overlong encoded keys and duplicate unique values refuse
+without changing backing. Literal malformed keys exercise the integrity boundary.
+Existing Text key-bound tests protect the shared encoder's old behavior.
+
+The [retained-value witness](#retained-variable-sized-values-0210) checks a Blob
+winner across a real Wasm upgrade and an output refusal/retry. This small probe
+establishes checkpoint ownership, not exhaustive Blob workload qualification.
+The local CLI accepts `0x`-prefixed payload bounds and renders Blob values as hex.
+Retained Blob commands use the same job endpoints as other fixture entities;
+their input is the whole entity. There is no matched legacy benchmark.
+The frozen IcyDB ordered-key implementation rejects Blob keys; this increment
+extends IC DB's existing terminated-byte encoder and shared execution paths.
+
+`make m2-cli` selects parser/display qualification and `console_text`'s Blob
+boundary case. The latter replaces the existing BinaryObject fixture with empty,
+zero-byte and non-UTF-8 values, reopens through real upgrades, and checks literal
+hex results for projections/extrema/groups. Absent optional bytes differ from
+present empty bytes. Whole backing snapshots verify read/refusal preservation;
+an oversized direct operand exercises server admission independently of Clap.
+The installed-console witness also checks payload bounds, DISTINCT, ordering,
+counts and one call-accounting footer per command. These are fixture checks,
+not production endpoint qualification.
+
+`console_aggregates` also checks all ten retained Blob selectors with absent,
+empty and non-UTF-8 inputs. Three upgrades preserve ten simultaneous jobs each;
+thirty completions/cancellations reuse the 16-slot store. A changed selector and
+an insufficient output budget refuse intact; retry completes. A source write
+invalidates an unfinished result. The console witness checks that accumulation
+shows no result table, then verifies start/resume/cancel accounting and cleanup.
+The independent oracles are literal byte vectors and display strings. This
+preserves IcyDB's selected-value ownership/null lessons through durable jobs;
+no legacy reducer or dynamic value hierarchy is copied.
+
+Checked 2026-11-17 with console Wasm SHA-256
+`acb67e37c4e3f03eced5bed095221efd30e1e3d49df2936c501f25c5063ad8b4`.
+Local receipts are `target/evidence/m2/console-values.log` and
+`target/evidence/m2/console-blob-cli.log`.
+The earlier `target/evidence/m2/console-callers.log` requalified five existing
+query/sorting callers after the private request change, with console SHA-256
+`bee63c173b5b7f7c1362502ddacc12e28291d87e83f9c779d508b5fff58cfdd1`.
+Retained Blob commands do not change that request. Parser unit tests,
+driver/canister Clippy, formatting and local documentation links also pass.

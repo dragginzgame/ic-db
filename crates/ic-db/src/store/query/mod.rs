@@ -690,7 +690,11 @@ impl<'a> Plan<'a> {
             .map(|p| &p.value)
             .chain(request.index.iter().flat_map(|(_, values)| values.iter()))
         {
-            if matches!(value, IndexValue::Text(text) if text.len() > crate::codec::MAX_ROW_BYTES) {
+            if match value {
+                IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
+                IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
+                _ => false,
+            } {
                 return Err(Error::Limit);
             }
         }

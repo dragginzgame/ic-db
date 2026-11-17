@@ -81,7 +81,12 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             work,
             bytes,
             select,
-            (distinct, (None::<String>, None::<String>), None::<String>),
+            (
+                distinct,
+                (None::<String>, None::<String>),
+                None::<String>,
+                (None::<Vec<u8>>, None::<Vec<u8>>),
+            ),
         );
         let reply = pic
             .query_call(
@@ -217,7 +222,12 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             work,
             bytes,
             if distinct { "category" } else { "id,amount" },
-            (distinct, (None::<String>, None::<String>), None::<String>),
+            (
+                distinct,
+                (None::<String>, None::<String>),
+                None::<String>,
+                (None::<Vec<u8>>, None::<Vec<u8>>),
+            ),
         );
         if measured {
             let backing = pic.get_stable_memory(canister).await;

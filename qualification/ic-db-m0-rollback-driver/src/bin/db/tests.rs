@@ -1,6 +1,39 @@
 use super::{Command, charged_cycles, parse_console_line};
 
 #[test]
+fn blob_literals_are_exact_bounded_bytes() {
+    for (literal, expected) in [
+        ("0x", vec![]),
+        ("0x00fF80", vec![0, 255, 128]),
+        ("0x00", vec![0]),
+    ] {
+        let cli =
+            parse_console_line(&format!("query BinaryObject --payload-min {literal}")).unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Query {payload_min:Some(value),..}) if value.0==expected)
+        );
+    }
+    let max = format!("0x{}", "ff".repeat(1024));
+    assert!(parse_console_line(&format!("query BinaryObject --payload-max {max}")).is_ok());
+    for literal in [
+        "00ff".to_owned(),
+        "0Xff".into(),
+        "0xf".into(),
+        "0xzz".into(),
+        "0xé".into(),
+        "0x００".into(),
+        format!("{max}00"),
+    ] {
+        assert!(
+            parse_console_line(&format!("query BinaryObject --payload-min {literal}")).is_err()
+        );
+    }
+    assert!(parse_console_line("count BinaryObject").is_ok());
+    assert!(parse_console_line("aggregate BinaryObject --select min:payload").is_ok());
+    assert!(parse_console_line("aggregate BinaryObject --payload-min 0x").is_err());
+}
+
+#[test]
 fn console_quotes_preserve_exact_fluent_operands() {
     for (operand, expected) in [
         ("''", ""),

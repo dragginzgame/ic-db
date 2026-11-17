@@ -415,6 +415,27 @@ fn console_inspects_and_queries() {
         &binary,
         "query Entry --select exists --work 1 --bytes 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 2\nquit\n",
     );
+    let blobs = run_console(
+        &binary,
+        "count BinaryObject\nquery BinaryObject\nquery BinaryObject --select payload --distinct\nquery BinaryObject --payload-min 0x00FF80 --payload-max 0x00ff80 --select min:payload\nquery BinaryObject --payload-min 0x --select max:payload\nquery BinaryObject --select payload,count --group-min 1\nquery BinaryObject --select payload,count:optional\nquery BinaryObject --payload-min 0x01 --select exists\nquery BinaryObject --payload-max 0x --select exists\nquery BinaryObject --order-by payload:desc --select payload\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&blobs),
+        vec![
+            vec!["1"],
+            vec!["1", "0x00ff80", "—"],
+            vec!["0x00ff80"],
+            vec!["0x00ff80"],
+            vec!["0x00ff80"],
+            vec!["0x00ff80", "1"],
+            vec!["0x00ff80", "0"],
+            vec!["false"],
+            vec!["false"],
+            vec!["0x00ff80"],
+        ]
+    );
+    assert_eq!(blobs.matches("query call (query):").count(), 9);
+    assert_eq!(blobs.matches("query call (cardinality):").count(), 1);
     assert_eq!(
         result_table_rows(&existence),
         vec![vec!["true"], vec!["true"], vec!["false"], vec!["false"]]
@@ -776,6 +797,9 @@ fn console_inspects_and_queries() {
             "aggregate DecimalRow --category 1",
             "aggregate DecimalRow --entry-id 1",
             "aggregate DecimalRow --select sum:amount",
+            "aggregate BinaryObject --min 0",
+            "aggregate BinaryObject --select sum:payload",
+            "aggregate BinaryObject --select max:payload --bytes 1",
             "aggregate Entry --select category,count --group-min 1.5",
             "aggregate Entry --select category,count --group-min 4 --group-max -1",
             "aggregate DecimalRow --select zone,avg:value --group-max 0.001",
@@ -892,6 +916,51 @@ fn console_inspects_and_queries() {
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
         }
+        let blobs: [ConsoleCase<'_>; 11] = [
+            ("count", &[&["1"]]),
+            ("count:payload", &[&["1"]]),
+            ("count:optional", &[&["0"]]),
+            ("distinct-count:payload", &[&["1"]]),
+            ("min:payload", &[&["0x00ff80"]]),
+            ("max:payload", &[&["0x00ff80"]]),
+            ("min:optional", &[]),
+            ("max:optional", &[]),
+            ("payload,count", &[&["0x00ff80", "1"]]),
+            ("payload,count:optional", &[&["0x00ff80", "0"]]),
+            ("payload,count --group-min 2", &[]),
+        ];
+        let mut commands = blobs
+            .iter()
+            .map(|(options, _)| {
+                format!("aggregate BinaryObject --select {options} --work 1 --page-size 1\n")
+            })
+            .collect::<String>();
+        commands.push_str("quit\n");
+        let stdout = run_console(&binary, &commands);
+        let sections = stdout.split("BinaryObject — ").skip(1).collect::<Vec<_>>();
+        assert_eq!(sections.len(), blobs.len());
+        for ((options, expected), section) in blobs.iter().zip(sections) {
+            assert_eq!(
+                &result_table_rows(section),
+                expected,
+                "{options}: {section}"
+            );
+            assert_eq!(section.matches("Complete;").count(), 1);
+            assert!(section.contains("Running; sequence 1; 1 examined"));
+            assert!(!section[..section.find("Complete;").unwrap()].contains(['│', '|']));
+        }
+        assert_eq!(
+            stdout.matches("update call (aggregate_start):").count(),
+            blobs.len()
+        );
+        assert_eq!(
+            stdout.matches("update call (aggregate_resume):").count(),
+            2 * blobs.len()
+        );
+        assert_eq!(
+            stdout.matches("update call (aggregate_cancel):").count(),
+            blobs.len()
+        );
         let paired_queries: &[(&str, &[ConsoleCase<'_>])] = &[
             (
                 "Document",

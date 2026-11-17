@@ -176,6 +176,7 @@ impl Field {
                     | Kind::Principal
                     | Kind::Bool
                     | Kind::Text(_)
+                    | Kind::Blob(_)
                     | Kind::Named(_, _)
             )
     }
@@ -193,13 +194,15 @@ impl Field {
             };
         }
         if self.optional {
-            if matches!(self.kind, Kind::Text(_)) {
+            if matches!(self.kind, Kind::Text(_) | Kind::Blob(_)) {
                 quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
             } else {
                 quote!(row.#ident.map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
             }
         } else if matches!(self.kind, Kind::Text(_)) {
             quote!(::ic_db::IndexValue::from(row.#ident.as_str()))
+        } else if matches!(self.kind, Kind::Blob(_)) {
+            quote!(::ic_db::IndexValue::from(row.#ident.as_slice()))
         } else {
             quote!(::ic_db::IndexValue::from(row.#ident))
         }

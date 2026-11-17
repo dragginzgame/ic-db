@@ -881,7 +881,7 @@ uses this checkout's explicitly prepared `.tools/m0-pocketic` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.43.0 are pinned. Read [AGENTS.md](AGENTS.md)
+Rust 1.100.0 and published Toko Tooling 0.44.11 are pinned. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 
@@ -896,6 +896,51 @@ make docs-check
 `make help` lists the focused checks. `make ci` is the aggregate native library gate;
 passing it does not qualify a database. The configured Linux and macOS CI jobs
 run it on GitHub. These checks do not certify a production database.
+
+CI uses explicit per-job and per-step time budgets. Five successful main runs
+reviewed on 2026-11-17 establish the current baseline (queue time excluded):
+
+| Job | Observed maximum | Job budget | Tool setup / qualification budgets |
+| --- | --- | --- | --- |
+| Secrets | 7 seconds | 10 minutes | Scanner install 2 minutes; scan 2 minutes |
+| Linux | 2m10s | 20 minutes | 5 / 5 minutes |
+| Apple Silicon macOS | 3m18s | 25 minutes | 8 / 6 minutes |
+| Intel macOS | 9m23s | 35 minutes | 14 / 8 minutes |
+
+Checkout is bounded to 2 minutes, compiler preparation to 3 minutes. Shorter
+work-step limits leave time for failure status, artifact upload and cleanup before
+the job deadline. Status records list step outcomes, their budgets and whether
+sanitized setup excerpts are available; an interrupted setup process may not
+finish collecting its excerpt. Upload/report steps are bounded too. Hard job
+termination or runner loss cannot guarantee an artifact; GitHub's runner log
+remains the fallback. These limits bound hangs, not successful-run performance.
+The workflow runs native scaffold checks, not the separately selected PocketIC
+release qualification. Preserve this distinction when revisiting the budgets.
+
+Timing sources: [run 48](https://github.com/dragginzgame/ic-db/actions/runs/43975586559),
+[run 46](https://github.com/dragginzgame/ic-db/actions/runs/43946175012),
+[run 44](https://github.com/dragginzgame/ic-db/actions/runs/43933647974),
+[run 41](https://github.com/dragginzgame/ic-db/actions/runs/43909172411),
+[run 39](https://github.com/dragginzgame/ic-db/actions/runs/43893625554).
+These predate the pending setup-diagnostic wrapper; retain headroom and reassess
+after hosted runs of the changed workflow. GitHub documents
+[step and job timeouts](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepstimeout-minutes).
+
+Compiler, tool and scanner setup failures retain sanitized diagnostics for seven
+days, linked from the job summary. The wrapper uses core Perl before tool setup;
+it preserves the original exit status and reports collection/upload failures
+separately. It keeps a bounded output tail and at most ten selected attempt logs,
+including hidden attempt directories, from the job-local tool/asset roots.
+Symlinks, configs, binaries and environment dumps are excluded. Each excerpt is
+limited to 64 KiB/300 lines, with oversized lines/logs explicitly omitted; total
+retained text stays below 768 KiB. Known credential fields, token patterns, private
+key blocks and sensitive environment values are removed before printing/upload.
+Raw logs are never uploaded. No general guarantee can be made for arbitrary
+unlabelled secrets in third-party output.
+
+Run `perl scripts/tests/ci-setup.t` for the offline failure-path regression and
+`actionlint .github/workflows/ci.yml` for workflow validation. These checks prove
+local collection/status behavior, not hosted artifact upload or retrieval.
 
 For tooling updates, change the exact Cargo pin, run
 `make deps-update DEPENDENCY_PACKAGE=toko-tooling`, then

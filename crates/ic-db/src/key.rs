@@ -59,6 +59,8 @@ pub enum IndexValue<'a> {
     Bool(bool),
     /// Exact UTF-8 bytes, without case folding or normalization.
     Text(&'a str),
+    /// Exact raw bytes in lexicographic order; shorter byte prefixes sort first.
+    Blob(&'a [u8]),
     /// Unit enum in canonical variant-name order, bound to its complete definition.
     UnitEnum {
         /// Declared enum identity and alternatives.
@@ -136,6 +138,13 @@ impl<'a> IndexValue<'a> {
                     Err(Error::Limit)
                 }
             }
+            (Self::Blob(value), FieldType::Blob { max_bytes }) => {
+                if value.len() <= max_bytes as usize {
+                    Ok(())
+                } else {
+                    Err(Error::Limit)
+                }
+            }
             _ => Err(Error::InvalidOperand),
         }
     }
@@ -194,17 +203,8 @@ impl<'a> IndexValue<'a> {
                 out.extend(value.as_slice());
             }
             Self::Bool(value) => out.push(u8::from(value)),
-            Self::Text(value) => {
-                // IcyDB's terminated-byte rule: preserve lexicographic order and
-                // component boundaries, including empty text and embedded NUL.
-                for byte in value.bytes() {
-                    out.push(byte);
-                    if byte == 0 {
-                        out.push(255);
-                    }
-                }
-                out.extend([0, 0]);
-            }
+            Self::Text(value) => append_bytes(value.as_bytes(), out),
+            Self::Blob(value) => append_bytes(value, out),
         }
     }
 
@@ -249,6 +249,7 @@ impl<'a> IndexValue<'a> {
             FieldType::Principal => Self::Principal(reader.principal()?),
             FieldType::Bool => Self::Bool(reader.boolean()?),
             FieldType::Text { max_bytes } => Self::Text(reader.text_ref(max_bytes as usize)?),
+            FieldType::Blob { max_bytes } => Self::Blob(reader.blob_ref(max_bytes as usize)?),
             _ => return Err(Error::Corrupt),
         })
     }
@@ -264,7 +265,7 @@ pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
         | FieldType::Int8
         | FieldType::Principal
         | FieldType::Decimal { .. } => 1,
-        FieldType::Nat16 | FieldType::Int16 | FieldType::Text { .. } => 2,
+        FieldType::Nat16 | FieldType::Int16 | FieldType::Text { .. } | FieldType::Blob { .. } => 2,
         FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 | FieldType::Date => 4,
         FieldType::Nat64
         | FieldType::Int64
@@ -433,6 +434,7 @@ pub(crate) fn supports(field: FieldType) -> bool {
             FieldType::Principal
                 | FieldType::Account
                 | FieldType::Text { .. }
+                | FieldType::Blob { .. }
                 | FieldType::Decimal { .. }
         )
 }
@@ -454,14 +456,16 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
         *bytes = &bytes[width..];
         return Ok(());
     }
-    if let FieldType::Text { max_bytes } = field {
+    if let FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } = field {
         let mut decoded = 0;
         loop {
             let end = bytes
                 .iter()
                 .position(|&byte| byte == 0)
                 .ok_or(Error::Corrupt)?;
-            std::str::from_utf8(&bytes[..end]).map_err(|_| Error::Corrupt)?;
+            if matches!(field, FieldType::Text { .. }) {
+                std::str::from_utf8(&bytes[..end]).map_err(|_| Error::Corrupt)?;
+            }
             decoded += end;
             let escaped = *bytes.get(end + 1).ok_or(Error::Corrupt)?;
             *bytes = &bytes[end + 2..];
@@ -517,4 +521,22 @@ impl<'a> From<&'a str> for IndexValue<'a> {
     fn from(value: &'a str) -> Self {
         Self::Text(value)
     }
+}
+
+impl<'a> From<&'a [u8]> for IndexValue<'a> {
+    fn from(value: &'a [u8]) -> Self {
+        Self::Blob(value)
+    }
+}
+
+// IcyDB's terminated-byte rule, also used for raw bytes: preserve lexical order
+// and component boundaries, including empty values and embedded zeroes.
+fn append_bytes(value: &[u8], out: &mut Vec<u8>) {
+    for &byte in value {
+        out.push(byte);
+        if byte == 0 {
+            out.push(255);
+        }
+    }
+    out.extend([0, 0]);
 }

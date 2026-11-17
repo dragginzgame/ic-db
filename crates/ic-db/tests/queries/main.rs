@@ -1,4 +1,5 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
+mod blobs;
 mod sorting;
 use ic_db::{
     Batch, Comparison as C, Database, Entity, Error, IndexValue, QueryCursor, Schema, entity,
@@ -1994,7 +1995,7 @@ fn admission_and_cursors_refuse_before_data_access() {
     ));
     assert!(matches!(
         db.query::<Entry>().filter("payload", C::Eq, "x").fetch(),
-        Err(Error::InvalidQuery)
+        Err(Error::InvalidOperand)
     ));
     assert!(matches!(
         db.query::<Entry>().filter("missing", C::Eq, 1_u64).fetch(),
@@ -2469,18 +2470,24 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
                 expected.len()
             );
         }
-        assert!(matches!(
-            db.query::<PresenceData>()
-                .filter(field, C::Eq, 0_u8)
-                .fetch(),
-            Err(Error::InvalidQuery)
-        ));
-        assert!(matches!(
-            db.query::<PresenceData>()
-                .filter(field, C::Lt, IndexValue::Absent)
-                .fetch(),
-            Err(Error::InvalidQuery)
-        ));
+        let result = db
+            .query::<PresenceData>()
+            .filter(field, C::Eq, 0_u8)
+            .fetch();
+        if field == "blob" {
+            assert!(matches!(result, Err(Error::InvalidOperand)));
+        } else {
+            assert!(matches!(result, Err(Error::InvalidQuery)));
+        }
+        let result = db
+            .query::<PresenceData>()
+            .filter(field, C::Lt, IndexValue::Absent)
+            .fetch();
+        if field == "blob" {
+            assert!(matches!(result, Err(Error::InvalidOperand)));
+        } else {
+            assert!(matches!(result, Err(Error::InvalidQuery)));
+        }
     }
     let page = db
         .query::<PresenceData>()
@@ -2938,7 +2945,6 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
     for order in [
         &[][..],
         &["missing"],
-        &["payload"],
         &["amount", "amount"],
         &["id", "amount"],
     ] {
@@ -2951,7 +2957,7 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
             Err(Error::InvalidQuery)
         ));
     }
-    for order in [&["amount", "category"][..], &["maybe"]] {
+    for order in [&["amount", "category"][..], &["maybe"], &["payload"]] {
         assert!(matches!(
             db.query::<Entry>()
                 .order_by(order)
@@ -3447,10 +3453,12 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
             .fetch_as::<AmountOnly>(),
         Err(Error::RowTooLarge)
     ));
-    assert!(matches!(
-        db.query::<Entry>().distinct().fetch_as::<PayloadOnly>(),
-        Err(Error::InvalidQuery)
-    ));
+    assert!(
+        db.query::<Entry>()
+            .distinct()
+            .fetch_as::<PayloadOnly>()
+            .is_ok()
+    );
     let cursor = db
         .query::<Entry>()
         .order_by(&["category"])
@@ -3950,10 +3958,7 @@ fn counts_refuse_incomplete_or_ambiguous_results() {
             .group_count::<CategoryOnly>(),
         Err(Error::Limit)
     ));
-    assert!(matches!(
-        db.query::<Entry>().group_count::<PayloadOnly>(),
-        Err(Error::InvalidQuery)
-    ));
+    assert!(db.query::<Entry>().group_count::<PayloadOnly>().is_ok());
     assert!(matches!(
         db.query::<Entry>().group_count::<WrongWidth>(),
         Err(Error::InvalidQuery)
@@ -4252,14 +4257,16 @@ fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
         db.query::<Entry>().group_min::<CategoryOnly, Summary>(),
         Err(Error::InvalidQuery)
     ));
-    assert!(matches!(
-        db.query::<Entry>().group_max::<CategoryOnly, PayloadOnly>(),
-        Err(Error::InvalidQuery)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().group_max::<PayloadOnly, AmountOnly>(),
-        Err(Error::InvalidQuery)
-    ));
+    assert!(
+        db.query::<Entry>()
+            .group_max::<CategoryOnly, PayloadOnly>()
+            .is_ok()
+    );
+    assert!(
+        db.query::<Entry>()
+            .group_max::<PayloadOnly, AmountOnly>()
+            .is_ok()
+    );
     let min = db
         .query::<Entry>()
         .limit(1)
@@ -4305,10 +4312,7 @@ fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
         db.query::<Entry>().min::<Summary>(),
         Err(Error::InvalidQuery)
     ));
-    assert!(matches!(
-        db.query::<Entry>().min::<PayloadOnly>(),
-        Err(Error::InvalidQuery)
-    ));
+    assert!(db.query::<Entry>().min::<PayloadOnly>().is_ok());
     assert!(matches!(
         db.query::<Entry>().min::<WrongWidth>(),
         Err(Error::InvalidQuery)
@@ -6420,11 +6424,11 @@ fn distinct_count_caps_apply_per_group_before_output_selection() {
         db.query::<Entry>().count_distinct::<AmountOnly>(),
         Err(Error::Limit)
     ));
-    assert!(matches!(
+    assert!(
         db.query::<Entry>()
-            .group_count_distinct::<CategoryOnly, PayloadOnly>(),
-        Err(Error::InvalidQuery)
-    ));
+            .group_count_distinct::<CategoryOnly, PayloadOnly>()
+            .is_ok()
+    );
     let mut batch = Batch::new();
     batch
         .insert(&Entry {

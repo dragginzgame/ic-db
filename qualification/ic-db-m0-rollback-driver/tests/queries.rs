@@ -373,7 +373,12 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
             work,
             1_u32,
             "exists",
-            (false, (None::<String>, None::<String>), None::<String>),
+            (
+                false,
+                (None::<String>, None::<String>),
+                None::<String>,
+                (None::<Vec<u8>>, None::<Vec<u8>>),
+            ),
         );
         let reply = pic
             .query_call(
@@ -1079,7 +1084,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 work,
                 bytes,
                 select,
-                (distinct, (group_min, None::<&str>), group_order),
+                (
+                    distinct,
+                    (group_min, None::<&str>),
+                    group_order,
+                    (None::<Vec<u8>>, None::<Vec<u8>>),
+                ),
             );
             let reply = pic
                 .query_call(
@@ -1834,6 +1844,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
                 false,
                 (minimum, None::<&str>),
                 select.starts_with("zone,").then_some("desc"),
+                (None::<Vec<u8>>, None::<Vec<u8>>),
             ),
         );
         let reply = pic

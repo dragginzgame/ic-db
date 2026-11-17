@@ -98,7 +98,12 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 128_u32,
                 4096_u32,
                 select,
-                (false, (lower, upper), Some("key")),
+                (
+                    false,
+                    (lower, upper),
+                    Some("key"),
+                    (None::<Vec<u8>>, None::<Vec<u8>>),
+                ),
             );
             let before = pic.get_stable_memory(canister).await;
             let reply = pic
@@ -342,7 +347,12 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
             128_u32,
             4096_u32,
             select,
-            (false, (None::<String>, None::<String>), Some("key-desc")),
+            (
+                false,
+                (None::<String>, None::<String>),
+                Some("key-desc"),
+                (None::<Vec<u8>>, None::<Vec<u8>>),
+            ),
         );
         let before = pic.get_stable_memory(canister).await;
         let reply = pic
@@ -508,5 +518,182 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
     }
     assert!(finished, "bounded input and completed pages must finish");
     assert_eq!(rows, vec![vec!["1", "3"], vec!["0", "3"]]);
+    owned.drop().await;
+}
+
+#[tokio::test]
+async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let query = async |entity: &str,
+                       select: &str,
+                       lower: Option<Vec<u8>>,
+                       upper: Option<Vec<u8>>,
+                       bytes: u32| {
+        let request = (
+            entity,
+            None::<Vec<u8>>,
+            32_u32,
+            None::<u64>,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            128_u32,
+            bytes,
+            select,
+            (
+                false,
+                (None::<String>, None::<String>),
+                None::<String>,
+                (lower, upper),
+            ),
+        );
+        let before = pic.get_stable_memory(canister).await;
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 3,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        ic_wire::decode::<Result<Page, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 3,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
+    for (payload, optional, hex) in [
+        (vec![], None, "0x"),
+        (vec![0], Some(vec![]), "0x00"),
+        (vec![0, 255, 128], Some(vec![255]), "0x00ff80"),
+    ] {
+        let expected_optional = match &optional {
+            None => "—",
+            Some(v) if v.is_empty() => "0x",
+            _ => "0xff",
+        };
+        let request = (
+            (
+                ic_wire::ByteBuf::from(payload.clone()),
+                optional.map(ic_wire::ByteBuf::from),
+            ),
+            false,
+        );
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "replace_binary_object",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 14,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ic_wire::decode::<Result<(), u8>>(
+                &reply,
+                Encoding::Frame {
+                    method: 14,
+                    direction: Direction::Response
+                },
+                LIMITS
+            )
+            .unwrap(),
+            Ok(())
+        );
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        for select in ["payload", "min:payload", "max:payload"] {
+            let page = query(
+                "BinaryObject",
+                select,
+                Some(payload.clone()),
+                Some(payload.clone()),
+                4096,
+            )
+            .await
+            .unwrap();
+            assert_eq!(page.1, vec![vec![hex]]);
+        }
+        assert_eq!(
+            query("BinaryObject", "optional", None, None, 4096)
+                .await
+                .unwrap()
+                .1,
+            vec![vec![expected_optional]]
+        );
+        assert_eq!(
+            query("BinaryObject", "payload,count", None, None, 4096)
+                .await
+                .unwrap()
+                .1,
+            vec![vec![hex, "1"]]
+        );
+        assert!(
+            query("BinaryObject", "payload", None, None, 1)
+                .await
+                .unwrap_err()
+                .contains("exceeds --bytes")
+        );
+    }
+    assert!(
+        query("BinaryObject", "payload", Some(vec![1; 1025]), None, 4096)
+            .await
+            .is_err()
+    );
+    assert!(
+        query("Entry", "id", Some(vec![]), None, 4096)
+            .await
+            .unwrap_err()
+            .contains("apply to BinaryObject")
+    );
+    assert!(
+        query("BinaryObject", "sum:payload", None, None, 4096)
+            .await
+            .is_err()
+    );
+    assert!(
+        query(
+            "BinaryObject",
+            "payload",
+            Some(vec![255]),
+            Some(vec![]),
+            4096
+        )
+        .await
+        .unwrap()
+        .1
+        .is_empty()
+    );
     owned.drop().await;
 }

@@ -65,21 +65,31 @@ impl GroupRequest<'_> {
         };
         // Extrema/numeric results may be absent even with required input fields.
         let absent_result = !matches!(reducer, Reducer::Count { .. } | Reducer::Distinct { .. });
-        let predicates = self.predicates.iter().map(|&(comparison, value, or_next)| {
-            if matches!(value, IndexValue::Text(text) if text.len() > crate::codec::MAX_ROW_BYTES) {
-                return Err(Error::Limit);
-            }
-            comparison.admit(field.value, absent_result, value)?;
-            let key = if value == IndexValue::Absent {
-                None
-            } else {
-                let mut key = Vec::new();
-                value.append_component(field.optional, &mut key);
-                if key.len() > MAX_COMPARISON_KEY { return Err(Error::Limit); }
-                Some(key)
-            };
-            Ok((comparison, key, or_next))
-        }).collect::<Result<_, Error>>()?;
+        let predicates = self
+            .predicates
+            .iter()
+            .map(|&(comparison, value, or_next)| {
+                if match value {
+                    IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
+                    IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
+                    _ => false,
+                } {
+                    return Err(Error::Limit);
+                }
+                comparison.admit(field.value, absent_result, value)?;
+                let key = if value == IndexValue::Absent {
+                    None
+                } else {
+                    let mut key = Vec::new();
+                    value.append_component(field.optional, &mut key);
+                    if key.len() > MAX_COMPARISON_KEY {
+                        return Err(Error::Limit);
+                    }
+                    Some(key)
+                };
+                Ok((comparison, key, or_next))
+            })
+            .collect::<Result<_, Error>>()?;
         Ok(Selection {
             predicates,
             order: self.order.unwrap_or_default(),

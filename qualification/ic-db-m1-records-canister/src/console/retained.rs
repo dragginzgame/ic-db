@@ -1,14 +1,15 @@
 //! Thin local CLI adapter: product jobs own accumulation, progress and pages.
 use super::{
     AmountOnly, AverageAmount, CategoryOnly, EntryIdOnly, NoteOnly, OptionalDecimal, PriorityOnly,
-    TotalAmount, TotalDecimal, TotalPriority, TotalScore, ZoneOnly, decimal_query, document_query,
-    entry_query, optional, parse_group_order, select_groups,
+    TotalAmount, TotalDecimal, TotalPriority, TotalScore, ZoneOnly,
+    blob::{self, Optional, Payload},
+    decimal_query, document_query, entry_query, optional, parse_group_order, select_groups,
 };
 use crate::{
     Backing,
     aggregate_store::open_jobs,
     open, runtime,
-    schema::{DecimalRow, Document, Entry},
+    schema::{BinaryObject, DecimalRow, Document, Entry},
 };
 use ic_db::{
     AggregateJobs, Entity, Error, GroupCount, GroupCursor, GroupPage, GroupValue, JobHandle,
@@ -89,6 +90,16 @@ fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
         "DecimalRow" => start_decimal(
             configured(
                 decimal_query(&db, *minimum, *category, *entry_id)?,
+                &selection,
+            )?,
+            &mut jobs,
+            now,
+            expires,
+            select,
+        ),
+        "BinaryObject" => start_blob(
+            configured(
+                blob::query(&db, *minimum, *category, *entry_id)?,
                 &selection,
             )?,
             &mut jobs,
@@ -262,9 +273,100 @@ fn aggregate_resume(
             now,
             select,
         ),
+        "BinaryObject" => resume_blob(
+            resume_query(
+                configured(
+                    blob::query(&db, *minimum, *category, *entry_id)?,
+                    &selection,
+                )?,
+                select,
+                budgets,
+            )?,
+            &mut jobs,
+            &handle,
+            sequence,
+            now,
+            select,
+        ),
         _ => Err(Error::InvalidQuery),
     };
     result.map_err(|e| e.to_string())
+}
+
+fn start_blob(
+    query: Query<'_, BinaryObject, Backing>,
+    jobs: &mut AggregateJobs<Backing>,
+    now: Timestamp,
+    expires: Timestamp,
+    select: &str,
+) -> Result<JobHandle, Error> {
+    match select {
+        "count" => query.start_count(jobs, now, expires),
+        "count:payload" | "count:optional" => {
+            query.start_count_field(&select[6..], jobs, now, expires)
+        }
+        "distinct-count:payload" => query.start_count_distinct::<Payload>(jobs, now, expires),
+        "min:payload" => query.start_min::<Payload>(jobs, now, expires),
+        "max:payload" => query.start_max::<Payload>(jobs, now, expires),
+        "min:optional" => query.start_min::<Optional>(jobs, now, expires),
+        "max:optional" => query.start_max::<Optional>(jobs, now, expires),
+        "payload,count" => query.start_group_count::<Payload>(jobs, now, expires),
+        "payload,count:optional" => {
+            query.start_group_count_field::<Payload>("optional", jobs, now, expires)
+        }
+        _ => Err(Error::InvalidQuery),
+    }
+}
+
+fn resume_blob(
+    query: Query<'_, BinaryObject, Backing>,
+    jobs: &mut AggregateJobs<Backing>,
+    handle: &JobHandle,
+    sequence: u64,
+    now: Timestamp,
+    select: &str,
+) -> Result<Response, Error> {
+    match select {
+        "count" => query
+            .resume_count(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "count:payload" | "count:optional" => query
+            .resume_count_field(&select[6..], jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct-count:payload" => query
+            .resume_count_distinct::<Payload>(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "min:payload" | "max:payload" => {
+            let step = if select == "min:payload" {
+                query.resume_min::<Payload>(jobs, handle, sequence, now)
+            } else {
+                query.resume_max::<Payload>(jobs, handle, sequence, now)
+            };
+            step.map(|s| display(s, |v| scalar("payload", v.map(|r| blob::hex(&r.payload)))))
+        }
+        "min:optional" | "max:optional" => {
+            let step = if select == "min:optional" {
+                query.resume_min::<Optional>(jobs, handle, sequence, now)
+            } else {
+                query.resume_max::<Optional>(jobs, handle, sequence, now)
+            };
+            step.map(|s| {
+                display(s, |v| {
+                    scalar(
+                        "optional",
+                        v.and_then(|r| r.optional).map(|v| blob::hex(&v)),
+                    )
+                })
+            })
+        }
+        "payload,count" => query
+            .resume_group_count::<Payload>(jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "payload", |k| blob::hex(&k.payload)))),
+        "payload,count:optional" => query
+            .resume_group_count_field::<Payload>("optional", jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "payload", |k| blob::hex(&k.payload)))),
+        _ => Err(Error::InvalidQuery),
+    }
 }
 
 fn resume_query<'a, E: Entity>(

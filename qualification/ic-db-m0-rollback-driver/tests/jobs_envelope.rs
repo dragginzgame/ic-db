@@ -653,3 +653,272 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
         "job-lifecycle: 16 near-limit frames invalidated/cancelled/expired; rollback, upgrade and full-slot reuse passed"
     );
 }
+
+#[tokio::test]
+async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
+    type ValuePage = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-job-envelope"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let start = async |operation: u8, limit: u32| {
+        call::<Result<Vec<u8>, String>>(pic, canister, "job_values_start", 119, &(operation, limit))
+            .await
+            .unwrap()
+    };
+    let advance = async |handle: &[u8],
+                         operation: u8,
+                         limit: u32,
+                         sequence: u64,
+                         work: u32,
+                         size: u32,
+                         after: &Option<Vec<u8>>,
+                         bytes: u32| {
+        let before = pic.cycle_balance(canister).await;
+        let (result, instructions): (Result<ValuePage, String>, u64) = call(
+            pic,
+            canister,
+            "job_values_advance",
+            149,
+            &(handle, operation, limit, sequence, work, size, after, bytes),
+        )
+        .await;
+        let cycles = before
+            .checked_sub(pic.cycle_balance(canister).await)
+            .unwrap();
+        eprintln!(
+            "job-values op={operation} seq={sequence} work={work} bytes={bytes} progress={:?} instructions={instructions} cycles={cycles}",
+            result.as_ref().map(|s| (s.0, s.1, s.4))
+        );
+        assert!(instructions > 0 && cycles > 0);
+        result
+    };
+    let upgrade = async || {
+        let before = pic.get_stable_memory(canister).await;
+        upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    };
+    let cancel = async |handle: &[u8]| {
+        call::<Result<u64, String>>(
+            pic,
+            canister,
+            "job_control",
+            112,
+            &(0_u8, handle, 1_i64, 0_u32),
+        )
+        .await
+        .unwrap();
+    };
+    // Literal strings are the oracle: null, empty, embedded NUL, a prefix pair,
+    // Unicode, equal winners, and exactly 64 UTF-8 bytes. No engine codecs or
+    // reducers are imported into this native driver.
+    let notes = [
+        None,
+        None,
+        Some("".into()),
+        None,
+        Some("a\0".into()),
+        Some("a\0b".into()),
+        Some("z".into()),
+        Some("é".into()),
+        Some("same".into()),
+        Some("same".into()),
+        Some("é".repeat(32)),
+        Some("a".into()),
+    ];
+    let documents: Vec<_> = notes
+        .iter()
+        .enumerate()
+        .map(|(i, note)| (i as u64 + 1, i as u64 / 2 + 1, note.clone()))
+        .collect();
+    call::<Result<(), String>>(
+        pic,
+        canister,
+        "job_values_write",
+        118,
+        &(&documents, Vec::<(u64, String)>::new()),
+    )
+    .await
+    .unwrap();
+    for operation in [0_u8, 1] {
+        let mut expected: Vec<_> = notes
+            .chunks(2)
+            .enumerate()
+            .map(|(i, pair)| {
+                let present = pair.iter().flatten();
+                let value = if operation == 0 {
+                    present.min()
+                } else {
+                    present.max()
+                };
+                (i as u64 + 1, value.map(|s| s.as_bytes().to_vec()))
+            })
+            .collect();
+        expected.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let handle = start(operation, 32).await;
+        let mut sequence = 0;
+        for chunk in 0..6 {
+            // A tiny output allowance does not reject a provisional winner.
+            let step = advance(&handle, operation, 32, sequence, 2, 2, &None, 1)
+                .await
+                .unwrap();
+            assert_eq!(
+                (step.1, step.2.len(), step.3, step.4),
+                (0, 0, None, (chunk + 1) * 2)
+            );
+            sequence = step.0;
+            if chunk == 2 {
+                upgrade().await;
+            }
+        }
+        let before = pic.get_stable_memory(canister).await;
+        assert_eq!(
+            advance(&handle, operation, 32, sequence, 2, 2, &None, 1)
+                .await
+                .unwrap_err(),
+            "RowTooLarge"
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        upgrade().await;
+        let mut after = None;
+        let mut actual = Vec::new();
+        loop {
+            let step = advance(&handle, operation, 32, sequence, 2, 2, &after, 4096)
+                .await
+                .unwrap();
+            assert_eq!((step.1, step.4), (1, 12));
+            sequence = step.0;
+            actual.extend(step.2);
+            after = step.3;
+            if after.is_none() {
+                break;
+            }
+            upgrade().await;
+        }
+        assert_eq!(actual, expected);
+        cancel(&handle).await;
+    }
+
+    // Raw non-UTF-8 bytes survive a retained winner checkpoint and heap loss.
+    let handle = start(3, 32).await;
+    let saved = advance(&handle, 3, 32, 0, 1, 2, &None, 4096).await.unwrap();
+    assert_eq!((saved.1, saved.4), (0, 1));
+    upgrade().await;
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        advance(&handle, 3, 32, saved.0, 1, 2, &None, 1)
+            .await
+            .unwrap_err(),
+        "RowTooLarge"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let complete = advance(&handle, 3, 32, saved.0, 1, 2, &None, 4096)
+        .await
+        .unwrap();
+    assert_eq!(complete.1, 1);
+    assert_eq!(complete.2, [(1, Some(vec![0, 255, 128]))]);
+    assert!(complete.3.is_none());
+    cancel(&handle).await;
+
+    // Large key/winner pairs exceed the checkpoint bound before 32 groups.
+    // A result limit of one must not hide that input-state refusal.
+    let texts: Vec<_> = (1..=32_u64)
+        .map(|id| (id, format!("{id:02}{}", "x".repeat(478))))
+        .collect();
+    for chunk in texts.chunks(16) {
+        call::<Result<(), String>>(
+            pic,
+            canister,
+            "job_values_write",
+            118,
+            &(Vec::<(u64, u64, Option<String>)>::new(), chunk),
+        )
+        .await
+        .unwrap();
+    }
+    let handle = start(2, 1).await;
+    let first = advance(&handle, 2, 1, 0, 16, 1, &None, 4096).await.unwrap();
+    assert_eq!((first.1, first.4), (0, 16));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        advance(&handle, 2, 1, first.0, 1, 1, &None, 4096)
+            .await
+            .unwrap_err(),
+        "Limit"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    upgrade().await;
+    assert_eq!(
+        advance(&handle, 2, 1, first.0, 1, 1, &None, 4096)
+            .await
+            .unwrap_err(),
+        "Limit"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+
+    // Explicitly reduce the source's value sizes; the old run invalidates and a
+    // new run finishes all 32 groups. There is no hidden restart or state spill.
+    let smaller: Vec<_> = texts
+        .iter()
+        .map(|(id, text)| (*id, text[..128].to_owned()))
+        .collect();
+    for chunk in smaller.chunks(16) {
+        call::<Result<(), String>>(
+            pic,
+            canister,
+            "job_values_write",
+            118,
+            &(Vec::<(u64, u64, Option<String>)>::new(), chunk),
+        )
+        .await
+        .unwrap();
+    }
+    let invalidated = advance(&handle, 2, 1, first.0, 1, 1, &None, 4096)
+        .await
+        .unwrap();
+    assert_eq!((invalidated.1, invalidated.4), (2, 16));
+    cancel(&handle).await;
+    let handle = start(2, 32).await;
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        advance(&handle, 2, 32, 0, 64, 4, &None, 1)
+            .await
+            .unwrap_err(),
+        "RowTooLarge"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let mut after = None;
+    let mut sequence = 0;
+    let mut actual = Vec::new();
+    loop {
+        let page = advance(&handle, 2, 32, sequence, 64, 4, &after, 4096)
+            .await
+            .unwrap();
+        assert_eq!((page.1, page.4), (1, 32));
+        sequence = page.0;
+        actual.extend(page.2);
+        after = page.3;
+        if after.is_none() {
+            break;
+        }
+        if actual.len() == 4 {
+            upgrade().await;
+        }
+    }
+    assert_eq!(
+        actual,
+        smaller
+            .into_iter()
+            .map(|(id, text)| (id, Some(text.into_bytes())))
+            .collect::<Vec<_>>()
+    );
+    cancel(&handle).await;
+    owned.drop().await;
+}

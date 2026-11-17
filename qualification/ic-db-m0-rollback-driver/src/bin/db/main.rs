@@ -109,10 +109,10 @@ enum Command {
     Status,
     /// Read the exact maintained whole-entity row count without scanning rows.
     #[command(
-        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports Entry, Document and DecimalRow in this temporary local fixture."
+        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports Entry, Document, DecimalRow and BinaryObject in this temporary local fixture."
     )]
     Count {
-        #[arg(value_parser=["Entry", "Document", "DecimalRow"])]
+        #[arg(value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
     },
     /// Run a fixed migration with a real local canister upgrade during copying.
@@ -125,13 +125,16 @@ enum Command {
         after_help = "Runs bounded update calls against this temporary fixture, then cancels the job. No partial aggregate is presented as a result.\n--min and --category filter Entry rows; --entry-id filters Document rows. --group-min, --group-max, --group-order and --limit select completed groups. --limit never truncates input.\n--work bounds input candidates per call; --page-size bounds completed groups per response. The fixture and jobs are discarded on exit."
     )]
     Aggregate {
-        #[arg(value_parser=["Entry", "Document", "DecimalRow"])]
+        #[arg(value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
         /// Entry: count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
         /// prefix with category, for groups. Document: count/count:note/count:priority,
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
         /// prefix with entry_id, for groups. DecimalRow: count, count/distinct-count/min/max/sum/avg
         /// of :value or :maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
+        /// BinaryObject: count/count:payload/count:optional, distinct-count:payload,
+        /// min/max:payload or :optional, payload,count and payload,count:optional.
+        /// Blob aggregates cover all rows; payload range flags currently apply to query only.
         #[arg(long, default_value = "count")]
         select: String,
         /// Entry.amount >= VALUE.
@@ -168,11 +171,18 @@ enum Command {
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; non-identity results retain at most 32 distinct tuples. Duplicates consume scan work; a 33rd distinct tuple refuses even with --limit 1. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all three entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; non-identity results retain at most 32 distinct tuples. Duplicates consume scan work; a 33rd distinct tuple refuses even with --limit 1. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all four query entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
-        #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow"])]
+        #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
+        /// BinaryObject.payload >= HEX; use 0x00ff80, or 0x for empty bytes.
+        /// Exactly two hex digits per byte, at most 1024 bytes; no text conversion.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_min: Option<BlobArg>,
+        /// BinaryObject.payload <= HEX; same byte syntax as --payload-min.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_max: Option<BlobArg>,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
         after: Option<CursorArg>,
@@ -212,6 +222,9 @@ enum Command {
         /// zone, grouping for DecimalRow. Averages use Decimal scale 2, ties to even.
         /// Prefix sums/extrema with category, for Entry or entry_id, for Document
         /// to group results; all-absent groups display an absent value.
+        /// BinaryObject: payload/optional projections, min/max:payload or :optional,
+        /// distinct-count:payload, payload,count and payload,count:optional.
+        /// Blob output uses lowercase 0x-prefixed hex; absence displays as —.
         #[arg(long, default_value = "full")]
         select: String,
         /// Deduplicate projections using live indexed pages or a bounded complete result.
@@ -239,6 +252,24 @@ enum Command {
 }
 #[derive(Clone, Debug)]
 struct CursorArg(Vec<u8>);
+#[derive(Clone, Debug)]
+struct BlobArg(Vec<u8>);
+fn parse_blob(text: &str) -> Result<BlobArg, String> {
+    let digits = text
+        .strip_prefix("0x")
+        .ok_or("Blob literals require a 0x prefix")?;
+    if digits.len() > 2048
+        || !digits.len().is_multiple_of(2)
+        || !digits.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("expected 0x followed by 0–1024 complete hexadecimal byte pairs".into());
+    }
+    (0..digits.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()
+        .map(BlobArg)
+}
 fn parse_cursor(text: &str) -> Result<CursorArg, String> {
     if !(70..=1092).contains(&text.len())
         || !text.len().is_multiple_of(2)
@@ -857,6 +888,8 @@ async fn session(
             }
             Command::Query {
                 entity,
+                payload_min,
+                payload_max,
                 after,
                 limit,
                 minimum,
@@ -888,7 +921,8 @@ async fn session(
                             work,
                             bytes,
                             select,
-                            (distinct, (group_min, group_max), group_order),
+                            (distinct, (group_min, group_max), group_order,
+                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0))),
                         ),
                         Encoding::Frame {
                             method: 3,

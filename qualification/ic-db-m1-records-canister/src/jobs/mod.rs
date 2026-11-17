@@ -1,4 +1,6 @@
 //! Feature-selected product-job witness, sharing the ordinary records and supplier.
+mod values;
+
 use super::{
     Backing,
     aggregate_store::open_jobs,

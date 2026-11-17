@@ -1,4 +1,5 @@
 //! Private console adapter: fixed typed entities, fluent execution, display-only mapping.
+mod blob;
 #[cfg(feature = "retained-console")]
 pub(crate) mod migration;
 #[cfg(feature = "retained-console")]
@@ -7,7 +8,7 @@ use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
     runtime,
-    schema::{DecimalRow, Document, Entry},
+    schema::{BinaryObject, DecimalRow, Document, Entry},
 };
 use ic_db::{
     Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
@@ -52,7 +53,12 @@ type Request = (
     u32,
     u32,
     String,
-    (bool, (Option<String>, Option<String>), Option<String>),
+    (
+        bool,
+        (Option<String>, Option<String>),
+        Option<String>,
+        (Option<Vec<u8>>, Option<Vec<u8>>),
+    ),
 );
 type Page = (
     Vec<String>,
@@ -83,7 +89,13 @@ fn cardinality(entity: String) -> Result<u64, String> {
         "Entry" => db.cardinality::<Entry>(),
         "Document" => db.cardinality::<Document>(),
         "DecimalRow" => db.cardinality::<DecimalRow>(),
-        _ => return Err("count supports Entry, Document and DecimalRow in this fixture".into()),
+        "BinaryObject" => db.cardinality::<BinaryObject>(),
+        _ => {
+            return Err(
+                "count supports Entry, Document, DecimalRow and BinaryObject in this fixture"
+                    .into(),
+            );
+        }
     }
     .map_err(message)
 }
@@ -132,9 +144,12 @@ fn query(
         work,
         bytes,
         select,
-        (distinct, (group_min, group_max), group_order),
+        (distinct, (group_min, group_max), group_order, (payload_min, payload_max)),
     ): Request,
 ) -> Result<Page, String> {
+    if entity != "BinaryObject" && (payload_min.is_some() || payload_max.is_some()) {
+        return Err("--payload-min and --payload-max apply to BinaryObject".into());
+    }
     let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = cursor
         .as_deref()
@@ -252,7 +267,45 @@ fn query(
                 ]
             },
         ),
-        _ => Err("query supports Entry, Document and DecimalRow in this fixture".into()),
+        "BinaryObject" => {
+            let mut query = blob::query(&db, minimum, category, entry_id)?;
+            for (comparison, operand) in [
+                (Comparison::Ge, payload_min.as_deref()),
+                (Comparison::Le, payload_max.as_deref()),
+            ] {
+                if let Some(operand) = operand {
+                    query = query.filter("payload", comparison, operand);
+                }
+            }
+            execute(
+                configure(
+                    query,
+                    cursor.as_ref(),
+                    &order,
+                    descending,
+                    limit,
+                    work,
+                    bytes,
+                ),
+                &select,
+                (
+                    distinct,
+                    (group_min.as_deref(), group_max.as_deref()),
+                    group_order,
+                ),
+                &["id", "payload", "optional"],
+                |r| {
+                    vec![
+                        r.id.to_string(),
+                        blob::hex(&r.payload),
+                        r.optional.map_or_else(|| "—".into(), |v| blob::hex(&v)),
+                    ]
+                },
+            )
+        }
+        _ => Err(
+            "query supports Entry, Document, DecimalRow and BinaryObject in this fixture".into(),
+        ),
     }
 }
 
@@ -406,6 +459,15 @@ fn execute<'a, E: Entity>(
     }
     let query = select_groups(query, select, bounds, group_order)?;
     match select {
+        "payload"
+        | "optional"
+        | "min:payload"
+        | "max:payload"
+        | "min:optional"
+        | "max:optional"
+        | "distinct-count:payload"
+        | "payload,count"
+        | "payload,count:optional" => blob::execute(query, select),
         "avg:amount" => query
             .avg::<AverageAmount>()
             .map(|r| display_value(r, "amount", |r| r.amount.to_string())),

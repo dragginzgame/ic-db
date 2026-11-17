@@ -1282,6 +1282,17 @@ is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
 
+Bounded Blob fields support exact equality/range comparisons, indexes, ordering,
+DISTINCT, grouping, and synchronous/retained min/max. Operands are borrowed
+`IndexValue::Blob(&[u8])` (or slices through `Into`), never coerced from Text.
+Unsigned raw bytes compare lexicographically; a shorter proper prefix sorts first.
+Absence, empty bytes and a zero byte are distinct. Text matching operators remain
+Text-only; Blob sums/averages and Blob primary keys are not admitted.
+Shared key encoding escapes zeroes and terminates each component, retaining the
+512-byte complete index-key bound, comparison/state bounds and output refusal
+rules. Stored Blob encoding is unchanged. An authored Blob index changes schema
+identity and requires the same explicit transition as any other added index.
+
 `Database::cardinality::<E>()` reads the maintained whole-entity count without
 enumeration. It admits the entity and requires well-formed metadata; it does not
 validate stored rows/indexes or detect an arbitrary well-formed counter corruption.
@@ -2092,6 +2103,21 @@ temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. Deployed-database CLI access
 and production endpoint composition remain M4 integration work.
 
+The pending 0.21 local console includes `BinaryObject` for synchronous queries,
+maintained counts and retained aggregates. `--payload-min`/`--payload-max` accept `0x`-prefixed hex
+pairs (0–1024 bytes); the CLI decodes these to byte operands before transport.
+Projection, DISTINCT, ordering, payload grouping/counts and min/max reuse the
+existing fluent endpoint. Hex output is presentation-only, with `0x` distinct
+from absent `—`. The engine and stored fixture schema do not change for this
+adapter addition. Retained counts, DISTINCT counts, min/max and payload groups
+use existing job endpoints, progress and explicit cancellation. They aggregate
+all rows; payload range flags apply to synchronous queries only. Optional-Blob
+filter flags remain outside the console's selected surface. The private query request changes with
+its callers; it is not an application protocol or backward-compatible service.
+IcyDB `6d421e3`'s `sql_query_result_from_statement_keeps_blob_projection_typed_until_rendering`
+regression supplies the binary-versus-display distinction; its SQL packaging and
+dynamic result hierarchy are not copied.
+
 The 0.20 console adds selected-entity/JSON schema inspection, separate
 reference target/index columns, per-call measured charges, history and quoted
 arguments. These remain fixture presentation and input handling, not a new query
@@ -2207,6 +2233,22 @@ larger/reference-heavy datasets, aggregate contention, entity/query/endpoint
 composition and matched IcyDB costs. Maintenance must retain its current narrow
 contract until an extension is deliberately selected. Source-plus-target space
 is accepted; logical cleanup does not imply physical shrink or reusable capacity.
+
+The pending 0.21.0 slice adds Blob query support and checks retained optional-text extrema and
+large text key/winner pairs through upgrades, exact completed pages and intact
+checkpoint/output refusals. Blob winners use the same checkpoint and finalization
+paths. The public operand enum gains a Blob variant; existing schema identities
+and stored row/key/job representations are unchanged. Retained Decimal averages now also exercise the existing console
+adapter through 13 datasets and upgrades, preserving final-only signed even-tie
+rounding, presence counts and fitting averages of widened totals. The
+[Decimal receipt](../../qualification/README.md#retained-decimal-averages-0210)
+distinguishes this from earlier synchronous coverage.
+Frozen IcyDB `6d421e3`'s `value_reducer/tests.rs` and grouped-state
+tests supply the invariant that a selected text value survives later inputs and
+ignores nulls; this witness independently checks durable ownership through heap
+loss rather than copying its value reducer or expression engine. The
+[qualification receipt](../../qualification/README.md#retained-variable-sized-values-0210)
+owns workload bounds and evidence; this is not a matched performance comparison.
 
 The 0.18 `make m3-references` probe now checks 256 rows in 128 reference pairs
 across copy chunks and upgrades. Complete-target validation detects a late
@@ -3334,8 +3376,7 @@ public query frontend. For example, `index_prefix::<E>("owner", &[owner.into()],
 looks up a Principal-leading index; an integer field requires its exact Rust
 width and signedness. Incorrect operand types refuse with `InvalidOperand`.
 Direct prefix lookups require nonempty prefixes and 1–32 results. The fluent
-builder supplies bounded queries and index continuation; Blob indexes remain
-separate work.
+builder supplies bounded queries and index continuation, including Blob indexes.
 
 Optional components use an explicit presence byte: `00` for absence, `01`
 followed by the scalar payload for presence. Ordinary indexes retain every row
@@ -3404,7 +3445,14 @@ The frozen IcyDB
 informed empty/zero-bound/over-limit cases; its
 [blob framing regression](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/value/hash/tests.rs)
 also motivates explicit boundaries. These cases are requalified here with native
-and Wasm codecs; no IcyDB value engine is copied. Blob indexes and predicates remain separate work.
+and Wasm codecs; no IcyDB value engine is copied.
+Blob ordering extends the existing terminated-byte Text encoder to raw bytes,
+retaining UTF-8 validation only for Text. Frozen IcyDB `6d421e3` explicitly rejects
+Blob keys in
+[`db/index/key/ordered/mod.rs`](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/index/key/ordered/mod.rs).
+This is an explicit capability addition, not legacy index parity. Shared traversal,
+group reducers, mutation preparation and job ownership remain unchanged; no
+Blob-specific executor, persistent catalog or extra collection is introduced.
 
 Typed reads decode once, then verify the physical key/index against that value.
 Batch construction encodes once and extracts keys directly from the admitted typed

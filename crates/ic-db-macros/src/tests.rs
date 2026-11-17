@@ -274,7 +274,6 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
         quote!(pk(field="id"), fields(#field, field(name="delta",value(item(prim="Int64",max_bytes=8))))),
         quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob"))))),
         quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=4097))))),
-        quote!(pk(field="id"), index(field="payload"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=8))))),
     ] {
         assert!(
             expand(

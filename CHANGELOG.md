@@ -1,5 +1,96 @@
 # Changelog
 
+## [0.21.0] - Unreleased
+
+### ⚠️ Breaking
+
+- `IndexValue::Blob(&[u8])` extends the public operand enum. Downstream exhaustive
+  matches must handle it. Stored Blob bytes and existing schema identities do not
+  change; adding an index still requires an explicit schema transition.
+
+### ➕ Added
+
+- Query bounded Blob fields with exact byte operands: comparisons, secondary
+  indexes, ordered pages, DISTINCT, grouping and synchronous/retained min/max.
+  Byte ordering is lexicographic, including empty values and embedded zeroes;
+  text matching remains text-only. Existing row, key and job bounds still apply.
+- Expose `BinaryObject` through local `db query` and `db count`. Payload bounds
+  accept exact `0x`-prefixed byte pairs, including `0x` for empty bytes. Project,
+  order, deduplicate, count/group and take min/max using the existing engine.
+  Render bytes as lowercase hex and absence as `—`.
+- Run `db aggregate BinaryObject` through the existing retained-job endpoints:
+  counts, DISTINCT counts, min/max and payload groups. Show progress and per-call
+  charges, then release the job. These commands aggregate all rows; payload range
+  flags remain specific to `db query`.
+
+### ▶️ Try it
+
+From the repository root, install the updated local demo:
+
+```sh
+make db
+```
+
+Then inspect its single Blob row (`0x00ff80`, optional field absent):
+
+```sh
+db count BinaryObject
+db query BinaryObject
+db query BinaryObject --payload-min 0x00ff80 --payload-max 0x00ff80 --select payload
+db query BinaryObject --select payload --distinct
+db query BinaryObject --select max:payload
+db query BinaryObject --select payload,count
+db aggregate BinaryObject --select max:payload --work 1
+db aggregate BinaryObject --select payload,count --work 1 --page-size 1
+```
+
+Each invocation uses a fresh temporary canister; it does not access deployed data.
+
+### 🧹 Cleanup
+
+- Use directory module roots consistently in the Wasm qualification canister,
+  preserving module paths and behavior.
+
+### 🩹 Fixed
+
+- Bound CI jobs using recent Linux/macOS timings, with shorter work-step limits
+  and reserved failure-evidence time. Retain step status even when interrupted
+  setup cannot finish its sanitized excerpt; keep original failures visible.
+- Retain bounded, sanitized compiler/tool/scanner setup diagnostics when CI fails
+  before tests start. Preserve the original failure, upload only selected evidence
+  for seven days, and report missing evidence or failed uploads explicitly.
+
+### 🧪 Testing
+
+- Release supplier review retains Host Artifacts 0.80.2, Build 0.84.1 and the
+  Testkit 0.106.0 launcher. Optional updates to 0.80.3, 0.87.3 and 0.108.0,
+  respectively, are deferred to the next dependency-maintenance batch.
+- Check retained scalar/grouped Decimal averages through the existing console
+  adapter across real upgrades: signed ties-to-even rounding, unequal chunks,
+  absent versus zero values, widened totals and intact output-budget retries.
+  No new arithmetic implementation or endpoint is added.
+- Check Blob CLI parsing, displayed results and call accounting; direct console
+  queries preserve empty/absent/non-UTF-8 values across upgrades and refuse
+  oversized operands, wrong-entity filters and insufficient output intact.
+- Check all retained Blob selectors across upgrades, refusal/retry, query binding
+  and source invalidation. Thirty completed jobs reuse the 16 slots through
+  explicit cancellation; incomplete calls expose no aggregate result.
+- Extend retained-aggregation Wasm coverage to optional text, large key/winner
+  pairs, upgrade recovery and completed-result pagination. Verify that output
+  limits and checkpoint exhaustion preserve progress. Blob winners also survive
+  upgrade and output-budget refusal/retry. See the
+  [variable-sized value witness](qualification/README.md#retained-variable-sized-values-0210).
+
+The existing local fixture demonstrates optional-text aggregation:
+
+```sh
+db aggregate Document --select entry_id,min:note --work 1
+db aggregate DecimalRow --select avg:value --work 1
+db aggregate DecimalRow --select zone,avg:maybe --work 1
+```
+
+The larger datasets are qualification-only; run `make m2-job-envelope` to exercise them.
+
 ## [0.20.0] - 2026-11-16
 
 ### ▶️ Try it
