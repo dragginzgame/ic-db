@@ -264,7 +264,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 .unwrap(),
             )
             .await?;
-        Ok::<_, pocket_ic::RejectResponse>(
+        Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
             ic_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
                 &reply,
                 Encoding::Frame {

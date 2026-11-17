@@ -67,7 +67,12 @@ type Request = (
         bool,
         (Option<String>, Option<String>),
         Option<String>,
-        (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>),
+        (
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+        ),
     ),
 );
 type Page = (
@@ -154,14 +159,22 @@ fn query(
         work,
         bytes,
         select,
-        (distinct, (group_min, group_max), group_order, (payload_min, payload_max, payload_prefix)),
+        (
+            distinct,
+            (group_min, group_max),
+            group_order,
+            (payload_min, payload_max, payload_prefix, payload_suffix),
+        ),
     ): Request,
 ) -> Result<Page, String> {
     if entity != "BinaryObject"
-        && (payload_min.is_some() || payload_max.is_some() || payload_prefix.is_some())
+        && (payload_min.is_some()
+            || payload_max.is_some()
+            || payload_prefix.is_some()
+            || payload_suffix.is_some())
     {
         return Err(
-            "--payload-min, --payload-max and --payload-prefix apply to BinaryObject".into(),
+            "--payload-min, --payload-max, --payload-prefix and --payload-suffix apply to BinaryObject".into(),
         );
     }
     let group_order = parse_group_order(group_order.as_deref())?;
@@ -287,6 +300,7 @@ fn query(
                 payload_min.as_deref(),
                 payload_max.as_deref(),
                 payload_prefix.as_deref(),
+                payload_suffix.as_deref(),
             );
             execute(
                 configure(

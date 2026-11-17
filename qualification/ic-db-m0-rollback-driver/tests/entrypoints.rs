@@ -1,8 +1,8 @@
 //! Standalone installed hooks: raw refusals and reply failures across IC boundaries.
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{ByteBuf, Direction, Encoding};
-use pocket_ic::ErrorCode;
 
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 4]);

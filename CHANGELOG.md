@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.22.1] - Unreleased
+
+### 🔧 Changed
+
+- Route qualification's original PocketIC client through Testkit 0.108.0 with
+  default features disabled. Keep PocketIC 16.1.0, the external prepared launcher,
+  explicit deletion and request deadlines. Remove the HTTP fixture's direct
+  `ic-ed25519` dependency in favor of a literal public synthetic PEM. The pending
+  CLI's direct Agent dependency remains an unresolved Platform migration;
+  [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4) records the
+  missing secp256k1 signed-query capability. Product crates and durable bytes do
+  not change.
+- Release supplier review: current stable registry selections are Storage 0.74.1,
+  Types 0.21.2, Host Artifacts 0.80.3, Host Text 0.77.2, Wire 0.24.3, Testkit
+  0.108.0 and Toko Tooling 0.44.11. Defer optional Runtime 0.23.16 (selected
+  0.23.13), Build 0.87.3 (release tool 0.84.1) and launcher 0.108.0 (prepared
+  0.106.0) refreshes to the next dependency-maintenance pass. Canic remains pinned
+  to the committed inspection producer; frozen IcyDB remains unchanged.
+
+### ➕ Added
+
+- `db inspect` connects to an explicit application provider/canister using Canic
+  inspection v1 from committed Canic 0.219.0. Select `--identity PEM` or
+  `--anonymous`; catalogue and selected-entity tables/JSON distinguish executable
+  schema, stored admission and optional maintained counts. Verified query calls
+  report elapsed time and unavailable remote cycles, with no fixture fallback.
+  Local development root-key trust requires `--local-root-key` on a loopback URL.
+  This implements the inspection slice of [IC DB #4](https://github.com/dragginzgame/ic-db/issues/4).
+- `db witness-list` reads one page from Canic's qualification application's
+  versioned Item listing: minimum score, ID order, 1–3 results and 1–4 examined
+  candidates. Empty pages preserve the opaque cursor; `--after` forwards it
+  unchanged. Authorization, filtering and continuation remain application/engine
+  responsibilities. This is one explicit application client, not arbitrary remote
+  database querying. Target/identity/verified HTTP and call reporting are shared
+  with inspection; the engine, durable state and resolved package set are unchanged.
+- `db query BinaryObject` and `db aggregate BinaryObject` accept
+  `--payload-suffix HEX`, composed with existing bounds and prefix filters.
+  Exact raw bytes use the engine's residual predicate and work limits; empty
+  suffixes match present payloads. Retained jobs bind the suffix across resume.
+
+### ▶️ Try it
+
+```sh
+make db
+db query BinaryObject --payload-suffix 0xff80 --select payload
+db aggregate BinaryObject --payload-prefix 0x00 --payload-suffix 0x80 --select count --work 1
+db query BinaryObject --payload-suffix 0xff --select count
+```
+
+The temporary fixture returns `0x00ff80`, count one, and count zero respectively.
+These commands do not access deployed data.
+
+For an application exposing Canic inspection, select its actual target and identity:
+
+```sh
+db inspect --provider "${IC_DB_PROVIDER:?}" --canister "${IC_DB_CANISTER:?}" --identity "${IC_DB_IDENTITY_PEM:?}"
+db inspect --provider "${IC_DB_PROVIDER:?}" --canister "${IC_DB_CANISTER:?}" --identity "${IC_DB_IDENTITY_PEM:?}" --entity Item --count --json
+```
+
+`Item` is the qualification application's entity; use the exposed catalogue for
+your application's names. `make m4-inspection` runs the signed HTTP client against
+the committed Canic witness, including denied access and closed/unsupported storage.
+
+Against that specific Canic witness, read a bounded page and reuse its `next`
+cursor with the same minimum score:
+
+```sh
+db witness-list --help
+db witness-list --provider "${IC_DB_PROVIDER:?}" --canister "${IC_DB_CANISTER:?}" --identity "${IC_DB_IDENTITY_PEM:?}" --minimum 30 --limit 1 --work 1 --json
+db witness-list --provider "${IC_DB_PROVIDER:?}" --canister "${IC_DB_CANISTER:?}" --identity "${IC_DB_IDENTITY_PEM:?}" --minimum 30 --limit 1 --work 1 --after "${IC_DB_CURSOR:?}" --json
+```
+
+`make m4-inspection` now also checks sparse listing across upgrade, altered-filter
+and corrupt-cursor refusals, repeated caller authorization and unchanged backing.
+
 ## [0.22.0] - 2026-11-17
 
 ### ⚠️ Breaking

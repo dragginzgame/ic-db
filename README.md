@@ -8,6 +8,15 @@ application-defined schemas and broad capabilities drive its design. The private
 Toko GitHub repository is a secondary compatibility target, not the architectural
 guide. The obsolete, deleted local checkout is not a design input.
 It does not replace IcyDB yet.
+`db inspect --provider URL --canister PRINCIPAL --identity KEY.pem` reads an
+application's Canic inspection v1 catalogue. Add `--entity NAME --count` for its
+schema and permitted maintained count, or `--json` for structured output.
+Use `--anonymous` instead of a PEM only when intentionally selecting that caller.
+Loopback development providers need explicit `--local-root-key` trust. Remote
+inspection never falls back to the temporary fixture. `db witness-list` reads one
+bounded page from Canic's specific qualification application; other `query`
+commands still use the local fixture. `make m4-inspection` qualifies the client through an
+installed Canic witness and local HTTP gateway.
 Ordinary Rust iteration handles result mapping; the Canic adapter owns product
 endpoints. Broad schema types and constrained resumable aggregation are required.
 Shared execution and measured monomorphization growth are explicit design concerns.

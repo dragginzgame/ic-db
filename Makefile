@@ -339,3 +339,10 @@ release-lint:
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features retained-console --target wasm32-unknown-unknown -- -D warnings
+
+.PHONY: m4-inspection-artifact m4-inspection
+m4-inspection-artifact:
+	bash scripts/build-canic-inspection.sh
+
+m4-inspection: m4-inspection-artifact
+	IC_DB_CANIC_WASM_DIR="$(CURDIR)/qualification/target/evidence/canic-inspection" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test inspection -- --nocapture

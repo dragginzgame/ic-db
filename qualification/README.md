@@ -19,7 +19,8 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
 ## External simulator ownership (0.19)
 
-The native driver now depends on PocketIC 16.1.0 directly. It requires
+The native driver uses PocketIC 16.1.0 through Testkit 0.108.0 with default
+features disabled. It requires
 `IC_TESTKIT_POCKET_IC_URL`, borrows the upstream async client on the caller's Tokio
 runtime and explicitly attempts instance deletion. It has no binary discovery,
 download, server startup or private session wrapper. Creation/request waits are
@@ -29,8 +30,9 @@ async `drop` is best-effort, not proof of successful deletion.
 `make m0-setup` explicitly prepares an optimized release-profile build of the
 released `ic-testkit-server` 0.106.0 CLI
 and authenticates the server assets. This retained executable is a development
-bootstrap outside the Cargo driver graph; it is not adoption of the retired
-Testkit library. [The command runner](../scripts/with-pocketic.sh) checks that
+bootstrap outside the Cargo driver graph; the lightweight library selects only
+the upstream client, not Testkit's optional server manager.
+[The command runner](../scripts/with-pocketic.sh) checks that
 prepared selection, then delegates process ownership to it. Existing Make probes
 use this runner. Standalone `db` re-enters itself through the same runner before
 creating its Tokio runtime; `--help` and argument refusal need no server. A supplied
@@ -52,10 +54,31 @@ incompatible fixture (missing `decimal_batch`). Receipts are retained locally un
 `target/evidence/external-server/`. This proves that run's deletion, not cleanup
 after every panic/cancellation. The command owner shuts down its server on exit.
 
-The driver graph loses Testkit 0.106.0, Platform facade 0.33.7 and legacy Host
+The 0.19 migration removed Testkit 0.106.0, Platform facade 0.33.7 and legacy Host
 FS/Process dependencies. Old Types 0.20.4 remains only under frozen IcyDB; Runtime
 0.22.5 remains under Storage/frozen IcyDB for raw IC imports. Historical performance
 receipts keep their original graphs and are not claimed as remeasured here.
+
+The pending 0.22.1 boundary correction selects Testkit 0.108.0's original-client
+export. Its only selected dependency is PocketIC 16.1.0; managed-server, CLI and
+held-reply features remain disabled. Existing endpoint admission, deadlines,
+caller-owned runtime and explicit deletion remain unchanged. This changes the
+dependency owner, not the simulator implementation or its transitive dependencies.
+The pending remote CLI still directly selects Agent 0.49.3. Platform 0.34.13's
+`signed_query` accepts only `Ed25519Identity`; its secp256k1 feature admits prepared
+updates, not the CLI's secp256k1 PEM queries. This remaining migration obligation
+belongs to [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4).
+Do not describe the remote CLI boundary as migrated or release-qualified. No
+legacy Platform facade, local signing implementation or authentication downgrade
+is introduced. The HTTP fixture uses a literal public synthetic PEM instead of
+a direct `ic-ed25519` dependency.
+Focused requalification passes all 11 native CLI tests, missing/malformed endpoint
+refusal, explicit instance release, the nine Wasm rollback modes and the real
+Canic HTTP inspection/listing journey across upgrade and closed admission. All
+driver targets pass strict Clippy; formatting and local documentation links pass.
+The retained receipt is `target/evidence/external-server/testkit-0.108-boundary.log`.
+These checks use the existing prepared simulator and producer Wasm artifacts;
+they do not rebuild or requalify the complete product or establish Agent removal.
 
 ```sh
 make m0-setup
@@ -272,7 +295,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
-| Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Adapter is in Canic's working checkout; delivery and application CLI remain M4 work. [Receipt](#canic-typed-application-integration-019) |
+| Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Committed Canic 0.219.0; native inspection now checked through HTTP. The fixed application listing also preserves sparse pages and cursor refusal after upgrade; broader application support is not claimed. [Receipt](#canic-typed-application-integration-019) |
 
 ### Product structure and functionality
 
@@ -285,7 +308,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Schema authoring | Attributes, shared model, host-side schema/actor generation | Attributes and two-stage path resolution retained; no author-supplied numeric field IDs; generated host registration stays out of Wasm |
 | Ordinary writes | Journaled writes with follow-up work in the measured host | Synchronous bounded final-state batches, preparation before mutation, IC message rollback; no ordinary-write WAL |
 | Durable schema authority | Accepted schema snapshots and runtime binding/admission | Compiled contract admitted against a minimal manifest; explicit versioned maintenance, no runtime DDL or online activation |
-| Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. Current CLI targets disposable local fixtures |
+| Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. CLI inspection targets Canic applications; one explicit witness listing uses its application protocol; general query demos remain local |
 | Codec boundary | Owned codec/runtime plus a product `ic-wire` dependency | Database-owned durable codec; no product Wire dependency. Qualification transport may use Wire |
 
 Structural findings are from the frozen
@@ -4041,8 +4064,24 @@ cargo test --offline --locked -p ic-db --test jobs retained_blob_suffix
 ```
 
 No durable/schema change or additional execution path is introduced. These are
-native checks; no suffix CLI flag, Wasm suffix qualification or performance
-comparison is claimed. Blob `Contains` remains unsupported.
+native checks for the 0.22 release; the subsequent CLI witness below adds Wasm
+qualification. No performance comparison is claimed. Blob `Contains` remains
+unsupported.
+
+### Blob suffix console (pending)
+
+`--payload-suffix HEX` selects the same residual predicate in synchronous and
+retained fixture queries. Raw-slice oracles exercise empty, zero and non-UTF-8
+payloads after upgrade, including the escaped-zero/`FF` false-match boundary.
+Retained counts combine suffix, prefix and range filters; changing or oversizing
+the suffix during resume refuses without changing backing. Input work still
+requires completion before a count is returned, including count zero.
+
+The focused Blob parser/console/retained checks and actual interactive CLI check
+pass with console Wasm SHA-256
+`4d75dbd41fb8edc70a6457d4e748c4d83f6955d646f00cfc661564935969b097`.
+This changes the paired private fixture request shape, not the product engine,
+schema, stored jobs or Canic's production inspection contract.
 
 ### Literal Blob defaults (0.22)
 
@@ -4068,3 +4107,61 @@ cargo test --offline --locked -p ic-db --test defaults
 make db
 db schema DefaultRow
 ```
+
+### Native Canic inspection client (pending)
+
+`db inspect` consumes Canic 0.219.0, revision
+`3d2ef2719450e57484638b4f1db6cb6bcc41d64c`, with IC Agent 0.49.3.
+The `db` feature exposes passive definitions to the native client without the
+Canic runtime or IC DB engine. Product dependency graphs and durable formats do
+not change. `scripts/build-canic-inspection.sh` locates that selected committed
+source, verifies its revision/clean tracked files and builds its existing normal,
+fault and incompatible witnesses with artifacts under this workspace's target.
+It does not modify the frozen IcyDB baseline or a sibling Canic checkout.
+
+```sh
+make m0-setup
+make m4-inspection
+```
+
+The actual CLI calls PocketIC's HTTP gateway with query signature verification
+enabled. A public synthetic Ed25519 identity proves caller selection. Catalogue,
+selected fields/indexes and permitted cardinality render in tables/JSON; each
+query reports elapsed time and unavailable remote cycles. Denied callers, missing
+entities and a disconnected provider refuse without fixture fallback. Unchanged
+schema upgrade, maintenance and incompatible storage preserve backing through
+inspection. Native checks additionally refuse wrong method/direction, malformed/
+oversized frames, wrong selection/schema and counts without readable admission.
+Named definitions stay finite; bounds and references have separate table columns.
+The source receipt, Wasm hashes/build records and HTTP run log live under
+`target/evidence/canic-inspection/`. This qualifies simulated-network inspection,
+not live deployment, remote arbitrary queries or update recovery. The explicit application listing is qualified below as the final client slice of
+[IC DB #4](https://github.com/dragginzgame/ic-db/issues/4).
+
+Frozen IcyDB `6d421e3`, `crates/icydb-cli/src/icp/call/mod.rs`, distinguishes
+query failures from updates with unknown outcomes. The client retains that
+call-lane distinction by admitting only inspection queries here; it copies no
+subprocess transport, SQL surface, retries or update reconciliation machinery.
+
+### Native typed witness listing (pending)
+
+The same pinned Canic witness now serves `db witness-list` over verified HTTP.
+Setup inserts six literal rows through the application's bounded write endpoint;
+CLI operations remain read-only. Minimum score 30 with one-candidate work starts
+with an empty page and a cursor. After upgrade the CLI forwards each cursor
+unchanged and returns exactly IDs 3, 4 and 6. Changed minimum, corrupt cursor and
+an unauthorized caller refuse; closed/incompatible storage refuses ordinary
+listing. Both inspection and listing leave backing unchanged. Each listing
+command reports one query call; JSON uses hex continuation and separate statistics.
+Native cases refuse page/candidate excess, oversized cursors, malformed frames
+and wrong method IDs without exposing partial results.
+
+The native client has an explicit binding to `canic-db-witness.query.v1`, not a
+general query protocol. Shared connection code owns target/identity admission,
+signature verification and timing; the application owns query semantics. Its
+whole witness crate currently enables `db-schema` on native builds, so importing
+it merely for DTOs would introduce an unused engine. The isolated binding is
+checked against the actual committed producer rather than copying its executor.
+Producer revision/artifact hashes remain those in `target/evidence/canic-inspection/`;
+`http-client-listing.log` records the extended run. No engine, format or performance
+claim changes, and no write-capable client or automatic retry is introduced.

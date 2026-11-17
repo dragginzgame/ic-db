@@ -1,7 +1,7 @@
 //! Real Wasm envelope witness with independent row/index byte expectations.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
-use pocket_ic::ErrorCode;
 
 use std::collections::BTreeMap;
 

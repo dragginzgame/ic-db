@@ -36,6 +36,25 @@ fn blob_literals_are_exact_bounded_bytes() {
         payload_min: Some(lower), payload_max: Some(upper), ..
     }) if lower.0.is_empty() && upper.0 == [255]));
     for command in ["query", "aggregate"] {
+        let cli = parse_console_line(&format!(
+            "{command} BinaryObject --payload-prefix 0x00 --payload-suffix 0xfF80"
+        ))
+        .unwrap();
+        let suffix = match cli.command.unwrap() {
+            Command::Query { payload_suffix, .. } | Command::Aggregate { payload_suffix, .. } => {
+                payload_suffix.unwrap()
+            }
+            _ => panic!("wrong command"),
+        };
+        assert_eq!(suffix.0, [255, 128]);
+        for literal in ["0x0".to_owned(), format!("{max}00")] {
+            assert!(
+                parse_console_line(&format!(
+                    "{command} BinaryObject --payload-suffix {literal}"
+                ))
+                .is_err()
+            );
+        }
         let cli =
             parse_console_line(&format!("{command} BinaryObject --payload-prefix 0x00fF")).unwrap();
         let prefix = match cli.command.unwrap() {

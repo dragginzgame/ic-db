@@ -1,8 +1,8 @@
 //! Entity growth with independently checked reachability, isolation and upgrade.
 mod artifact;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
-use pocket_ic::ErrorCode;
 
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);

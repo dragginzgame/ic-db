@@ -32,11 +32,13 @@ pub(super) fn filter<'a, E: Entity>(
     minimum: Option<&'a [u8]>,
     maximum: Option<&'a [u8]>,
     prefix: Option<&'a [u8]>,
+    suffix: Option<&'a [u8]>,
 ) -> Query<'a, E, Backing> {
     for (comparison, operand) in [
         (Comparison::Ge, minimum),
         (Comparison::Le, maximum),
         (Comparison::StartsWith, prefix),
+        (Comparison::EndsWith, suffix),
     ] {
         if let Some(operand) = operand {
             query = query.filter("payload", comparison, operand);

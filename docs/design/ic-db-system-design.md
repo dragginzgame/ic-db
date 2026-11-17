@@ -1,10 +1,11 @@
 # IC DB system design
 
-Status reviewed 2026-11-16: delivered engine scope includes the 0.19 maintained-count
+Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
 0.20 separates 16 KiB job frames from 4 KiB rows and improves console inspection
 and local operation; it does not establish remote application support.
-Section 9 specifies the preferred next integration slice.
+The 0.22.1 native CLI adds Canic application inspection; section 9 separates
+its checked inspection/listing scope from broader application qualification.
 The changelog and Git tags record releases.
 Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
@@ -219,7 +220,8 @@ IC Storage owns allocation handles and collection/backing mechanics; IC DB owns
 cross-record and cross-index invariants. The supplier boundary must be proved,
 not inferred from the word "storage". Do not recreate Memory/Storage layers merely
 to reproduce old package boundaries. Qualification borrows PocketIC's original
-async client; an explicitly prepared command launcher owns the server process.
+async client through Testkit with default features disabled; an explicitly
+prepared command launcher owns the server process.
 Instance deletion is explicit and best-effort, not a new IC DB lifecycle layer;
 Build owns generic Wasm build mechanics. Choose their current published versions
 when an experiment actually needs them, not speculative pins in this design.
@@ -1307,6 +1309,10 @@ Absence, empty bytes and a zero byte are distinct. `StartsWith` also accepts an
 exact Blob operand; an empty prefix matches every present value. A selected index
 can seek the prefix on its first unfixed component. `EndsWith` accepts exact Blob
 suffixes as a residual predicate; empty suffixes match present values only.
+The fixture CLI exposes this through `--payload-suffix HEX` on `db query
+BinaryObject` and `db aggregate BinaryObject`, combined with prefix/range bounds.
+It uses the same engine predicate and retained-job identity; the private fixture
+request shape changes with its paired CLI, without a durable-format change.
 Blob substring matching, sums/averages and primary keys are not admitted.
 Native composition checks cover optional Blob DISTINCT and retained grouped
 min/max whose late winners change prefix membership. Group filtering, aggregate
@@ -2112,7 +2118,7 @@ trapping safely on the same oversized operation is not successful continuation.
 
 ## 9. Delivery and deletion gates
 
-This is the current status summary, reviewed 2026-11-16. Passing a selected
+This is the current status summary, reviewed 2026-11-17. Passing a selected
 workload establishes that contract and envelope, not every combination in the
 retained capability scope. Later detail explains the implementation and evidence.
 
@@ -2122,13 +2128,13 @@ retained capability scope. Later detail explains the implementation and evidence
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Same entity set and keys only; broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
-| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent mixed-history model through jobs, upgrade and migration; installed typed adapter now owned by Canic | Adapter delivery and application CLI, broader matched workloads and operational acceptance; tier-2 application findings remain separate |
+| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent mixed-history model through jobs, upgrade and migration; Canic-owned typed adapter, native v1 inspection and one typed listing through signed HTTP | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
 The CLI demonstrates product schemas, bounded queries and aggregates against a
 temporary local fixture. Version 0.18 adds `db migration-demo`
-with a real local canister upgrade during copying. Deployed-database CLI access
-and production endpoint composition remain M4 integration work.
+with a real local canister upgrade during copying. The pending native `db inspect` command now consumes committed Canic inspection
+v1; `db witness-list` binds the qualification application's typed listing only.
 
 The 0.21 local console includes `BinaryObject` for synchronous queries,
 maintained counts and retained aggregates. `--payload-min`/`--payload-max` accept `0x`-prefixed hex
@@ -2137,7 +2143,7 @@ Projection, DISTINCT, ordering, payload grouping/counts and min/max reuse the
 existing fluent endpoint. Hex output is presentation-only, with `0x` distinct
 from absent `—`. The engine and stored fixture schema do not change for this
 adapter addition. Retained counts, DISTINCT counts, min/max and payload groups
-use existing job endpoints, progress and explicit cancellation. The pending
+use existing job endpoints, progress and explicit cancellation. The
 0.22 console also accepts payload bounds for retained aggregates, reconstructing
 the same fluent predicates on start and resume. Existing job admission rejects
 changed predicates without advancing progress; nonmatches consume scan work and
@@ -2145,7 +2151,7 @@ empty results still require completion. No engine or durable job format changes.
 This retains the signature-mismatch refusal lesson from frozen IcyDB `6d421e3`,
 `db/cursor/tests/mod.rs::prepare_grouped_cursor_rejects_signature_mismatch`;
 the CLI uses IC DB's existing job binding, not a copied cursor framework.
-The same pending console increment exposes optional Blob grouping and projected
+The 0.22 console exposes optional Blob grouping and projected
 DISTINCT counts: absence is one group/value, distinct from empty bytes, while
 `count:optional` excludes absent values. This preserves frozen IcyDB `6d421e3`'s
 `db/executor/aggregate/value_reducer/tests.rs::count_ignores_owned_and_borrowed_nulls`
@@ -2157,10 +2163,12 @@ selection; this complements, rather than extends, the recorded Wasm upgrade proo
 Optional-Blob retained checks also preserve absent versus empty keys and zero
 present-field counts across chunks/reopens on primary and indexed paths.
 Optional-Blob filter flags remain outside the console's selected surface.
-The pending fluent Blob prefix increment reuses the escaped component comparison
+The 0.22 fluent Blob prefix increment reuses the escaped component comparison
 and secondary prefix range used by Text. Prefix matching begins at the component
-boundary, so zero escaping preserves raw-byte prefix identity. Suffix/contains
-remain Text-only: arbitrary Blob needles could otherwise match inside an escape.
+boundary, so zero escaping preserves raw-byte prefix identity. Blob suffixes
+also use the shared comparator, rejecting matches that begin inside a zero escape.
+Substring matching remains Text-only; Blob substring search needs its own bounded
+algorithm before admission.
 Frozen IcyDB `6d421e3`, `db/predicate/runtime/mod.rs` and its
 `borrowed_field_pairs_match_general_comparison_semantics` regression, retain strict
 Text/Blob separation but do not implement Blob prefix comparison. IC DB extends
@@ -2209,7 +2217,9 @@ Ordinary Wasm exposes no fixture fault/maintenance controls. IC DB's temporary
 patch and runner are retired, leaving one implementation owner. These Canic
 files remain untracked in the read-only review at Canic HEAD `e84702b` on
 2026-11-16; that review did not rerun qualification or establish delivery.
-Remote application CLI support and a common inspection protocol remain outstanding. See the
+At that historical review, application CLI support and a common inspection protocol
+were outstanding. The committed contract and native client below supersede that
+status. See the
 [integration receipt](../../qualification/README.md#canic-typed-application-integration-019).
 
 This preserves IcyDB's application-supplied, synchronous caller authorization
@@ -2219,13 +2229,45 @@ into IC DB. Mounting follows Canic's existing Blob hooks; application policy
 remains outside both engines. An operation-level authorization grant does not
 replace any tenant/row checks required inside an application's typed handler.
 
-### Next integration design: inspect one application canister
+### Application inspection and one typed listing
 
-Preferred next M4 slice, not an implemented remote CLI or authorization to edit
-Canic: inspect a deliberately selected application canister, then exercise one
-application-defined listing through its typed adapter. The existing broad fluent
-engine remains the query implementation. This slice establishes the client/host
-boundary before adding a generic command surface around it.
+The 0.22.1 `db inspect` command consumes Canic 0.219.0 at committed revision
+`3d2ef2719450e57484638b4f1db6cb6bcc41d64c`. It requires provider, canister and
+an explicit anonymous/PEM identity, uses verified IC Agent query calls and
+Canic's passive bounded v1 contract, and never falls back to fixture operation.
+Only an explicit loopback option fetches a local root key. A selected entity
+binds the catalogue schema and requires unchanged admission/incarnation across
+its two observations. Counts remain application-selected maintained metadata.
+Tables/JSON separate executable identity from readable/closed/unsupported storage;
+remote cycles are reported as unavailable. No engine or stored format changes.
+Agent remains a direct, pending native dependency: Platform 0.34.13 supplies
+Ed25519 signed queries but not the CLI's secp256k1 PEM query path. The remaining
+boundary migration is recorded in [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4);
+functional HTTP qualification does not establish dependency-boundary completion.
+The installed HTTP witness qualifies signed caller selection, denial, schema/count
+rendering, unchanged-schema upgrade, maintenance and incompatibility without
+backing changes. This is local simulated-network evidence, not a live deployment.
+The 0.22.1 `db witness-list` command binds the same committed application's
+`canic-db-witness.query.v1`: minimum score, ID order, limit 1–3 and work 1–4.
+One command returns one page, including an empty page with continuation. The
+cursor remains opaque; the application reauthorizes every call and the engine
+refuses changed filter/cursor identity. There is no client filtering, accumulation,
+automatic pagination or update method. Target/identity/verified HTTP and statistics
+have one shared native owner with inspection.
+The isolated client DTO binding follows the application's committed protocol;
+importing its whole witness package would enable `db-schema` and an unnecessary
+native engine dependency. Actual producer calls qualify the binding. No protocol
+registry, source extraction or new package is introduced. The fixed witness
+command is not a general remote fluent frontend; other applications retain their
+own request shapes and exposure policy.
+This witness command is a temporary demonstration surface. Retain the application
+and regression coverage, but retire or move the special command when real
+application integration replaces it; the shared target/identity/inspection client
+remains useful independently.
+Frozen IcyDB `6d421e3`'s
+`db/cursor/tests/mod.rs::prepare_grouped_cursor_rejects_signature_mismatch`
+supplies the changed-query refusal invariant. This client forwards the existing
+IC DB cursor; it does not copy IcyDB's token parser or cursor framework.
 
 | Contract | Preferred initial rule |
 | --- | --- |
@@ -2239,12 +2281,10 @@ boundary before adding a generic command surface around it.
 | Continuation | Forward the application's bounded cursor unchanged and preserve empty-page continuation. Each request is authorized again. Inspection across several calls is not a snapshot; changed schema/database identity invalidates the client's accumulated description. |
 | Call evidence | Report the actual query/update lane and measured client elapsed time. Show cycles only when their source and scope are known; unavailable remote charges are not zero and concurrent balance changes are not an exact per-call meter. |
 
-Share passive inspection definitions at the adapter boundary once both producer
-and client need them. Wire stays outside the engine and durable codec. Do not
+The client imports passive inspection definitions from the Canic adapter. Wire stays outside the engine and durable codec. Do not
 add a crate, generated endpoint registry, protocol-negotiation framework or
 general dynamic executor merely to expose these few facts. The current JSON
-display strings are not a substitute for a versioned typed reply. Endpoint names,
-transport IDs and exact metadata bounds still need agreement at the Canic owner.
+display strings are not a substitute for a versioned typed reply. Canic owns `db_inspect`, `canic.db.inspect.v1` and the metadata/frame bounds.
 The adapter contract and its focused installed qualification are tracked in
 [Canic #18](https://github.com/dragginzgame/canic/issues/18). CLI target selection,
 presentation and client integration are tracked separately in
@@ -2263,11 +2303,12 @@ check before a write-capable client is admitted.
 Qualification is one small end-to-end application witness, not a second engine:
 authorized schema/status, denied caller before malformed decoding, wrong protocol
 version, unsupported/maintenance state without backing changes, selected-entity
-bounds, and unchanged-schema upgrade. Add its real filtered/ordered listing with
-sparse pages and altered-cursor refusal. A later write-capable client must also
+bounds, and unchanged-schema upgrade. Its real filtered/ordered listing now preserves
+sparse pages and altered-cursor refusal across an unchanged-schema upgrade. A later write-capable client must also
 prove lost-reply handling. Keep network-call latency separate from Wasm bytes,
 instructions and cycles; the frozen IcyDB comparison matrix remains authoritative
-only for its matched workloads. No remote implementation is claimed by this plan.
+only for its matched workloads. The client supports inspection plus the explicitly named witness listing; generic
+remote queries and writes are not exposed.
 
 ### Current engine delivery and qualification
 
@@ -2279,7 +2320,7 @@ metadata obligations or change planner defaults to improve selected benchmarks.
 The 0.19 increment adds maintained whole-entity cardinality under the explicit
 format hard cut described in section 4. It does not change schema authoring or
 replace fluent counting, and provides no conversion of earlier stored formats.
-The local CLI exposes this as `db count ENTITY` for its three queryable fixture
+The local CLI exposes this as `db count ENTITY` for its queryable fixture
 entities. It accepts no filtering, limit or continuation options; filtered counts
 remain fluent `db query ENTITY --select count`. This directly calls the existing
 typed cardinality API, with no new engine, cache, metadata or endpoint-generation
@@ -4685,9 +4726,9 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.44.9. Qualification selects
-IC Storage 0.74.1, PocketIC 16.1.0 directly, Platform Runtime 0.23.13
-and Wire 0.24.2, with exact resolution in its own lockfile. The product selects
+The current tooling baseline is Toko Tooling 0.44.11. Qualification selects
+IC Storage 0.74.1, PocketIC 16.1.0 through Testkit 0.108.0, Platform Runtime 0.23.13
+and Wire 0.24.3, with exact resolution in its own lockfile. The product selects
 Platform Types 0.21.2. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions
 are probe inputs, not a product compatibility promise. Earlier M0 runs used the
@@ -4698,7 +4739,7 @@ request/response encoding; method identities and bounds stay unchanged. The
 frozen IcyDB comparison alone retains transitive Wire 0.22.4. No Wire type crosses
 that boundary or enters the product's codecs. Qualification package directories
 now match their existing Cargo package names, without changing package identities.
-Host Artifacts selects 0.80.2 and Host Text selects 0.76.0. The old native
+Host Artifacts selects 0.80.3 and Host Text selects 0.77.2. The old native
 Testkit/Platform facade and Host FS/Process graph have been removed. The CLI and
 probes use their retained APIs. The tooling installer updates the qualification
 release-lock planner; no product release or publication is part of adoption.

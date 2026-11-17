@@ -102,7 +102,12 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     false,
                     (lower, upper),
                     Some("key"),
-                    (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
+                    (
+                        None::<Vec<u8>>,
+                        None::<Vec<u8>>,
+                        None::<Vec<u8>>,
+                        None::<Vec<u8>>,
+                    ),
                 ),
             );
             let before = pic.get_stable_memory(canister).await;
@@ -145,7 +150,12 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 3_u32,
                 (lower, upper),
                 Some("key"),
-                (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
+                (
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                ),
             );
             let reply = pic
                 .update_call(
@@ -352,7 +362,12 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                 false,
                 (None::<String>, None::<String>),
                 Some("key-desc"),
-                (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
+                (
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                ),
             ),
         );
         let before = pic.get_stable_memory(canister).await;
@@ -399,7 +414,12 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         2_u32,
         (None::<String>, None::<String>),
         Some("key-desc"),
-        (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
+        (
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        ),
     );
     let reply = pic
         .update_call(
@@ -533,12 +553,13 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let query_with_prefix = async |entity: &str,
-                                   select: &str,
-                                   lower: Option<Vec<u8>>,
-                                   upper: Option<Vec<u8>>,
-                                   prefix: Option<Vec<u8>>,
-                                   bytes: u32| {
+    let query_with_pattern = async |entity: &str,
+                                    select: &str,
+                                    lower: Option<Vec<u8>>,
+                                    upper: Option<Vec<u8>>,
+                                    prefix: Option<Vec<u8>>,
+                                    suffix: Option<Vec<u8>>,
+                                    bytes: u32| {
         let request = (
             entity,
             None::<Vec<u8>>,
@@ -555,7 +576,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 false,
                 (None::<String>, None::<String>),
                 None::<String>,
-                (lower, upper, prefix),
+                (lower, upper, prefix, suffix),
             ),
         );
         let before = pic.get_stable_memory(canister).await;
@@ -586,6 +607,9 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             LIMITS,
         )
         .unwrap()
+    };
+    let query_with_prefix = async |entity: &str, select: &str, lower, upper, prefix, bytes| {
+        query_with_pattern(entity, select, lower, upper, prefix, None, bytes).await
     };
     let query = async |entity: &str, select: &str, lower, upper, bytes| {
         query_with_prefix(entity, select, lower, upper, None, bytes).await
@@ -639,6 +663,25 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
         ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
+        for suffix in [vec![], vec![255], vec![128], vec![0], vec![255, 128]] {
+            let page = query_with_pattern(
+                "BinaryObject",
+                "payload",
+                None,
+                None,
+                None,
+                Some(suffix.clone()),
+                4096,
+            )
+            .await
+            .unwrap();
+            let expected = if payload.ends_with(&suffix) {
+                vec![vec![hex.to_owned()]]
+            } else {
+                vec![]
+            };
+            assert_eq!(page.1, expected);
+        }
         for prefix in [
             vec![],
             vec![0],
@@ -713,6 +756,13 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 .await
                 .unwrap_err()
                 .contains("exceeds --bytes")
+        );
+    }
+    for (entity, suffix) in [("BinaryObject", vec![0; 1025]), ("Entry", vec![])] {
+        assert!(
+            query_with_pattern(entity, "id", None, None, None, Some(suffix), 4096)
+                .await
+                .is_err()
         );
     }
     assert!(

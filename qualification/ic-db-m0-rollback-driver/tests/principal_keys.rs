@@ -1,7 +1,7 @@
 //! Length-framed Principal identity through the real product and IC rollback.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
-use pocket_ic::ErrorCode;
 
 type Row = (Vec<u8>, Option<Vec<u8>>, u64);
 type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);

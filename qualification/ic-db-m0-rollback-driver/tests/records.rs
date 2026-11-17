@@ -438,13 +438,20 @@ fn console_inspects_and_queries() {
     assert_eq!(blobs.matches("query call (cardinality):").count(), 1);
     let prefixes = run_console(
         &binary,
-        "query BinaryObject --payload-prefix 0x00FF --select payload\nquery BinaryObject --payload-prefix 0xff --select count\nquery BinaryObject --payload-prefix 0x00 --payload-max 0x00ff --select count\nquit\n",
+        "query BinaryObject --payload-prefix 0x00FF --select payload\nquery BinaryObject --payload-prefix 0xff --select count\nquery BinaryObject --payload-prefix 0x00 --payload-max 0x00ff --select count\nquery BinaryObject --payload-suffix 0xfF80 --select payload\nquery BinaryObject --payload-suffix 0xff --select count\nquery BinaryObject --payload-prefix 0x00 --payload-suffix 0x80 --select count\nquit\n",
     );
     assert_eq!(
         result_table_rows(&prefixes),
-        [vec!["0x00ff80"], vec!["0"], vec!["0"]]
+        [
+            vec!["0x00ff80"],
+            vec!["0"],
+            vec!["0"],
+            vec!["0x00ff80"],
+            vec!["0"],
+            vec!["1"]
+        ]
     );
-    assert_eq!(prefixes.matches("query call (query):").count(), 3);
+    assert_eq!(prefixes.matches("query call (query):").count(), 6);
     assert_eq!(
         result_table_rows(&existence),
         vec![vec!["true"], vec!["true"], vec!["false"], vec!["false"]]
@@ -925,7 +932,7 @@ fn console_inspects_and_queries() {
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
         }
-        let blobs: [ConsoleCase<'_>; 25] = [
+        let blobs: &[ConsoleCase<'_>] = &[
             ("count", &[&["1"]]),
             ("count:payload", &[&["1"]]),
             ("count:optional", &[&["0"]]),
@@ -953,6 +960,12 @@ fn console_inspects_and_queries() {
             ("count --payload-prefix 0x00ff", &[&["1"]]),
             ("count --payload-prefix 0xff", &[&["0"]]),
             ("count --payload-prefix 0x", &[&["1"]]),
+            ("count --payload-suffix 0x80", &[&["1"]]),
+            ("count --payload-suffix 0xff", &[&["0"]]),
+            (
+                "max:payload --payload-prefix 0x00 --payload-suffix 0xff80",
+                &[&["0x00ff80"]],
+            ),
             (
                 "max:payload --payload-prefix 0x00 --payload-max 0x00ff",
                 &[],

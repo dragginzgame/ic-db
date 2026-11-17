@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
-//! Local product-record console. Real canister integration belongs to Canic.
+//! Local product-record console and native client for Canic application inspection.
 
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_host_text::{bordered_table, escape};
+use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
 
 use std::{
@@ -67,8 +68,8 @@ async fn measured_call(
 #[derive(Parser)]
 #[command(
     name = "db",
-    about = "Inspect and query a fresh local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nThis local fixture is discarded on exit; it is not a deployed database.\nSchema inspection covers all declared entities; query supports Entry, Document and DecimalRow.\nCall statistics follow normal results; JSON and failed-command statistics use stderr. Seconds measure the local simulator call, excluding startup, fixture setup and cycle sampling. Cycles charged are the observed canister balance decrease, not an instruction-derived estimate; zero charged cycles does not mean zero execution work. Aggregate and migration commands report each database call separately.",
+    about = "Inspect a Canic application or query a local IC DB fixture (no SQL)",
+    after_help = "Without a command, read commands interactively or from standard input.\nUse inspect with an explicit provider, canister and identity for application metadata. Other commands use a local fixture discarded on exit.\nSchema inspection covers all declared entities; query supports Entry, Document, DecimalRow and BinaryObject.\nCall statistics follow normal results; JSON and failed-command statistics use stderr. Seconds measure the local simulator call, excluding startup, fixture setup and cycle sampling. Cycles charged are the observed canister balance decrease, not an instruction-derived estimate; zero charged cycles does not mean zero execution work. Aggregate and migration commands report each database call separately.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -87,12 +88,19 @@ fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(std::iter::once("db".to_owned()).chain(words))
 }
 
+mod inspect;
+mod remote;
 mod terminal;
 #[cfg(test)]
 mod tests;
+mod witness_listing;
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect an explicitly selected application through Canic inspection v1.
+    Inspect(inspect::Options),
+    /// Read one page from the Canic qualification application's fixed Item listing.
+    WitnessList(witness_listing::Options),
     /// Inspect generated fields, types, indexes and admitted schema identity.
     #[command(
         after_help = "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes.\nPresent references require an existing target and restrict its deletion; absent references have no target.\nUse db status for stored schema admission and storage details."
@@ -147,6 +155,9 @@ enum Command {
         /// BinaryObject.payload starts with HEX; 0x matches every present payload.
         #[arg(long, value_name="HEX", value_parser=parse_blob)]
         payload_prefix: Option<BlobArg>,
+        /// BinaryObject.payload ends with HEX; residual filtering consumes scan work.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_suffix: Option<BlobArg>,
         /// Entry.amount >= VALUE.
         #[arg(long = "min")]
         minimum: Option<u64>,
@@ -196,6 +207,9 @@ enum Command {
         /// BinaryObject.payload starts with exact raw bytes; combines with range bounds.
         #[arg(long, value_name="HEX", value_parser=parse_blob)]
         payload_prefix: Option<BlobArg>,
+        /// BinaryObject.payload ends with HEX; residual filtering consumes scan work.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_suffix: Option<BlobArg>,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
         after: Option<CursorArg>,
@@ -484,6 +498,16 @@ fn print_status((schema, incarnation, revision, pages): Status) {
 
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
+    if let Some(Command::WitnessList(options)) = &cli.command {
+        return tokio::runtime::Runtime::new()
+            .map_err(|e| e.to_string())?
+            .block_on(witness_listing::run(options));
+    }
+    if let Some(Command::Inspect(options)) = &cli.command {
+        return tokio::runtime::Runtime::new()
+            .map_err(|e| e.to_string())?
+            .block_on(inspect::run(options));
+    }
     if matches!(cli.command, Some(Command::Help)) {
         help();
         return Ok(());
@@ -612,6 +636,8 @@ async fn session(
         };
         let outcome = async {
         match command {
+            Command::Inspect(options) => inspect::run(&options).await?,
+            Command::WitnessList(options) => witness_listing::run(&options).await?,
             Command::Help => help(),
             Command::Quit => {}
             Command::MigrationDemo => {
@@ -696,6 +722,7 @@ async fn session(
                 payload_min,
                 payload_max,
                 payload_prefix,
+                payload_suffix,
                 minimum,
                 category,
                 entry_id,
@@ -714,7 +741,7 @@ async fn session(
                     limit,
                     (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
-                    (payload_min.map(|v| v.0), payload_max.map(|v| v.0), payload_prefix.map(|v| v.0)),
+                    (payload_min.map(|v| v.0), payload_max.map(|v| v.0), payload_prefix.map(|v| v.0), payload_suffix.map(|v| v.0)),
                 );
                 let reply = invoke(
                     CallKind::Update,
@@ -909,6 +936,7 @@ async fn session(
                 payload_min,
                 payload_max,
                 payload_prefix,
+                payload_suffix,
                 after,
                 limit,
                 minimum,
@@ -941,7 +969,7 @@ async fn session(
                             bytes,
                             select,
                             (distinct, (group_min, group_max), group_order,
-                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0), payload_prefix.map(|v|v.0))),
+                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0), payload_prefix.map(|v|v.0), payload_suffix.map(|v|v.0))),
                         ),
                         Encoding::Frame {
                             method: 3,

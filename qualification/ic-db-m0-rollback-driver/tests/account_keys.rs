@@ -1,7 +1,7 @@
 //! Canonical Account/Subaccount keys across cross-entity batches and IC messages.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
-use pocket_ic::ErrorCode;
 
 type Identity = (Vec<u8>, Option<[u8; 32]>);
 type AccountRow = (Identity, Option<[u8; 32]>, u64);

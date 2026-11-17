@@ -1,7 +1,7 @@
 //! Cardinality, retained-byte and completed-output boundaries in the real engine.
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
+use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
-use pocket_ic::{CanisterId, nonblocking::PocketIc};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 
@@ -513,7 +513,7 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
             "job-lifecycle op={operation} now={now} limit={limit} result={result:?} instructions={instructions} cycles={cycles} writes={writes}"
         );
         assert!(instructions > 0 && cycles > 0);
-        Ok::<_, pocket_ic::RejectResponse>((result, writes))
+        Ok::<_, ic_testkit::pocket_ic::RejectResponse>((result, writes))
     };
     let fill = async |handle: &[u8]| {
         let prefix = advance(pic, canister, handle, 17, 0, 512).await.unwrap();

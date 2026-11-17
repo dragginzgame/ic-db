@@ -15,18 +15,20 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
+canic.workspace = true
 clap.workspace = true
+ic-agent.workspace = true
 ic-host-text.workspace = true
+ic-testkit.workspace = true
 ic-wire.workspace = true
-pocket-ic.workspace = true
 rustyline.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shlex.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
 ic-host-artifacts.workspace = true
-serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
 wasmparser.workspace = true
 

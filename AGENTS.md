@@ -38,13 +38,21 @@ This overlay owns local authority, product boundaries and qualification choices.
   product dependencies and stored bytes. Version durable changes; unsupported
   formats refuse intact until a supported transition exists.
 - IC Storage owns allocation/collections. Qualification borrows PocketIC's
-  original async client; a prepared command-scoped launcher owns the server.
+  original async client through Testkit's default-feature-free export; a prepared
+  command-scoped launcher owns the server.
   Keep setup explicit and attempt instance deletion explicitly; no replacement
   lifecycle framework belongs in IC DB. The released 0.106.0 launcher remains
-  an external bootstrap tool, not a driver library dependency.
+  an external bootstrap tool, independent of the lightweight Testkit library.
   Canic's adapter owns endpoints, guards and composition; applications own
   authorization. Standalone qualification may use Platform hooks and bounded
   Wire transport outside product crates, never a second executor/endpoint registry.
+- The maintainer authorized 0.22.1 source delivery after the direct Agent finding.
+  This scopes an exception to the external-IC dependency ownership rule to the
+  native inspection/listing client and its qualification. Retain Agent 0.49.3
+  until Platform supplies the supported secp256k1 query path tracked in
+  [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4), then migrate
+  and remove this exception. It grants no advisory exemption, live deployment,
+  product-engine dependency or sibling implementation authority.
 - Keep two-stage schema expansion: Rust resolves paths, host-only registration
   collects declarations, then validation seals the graph and emits target data.
   Registration and `ctor` stay out of deployed Wasm.

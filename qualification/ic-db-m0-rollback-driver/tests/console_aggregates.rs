@@ -1,7 +1,7 @@
 //! Retained Decimal rounding and Blob results through the console, across heap loss.
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
+use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
-use pocket_ic::{CanisterId, nonblocking::PocketIc};
 use serde::{Serialize, de::DeserializeOwned};
 
 type Selection = (
@@ -11,7 +11,12 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
-    (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>),
+    (
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    ),
 );
 type Step = (
     u64,
@@ -157,7 +162,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 32,
                 (None, None),
                 None,
-                (None, None, None),
+                (None, None, None, None),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -391,7 +396,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 32,
                 (None, None),
                 None,
-                (None, None, None),
+                (None, None, None, None),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -430,7 +435,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
     }
     // Inclusive byte bounds select the input, including empty and non-UTF-8
     // bytes. A nonmatch still consumes work; it never becomes a partial answer.
-    for (payload, lower, upper, prefix, matches) in [
+    for (payload, lower, upper, prefix, suffix, matches) in [
         (vec![], Some(vec![]), Some(vec![]), None, true),
         (vec![0], None, Some(vec![]), None, false),
         (
@@ -468,7 +473,31 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             Some(vec![255, 255]),
             true,
         ),
-    ] {
+    ]
+    .into_iter()
+    .map(|(payload, lower, upper, prefix, matches)| (payload, lower, upper, prefix, None, matches))
+    .chain([
+        (vec![], None, None, None, Some(vec![]), true),
+        (vec![0], None, None, None, Some(vec![255]), false),
+        (vec![0], None, None, None, Some(vec![0]), true),
+        (
+            vec![0, 255, 128],
+            None,
+            None,
+            Some(vec![0]),
+            Some(vec![255, 128]),
+            true,
+        ),
+        (
+            vec![0, 255, 128],
+            None,
+            Some(vec![0, 255]),
+            None,
+            Some(vec![128]),
+            false,
+        ),
+        (vec![0, 255, 128], None, None, None, Some(vec![255]), false),
+    ]) {
         replace(payload, None).await;
         let selection: Selection = (
             "BinaryObject".into(),
@@ -477,7 +506,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             32,
             (None, None),
             None,
-            (lower, upper, prefix),
+            (lower, upper, prefix, suffix),
         );
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -491,13 +520,18 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .unwrap();
         let before = pic.get_stable_memory(canister).await;
         let mut changed = selection.clone();
+        changed.6.3 = Some(vec![42]);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        changed.6.3 = Some(vec![0; 1025]);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        changed = selection.clone();
         changed.6.2 = Some(vec![42]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         changed.6.2 = Some(vec![0; 1025]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6 = (Some(vec![1, 2, 3]), None, None);
+        changed.6 = (Some(vec![1, 2, 3]), None, None, None);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6 = (Some(vec![0; 1025]), None, None);
+        changed.6 = (Some(vec![0; 1025]), None, None, None);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
@@ -505,7 +539,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 .is_err()
         );
         changed.0 = "Document".into();
-        changed.6 = (Some(vec![]), None, None);
+        changed.6 = (Some(vec![]), None, None, None);
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
                 .await
@@ -526,7 +560,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         32,
         (None, None),
         None,
-        (None, None, None),
+        (None, None, None, None),
     );
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await
