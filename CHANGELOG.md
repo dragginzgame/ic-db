@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.22.0] - Unreleased
+
+### ⚠️ Breaking
+
+- `LiteralDefault::Blob` extends the public metadata enum; exhaustive consumers
+  must handle raw byte defaults. Existing declared contracts retain their identity.
+
+### ➕ Added
+
+- Fluent `filter_between(field, lower, upper)` includes both endpoints using
+  existing exact comparisons and index ranges. It consumes two filter terms;
+  absent values do not match, and reversed bounds produce no matches.
+- Fluent `filter_not_between(field, lower, upper)` matches present values strictly
+  outside the inclusive interval. It reuses one bounded OR traversal; reversed
+  bounds match every present value once. Both range helpers retain continuation
+  identity with their explicit comparisons, including aggregate jobs after reopen.
+- Blob insert defaults use Rust byte literals, such as `default = b""` or
+  `default = b"\x00\xff"`. Omission applies the default; explicit absence/empty
+  bytes and replacements remain unchanged. Defaults obey field bounds and normal
+  batch constraints. Schema inspection displays them as hex in the Info column.
+- Fluent Blob prefix filtering with `Comparison::StartsWith`, including indexed
+  prefix seeks, completed group extrema and retained aggregates. Empty prefixes
+  match present values; absence never matches. Use `--payload-prefix HEX` with `db query BinaryObject`
+  or `db aggregate BinaryObject`; it combines with inclusive payload bounds.
+- Fluent Blob suffix filtering with `Comparison::EndsWith`, also available to
+  completed group extrema and retained aggregates. Matching respects raw byte
+  boundaries, so a zero byte cannot falsely match suffix `0xff`. Empty suffixes
+  match present values; absence never matches. Suffixes remain residual filters
+  under the work budget. Blob `Contains` remains unsupported; no CLI suffix flag
+  is added in this increment.
+- Filter retained `BinaryObject` aggregates with `--payload-min` and
+  `--payload-max`, using the same inclusive byte bounds as `db query`.
+  Filters apply before accumulation; changing them during resume refuses
+  without changing the saved job. Empty results still require a completed scan.
+- Group optional Blob values and count their DISTINCT projection with both
+  `db query` and `db aggregate`. Absence is one distinct value/group, separate
+  from empty bytes. `optional,count:optional` keeps the absent group with count zero.
+
+### ▶️ Try it
+
+```sh
+make db
+db aggregate BinaryObject --select count --payload-min 0x00ff80 --payload-max 0x00ff80 --work 1
+db aggregate BinaryObject --select max:payload --payload-max 0x00ff --work 1
+db query BinaryObject --select distinct-count:optional
+db aggregate BinaryObject --select optional,count:optional --work 1
+db query BinaryObject --payload-prefix 0x00ff --select payload
+db aggregate BinaryObject --payload-prefix 0xff --select count --work 1
+db schema DefaultRow
+```
+
+The temporary fixture contains `0x00ff80`: the first command returns one;
+the second completes with no maximum. Its absent optional value contributes one
+DISTINCT value; the optional-field group command shows the absent group with count zero.
+The prefix query returns `0x00ff80`; the prefix aggregate completes with count zero.
+`DefaultRow` shows empty (`0x`) and binary (`0x00ff`) defaults.
+These commands do not access deployed data.
+
+### 🧪 Testing
+
+- Release supplier review (2026-11-17): selected Platform Types 0.21.2,
+  Runtime 0.23.16, Storage 0.74.1, Host Artifacts 0.80.3, Host Text 0.77.2,
+  Wire 0.24.3 and Toko Tooling 0.44.11 match current stable, non-yanked Cargo
+  index releases. Retain the qualified external Testkit 0.106.0 launcher and
+  Build 0.84.1 release editor; defer their optional 0.108.0 / 0.87.3 refreshes
+  to the next tooling-maintenance pass.
+- Qualify Blob prefixes with DISTINCT projections and retained grouped min/max.
+  Late winners can enter or leave the selected prefix; filtering, aggregate order
+  and the result limit apply only after complete accumulation. Single-row work
+  chunks and result pages survive repeated reopen on primary and index paths.
+- Qualify retained Blob grouping and DISTINCT across sparse scans, indexed
+  paths, repeated reopen, retries and completed-result pages. Independent byte
+  keys establish exact results; group filters and output limits never truncate
+  the input, and output refusal preserves progress. This is native engine
+  qualification, complementing the existing Wasm upgrade checks.
+- Check optional Blob groups across retained chunks and reopened stores on both
+  scan and index paths. Absence contributes one DISTINCT key and a group with
+  zero present values; empty bytes remain a separate, counted value.
+
 ## [0.21.0] - 2026-11-17
 
 ### ⚠️ Breaking

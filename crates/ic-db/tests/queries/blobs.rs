@@ -167,6 +167,44 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
             .collect::<Vec<_>>()
     );
     let mut optional_order = rows.clone();
+    let mut optional_groups = std::collections::BTreeMap::new();
+    for row in &rows {
+        *optional_groups.entry(row.optional.clone()).or_insert(0_u64) += 1;
+    }
+    assert_eq!(
+        db.query::<Binary>()
+            .count_distinct::<Optional>()
+            .unwrap()
+            .value,
+        optional_groups.len() as u64
+    );
+    for present_only in [false, true] {
+        let query = db.query::<Binary>();
+        let groups = if present_only {
+            query.group_count_field::<Optional>("optional")
+        } else {
+            query.group_count::<Optional>()
+        }
+        .unwrap()
+        .value;
+        assert_eq!(
+            groups
+                .into_iter()
+                .map(|g| (g.key.optional, g.count))
+                .collect::<Vec<_>>(),
+            optional_groups
+                .iter()
+                .map(|(key, count)| (
+                    key.clone(),
+                    if present_only && key.is_none() {
+                        0
+                    } else {
+                        *count
+                    }
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
     optional_order.sort_by(|a, b| (&a.optional, a.id).cmp(&(&b.optional, b.id)));
     assert_eq!(
         db.query::<Binary>()
@@ -200,14 +238,12 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
             .collect::<Vec<_>>(),
         oracle
     );
-    for comparison in [C::StartsWith, C::EndsWith, C::Contains] {
-        assert!(matches!(
-            db.query::<Binary>()
-                .filter("payload", comparison, [0_u8].as_slice())
-                .fetch(),
-            Err(Error::InvalidQuery)
-        ));
-    }
+    assert!(matches!(
+        db.query::<Binary>()
+            .filter("payload", C::Contains, [0_u8].as_slice())
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
     assert!(matches!(
         db.query::<Binary>().filter("payload", C::Eq, "").fetch(),
         Err(Error::InvalidOperand)
@@ -224,6 +260,336 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
             .fetch(),
         Err(Error::Limit)
     ));
+}
+
+#[test]
+fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Binary::SCHEMA]).unwrap(),
+        [53; 16],
+    )
+    .unwrap();
+    let values = [
+        vec![],
+        vec![0],
+        vec![255],
+        vec![0, 255],
+        vec![255, 0],
+        vec![0, 0],
+        vec![255, 255],
+        vec![1, 255],
+        vec![1],
+        vec![128],
+        vec![0, 255, 0],
+    ];
+    let rows = values
+        .into_iter()
+        .enumerate()
+        .map(|(id, payload)| Binary {
+            id: id as u64,
+            optional: if id % 4 == 1 {
+                None
+            } else {
+                Some(payload.clone())
+            },
+            payload,
+            unique: None,
+        })
+        .collect::<Vec<_>>();
+    let mut batch = Batch::new();
+    for row in &rows {
+        batch.insert(row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let saved = backing.borrow().clone();
+    let suffixes = (0..=255)
+        .map(|b| vec![b])
+        .chain([
+            vec![],
+            vec![0, 0],
+            vec![0, 255],
+            vec![255, 0],
+            vec![255, 255],
+            vec![0; 600],
+        ])
+        .collect::<Vec<_>>();
+    for optional in [false, true] {
+        let field = if optional { "optional" } else { "payload" };
+        let index = if optional {
+            "optional,id"
+        } else {
+            "payload,id"
+        };
+        let value = |r: &Binary| {
+            if optional {
+                r.optional.clone()
+            } else {
+                Some(r.payload.clone())
+            }
+        };
+        for suffix in &suffixes {
+            for indexed in [false, true] {
+                for descending in [false, true] {
+                    let mut expected = rows
+                        .iter()
+                        .filter(|r| value(r).is_some_and(|v| v.ends_with(suffix)))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if indexed {
+                        expected.sort_by_key(|r| (value(r), r.id));
+                    }
+                    if descending {
+                        expected.reverse();
+                    }
+                    let mut actual = Vec::new();
+                    let mut cursor = None;
+                    let mut examined = 0;
+                    for page_number in 0..16 {
+                        let mut q = db
+                            .query::<Binary>()
+                            .filter(field, C::EndsWith, suffix.as_slice())
+                            .work_limit(3)
+                            .limit(2);
+                        if indexed {
+                            q = q.using_index(index, &[]);
+                        }
+                        if descending {
+                            q = q.descending();
+                        }
+                        if let Some(cursor) = &cursor {
+                            q = q.after(cursor);
+                        }
+                        let page = q.fetch().unwrap();
+                        assert!(page.examined <= 3);
+                        examined += page.examined;
+                        actual.extend(page.rows);
+                        cursor = page.next;
+                        if cursor.is_none() {
+                            break;
+                        }
+                        assert!(page_number < 15, "suffix pages must progress");
+                    }
+                    assert_eq!(actual, expected);
+                    assert_eq!(examined, rows.len(), "suffixes remain residual filters");
+                }
+            }
+        }
+    }
+    let groups = db
+        .query::<Binary>()
+        .filter_groups(C::EndsWith, [255].as_slice())
+        .group_max::<Payload, Optional>()
+        .unwrap()
+        .value;
+    assert_eq!(
+        groups
+            .into_iter()
+            .map(|g| g.key.payload)
+            .collect::<Vec<_>>(),
+        vec![vec![0, 255], vec![1, 255], vec![255], vec![255, 255]]
+    );
+    assert_eq!(*backing.borrow(), saved);
+}
+
+#[test]
+fn blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Binary::SCHEMA]).unwrap(),
+        [52; 16],
+    )
+    .unwrap();
+    let values = [
+        vec![],
+        vec![0],
+        vec![0, 0],
+        vec![0, 255],
+        vec![0, 255, 128],
+        vec![255],
+        vec![255, 0],
+        vec![255, 255],
+        vec![128],
+        vec![1, 0],
+        vec![0],
+    ];
+    let rows = values
+        .into_iter()
+        .enumerate()
+        .map(|(id, payload)| Binary {
+            id: id as u64,
+            optional: if id % 4 == 1 {
+                None
+            } else {
+                Some(payload.clone())
+            },
+            payload,
+            unique: None,
+        })
+        .collect::<Vec<_>>();
+    let mut batch = Batch::new();
+    for row in &rows {
+        batch.insert(row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let saved = backing.borrow().clone();
+    let prefixes = (0..=255)
+        .map(|b| vec![b])
+        .chain([
+            vec![],
+            vec![0, 0],
+            vec![0, 255],
+            vec![0, 255, 128],
+            vec![255, 255],
+            vec![0; 600], // Admitted comparison, too large for an index seek.
+        ])
+        .collect::<Vec<_>>();
+    for optional in [false, true] {
+        let field = if optional { "optional" } else { "payload" };
+        let index = if optional {
+            "optional,id"
+        } else {
+            "payload,id"
+        };
+        let value = |r: &Binary| {
+            if optional {
+                r.optional.clone()
+            } else {
+                Some(r.payload.clone())
+            }
+        };
+        for prefix in &prefixes {
+            for indexed in [false, true] {
+                for descending in [false, true] {
+                    let mut expected = rows
+                        .iter()
+                        .filter(|r| value(r).is_some_and(|v| v.starts_with(prefix)))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if indexed {
+                        expected.sort_by_key(|r| (value(r), r.id));
+                    }
+                    if descending {
+                        expected.reverse();
+                    }
+                    let query = || {
+                        let mut q =
+                            db.query::<Binary>()
+                                .filter(field, C::StartsWith, prefix.as_slice());
+                        if indexed {
+                            q = q.using_index(index, &[]);
+                        }
+                        if descending {
+                            q = q.descending();
+                        }
+                        q
+                    };
+                    if !descending {
+                        assert_eq!(query().count().unwrap().value, expected.len() as u64);
+                    }
+                    let mut actual = Vec::new();
+                    let mut cursor = None;
+                    let mut examined = 0;
+                    let mut complete = false;
+                    for _ in 0..16 {
+                        let mut q = query().limit(2).work_limit(3);
+                        if let Some(after) = &cursor {
+                            q = q.after(after);
+                        }
+                        let page = q.fetch().unwrap();
+                        assert!(page.examined <= 3);
+                        examined += page.examined;
+                        actual.extend(page.rows);
+                        cursor = page.next;
+                        if cursor.is_none() {
+                            complete = true;
+                            break;
+                        }
+                    }
+                    assert!(complete);
+                    assert_eq!(actual, expected);
+                    if indexed && prefix.len() < 600 {
+                        assert_eq!(examined, expected.len());
+                    }
+                }
+            }
+        }
+    }
+    // DISTINCT must apply the prefix before collapsing a projected value class.
+    for prefix in [&[][..], &[0][..], &[0, 255][..], &[255][..]] {
+        let expected = rows
+            .iter()
+            .filter_map(|r| r.optional.as_ref())
+            .filter(|v| v.starts_with(prefix))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        for indexed in [false, true] {
+            let query = || {
+                let q = db
+                    .query::<Binary>()
+                    .filter("optional", C::StartsWith, prefix);
+                if indexed {
+                    q.using_index("optional,id", &[])
+                } else {
+                    q
+                }
+            };
+            let actual = query()
+                .distinct()
+                .fetch_as::<Optional>()
+                .unwrap()
+                .rows
+                .into_iter()
+                .map(|r| r.optional.unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(actual.len(), expected.len());
+            assert_eq!(
+                actual
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected
+            );
+            assert_eq!(
+                query().count_distinct::<Optional>().unwrap().value,
+                expected.len() as u64
+            );
+        }
+    }
+    // Group selection uses the same admitted prefix semantics on a completed winner.
+    let groups = db
+        .query::<Binary>()
+        .filter_groups(C::StartsWith, [0, 255].as_slice())
+        .group_max::<Payload, Optional>()
+        .unwrap()
+        .value;
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| g.key.payload.clone())
+            .collect::<Vec<_>>(),
+        vec![vec![0, 255], vec![0, 255, 128]]
+    );
+    for operand in [
+        IndexValue::Absent,
+        IndexValue::Text(""),
+        IndexValue::Nat64(0),
+    ] {
+        assert!(matches!(
+            db.query::<Binary>()
+                .filter("optional", C::StartsWith, operand)
+                .fetch(),
+            Err(Error::InvalidOperand)
+        ));
+    }
+    assert_eq!(*backing.borrow(), saved);
 }
 
 #[test]

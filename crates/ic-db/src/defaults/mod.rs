@@ -17,6 +17,8 @@ pub enum LiteralDefault {
     Bool(bool),
     /// UTF-8 text within the declared byte limit.
     Text(&'static str),
+    /// Raw bytes within the declared Blob byte limit.
+    Blob(&'static [u8]),
 }
 
 impl LiteralDefault {
@@ -39,6 +41,11 @@ impl LiteralDefault {
                 writer
                     .bytes(s.as_bytes())
                     .map_err(|_| Error::InvalidSchema)?;
+            }
+            (Self::Blob(bytes), FieldType::Blob { max_bytes })
+                if bytes.len() <= max_bytes as usize =>
+            {
+                writer.bytes(bytes).map_err(|_| Error::InvalidSchema)?;
             }
             _ => return Err(Error::InvalidSchema),
         }

@@ -34,7 +34,8 @@ use field::Field;
 /// and `Self`) to its logical identity. Numeric authoring IDs are unsupported.
 /// With the host-only `ic-db/build` feature, declarations also register their
 /// full Rust paths for second-stage schema assembly.
-/// Fields may declare `default = LITERAL` for integers, Bool and bounded Text.
+/// Fields may declare `default = LITERAL` for integers, Bool, bounded Text and Blob.
+/// Blob defaults use Rust byte strings, e.g. `default = b"\x00\xff"`, never text/hex coercion.
 /// `Entity::insert()` builds typed omission-aware input for `Batch::insert_input`;
 /// explicit optional `None` is never replaced by a default. Primary-key and nested
 /// record defaults are not implemented. Defaults never run on decode/replacement.

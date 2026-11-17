@@ -30,7 +30,29 @@ fn blob_literals_are_exact_bounded_bytes() {
     }
     assert!(parse_console_line("count BinaryObject").is_ok());
     assert!(parse_console_line("aggregate BinaryObject --select min:payload").is_ok());
-    assert!(parse_console_line("aggregate BinaryObject --payload-min 0x").is_err());
+    let cli =
+        parse_console_line("aggregate BinaryObject --payload-min 0x --payload-max 0xFF").unwrap();
+    assert!(matches!(cli.command, Some(Command::Aggregate {
+        payload_min: Some(lower), payload_max: Some(upper), ..
+    }) if lower.0.is_empty() && upper.0 == [255]));
+    for command in ["query", "aggregate"] {
+        let cli =
+            parse_console_line(&format!("{command} BinaryObject --payload-prefix 0x00fF")).unwrap();
+        let prefix = match cli.command.unwrap() {
+            Command::Query { payload_prefix, .. } | Command::Aggregate { payload_prefix, .. } => {
+                payload_prefix.unwrap()
+            }
+            _ => panic!("wrong command"),
+        };
+        assert_eq!(prefix.0, [0, 255]);
+        assert!(
+            parse_console_line(&format!("{command} BinaryObject --payload-prefix 0x0")).is_err()
+        );
+        assert!(
+            parse_console_line(&format!("{command} BinaryObject --payload-prefix {max}00"))
+                .is_err()
+        );
+    }
 }
 
 #[test]

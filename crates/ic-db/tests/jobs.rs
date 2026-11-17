@@ -28,8 +28,574 @@ struct Other {}
 struct Amount {}
 #[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct Id {}
+#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 3500)))))]
+struct Payload {}
 fn time(ms: i64) -> Timestamp {
     Timestamp::from_millis(ms)
+}
+
+#[test]
+fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
+    use std::collections::BTreeMap;
+    let keys = [
+        vec![],
+        vec![0],
+        vec![0, 0],
+        vec![0, 255],
+        vec![128],
+        vec![255],
+    ];
+    let rows = (0..64)
+        .map(|id| Row {
+            id,
+            flag: u8::from(id >= 24),
+            amount: None,
+            payload: if id < 24 {
+                vec![42]
+            } else {
+                keys[(id as usize - 24) % keys.len()].clone()
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut counts = BTreeMap::<Vec<u8>, u64>::new();
+    for row in rows.iter().filter(|r| r.flag == 1) {
+        *counts.entry(row.payload.clone()).or_default() += 1;
+    }
+    let distinct = counts.len() as u64;
+    let mut expected = counts
+        .into_iter()
+        .filter(|(_, n)| *n >= 7)
+        .collect::<Vec<_>>();
+    expected.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    expected.truncate(3);
+    for indexed in [false, true] {
+        for work in [1, 7] {
+            let backing = VectorMemory::default();
+            let runtime = host(backing.clone());
+            let (mut db, mut jobs) = create_stores(&runtime, schema());
+            for chunk in rows.chunks(32) {
+                let mut batch = Batch::new();
+                for row in chunk {
+                    batch.insert(row).unwrap();
+                }
+                db.commit(batch).unwrap();
+            }
+            let query = || {
+                let q = db.query::<Row>().filter("flag", Comparison::Eq, 1_u8);
+                if indexed {
+                    q.using_index("flag", &[])
+                } else {
+                    q
+                }
+            };
+            let grouped = query()
+                .limit(3)
+                .filter_groups(Comparison::Ge, 7_u64)
+                .order_groups(GroupOrder::AggregateDescending)
+                .start_group_count::<Payload>(&mut jobs, time(0), time(100))
+                .unwrap();
+            let unique = query()
+                .start_count_distinct::<Payload>(&mut jobs, time(0), time(100))
+                .unwrap();
+            drop((db, jobs, runtime));
+            let mut sequence = 0;
+            let mut examined = 0;
+            let mut cursor = None;
+            let mut actual = Vec::new();
+            let mut complete = false;
+            // Reopen after every advance and every completed page. Bounds keep a
+            // broken continuation from turning this regression into an endless loop.
+            for _ in 0..70 {
+                let runtime = host(backing.clone());
+                let db = Database::open(
+                    runtime
+                        .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                        .unwrap(),
+                    schema(),
+                )
+                .unwrap();
+                let mut jobs = AggregateJobs::open(
+                    runtime
+                        .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let query = || {
+                    let q = db
+                        .query::<Row>()
+                        .filter("flag", Comparison::Eq, 1_u8)
+                        .work_limit(work);
+                    if indexed {
+                        q.using_index("flag", &[])
+                    } else {
+                        q
+                    }
+                };
+                let groups = || {
+                    query()
+                        .limit(3)
+                        .filter_groups(Comparison::Ge, 7_u64)
+                        .order_groups(GroupOrder::AggregateDescending)
+                        .group_page(2, cursor.as_ref())
+                };
+                let saved = backing.borrow().clone();
+                if cursor.is_some() {
+                    assert!(matches!(
+                        groups().byte_limit(1).resume_group_count::<Payload>(
+                            &mut jobs,
+                            &grouped,
+                            sequence,
+                            time(1)
+                        ),
+                        Err(Error::RowTooLarge)
+                    ));
+                    assert_eq!(*backing.borrow(), saved);
+                }
+                let step = groups()
+                    .resume_group_count::<Payload>(&mut jobs, &grouped, sequence, time(1))
+                    .unwrap();
+                let checkpoint = backing.borrow().clone();
+                let retry = groups()
+                    .resume_group_count::<Payload>(&mut jobs, &grouped, sequence, time(1))
+                    .unwrap();
+                assert_eq!(
+                    (retry.sequence, retry.examined),
+                    (step.sequence, step.examined)
+                );
+                match (&retry.outcome, &step.outcome) {
+                    (JobOutcome::Running, JobOutcome::Running) => {}
+                    (JobOutcome::Complete(retry), JobOutcome::Complete(page)) => {
+                        assert_eq!(
+                            retry
+                                .rows
+                                .iter()
+                                .map(|r| (&r.key.payload, r.count))
+                                .collect::<Vec<_>>(),
+                            page.rows
+                                .iter()
+                                .map(|r| (&r.key.payload, r.count))
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(
+                            retry.next.as_ref().map(|c| c.to_bytes()),
+                            page.next.as_ref().map(|c| c.to_bytes())
+                        );
+                    }
+                    other => panic!("retry changed the result: {other:?}"),
+                }
+                assert_eq!(*backing.borrow(), checkpoint);
+                if cursor.is_none() {
+                    let count = query()
+                        .resume_count_distinct::<Payload>(&mut jobs, &unique, sequence, time(1))
+                        .unwrap();
+                    assert_eq!(
+                        (count.sequence, count.examined),
+                        (step.sequence, step.examined)
+                    );
+                    match count.outcome {
+                        JobOutcome::Running => assert!(matches!(step.outcome, JobOutcome::Running)),
+                        JobOutcome::Complete(value) => assert_eq!(value, distinct),
+                        other => panic!("unexpected distinct outcome: {other:?}"),
+                    }
+                }
+                assert!(step.examined >= examined && step.examined - examined <= work as u64);
+                examined = step.examined;
+                sequence = step.sequence;
+                if !indexed && examined <= 24 {
+                    assert!(matches!(step.outcome, JobOutcome::Running));
+                }
+                match step.outcome {
+                    JobOutcome::Running => assert!(cursor.is_none()),
+                    JobOutcome::Complete(page) => {
+                        assert_eq!(examined, if indexed { 40 } else { 64 });
+                        actual.extend(page.rows.into_iter().map(|r| (r.key.payload, r.count)));
+                        cursor = page.next;
+                        if cursor.is_none() {
+                            jobs.cancel(&grouped).unwrap();
+                            jobs.cancel(&unique).unwrap();
+                            complete = true;
+                            break;
+                        }
+                    }
+                    other => panic!("unexpected grouped outcome: {other:?}"),
+                }
+            }
+            assert!(complete);
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn retained_blob_group_prefix_selection_waits_for_final_winners_and_pages() {
+    // Later rows move winners into/out of the prefix. Row 8 must be excluded
+    // before accumulation, and the result limit must apply after group selection.
+    let values = [
+        (0, vec![0]),
+        (1, vec![255]),
+        (2, vec![]),
+        (3, vec![0]),
+        (0, vec![255]),
+        (1, vec![0, 255]),
+        (2, vec![0, 255]),
+        (3, vec![0, 255, 128]),
+        (3, vec![255]),
+    ];
+    for maximum in [false, true] {
+        let expected = if maximum {
+            vec![(3, vec![0, 255, 128]), (2, vec![0, 255])]
+        } else {
+            vec![(1, vec![0, 255]), (0, vec![0])]
+        };
+        for indexed in [false, true] {
+            let backing = VectorMemory::default();
+            let runtime = host(backing.clone());
+            let (mut db, mut jobs) = create_stores(&runtime, schema());
+            let mut batch = Batch::new();
+            for (id, (flag, payload)) in values.iter().enumerate() {
+                batch
+                    .insert(&Row {
+                        id: id as u64,
+                        flag: *flag,
+                        amount: None,
+                        payload: payload.clone(),
+                    })
+                    .unwrap();
+            }
+            db.commit(batch).unwrap();
+            let mut query = db
+                .query::<Row>()
+                .filter_between("id", 0_u64, 7_u64)
+                .filter_groups(Comparison::StartsWith, [0].as_slice())
+                .order_groups(GroupOrder::AggregateDescending)
+                .limit(2);
+            if indexed {
+                query = query.using_index("flag", &[]);
+            }
+            let handle = if maximum {
+                query.start_group_max::<Flag, Payload>(&mut jobs, time(0), time(100))
+            } else {
+                query.start_group_min::<Flag, Payload>(&mut jobs, time(0), time(100))
+            }
+            .unwrap();
+            drop((db, jobs, runtime));
+            let mut sequence = 0;
+            let mut cursor = None;
+            let mut actual = Vec::new();
+            let mut finished = false;
+            for _ in 0..12 {
+                let runtime = host(backing.clone());
+                let db = Database::open(
+                    runtime
+                        .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                        .unwrap(),
+                    schema(),
+                )
+                .unwrap();
+                let mut jobs = AggregateJobs::open(
+                    runtime
+                        .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let query = |prefix: &'static [u8]| {
+                    let q = db
+                        .query::<Row>()
+                        .filter_between("id", 0_u64, 7_u64)
+                        .filter_groups(Comparison::StartsWith, prefix)
+                        .order_groups(GroupOrder::AggregateDescending)
+                        .limit(2)
+                        .work_limit(1)
+                        .group_page(1, cursor.as_ref());
+                    if indexed {
+                        q.using_index("flag", &[])
+                    } else {
+                        q
+                    }
+                };
+                if sequence == 1 {
+                    let saved = backing.borrow().clone();
+                    let changed = if maximum {
+                        query(&[255]).resume_group_max::<Flag, Payload>(
+                            &mut jobs,
+                            &handle,
+                            sequence,
+                            time(1),
+                        )
+                    } else {
+                        query(&[255]).resume_group_min::<Flag, Payload>(
+                            &mut jobs,
+                            &handle,
+                            sequence,
+                            time(1),
+                        )
+                    };
+                    assert!(matches!(changed, Err(Error::InvalidJob)));
+                    assert_eq!(*backing.borrow(), saved);
+                }
+                let step = if maximum {
+                    query(&[0]).resume_group_max::<Flag, Payload>(
+                        &mut jobs,
+                        &handle,
+                        sequence,
+                        time(1),
+                    )
+                } else {
+                    query(&[0]).resume_group_min::<Flag, Payload>(
+                        &mut jobs,
+                        &handle,
+                        sequence,
+                        time(1),
+                    )
+                }
+                .unwrap();
+                sequence = step.sequence;
+                match step.outcome {
+                    JobOutcome::Running => assert!(actual.is_empty()),
+                    JobOutcome::Complete(page) => {
+                        assert_eq!(step.examined, if indexed { 9 } else { 8 });
+                        assert_eq!(page.rows.len(), 1);
+                        actual.extend(
+                            page.rows
+                                .into_iter()
+                                .map(|r| (r.key.flag, r.value.unwrap().payload)),
+                        );
+                        cursor = page.next;
+                        if cursor.is_none() {
+                            jobs.cancel(&handle).unwrap();
+                            finished = true;
+                            break;
+                        }
+                    }
+                    other => panic!("unexpected group outcome: {other:?}"),
+                }
+            }
+            assert!(finished, "completed group pages must terminate");
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn retained_optional_blob_groups_preserve_absence_across_chunks() {
+    use std::collections::BTreeMap;
+    #[entity(
+        pk(field = "id"),
+        index(field = "bytes"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "bytes", value(opt, item(prim = "Blob", max_bytes = 16)))
+        )
+    )]
+    struct Binary {}
+    #[ic_db::record(fields(field(
+        name = "bytes",
+        value(opt, item(prim = "Blob", max_bytes = 16))
+    )))]
+    struct Key {}
+    let values = [
+        None,
+        Some(vec![]),
+        Some(vec![0]),
+        None,
+        Some(vec![255]),
+        Some(vec![]),
+    ];
+    let rows = (0..24)
+        .map(|id| Binary {
+            id,
+            bytes: values[id as usize % values.len()].clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut expected = BTreeMap::<Option<Vec<u8>>, u64>::new();
+    for row in &rows {
+        *expected.entry(row.bytes.clone()).or_default() += u64::from(row.bytes.is_some());
+    }
+    for indexed in [false, true] {
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let schema = || Schema::new(&[Binary::SCHEMA]).unwrap();
+        let (mut db, mut jobs) = create_stores(&runtime, schema());
+        let mut batch = Batch::new();
+        for row in &rows {
+            batch.insert(row).unwrap();
+        }
+        db.commit(batch).unwrap();
+        let query = || {
+            let q = db.query::<Binary>();
+            if indexed {
+                q.using_index("bytes", &[])
+            } else {
+                q
+            }
+        };
+        let groups = query()
+            .start_group_count_field::<Key>("bytes", &mut jobs, time(0), time(100))
+            .unwrap();
+        let distinct = query()
+            .start_count_distinct::<Key>(&mut jobs, time(0), time(100))
+            .unwrap();
+        drop((db, jobs, runtime));
+        let mut sequence = 0;
+        let mut complete = false;
+        for _ in 0..14 {
+            let runtime = host(backing.clone());
+            let db = Database::open(
+                runtime
+                    .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                    .unwrap(),
+                schema(),
+            )
+            .unwrap();
+            let mut jobs = AggregateJobs::open(
+                runtime
+                    .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            let query = || {
+                let q = db.query::<Binary>().work_limit(2);
+                if indexed {
+                    q.using_index("bytes", &[])
+                } else {
+                    q
+                }
+            };
+            let g = query()
+                .resume_group_count_field::<Key>("bytes", &mut jobs, &groups, sequence, time(1))
+                .unwrap();
+            let d = query()
+                .resume_count_distinct::<Key>(&mut jobs, &distinct, sequence, time(1))
+                .unwrap();
+            assert_eq!((g.sequence, g.examined), (d.sequence, d.examined));
+            sequence = g.sequence;
+            match (g.outcome, d.outcome) {
+                (JobOutcome::Running, JobOutcome::Running) => {}
+                (JobOutcome::Complete(page), JobOutcome::Complete(count)) => {
+                    assert_eq!(g.examined, rows.len() as u64);
+                    assert!(page.next.is_none());
+                    assert_eq!(page.rows.len(), expected.len());
+                    assert_eq!(
+                        page.rows
+                            .into_iter()
+                            .map(|r| (r.key.bytes, r.count))
+                            .collect::<BTreeMap<_, _>>(),
+                        expected
+                    );
+                    assert_eq!(count, expected.len() as u64);
+                    jobs.cancel(&groups).unwrap();
+                    jobs.cancel(&distinct).unwrap();
+                    complete = true;
+                    break;
+                }
+                other => panic!("inconsistent optional Blob completion: {other:?}"),
+            }
+        }
+        assert!(complete);
+    }
+}
+
+#[test]
+fn retained_blob_prefix_binding_survives_reopen() {
+    retained_blob_pattern_reopen(Comparison::StartsWith, &[0, 255]);
+}
+
+#[test]
+fn retained_blob_suffix_binding_survives_reopen() {
+    retained_blob_pattern_reopen(Comparison::EndsWith, &[255]);
+}
+
+fn retained_blob_pattern_reopen(comparison: Comparison, pattern: &[u8]) {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (mut db, mut jobs) = create_stores(&runtime, schema());
+    let values = [
+        vec![],
+        vec![0],
+        vec![0, 255],
+        vec![0, 255, 128],
+        vec![255],
+        vec![0, 0],
+    ];
+    let mut batch = Batch::new();
+    for (id, payload) in values.iter().enumerate() {
+        batch
+            .insert(&Row {
+                id: id as u64,
+                flag: 0,
+                amount: None,
+                payload: payload.clone(),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let expected = values
+        .iter()
+        .filter(|v| match comparison {
+            Comparison::StartsWith => v.starts_with(pattern),
+            Comparison::EndsWith => v.ends_with(pattern),
+            _ => unreachable!(),
+        })
+        .count() as u64;
+    let job = db
+        .query::<Row>()
+        .filter("payload", comparison, pattern)
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let step = db
+        .query::<Row>()
+        .filter("payload", comparison, pattern)
+        .work_limit(1)
+        .resume_count(&mut jobs, &job, 0, time(1))
+        .unwrap();
+    assert!(matches!(step.outcome, JobOutcome::Running));
+    drop((db, jobs, runtime));
+    let runtime = host(backing.clone());
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema(),
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let saved = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Row>()
+            .filter("payload", comparison, [0].as_slice())
+            .work_limit(1)
+            .resume_count(&mut jobs, &job, step.sequence, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), saved);
+    let mut sequence = step.sequence;
+    let mut complete = false;
+    for _ in 0..8 {
+        let step = db
+            .query::<Row>()
+            .filter("payload", comparison, pattern)
+            .work_limit(1)
+            .resume_count(&mut jobs, &job, sequence, time(1))
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {}
+            JobOutcome::Complete(count) => {
+                assert_eq!(count, expected);
+                assert_eq!(step.examined, values.len() as u64);
+                complete = true;
+                break;
+            }
+            other => panic!("unexpected pattern count: {other:?}"),
+        }
+    }
+    assert!(complete);
+    jobs.cancel(&job).unwrap();
 }
 
 #[test]
@@ -197,6 +763,75 @@ fn group_or_jobs_bind_clauses_and_resume_completed_pages_after_reopen() {
     };
     assert_eq!((page.rows[0].key.flag, page.rows[0].count), (1, 3));
     assert!(page.next.is_none());
+}
+
+#[test]
+fn range_helpers_resume_exact_counts_through_explicit_comparisons_after_reopen() {
+    for outside in [false, true] {
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let (db, mut jobs) = create(
+            &runtime,
+            &[Some(10), None, Some(20), Some(30), Some(40), Some(50)],
+            0,
+        );
+        let query = db.query::<Row>();
+        let query = if outside {
+            query.filter_not_between("amount", 20_i128, 30_i128)
+        } else {
+            query.filter_between("amount", 20_i128, 30_i128)
+        };
+        let handle = query.start_count(&mut jobs, time(0), time(100)).unwrap();
+        drop((db, jobs, runtime));
+        let mut sequence = 0;
+        let mut completed = false;
+        for _ in 0..7 {
+            let runtime = host(backing.clone());
+            let db = Database::open(
+                runtime
+                    .open_memory(&StableKey::parse("test.db.v1").unwrap())
+                    .unwrap(),
+                schema(),
+            )
+            .unwrap();
+            let mut jobs = AggregateJobs::open(
+                runtime
+                    .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            let alternatives = [
+                ("amount", Comparison::Lt, 20_i128.into()),
+                ("amount", Comparison::Gt, 30_i128.into()),
+            ];
+            let query = db.query::<Row>();
+            let query = if outside {
+                query.filter_any(&alternatives)
+            } else {
+                query.filter("amount", Comparison::Ge, 20_i128).filter(
+                    "amount",
+                    Comparison::Le,
+                    30_i128,
+                )
+            };
+            let step = query
+                .work_limit(1)
+                .resume_count(&mut jobs, &handle, sequence, time(1))
+                .unwrap();
+            sequence = step.sequence;
+            match step.outcome {
+                JobOutcome::Running => {}
+                JobOutcome::Complete(value) => {
+                    assert_eq!(value, if outside { 3 } else { 2 });
+                    assert_eq!(step.examined, 6);
+                    completed = true;
+                    break;
+                }
+                other => panic!("unexpected outcome: {other:?}"),
+            }
+        }
+        assert!(completed, "range aggregate must complete");
+    }
 }
 
 #[test]

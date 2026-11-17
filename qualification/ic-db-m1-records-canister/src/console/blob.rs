@@ -1,8 +1,7 @@
 //! Fixed Blob result shapes for the local console; the engine owns all query work.
-use super::{Page, display, display_groups, display_scalar, extremum};
+use super::{Page, display, display_groups, display_scalar, extremum, hex};
 use crate::{Backing, schema::BinaryObject};
-use ic_db::{Entity, Error, Query};
-use std::fmt::Write;
+use ic_db::{Comparison, Entity, Error, Query};
 
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 pub(super) struct Payload {}
@@ -24,13 +23,26 @@ pub(super) fn query(
     Ok(db.query::<BinaryObject>())
 }
 
-pub(super) fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(2 + bytes.len() * 2);
-    text.push_str("0x");
-    for byte in bytes {
-        write!(text, "{byte:02x}").expect("writing to String cannot fail");
+pub(super) fn optional_hex(value: Option<Vec<u8>>) -> String {
+    value.map_or_else(|| "—".into(), |v| hex(&v))
+}
+
+pub(super) fn filter<'a, E: Entity>(
+    mut query: Query<'a, E, Backing>,
+    minimum: Option<&'a [u8]>,
+    maximum: Option<&'a [u8]>,
+    prefix: Option<&'a [u8]>,
+) -> Query<'a, E, Backing> {
+    for (comparison, operand) in [
+        (Comparison::Ge, minimum),
+        (Comparison::Le, maximum),
+        (Comparison::StartsWith, prefix),
+    ] {
+        if let Some(operand) = operand {
+            query = query.filter("payload", comparison, operand);
+        }
     }
-    text
+    query
 }
 
 pub(super) fn execute<E: Entity>(
@@ -41,11 +53,9 @@ pub(super) fn execute<E: Entity>(
         "payload" => query
             .fetch_as::<Payload>()
             .map(|p| display(p, &["payload"], |r| vec![hex(&r.payload)])),
-        "optional" => query.fetch_as::<Optional>().map(|p| {
-            display(p, &["optional"], |r| {
-                vec![r.optional.map_or_else(|| "—".into(), |v| hex(&v))]
-            })
-        }),
+        "optional" => query
+            .fetch_as::<Optional>()
+            .map(|p| display(p, &["optional"], |r| vec![optional_hex(r.optional)])),
         "min:payload" | "max:payload" => {
             extremum(query, select == "max:payload", "payload", |r: Payload| {
                 hex(&r.payload)
@@ -55,10 +65,13 @@ pub(super) fn execute<E: Entity>(
             query,
             select == "max:optional",
             "optional",
-            |r: Optional| r.optional.map_or_else(|| "—".into(), |v| hex(&v)),
+            |r: Optional| optional_hex(r.optional),
         ),
         "distinct-count:payload" => query
             .count_distinct::<Payload>()
+            .map(|r| display_scalar(&r, "count")),
+        "distinct-count:optional" => query
+            .count_distinct::<Optional>()
             .map(|r| display_scalar(&r, "count")),
         "payload,count" => query
             .group_count::<Payload>()
@@ -66,6 +79,12 @@ pub(super) fn execute<E: Entity>(
         "payload,count:optional" => query
             .group_count_field::<Payload>("optional")
             .map(|r| display_groups(r, "payload", |k| hex(&k.payload))),
+        "optional,count" => query
+            .group_count::<Optional>()
+            .map(|r| display_groups(r, "optional", |k| optional_hex(k.optional))),
+        "optional,count:optional" => query
+            .group_count_field::<Optional>("optional")
+            .map(|r| display_groups(r, "optional", |k| optional_hex(k.optional))),
         _ => Err(Error::InvalidQuery),
     }
 }

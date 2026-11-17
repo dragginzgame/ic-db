@@ -14,6 +14,16 @@ use ic_db::{
     Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
     QueryPage, SortDirection, Value,
 };
+use std::fmt::Write;
+
+pub(super) fn hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(2 + bytes.len() * 2);
+    text.push_str("0x");
+    for byte in bytes {
+        write!(text, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    text
+}
 
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
 struct CategoryOnly {}
@@ -57,7 +67,7 @@ type Request = (
         bool,
         (Option<String>, Option<String>),
         Option<String>,
-        (Option<Vec<u8>>, Option<Vec<u8>>),
+        (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>),
     ),
 );
 type Page = (
@@ -144,11 +154,15 @@ fn query(
         work,
         bytes,
         select,
-        (distinct, (group_min, group_max), group_order, (payload_min, payload_max)),
+        (distinct, (group_min, group_max), group_order, (payload_min, payload_max, payload_prefix)),
     ): Request,
 ) -> Result<Page, String> {
-    if entity != "BinaryObject" && (payload_min.is_some() || payload_max.is_some()) {
-        return Err("--payload-min and --payload-max apply to BinaryObject".into());
+    if entity != "BinaryObject"
+        && (payload_min.is_some() || payload_max.is_some() || payload_prefix.is_some())
+    {
+        return Err(
+            "--payload-min, --payload-max and --payload-prefix apply to BinaryObject".into(),
+        );
     }
     let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = cursor
@@ -268,15 +282,12 @@ fn query(
             },
         ),
         "BinaryObject" => {
-            let mut query = blob::query(&db, minimum, category, entry_id)?;
-            for (comparison, operand) in [
-                (Comparison::Ge, payload_min.as_deref()),
-                (Comparison::Le, payload_max.as_deref()),
-            ] {
-                if let Some(operand) = operand {
-                    query = query.filter("payload", comparison, operand);
-                }
-            }
+            let query = blob::filter(
+                blob::query(&db, minimum, category, entry_id)?,
+                payload_min.as_deref(),
+                payload_max.as_deref(),
+                payload_prefix.as_deref(),
+            );
             execute(
                 configure(
                     query,
@@ -297,8 +308,8 @@ fn query(
                 |r| {
                     vec![
                         r.id.to_string(),
-                        blob::hex(&r.payload),
-                        r.optional.map_or_else(|| "—".into(), |v| blob::hex(&v)),
+                        hex(&r.payload),
+                        blob::optional_hex(r.optional),
                     ]
                 },
             )
@@ -466,8 +477,11 @@ fn execute<'a, E: Entity>(
         | "min:optional"
         | "max:optional"
         | "distinct-count:payload"
+        | "distinct-count:optional"
         | "payload,count"
-        | "payload,count:optional" => blob::execute(query, select),
+        | "payload,count:optional"
+        | "optional,count"
+        | "optional,count:optional" => blob::execute(query, select),
         "avg:amount" => query
             .avg::<AverageAmount>()
             .map(|r| display_value(r, "amount", |r| r.amount.to_string())),

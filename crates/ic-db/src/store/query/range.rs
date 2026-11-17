@@ -59,9 +59,9 @@ pub(super) fn bounds(
     if let Some(field) = field {
         for clause in plan.terms.split_inclusive(|term| !term.or_next) {
             let [term] = clause else { continue };
-            let text_prefix = secondary && term.comparison == Comparison::StartsWith;
+            let byte_prefix = secondary && term.comparison == Comparison::StartsWith;
             if entity.fields[term.position].name != field
-                || !(text_prefix
+                || !(byte_prefix
                     || matches!(
                         term.comparison,
                         Comparison::Eq
@@ -73,10 +73,10 @@ pub(super) fn bounds(
             {
                 continue;
             }
-            // An admitted Text prefix keeps its optional-present tag and escaped
-            // UTF-8 bytes, but drops the terminator so extensions remain in range.
-            // Empty prefixes then span all present text, excluding absence.
-            let operand = if text_prefix {
+            // An admitted Text/Blob prefix keeps its optional-present tag and
+            // escaped bytes, but drops the terminator so extensions remain in range.
+            // Empty prefixes span all present values, excluding absence.
+            let operand = if byte_prefix {
                 term.operand
                     .strip_suffix(&[0, 0])
                     .ok_or(Error::InvalidQuery)?

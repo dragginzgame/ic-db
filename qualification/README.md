@@ -262,7 +262,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
-| Blob queries (pending 0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. CLI retained operations aggregate all rows. [Scope](#blob-query-contract-0210) |
+| Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
@@ -3880,7 +3880,8 @@ winner across a real Wasm upgrade and an output refusal/retry. This small probe
 establishes checkpoint ownership, not exhaustive Blob workload qualification.
 The local CLI accepts `0x`-prefixed payload bounds and renders Blob values as hex.
 Retained Blob commands use the same job endpoints as other fixture entities;
-their input is the whole entity. There is no matched legacy benchmark.
+0.22 adds inclusive payload bounds through the same fluent predicates as
+synchronous queries. There is no matched legacy benchmark.
 The frozen IcyDB ordered-key implementation rejects Blob keys; this increment
 extends IC DB's existing terminated-byte encoder and shared execution paths.
 
@@ -3913,3 +3914,157 @@ query/sorting callers after the private request change, with console SHA-256
 `bee63c173b5b7f7c1362502ddacc12e28291d87e83f9c779d508b5fff58cfdd1`.
 Retained Blob commands do not change that request. Parser unit tests,
 driver/canister Clippy, formatting and local documentation links also pass.
+
+The 0.22 increment extends that witness with seven inclusive payload-range cases:
+empty bytes, proper prefixes, non-UTF-8 bytes and contradictory bounds.
+Each consumes one candidate before an upgrade, refuses changed or oversized
+resume operands without altering backing, then completes with the exact count.
+Wrong-entity bounds refuse before creating a job. The CLI witness covers filtered
+counts, extrema and groups, including empty results and start/resume/cancel
+accounting. Optional Blob grouping and projected DISTINCT counts are also exposed
+through synchronous and retained selectors. Thirteen simultaneous jobs per
+dataset retain absence, empty bytes and non-UTF-8 values across upgrades; 39
+completions/cancellations reuse the existing 16 slots. Native multi-row checks use
+an independent `BTreeMap<Option<Vec<u8>>, u64>` oracle, including duplicate values
+and a zero present-field count for the absent group.
+That optional/range increment changes the private retained request with its
+callers; the later prefix increment below extends both console requests.
+The durable job format remains unchanged.
+
+Checked 2026-11-17 with console Wasm SHA-256
+`aef602cf1b9d6636059e9da3755a2093820509eb0b69978c2ed604e126841748`:
+`target/evidence/m2/console-optional-blobs.log` (two retained aggregate tests and
+three text/Blob query tests) and
+`target/evidence/m2/console-optional-cli-retry.log` (CLI integration). The CLI
+test's table reader now recognizes an absent first-column value instead of
+discarding that row; the original failure log is retained alongside the retry.
+The focused native Blob oracle, driver/canister Clippy and formatting also pass.
+These use the
+pre-existing qualification lock selection of Platform Runtime 0.23.16 and
+Host Artifacts 0.80.3; this increment did not resolve or update dependencies.
+
+The focused native retained-Blob check uses 64 rows: 24 initial nonmatches,
+followed by 40 rows with six duplicate byte keys (empty, zeroes, proper prefixes
+and non-UTF-8). Work budgets 1 and 7 produce the same exact DISTINCT count and
+group selection after reopening both stores on every advance/page. Primary
+scanning examines 64 candidates; explicit indexed filtering examines 40.
+An independent Rust map supplies counts, aggregate-order ties and the selected
+top three groups. Replay leaves backing unchanged; a too-small completed-page
+allowance refuses intact and the same continuation then succeeds. This is
+native persistence evidence, not a new IC instruction or Wasm-upgrade claim.
+
+```sh
+cargo test --offline --locked -p ic-db --test jobs retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages
+```
+
+A second native retained check mixes 24 optional Blob rows, including repeated
+absent, empty, zero-byte and non-UTF-8 values. Two-candidate chunks reopen both
+stores before each advance, on primary and optional-index paths. An independent
+map establishes four DISTINCT keys and present-field counts: absent zero, empty
+eight, and four each for zero-byte and non-UTF-8 keys. No aggregate result is
+returned until completion. This adds no engine or durable-format change.
+
+```sh
+cargo test --offline --locked -p ic-db --test jobs retained_optional_blob_groups_preserve_absence_across_chunks
+```
+
+Pending fluent Blob prefix qualification compares `StartsWith` with Rust slice
+prefix matching for every one-byte prefix, empty and multi-byte prefixes, and an
+oversized index-seek operand that must remain a residual filter. Required and
+optional fields, primary/index paths, both directions and small pages preserve
+exact rows; eligible index seeks examine only matches. Completed group extrema
+share the same predicate. A retained count reopens after an incomplete step,
+refuses a changed prefix without changing backing, then completes with the
+original input. These native checks establish engine behavior independently of
+the console transport and do not establish Wasm performance.
+
+```sh
+cargo test --offline --locked -p ic-db --test queries blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages
+cargo test --offline --locked -p ic-db --test jobs retained_blob_prefix_binding_survives_reopen
+```
+
+The console exposes `--payload-prefix HEX` for `query BinaryObject` and
+`aggregate BinaryObject`, using the existing bounded hex parser and one shared
+predicate builder with the inclusive range flags. The private query/retained
+tuples now carry the optional prefix; all callers change together. No application
+protocol, durable representation or new executor is introduced.
+
+Checked 2026-11-17 with console Wasm SHA-256
+`3703ff816393985e49faa48b2423c6ef29b563e070eb138211b76c8ef012d32f`:
+`target/evidence/m2/console-blob-prefix.log` covers parser checks, three console
+query tests and two retained aggregate tests. Prefixes exercise empty/zero/non-UTF-8
+bytes and combined bounds. Retained calls upgrade after an incomplete step,
+refuse changed/oversized prefixes with unchanged backing, then complete and cancel.
+`target/evidence/m2/console-blob-prefix-cli.log` checks actual CLI commands,
+including 25 Blob aggregate cases and per-call reporting.
+`target/evidence/m2/console-blob-prefix-callers.log` requalifies both sorting
+callers, existence, sparse pages, Decimal aggregates and indexed Text prefixes.
+Native/Wasm Clippy and formatting pass. These establish behavior in the selected
+fixture; they are not a matched performance comparison or deployed application proof.
+
+### Blob prefix composition (0.22)
+
+Native checks extend prefix coverage to optional Blob DISTINCT projections and
+distinct counts on primary and index paths, with independent raw-byte set results.
+Retained grouped min/max use nine rows: the input range excludes one sentinel,
+late winners enter/leave a zero-byte prefix, completed winners sort descending,
+and a two-group limit spans two one-group output pages. Both stores reopen after
+each one-candidate advance and each output page. Changing the prefix refuses
+without changing backing. Primary reads examine eight candidates; the secondary
+path examines nine, including the residual nonmatch. Empty values, non-UTF-8 bytes
+and equal-winner key ordering are included.
+
+```sh
+cargo test --offline --locked -p ic-db --test queries blob_prefixes_match_raw_bytes
+cargo test --offline --locked -p ic-db --test jobs retained_blob_group_prefix_selection
+```
+
+This checks the existing shared executor and finalization contract; no product
+code, durable state or format changes are needed. It adds native persistence
+evidence, not Wasm-upgrade or performance claims.
+
+### Blob suffix matching (0.22)
+
+`Comparison::EndsWith` uses the shared comparator for Text and Blob. Native
+raw-slice oracles check every one-byte suffix, empty/multibyte suffixes, embedded
+zeroes, non-UTF-8 bytes and a 600-byte nonmatch. Required/optional fields, primary
+and secondary traversals, both directions and sparse pages agree with Rust
+`ends_with`. All input candidates remain charged: suffixes do not seek an index
+range. A suffix beginning with `FF` cannot start inside the escape for zero.
+Completed group extrema use the same boundary rule. Retained counts reopen after
+an incomplete chunk, refuse a changed suffix without changing backing, then
+finish with the exact count and cancel normally.
+
+```sh
+cargo test --offline --locked -p ic-db --test queries blob_suffixes
+cargo test --offline --locked -p ic-db --test jobs retained_blob_suffix
+```
+
+No durable/schema change or additional execution path is introduced. These are
+native checks; no suffix CLI flag, Wasm suffix qualification or performance
+comparison is claimed. Blob `Contains` remains unsupported.
+
+### Literal Blob defaults (0.22)
+
+Rust byte literals extend the existing omission-aware insert path. Native checks
+cover exact encoded bytes, wrong-type/oversized metadata, compile-time literal
+refusal, explicit absence versus empty bytes, default uniqueness conflicts,
+replacement/reopen preservation and changed-default schema refusal. Existing
+integer/Text default checks continue to pass. The host's existing hex formatter
+is shared by query results and schema default descriptions.
+
+The installed `DefaultRow` witness adds empty and non-UTF-8 Blob defaults. It
+checks omitted/explicit values, oversized refusal, whole-message rollback,
+replacement without default reapplication and unchanged-schema upgrade.
+Checked 2026-11-17 using console Wasm SHA-256
+`77dbd7351e4742c4a0dcff287fceca353c21a4e721e446d36204f71dc0646093`;
+receipt: `target/evidence/m2/blob-defaults.log`. This changes the private fixture
+schema and default endpoint reply together, not existing application contracts
+or the database codec. Adding/changing an authored default still changes its
+schema identity. Macro/library and affected native/Wasm caller Clippy pass.
+
+```sh
+cargo test --offline --locked -p ic-db --test defaults
+make db
+db schema DefaultRow
+```

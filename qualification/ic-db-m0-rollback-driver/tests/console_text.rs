@@ -102,7 +102,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     false,
                     (lower, upper),
                     Some("key"),
-                    (None::<Vec<u8>>, None::<Vec<u8>>),
+                    (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
                 ),
             );
             let before = pic.get_stable_memory(canister).await;
@@ -145,6 +145,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 3_u32,
                 (lower, upper),
                 Some("key"),
+                (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
             );
             let reply = pic
                 .update_call(
@@ -227,7 +228,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 assert_eq!(step.1, "Running");
                 assert!(step.5.1.is_empty());
                 if note == Some(utf8.as_str()) {
-                    let mut changed = selection;
+                    let mut changed = selection.clone();
                     changed.4.0 = Some("different");
                     let request = (
                         &changed,
@@ -351,7 +352,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                 false,
                 (None::<String>, None::<String>),
                 Some("key-desc"),
-                (None::<Vec<u8>>, None::<Vec<u8>>),
+                (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
             ),
         );
         let before = pic.get_stable_memory(canister).await;
@@ -398,6 +399,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         2_u32,
         (None::<String>, None::<String>),
         Some("key-desc"),
+        (None::<Vec<u8>>, None::<Vec<u8>>, None::<Vec<u8>>),
     );
     let reply = pic
         .update_call(
@@ -531,11 +533,12 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let query = async |entity: &str,
-                       select: &str,
-                       lower: Option<Vec<u8>>,
-                       upper: Option<Vec<u8>>,
-                       bytes: u32| {
+    let query_with_prefix = async |entity: &str,
+                                   select: &str,
+                                   lower: Option<Vec<u8>>,
+                                   upper: Option<Vec<u8>>,
+                                   prefix: Option<Vec<u8>>,
+                                   bytes: u32| {
         let request = (
             entity,
             None::<Vec<u8>>,
@@ -552,7 +555,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 false,
                 (None::<String>, None::<String>),
                 None::<String>,
-                (lower, upper),
+                (lower, upper, prefix),
             ),
         );
         let before = pic.get_stable_memory(canister).await;
@@ -583,6 +586,9 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             LIMITS,
         )
         .unwrap()
+    };
+    let query = async |entity: &str, select: &str, lower, upper, bytes| {
+        query_with_prefix(entity, select, lower, upper, None, bytes).await
     };
     for (payload, optional, hex) in [
         (vec![], None, "0x"),
@@ -633,6 +639,30 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
         ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
+        for prefix in [
+            vec![],
+            vec![0],
+            vec![0, 255],
+            vec![255],
+            vec![0, 255, 128, 0],
+        ] {
+            let page = query_with_prefix(
+                "BinaryObject",
+                "payload",
+                None,
+                None,
+                Some(prefix.clone()),
+                4096,
+            )
+            .await
+            .unwrap();
+            let expected = if payload.starts_with(&prefix) {
+                vec![vec![hex.to_owned()]]
+            } else {
+                vec![]
+            };
+            assert_eq!(page.1, expected);
+        }
         for select in ["payload", "min:payload", "max:payload"] {
             let page = query(
                 "BinaryObject",
@@ -659,6 +689,25 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 .1,
             vec![vec![hex, "1"]]
         );
+        for (select, expected) in [
+            ("distinct-count:optional", vec![vec!["1"]]),
+            ("optional,count", vec![vec![expected_optional, "1"]]),
+            (
+                "optional,count:optional",
+                vec![vec![
+                    expected_optional,
+                    if expected_optional == "—" { "0" } else { "1" },
+                ]],
+            ),
+        ] {
+            assert_eq!(
+                query("BinaryObject", select, None, None, 4096)
+                    .await
+                    .unwrap()
+                    .1,
+                expected,
+            );
+        }
         assert!(
             query("BinaryObject", "payload", None, None, 1)
                 .await
@@ -666,6 +715,23 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 .contains("exceeds --bytes")
         );
     }
+    assert!(
+        query_with_prefix(
+            "BinaryObject",
+            "payload",
+            None,
+            None,
+            Some(vec![0; 1025]),
+            4096
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        query_with_prefix("Entry", "id", None, None, Some(vec![]), 4096)
+            .await
+            .is_err()
+    );
     assert!(
         query("BinaryObject", "payload", Some(vec![1; 1025]), None, 4096)
             .await

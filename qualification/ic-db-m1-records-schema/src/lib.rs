@@ -337,6 +337,16 @@ pub struct WideKey {}
             name = "label",
             value(opt, item(prim = "Text", max_bytes = 8)),
             default = "draft"
+        ),
+        field(
+            name = "empty",
+            value(item(prim = "Blob", max_bytes = 0)),
+            default = b""
+        ),
+        field(
+            name = "payload",
+            value(opt, item(prim = "Blob", max_bytes = 2)),
+            default = b"\x00\xff"
         )
     )
 )]

@@ -71,6 +71,80 @@ struct Absent {}
 struct Extremes {}
 
 #[test]
+fn blob_defaults_preserve_omission_absence_uniqueness_and_reopen() {
+    #[entity(
+        pk(field = "id"),
+        index(field = "payload", unique, present_only),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(
+                name = "empty",
+                value(item(prim = "Blob", max_bytes = 0)),
+                default = b""
+            ),
+            field(
+                name = "payload",
+                value(opt, item(prim = "Blob", max_bytes = 2)),
+                default = b"\x00\xff"
+            )
+        )
+    )]
+    struct Binary {}
+    let backing = VectorMemory::default();
+    let host = runtime(backing.clone());
+    let schema = || Schema::new(&[Binary::SCHEMA]).unwrap();
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(host.open_memory(&key).unwrap(), schema(), [3; 16]).unwrap();
+    let mut batch = Batch::new();
+    let defaulted = batch.insert_input(Binary::insert().id(1)).unwrap();
+    assert!(defaulted.empty.is_empty());
+    assert_eq!(defaulted.payload, Some(vec![0, 255]));
+    let absent = batch
+        .insert_input(Binary::insert().id(2).payload(None))
+        .unwrap();
+    let empty = batch
+        .insert_input(Binary::insert().id(3).payload(Some(vec![])))
+        .unwrap();
+    db.commit(batch).unwrap();
+    let before = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch.insert_input(Binary::insert().id(4)).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+    assert_eq!(*backing.borrow(), before);
+    let mut replacement = defaulted;
+    replacement.payload = None;
+    let mut batch = Batch::new();
+    batch.replace(&replacement).unwrap();
+    db.commit(batch).unwrap();
+    drop((db, host));
+    let host = runtime(backing.clone());
+    let db = Database::open(host.open_memory(&key).unwrap(), schema()).unwrap();
+    assert_eq!(
+        db.page::<Binary>(None, 32).unwrap().rows,
+        [replacement, absent, empty]
+    );
+    let before = backing.borrow().clone();
+    let mut fields = Binary::SCHEMA.fields.to_vec();
+    fields
+        .iter_mut()
+        .find(|f| f.name == "payload")
+        .unwrap()
+        .default = Some(&LiteralDefault::Blob(b"\xff\x00"));
+    let changed = Box::leak(Box::new(ic_db::EntitySchema {
+        fields: Box::leak(fields.into_boxed_slice()),
+        ..*Binary::SCHEMA
+    }));
+    let changed = Schema::new(&[changed]).unwrap();
+    assert_ne!(changed.fingerprint(), schema().fingerprint());
+    drop(db);
+    assert!(matches!(
+        Database::open(host.open_memory(&key).unwrap(), changed),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
 fn literal_defaults_preserve_every_integer_width_without_host_narrowing() {
     Schema::new(&[Extremes::SCHEMA]).unwrap();
     let row = Extremes::insert().id(1).into_entity().unwrap();

@@ -9,6 +9,7 @@ pub(super) enum Literal {
     Int(i128),
     Bool(bool),
     Text(String),
+    Blob(Vec<u8>),
 }
 
 impl Literal {
@@ -16,7 +17,7 @@ impl Literal {
         let fail = || {
             syn::Error::new_spanned(
                 meta,
-                "default requires an in-range unsuffixed integer, Bool or bounded Text literal matching the field; other default types are not implemented",
+                "default requires an in-range unsuffixed integer, Bool, bounded Text string or Blob byte-string literal matching the field; other default types are not implemented",
             )
         };
         if many.is_some() {
@@ -39,6 +40,11 @@ impl Literal {
             (Kind::Bool, Lit::Bool(value), false) => return Ok(Self::Bool(value.value)),
             (Kind::Text(max), Lit::Str(value), false) if value.value().len() <= *max as usize => {
                 return Ok(Self::Text(value.value()));
+            }
+            (Kind::Blob(max), Lit::ByteStr(value), false)
+                if value.value().len() <= *max as usize =>
+            {
+                return Ok(Self::Blob(value.value()));
             }
             _ => {}
         }
@@ -101,6 +107,10 @@ impl Literal {
             Self::Int(v) => quote!(::ic_db::LiteralDefault::Int(#v)),
             Self::Bool(v) => quote!(::ic_db::LiteralDefault::Bool(#v)),
             Self::Text(v) => quote!(::ic_db::LiteralDefault::Text(#v)),
+            Self::Blob(v) => {
+                let bytes = syn::LitByteStr::new(v, proc_macro2::Span::call_site());
+                quote!(::ic_db::LiteralDefault::Blob(#bytes))
+            }
         }
     }
     fn value(&self) -> TokenStream {
@@ -113,6 +123,10 @@ impl Literal {
                 .into_token_stream(),
             Self::Bool(v) => quote!(#v),
             Self::Text(v) => quote!(::std::string::String::from(#v)),
+            Self::Blob(v) => {
+                let bytes = syn::LitByteStr::new(v, proc_macro2::Span::call_site());
+                quote!(#bytes.to_vec())
+            }
         }
     }
 }

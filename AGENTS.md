@@ -101,6 +101,13 @@ Read the owning design contract before changing its behavior:
 
 ## IcyDB research and explanations
 
+Existence in IcyDB is not evidence of best practice or a requirement to restore
+parity. Some features, attributes and abstractions were mistakes or experiments
+that persisted. Evaluate each against a current requirement and its total cost;
+keep the solved invariant where needed, but change or omit the mechanism when
+justified. Describe missing legacy behavior separately from accepted IC DB work:
+do not call every difference unfinished work or automatically recreate it.
+
 Before substantive subsystem work, inspect the relevant frozen implementation,
 regressions and explanatory history. Identify the original failure, solution and
 changed assumptions. Reuse sound code/algorithms when they fit; independent

@@ -23,7 +23,7 @@ fn result_table_rows(text: &str) -> Vec<Vec<&str>> {
         })
         .filter(|row| {
             row.first().is_some_and(|v| {
-                matches!(*v, "true" | "false")
+                matches!(*v, "true" | "false" | "—")
                     || v.chars()
                         .next()
                         .is_some_and(|c| c.is_ascii_digit() || c == '-')
@@ -436,6 +436,15 @@ fn console_inspects_and_queries() {
     );
     assert_eq!(blobs.matches("query call (query):").count(), 9);
     assert_eq!(blobs.matches("query call (cardinality):").count(), 1);
+    let prefixes = run_console(
+        &binary,
+        "query BinaryObject --payload-prefix 0x00FF --select payload\nquery BinaryObject --payload-prefix 0xff --select count\nquery BinaryObject --payload-prefix 0x00 --payload-max 0x00ff --select count\nquit\n",
+    );
+    assert_eq!(
+        result_table_rows(&prefixes),
+        [vec!["0x00ff80"], vec!["0"], vec!["0"]]
+    );
+    assert_eq!(prefixes.matches("query call (query):").count(), 3);
     assert_eq!(
         result_table_rows(&existence),
         vec![vec!["true"], vec!["true"], vec!["false"], vec!["false"]]
@@ -916,11 +925,17 @@ fn console_inspects_and_queries() {
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
         }
-        let blobs: [ConsoleCase<'_>; 11] = [
+        let blobs: [ConsoleCase<'_>; 25] = [
             ("count", &[&["1"]]),
             ("count:payload", &[&["1"]]),
             ("count:optional", &[&["0"]]),
             ("distinct-count:payload", &[&["1"]]),
+            ("distinct-count:optional", &[&["1"]]),
+            ("optional,count", &[&["—", "1"]]),
+            ("optional,count:optional", &[&["—", "0"]]),
+            ("optional,count:optional --group-min 1", &[]),
+            ("optional,count --payload-max 0x00ff", &[]),
+            ("distinct-count:optional --payload-max 0x00ff", &[&["0"]]),
             ("min:payload", &[&["0x00ff80"]]),
             ("max:payload", &[&["0x00ff80"]]),
             ("min:optional", &[]),
@@ -928,6 +943,20 @@ fn console_inspects_and_queries() {
             ("payload,count", &[&["0x00ff80", "1"]]),
             ("payload,count:optional", &[&["0x00ff80", "0"]]),
             ("payload,count --group-min 2", &[]),
+            (
+                "count --payload-min 0x00ff80 --payload-max 0x00ff80",
+                &[&["1"]],
+            ),
+            ("max:payload --payload-max 0x00ff", &[]),
+            ("payload,count --payload-min 0x00ff81", &[]),
+            ("count --payload-min 0xff --payload-max 0x00", &[&["0"]]),
+            ("count --payload-prefix 0x00ff", &[&["1"]]),
+            ("count --payload-prefix 0xff", &[&["0"]]),
+            ("count --payload-prefix 0x", &[&["1"]]),
+            (
+                "max:payload --payload-prefix 0x00 --payload-max 0x00ff",
+                &[],
+            ),
         ];
         let mut commands = blobs
             .iter()

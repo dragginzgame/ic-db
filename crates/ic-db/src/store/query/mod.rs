@@ -32,7 +32,7 @@ pub enum SortDirection {
     Descending,
 }
 
-/// Exact comparison. Equality distinguishes absent values; ranges and text matches require presence.
+/// Exact comparison. Equality distinguishes absent values; ranges and pattern matches require presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Comparison {
@@ -48,11 +48,12 @@ pub enum Comparison {
     Gt = 4,
     /// Present and greater than or equal to the present operand.
     Ge = 5,
-    /// Present text starts with the exact UTF-8 operand, without normalization.
-    /// Empty prefixes match all present text, including empty text; other types refuse.
+    /// Present Text or Blob starts with an exact operand of the same type.
+    /// Text uses UTF-8 bytes without normalization; Blob uses raw bytes.
+    /// Empty prefixes match all present values, including empty values; other types refuse.
     StartsWith = 6,
-    /// Present text ends with the exact UTF-8 operand, without normalization.
-    /// Empty suffixes match all present text, including empty text; other types refuse.
+    /// Present Text or Blob ends with an exact operand of the same type.
+    /// Empty suffixes match all present values; text is not normalized.
     EndsWith = 7,
     /// Present text contains the exact UTF-8 operand, without normalization.
     /// Empty needles match all present text; this is not collection membership.
@@ -62,8 +63,9 @@ pub enum Comparison {
 impl Comparison {
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
-        if matches!(self, Self::StartsWith | Self::EndsWith | Self::Contains)
-            && !matches!(field, FieldType::Text { .. })
+        if (matches!(self, Self::StartsWith | Self::EndsWith)
+            && !matches!(field, FieldType::Text { .. } | FieldType::Blob { .. }))
+            || (self == Self::Contains && !matches!(field, FieldType::Text { .. }))
         {
             return Err(Error::InvalidQuery);
         }
@@ -81,17 +83,24 @@ impl Comparison {
             Self::Eq => actual == operand,
             Self::Ne => actual != operand,
             Self::StartsWith | Self::EndsWith | Self::Contains => {
-                // Compare only escaped text, never the presence byte or terminator.
+                // Compare escaped content, never the presence byte or terminator.
                 // In particular, optional empty text must not match suffix U+0001.
-                fn text(key: &[u8], optional: bool) -> Option<&[u8]> {
+                fn content(key: &[u8], optional: bool) -> Option<&[u8]> {
                     key.get(usize::from(optional)..)?.strip_suffix(&[0, 0])
                 }
                 actual
-                    .and_then(|key| text(key, optional))
-                    .zip(operand.and_then(|key| text(key, optional)))
+                    .and_then(|key| content(key, optional))
+                    .zip(operand.and_then(|key| content(key, optional)))
                     .is_some_and(|(actual, operand)| match self {
+                        // Prefixes start at a component boundary: escaping each
+                        // byte preserves prefix identity for Text and Blob alike.
                         Self::StartsWith => actual.starts_with(operand),
-                        Self::EndsWith => actual.ends_with(operand),
+                        // A suffix starting after 00 starts inside an escaped zero
+                        // (00 FF), not at a raw-byte boundary. This matters for Blob
+                        // operands beginning FF; valid UTF-8 cannot begin there.
+                        Self::EndsWith => actual
+                            .strip_suffix(operand)
+                            .is_some_and(|prefix| prefix.last() != Some(&0)),
                         // Valid UTF-8 needles cannot start within an escaped NUL
                         // (00 FF) or a multibyte character. Search is linear and
                         // constant-space even for repetitive bounded operands.
@@ -402,7 +411,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// narrow the scanned range. On an index path, those comparisons can narrow
     /// its first field after the admitted fixed prefix. Only examined rows
     /// undergo integrity checks; oversized derived bounds remain residual filters.
-    /// Indexed StartsWith can seek that field's exact encoded text prefix too.
+    /// Indexed StartsWith can seek that field's exact encoded Text/Blob prefix too.
     #[must_use]
     pub fn filter(
         mut self,
@@ -412,6 +421,41 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Self {
         self.request.filter(field, comparison, value);
         self
+    }
+    /// Match a present field inside an inclusive range, ANDed with other filters.
+    /// Equivalent to `filter(field, Comparison::Ge, lower)` followed by
+    /// `filter(field, Comparison::Le, upper)`, including cursor/job identity.
+    /// Both exact operands are admitted and consume two of the eight comparisons.
+    /// Absent operands refuse; absent fields never match. Reversed bounds produce
+    /// no matches, without skipping admission of either operand or other filters.
+    #[must_use]
+    pub fn filter_between(
+        self,
+        field: &'a str,
+        lower: impl Into<IndexValue<'a>>,
+        upper: impl Into<IndexValue<'a>>,
+    ) -> Self {
+        self.filter(field, Comparison::Ge, lower)
+            .filter(field, Comparison::Le, upper)
+    }
+    /// Match a present field strictly outside an inclusive range.
+    /// Equivalent to one `filter_any` clause containing `Lt lower` then `Gt upper`,
+    /// including cursor/job identity. Both exact operands consume filter terms.
+    /// Absent operands refuse and absent fields never match; this is not a general
+    /// negation of `filter_between`. Equal bounds exclude that value; reversed
+    /// bounds match every present value, once. Uses the existing single traversal
+    /// and work budget, without seeking separate ranges for the two alternatives.
+    #[must_use]
+    pub fn filter_not_between(
+        self,
+        field: &'a str,
+        lower: impl Into<IndexValue<'a>>,
+        upper: impl Into<IndexValue<'a>>,
+    ) -> Self {
+        self.filter_any(&[
+            (field, Comparison::Lt, lower.into()),
+            (field, Comparison::Gt, upper.into()),
+        ])
     }
     /// Add an OR clause of exact top-level comparisons, ANDed with other filters.
     /// Each clause must contain at least one comparison; all filters together

@@ -11,6 +11,7 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
+    (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>),
 );
 type Step = (
     u64,
@@ -156,6 +157,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 32,
                 (None, None),
                 None,
+                (None, None, None),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -358,6 +360,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             ("count:payload", vec![vec!["1"]]),
             ("count:optional", vec![vec![present]]),
             ("distinct-count:payload", vec![vec!["1"]]),
+            ("distinct-count:optional", vec![vec!["1"]]),
             ("min:payload", vec![vec![hex]]),
             ("max:payload", vec![vec![hex]]),
             (
@@ -370,6 +373,14 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             ),
             ("payload,count", vec![vec![hex, "1"]]),
             ("payload,count:optional", vec![vec![hex, present]]),
+            (
+                "optional,count",
+                vec![vec![optional_hex.unwrap_or("—"), "1"]],
+            ),
+            (
+                "optional,count:optional",
+                vec![vec![optional_hex.unwrap_or("—"), present]],
+            ),
         ];
         let mut jobs = Vec::new();
         for (selector, expected) in cases {
@@ -380,6 +391,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 32,
                 (None, None),
                 None,
+                (None, None, None),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -416,6 +428,97 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 .unwrap();
         }
     }
+    // Inclusive byte bounds select the input, including empty and non-UTF-8
+    // bytes. A nonmatch still consumes work; it never becomes a partial answer.
+    for (payload, lower, upper, prefix, matches) in [
+        (vec![], Some(vec![]), Some(vec![]), None, true),
+        (vec![0], None, Some(vec![]), None, false),
+        (
+            vec![0, 255, 128],
+            Some(vec![0, 255, 128]),
+            Some(vec![0, 255, 128]),
+            None,
+            true,
+        ),
+        (vec![0, 255, 128], None, Some(vec![0, 255]), None, false),
+        (
+            vec![0, 255, 128],
+            Some(vec![0, 255, 129]),
+            None,
+            None,
+            false,
+        ),
+        (vec![255], Some(vec![128]), None, None, true),
+        (vec![128], Some(vec![255]), Some(vec![0]), None, false),
+        (vec![], None, None, Some(vec![]), true),
+        (vec![], None, None, Some(vec![0]), false),
+        (vec![0, 255, 128], None, None, Some(vec![0, 255]), true),
+        (vec![0, 255, 128], None, None, Some(vec![255]), false),
+        (
+            vec![0, 255, 128],
+            None,
+            Some(vec![0, 255]),
+            Some(vec![0]),
+            false,
+        ),
+        (
+            vec![255, 255],
+            Some(vec![255]),
+            None,
+            Some(vec![255, 255]),
+            true,
+        ),
+    ] {
+        replace(payload, None).await;
+        let selection: Selection = (
+            "BinaryObject".into(),
+            "count".into(),
+            (None, None, None),
+            32,
+            (None, None),
+            None,
+            (lower, upper, prefix),
+        );
+        let handle =
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
+                .await
+                .unwrap();
+        let first = advance(&selection, &handle, 0, 4096).await.unwrap();
+        assert_eq!((first.1.as_str(), first.2), ("Running", 1));
+        assert!(first.5.1.is_empty());
+        upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        let before = pic.get_stable_memory(canister).await;
+        let mut changed = selection.clone();
+        changed.6.2 = Some(vec![42]);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        changed.6.2 = Some(vec![0; 1025]);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        changed.6 = (Some(vec![1, 2, 3]), None, None);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        changed.6 = (Some(vec![0; 1025]), None, None);
+        assert!(advance(&changed, &handle, 1, 4096).await.is_err());
+        assert!(
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
+                .await
+                .is_err()
+        );
+        changed.0 = "Document".into();
+        changed.6 = (Some(vec![]), None, None);
+        assert!(
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
+                .await
+                .is_err()
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
+        assert_eq!((complete.1.as_str(), complete.2), ("Complete", 1));
+        assert_eq!(complete.5.1, vec![vec![if matches { "1" } else { "0" }]]);
+        call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
+            .await
+            .unwrap();
+    }
     let selection: Selection = (
         "BinaryObject".into(),
         "max:payload".into(),
@@ -423,6 +526,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         32,
         (None, None),
         None,
+        (None, None, None),
     );
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await

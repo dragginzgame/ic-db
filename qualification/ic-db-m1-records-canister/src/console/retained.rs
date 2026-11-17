@@ -28,12 +28,25 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
+    (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>),
 );
 fn configured<'a, E: Entity>(
     query: Query<'a, E, Backing>,
     selection: &'a Selection,
 ) -> Result<Query<'a, E, Backing>, String> {
-    let (_, select, _, limit, (group_min, group_max), group_order) = selection;
+    let (entity, select, _, limit, (group_min, group_max), group_order, (minimum, maximum, prefix)) =
+        selection;
+    if entity != "BinaryObject" && (minimum.is_some() || maximum.is_some() || prefix.is_some()) {
+        return Err(
+            "--payload-min, --payload-max and --payload-prefix apply to BinaryObject".into(),
+        );
+    }
+    let query = blob::filter(
+        query,
+        minimum.as_deref(),
+        maximum.as_deref(),
+        prefix.as_deref(),
+    );
     select_groups(
         query.limit(*limit as usize),
         select,
@@ -306,6 +319,7 @@ fn start_blob(
             query.start_count_field(&select[6..], jobs, now, expires)
         }
         "distinct-count:payload" => query.start_count_distinct::<Payload>(jobs, now, expires),
+        "distinct-count:optional" => query.start_count_distinct::<Optional>(jobs, now, expires),
         "min:payload" => query.start_min::<Payload>(jobs, now, expires),
         "max:payload" => query.start_max::<Payload>(jobs, now, expires),
         "min:optional" => query.start_min::<Optional>(jobs, now, expires),
@@ -313,6 +327,10 @@ fn start_blob(
         "payload,count" => query.start_group_count::<Payload>(jobs, now, expires),
         "payload,count:optional" => {
             query.start_group_count_field::<Payload>("optional", jobs, now, expires)
+        }
+        "optional,count" => query.start_group_count::<Optional>(jobs, now, expires),
+        "optional,count:optional" => {
+            query.start_group_count_field::<Optional>("optional", jobs, now, expires)
         }
         _ => Err(Error::InvalidQuery),
     }
@@ -336,13 +354,16 @@ fn resume_blob(
         "distinct-count:payload" => query
             .resume_count_distinct::<Payload>(jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct-count:optional" => query
+            .resume_count_distinct::<Optional>(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
         "min:payload" | "max:payload" => {
             let step = if select == "min:payload" {
                 query.resume_min::<Payload>(jobs, handle, sequence, now)
             } else {
                 query.resume_max::<Payload>(jobs, handle, sequence, now)
             };
-            step.map(|s| display(s, |v| scalar("payload", v.map(|r| blob::hex(&r.payload)))))
+            step.map(|s| display(s, |v| scalar("payload", v.map(|r| super::hex(&r.payload)))))
         }
         "min:optional" | "max:optional" => {
             let step = if select == "min:optional" {
@@ -354,17 +375,31 @@ fn resume_blob(
                 display(s, |v| {
                     scalar(
                         "optional",
-                        v.and_then(|r| r.optional).map(|v| blob::hex(&v)),
+                        v.and_then(|r| r.optional).map(|v| super::hex(&v)),
                     )
                 })
             })
         }
         "payload,count" => query
             .resume_group_count::<Payload>(jobs, handle, sequence, now)
-            .map(|s| display(s, |p| counts(p, "payload", |k| blob::hex(&k.payload)))),
+            .map(|s| display(s, |p| counts(p, "payload", |k| super::hex(&k.payload)))),
         "payload,count:optional" => query
             .resume_group_count_field::<Payload>("optional", jobs, handle, sequence, now)
-            .map(|s| display(s, |p| counts(p, "payload", |k| blob::hex(&k.payload)))),
+            .map(|s| display(s, |p| counts(p, "payload", |k| super::hex(&k.payload)))),
+        "optional,count" => query
+            .resume_group_count::<Optional>(jobs, handle, sequence, now)
+            .map(|s| {
+                display(s, |p| {
+                    counts(p, "optional", |k| blob::optional_hex(k.optional))
+                })
+            }),
+        "optional,count:optional" => query
+            .resume_group_count_field::<Optional>("optional", jobs, handle, sequence, now)
+            .map(|s| {
+                display(s, |p| {
+                    counts(p, "optional", |k| blob::optional_hex(k.optional))
+                })
+            }),
         _ => Err(Error::InvalidQuery),
     }
 }

@@ -2,9 +2,16 @@
 use crate::{open, runtime, schema::DefaultRow};
 use ic_db::{Batch, Error};
 
-type Row = (u64, u16, bool, Option<String>);
+type Row = (u64, u16, bool, Option<String>, Vec<u8>, Option<Vec<u8>>);
 fn view(row: DefaultRow) -> Row {
-    (row.id, row.count, row.enabled, row.label)
+    (
+        row.id,
+        row.count,
+        row.enabled,
+        row.label,
+        row.empty,
+        row.payload,
+    )
 }
 
 #[ic_platform_runtime::update(
@@ -27,18 +34,32 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
                 .id(id)
                 .count(0)
                 .enabled(false)
-                .label(None),
+                .label(None)
+                .payload(None),
         ),
         2 => {
             let mut row = db.get::<DefaultRow>(id).unwrap().ok_or(4_u8)?;
             row.count = 0;
             row.enabled = false;
             row.label = None;
+            row.payload = None;
             batch.replace(&row).map_err(|_| 4_u8)?;
             Ok(row)
         }
         3 => batch.insert_input(DefaultRow::insert()),
         4 => batch.insert_input(DefaultRow::insert().id(id).label(Some("too long!".into()))),
+        5 => batch.insert_input(
+            DefaultRow::insert()
+                .id(id)
+                .label(None)
+                .payload(Some(vec![])),
+        ),
+        6 => batch.insert_input(
+            DefaultRow::insert()
+                .id(id)
+                .label(None)
+                .payload(Some(vec![0; 3])),
+        ),
         _ => return Err(4),
     }
     .map_err(|error| match error {

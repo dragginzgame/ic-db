@@ -2,7 +2,7 @@
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
-type Row = (u64, u16, bool, Option<String>);
+type Row = (u64, u16, bool, Option<String>, Vec<u8>, Option<Vec<u8>>);
 type State = (Vec<Row>, Vec<u64>, u64);
 
 #[tokio::test]
@@ -74,16 +74,16 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
     };
     assert_eq!(
         decode(call(1, 0, false).await.unwrap()).unwrap(),
-        (1, 7, true, Some("draft".into()))
+        (1, 7, true, Some("draft".into()), vec![], Some(vec![0, 255]))
     );
     assert_eq!(
         decode(call(2, 1, false).await.unwrap()).unwrap(),
-        (2, 0, false, None)
+        (2, 0, false, None, vec![], None)
     );
     let before = pic.get_stable_memory(canister).await;
     let current = state().await;
     assert_eq!(current.1, vec![1]);
-    for (mode, error) in [(0, 3), (3, 1), (4, 2)] {
+    for (mode, error) in [(0, 3), (3, 1), (4, 2), (6, 2)] {
         assert_eq!(decode(call(3, mode, false).await.unwrap()), Err(error));
         assert!(pic.get_stable_memory(canister).await == before);
     }
@@ -93,7 +93,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
     assert_eq!(state().await, current);
     assert_eq!(
         decode(call(1, 2, false).await.unwrap()).unwrap(),
-        (1, 0, false, None)
+        (1, 0, false, None, vec![], None)
     );
     let revision = state().await.2;
     decode(call(1, 2, false).await.unwrap()).unwrap();
@@ -101,6 +101,10 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
     assert!(state().await.1.is_empty());
     decode(call(3, 0, false).await.unwrap()).unwrap();
     assert_eq!(state().await.1, vec![3]);
+    assert_eq!(
+        decode(call(4, 5, false).await.unwrap()).unwrap(),
+        (4, 7, true, None, vec![], Some(vec![]))
+    );
     let before = state().await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await

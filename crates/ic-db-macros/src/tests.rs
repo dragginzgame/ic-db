@@ -144,6 +144,31 @@ fn literal_defaults_reject_wrong_types_ranges_and_unimplemented_shapes() {
     for field in [
         quote!(field(
             name = "value",
+            value(item(prim = "Blob", max_bytes = 1)),
+            default = b"ab"
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Blob", max_bytes = 2)),
+            default = "ff"
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Text", max_bytes = 2)),
+            default = b"ab"
+        )),
+        quote!(field(
+            name = "value",
+            value(item(prim = "Blob", max_bytes = 2)),
+            default = [0, 255]
+        )),
+        quote!(field(
+            name = "value",
+            value(many, max_items = 1, item(prim = "Blob", max_bytes = 2)),
+            default = b"ab"
+        )),
+        quote!(field(
+            name = "value",
             value(item(prim = "Nat8")),
             default = 256
         )),

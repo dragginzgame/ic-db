@@ -1252,6 +1252,186 @@ fn exclusion_admits_every_member_and_shares_the_filter_budget() {
 }
 
 #[test]
+fn inclusive_ranges_preserve_endpoints_absence_index_order_and_continuation() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for indexed in [false, true] {
+        for descending in [false, true] {
+            let mut query = db.query::<Entry>().filter_between("maybe", 2_u64, 7_u64);
+            if indexed {
+                query = query.using_index("maybe", &[]);
+            }
+            if descending {
+                query = query.descending();
+            }
+            let expected = if descending {
+                vec![7, 5, 4, 2]
+            } else {
+                vec![2, 4, 5, 7]
+            };
+            assert_eq!(ids(&query.fetch().unwrap().rows), expected);
+        }
+    }
+    assert_eq!(
+        ids(&db
+            .query::<Entry>()
+            .filter_between("id", 4_u64, 4_u64)
+            .fetch()
+            .unwrap()
+            .rows),
+        [4]
+    );
+    assert_eq!(
+        db.query::<Entry>()
+            .filter_between("id", 7_u64, 2_u64)
+            .count()
+            .unwrap()
+            .value,
+        0
+    );
+    let page = db
+        .query::<Entry>()
+        .filter_between("amount", 20_u64, 40_u64)
+        .using_index("amount,id", &[])
+        .limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [2]);
+    let cursor = page.next.unwrap();
+    let rest = db
+        .query::<Entry>()
+        .filter("amount", C::Ge, 20_u64)
+        .filter("amount", C::Le, 40_u64)
+        .using_index("amount,id", &[])
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [3, 4]);
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_between("amount", 20_u64, 50_u64)
+            .using_index("amount,id", &[])
+            .after(&cursor)
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
+}
+
+#[test]
+fn inclusive_ranges_admit_both_operands_and_share_the_filter_budget() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for invalid in [IndexValue::Absent, 1_u8.into(), "wrong".into()] {
+        for (lower, upper) in [(invalid, 8_u64.into()), (1_u64.into(), invalid)] {
+            assert!(matches!(
+                db.query::<Entry>()
+                    .filter("id", C::Lt, 0_u64)
+                    .filter_between("id", lower, upper)
+                    .fetch(),
+                Err(Error::InvalidOperand)
+            ));
+        }
+    }
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_between("missing", 1_u64, 8_u64)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    let mut query = db.query::<Entry>();
+    for _ in 0..4 {
+        query = query.filter_between("id", 2_u64, 4_u64);
+    }
+    assert_eq!(query.count().unwrap().value, 3);
+    let mut query = db.query::<Entry>().filter("id", C::Ge, 1_u64);
+    for _ in 0..4 {
+        query = query.filter_between("id", 2_u64, 4_u64);
+    }
+    assert!(matches!(query.fetch(), Err(Error::Limit)));
+}
+
+#[test]
+fn outside_ranges_preserve_sparse_progress_absence_and_or_cursor_identity() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for indexed in [false, true] {
+        for descending in [false, true] {
+            for (lower, upper, expected) in [
+                (2_u64, 7_u64, vec![1, 8]),
+                (4, 4, vec![1, 2, 5, 7, 8]),
+                (7, 2, vec![1, 2, 4, 5, 7, 8]),
+            ] {
+                let mut expected = expected;
+                if descending {
+                    expected.reverse();
+                }
+                let alternatives = [
+                    ("maybe", C::Lt, lower.into()),
+                    ("maybe", C::Gt, upper.into()),
+                ];
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                for page_number in 0..16 {
+                    // Continue a helper-created cursor using the explicit OR clause.
+                    let mut query = if cursor.is_none() {
+                        db.query::<Entry>()
+                            .filter_not_between("maybe", lower, upper)
+                    } else {
+                        db.query::<Entry>().filter_any(&alternatives)
+                    }
+                    .work_limit(1);
+                    if indexed {
+                        query = query.using_index("maybe", &[]);
+                    }
+                    if descending {
+                        query = query.descending();
+                    }
+                    if let Some(cursor) = &cursor {
+                        query = query.after(cursor);
+                    }
+                    let page = query.fetch().unwrap();
+                    assert!(page.examined <= 1);
+                    actual.extend(ids(&page.rows));
+                    cursor = page.next;
+                    if cursor.is_none() {
+                        break;
+                    }
+                    assert!(page_number < 15, "outside range must progress");
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn outside_ranges_admit_both_operands_and_share_the_filter_budget() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for invalid in [IndexValue::Absent, 1_u8.into(), "wrong".into()] {
+        for (lower, upper) in [(invalid, 0_u64.into()), (9_u64.into(), invalid)] {
+            // The valid alternative matches every row, but cannot hide a bad operand.
+            assert!(matches!(
+                db.query::<Entry>()
+                    .filter_not_between("id", lower, upper)
+                    .fetch(),
+                Err(Error::InvalidOperand)
+            ));
+        }
+    }
+    let mut query = db.query::<Entry>();
+    for _ in 0..4 {
+        query = query.filter_not_between("id", 2_u64, 7_u64);
+    }
+    assert_eq!(query.count().unwrap().value, 2);
+    let mut query = db.query::<Entry>().filter("id", C::Ge, 0_u64);
+    for _ in 0..4 {
+        query = query.filter_not_between("id", 2_u64, 7_u64);
+    }
+    assert!(matches!(query.fetch(), Err(Error::Limit)));
+}
+
+#[test]
 fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

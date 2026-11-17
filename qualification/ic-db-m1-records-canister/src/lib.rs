@@ -256,6 +256,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                             ic_db::LiteralDefault::Int(v) => v.to_string(),
                             ic_db::LiteralDefault::Bool(v) => v.to_string(),
                             ic_db::LiteralDefault::Text(v) => format!("{v:?}"),
+                            ic_db::LiteralDefault::Blob(v) => console::hex(v),
                         };
                         info = joined_info(info, &format!("default {value}"));
                     }

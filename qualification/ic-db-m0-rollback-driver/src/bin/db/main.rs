@@ -132,11 +132,21 @@ enum Command {
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
         /// prefix with entry_id, for groups. DecimalRow: count, count/distinct-count/min/max/sum/avg
         /// of :value or :maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
-        /// BinaryObject: count/count:payload/count:optional, distinct-count:payload,
-        /// min/max:payload or :optional, payload,count and payload,count:optional.
-        /// Blob aggregates cover all rows; payload range flags currently apply to query only.
+        /// BinaryObject: count/count:payload/count:optional, distinct-count:payload or :optional,
+        /// min/max:payload or :optional; payload/optional,count or ,count:optional.
+        /// Blob payload bounds filter input before accumulation.
+        /// DISTINCT counts include absence; count:optional counts only present values.
         #[arg(long, default_value = "count")]
         select: String,
+        /// BinaryObject.payload >= HEX; exact 0x-prefixed bytes, at most 1024 bytes.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_min: Option<BlobArg>,
+        /// BinaryObject.payload <= HEX; use 0x for empty bytes.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_max: Option<BlobArg>,
+        /// BinaryObject.payload starts with HEX; 0x matches every present payload.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_prefix: Option<BlobArg>,
         /// Entry.amount >= VALUE.
         #[arg(long = "min")]
         minimum: Option<u64>,
@@ -183,6 +193,9 @@ enum Command {
         /// BinaryObject.payload <= HEX; same byte syntax as --payload-min.
         #[arg(long, value_name="HEX", value_parser=parse_blob)]
         payload_max: Option<BlobArg>,
+        /// BinaryObject.payload starts with exact raw bytes; combines with range bounds.
+        #[arg(long, value_name="HEX", value_parser=parse_blob)]
+        payload_prefix: Option<BlobArg>,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
         after: Option<CursorArg>,
@@ -223,8 +236,9 @@ enum Command {
         /// Prefix sums/extrema with category, for Entry or entry_id, for Document
         /// to group results; all-absent groups display an absent value.
         /// BinaryObject: payload/optional projections, min/max:payload or :optional,
-        /// distinct-count:payload, payload,count and payload,count:optional.
+        /// distinct-count:payload or :optional; payload/optional,count or ,count:optional.
         /// Blob output uses lowercase 0x-prefixed hex; absence displays as —.
+        /// DISTINCT counts include absence; count:optional counts only present values.
         #[arg(long, default_value = "full")]
         select: String,
         /// Deduplicate projections using live indexed pages or a bounded complete result.
@@ -679,6 +693,9 @@ async fn session(
             Command::Aggregate {
                 entity,
                 select,
+                payload_min,
+                payload_max,
+                payload_prefix,
                 minimum,
                 category,
                 entry_id,
@@ -697,6 +714,7 @@ async fn session(
                     limit,
                     (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
+                    (payload_min.map(|v| v.0), payload_max.map(|v| v.0), payload_prefix.map(|v| v.0)),
                 );
                 let reply = invoke(
                     CallKind::Update,
@@ -890,6 +908,7 @@ async fn session(
                 entity,
                 payload_min,
                 payload_max,
+                payload_prefix,
                 after,
                 limit,
                 minimum,
@@ -922,7 +941,7 @@ async fn session(
                             bytes,
                             select,
                             (distinct, (group_min, group_max), group_order,
-                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0))),
+                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0), payload_prefix.map(|v|v.0))),
                         ),
                         Encoding::Frame {
                             method: 3,

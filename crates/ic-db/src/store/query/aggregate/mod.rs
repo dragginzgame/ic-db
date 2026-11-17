@@ -151,7 +151,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// and output limits. At most eight terms. Counts require Nat64 operands;
     /// extrema require the source type; sums require the declared result type.
     /// Absent values support Eq/Ne only. Text extrema also accept StartsWith,
-    /// EndsWith and Contains.
+    /// EndsWith and Contains; Blob extrema accept StartsWith and EndsWith.
     /// Only grouped terminals accept this modifier, even for empty input.
     #[must_use]
     pub fn filter_groups(

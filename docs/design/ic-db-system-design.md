@@ -36,6 +36,14 @@ algorithms; its accumulated architecture is not a blueprint to reproduce.
 Challenge inherited mechanisms and prove platform assumptions before building
 infrastructure around them. This remains a separate experimental product.
 
+Maintainer clarification (2026-11-17): some IcyDB features and abstractions were
+mistakes or experiments that simply stayed. Their presence is not evidence of
+best practice or an obligation to reproduce them. Assess each capability and
+mechanism against current requirements and total responsibility, including work
+moved to applications. Distinguish an observed legacy difference from accepted
+unfinished IC DB scope; existing commitments still require an explicit decision
+before changing them.
+
 Section 10 records measured reductions for selected matched workloads. Those
 results do not establish whole-product savings, universal safety or feature parity.
 
@@ -799,8 +807,17 @@ input per entity contains optional supplied fields; an optional stored field has
 an outer omission marker, so explicit `None` remains distinct. This construction
 feeds existing encoding, constraints and commit logic. Fully specified inserts
 and replacements remain available; there is no partial-update builder yet.
-Literal defaults initially support signed/unsigned 8–128-bit integers, Bool and
-bounded Text, including optional present defaults. Missing required inputs refuse.
+Literal defaults support signed/unsigned 8–128-bit integers, Bool, bounded Text
+and Blob, including optional present defaults. Missing required inputs refuse.
+Blob defaults use Rust byte strings (`default = b"\x00\xff"`); empty byte strings
+are valid within a zero-byte field bound. Ordinary strings and byte arrays are
+not coerced. The macro checks the literal's bytes and bound; compiled metadata
+uses the existing owned Blob codec and default fingerprint trailer. A changed
+default changes schema identity; no default runs on decoding or replacement.
+Frozen IcyDB `6d421e3`, `docs/guides/schema-authoring.md#literal-diagnostics`,
+documents a prior ambiguity between text and hex Blob defaults. IC DB retains
+exact-byte admission without adopting that hex grammar or a literal parser shared
+with SQL. This is a typed construction extension, not a sanitizer or policy engine.
 Primary-key defaults, nested-record defaults and richer producers remain separate
 increments, not retired capabilities.
 
@@ -1286,8 +1303,18 @@ Bounded Blob fields support exact equality/range comparisons, indexes, ordering,
 DISTINCT, grouping, and synchronous/retained min/max. Operands are borrowed
 `IndexValue::Blob(&[u8])` (or slices through `Into`), never coerced from Text.
 Unsigned raw bytes compare lexicographically; a shorter proper prefix sorts first.
-Absence, empty bytes and a zero byte are distinct. Text matching operators remain
-Text-only; Blob sums/averages and Blob primary keys are not admitted.
+Absence, empty bytes and a zero byte are distinct. `StartsWith` also accepts an
+exact Blob operand; an empty prefix matches every present value. A selected index
+can seek the prefix on its first unfixed component. `EndsWith` accepts exact Blob
+suffixes as a residual predicate; empty suffixes match present values only.
+Blob substring matching, sums/averages and primary keys are not admitted.
+Native composition checks cover optional Blob DISTINCT and retained grouped
+min/max whose late winners change prefix membership. Group filtering, aggregate
+ordering and limits apply only to completed winners, with reopen between work
+chunks and result pages; see the [qualification receipt](../../qualification/README.md#blob-prefix-composition-022).
+This retains the post-aggregate selection invariant represented in frozen IcyDB
+`6d421e3`'s `executor/aggregate/runtime/tests.rs`, without copying its general
+compiled-expression evaluator. Existing comparison and finalization paths suffice.
 Shared key encoding escapes zeroes and terminates each component, retaining the
 512-byte complete index-key bound, comparison/state bounds and output refusal
 rules. Stored Blob encoding is unchanged. An authored Blob index changes schema
@@ -2103,16 +2130,48 @@ temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. Deployed-database CLI access
 and production endpoint composition remain M4 integration work.
 
-The pending 0.21 local console includes `BinaryObject` for synchronous queries,
+The 0.21 local console includes `BinaryObject` for synchronous queries,
 maintained counts and retained aggregates. `--payload-min`/`--payload-max` accept `0x`-prefixed hex
 pairs (0–1024 bytes); the CLI decodes these to byte operands before transport.
 Projection, DISTINCT, ordering, payload grouping/counts and min/max reuse the
 existing fluent endpoint. Hex output is presentation-only, with `0x` distinct
 from absent `—`. The engine and stored fixture schema do not change for this
 adapter addition. Retained counts, DISTINCT counts, min/max and payload groups
-use existing job endpoints, progress and explicit cancellation. They aggregate
-all rows; payload range flags apply to synchronous queries only. Optional-Blob
-filter flags remain outside the console's selected surface. The private query request changes with
+use existing job endpoints, progress and explicit cancellation. The pending
+0.22 console also accepts payload bounds for retained aggregates, reconstructing
+the same fluent predicates on start and resume. Existing job admission rejects
+changed predicates without advancing progress; nonmatches consume scan work and
+empty results still require completion. No engine or durable job format changes.
+This retains the signature-mismatch refusal lesson from frozen IcyDB `6d421e3`,
+`db/cursor/tests/mod.rs::prepare_grouped_cursor_rejects_signature_mismatch`;
+the CLI uses IC DB's existing job binding, not a copied cursor framework.
+The same pending console increment exposes optional Blob grouping and projected
+DISTINCT counts: absence is one group/value, distinct from empty bytes, while
+`count:optional` excludes absent values. This preserves frozen IcyDB `6d421e3`'s
+`db/executor/aggregate/value_reducer/tests.rs::count_ignores_owned_and_borrowed_nulls`
+lesson through existing IC DB operations, without copying its reducer machinery.
+Native retained-Blob qualification now also merges duplicate byte keys across
+sparse primary scans and indexed input, reopening both stores between advances
+and completed pages. An independent Rust map checks exact counts and final group
+selection; this complements, rather than extends, the recorded Wasm upgrade proof.
+Optional-Blob retained checks also preserve absent versus empty keys and zero
+present-field counts across chunks/reopens on primary and indexed paths.
+Optional-Blob filter flags remain outside the console's selected surface.
+The pending fluent Blob prefix increment reuses the escaped component comparison
+and secondary prefix range used by Text. Prefix matching begins at the component
+boundary, so zero escaping preserves raw-byte prefix identity. Suffix/contains
+remain Text-only: arbitrary Blob needles could otherwise match inside an escape.
+Frozen IcyDB `6d421e3`, `db/predicate/runtime/mod.rs` and its
+`borrowed_field_pairs_match_general_comparison_semantics` regression, retain strict
+Text/Blob separation but do not implement Blob prefix comparison. IC DB extends
+its existing mechanism, without copying IcyDB's coercion/value dispatch. Native
+checks compare scans, index seeks, sparse/reverse pages and retained reopen with
+raw byte-slice results. The local console exposes `--payload-prefix` on query and
+retained aggregate commands, combining it with inclusive byte bounds through one
+shared predicate builder. The private query/retained request tuples change with
+their callers; durable row, index and job formats do not. Qualification evidence
+and its exact Wasm identity are recorded in the qualification guide.
+The private query request changes with
 its callers; it is not an application protocol or backward-compatible service.
 IcyDB `6d421e3`'s `sql_query_result_from_statement_keeps_blob_projection_typed_until_rendering`
 regression supplies the binary-versus-display distinction; its SQL packaging and
@@ -2187,8 +2246,10 @@ general dynamic executor merely to expose these few facts. The current JSON
 display strings are not a substitute for a versioned typed reply. Endpoint names,
 transport IDs and exact metadata bounds still need agreement at the Canic owner.
 The adapter contract and its focused installed qualification are tracked in
-[Canic #18](https://github.com/dragginzgame/canic/issues/18); CLI target selection
-and presentation remain IC DB responsibilities.
+[Canic #18](https://github.com/dragginzgame/canic/issues/18). CLI target selection,
+presentation and client integration are tracked separately in
+[IC DB #4](https://github.com/dragginzgame/ic-db/issues/4). Each owner qualifies
+and closes its own implementation; Canic completion does not wait for DB adoption.
 
 Retain IcyDB's conservative call-failure distinction, inspected at frozen
 `6d421e3`, `crates/icydb-cli/src/icp/call/mod.rs`: an update whose reply is lost
@@ -2234,7 +2295,7 @@ composition and matched IcyDB costs. Maintenance must retain its current narrow
 contract until an extension is deliberately selected. Source-plus-target space
 is accepted; logical cleanup does not imply physical shrink or reusable capacity.
 
-The pending 0.21.0 slice adds Blob query support and checks retained optional-text extrema and
+The 0.21.0 slice adds Blob query support and checks retained optional-text extrema and
 large text key/winner pairs through upgrades, exact completed pages and intact
 checkpoint/output refusals. Blob winners use the same checkpoint and finalization
 paths. The public operand enum gains a Blob variant; existing schema identities
@@ -2363,11 +2424,28 @@ comparison variant, negation executor or retained representation. Native oracles
 cover optional values, duplicate exclusions, both page directions, bounds and
 continuation through ordinary inequalities, including retained counts.
 
+`filter_between(field, lower, upper)` is shorthand for `Ge` then `Le`, retaining
+both endpoints, the same cursor/job identity and two ordinary comparison terms.
+Operands must have the field's exact admitted type; absence refuses as a bound
+and never matches as a field value. Reversed bounds match nothing but do not
+bypass admission. This retains frozen IcyDB `6d421e3`'s inclusive `FieldRef::between`
+semantics (`db/query/builder/field/mod.rs`), without its allocated expression tree
+or field-to-field bounds. Existing range selection and execution remain the owners.
+
+`filter_not_between` lowers to one OR clause (`Lt lower`, then `Gt upper`),
+retaining IcyDB's `FieldRef::not_between` semantics and two-term budget without
+general negation. Absence never matches. Equal bounds exclude that value; reversed
+bounds match every present value once, even when both alternatives match. Existing
+single-path traversal bounds apply; there is no two-range seek or union plan.
+Sparse scan/index pages and retained counts through reopen use the same explicit
+comparison identity. This is native qualification, not new Wasm performance evidence.
+
 `Comparison::StartsWith`, `EndsWith` and `Contains` admit present Text operands under the declared byte
 limit, for row filters and completed text min/max group selection. Matching is
 literal, case-sensitive UTF-8 with no normalization; an empty operand matches
-every present text value, including empty text, but not absence. Nontext fields
-refuse. Shared admission and comparison reuse existing terminated text keys,
+every present text value, including empty text, but not absence. `StartsWith` also
+accepts Blob as specified above; `EndsWith` does too, while `Contains` remains Text-only.
+Shared admission and comparison reuse existing terminated text keys,
 stripping presence and terminator framing only when matching, while preserving
 escaped NUL bytes. This prevents optional empty text from matching suffix U+0001.
 Encoded operands stay unchanged. No codec, schema or job-format change is needed;
@@ -2382,6 +2460,17 @@ encoding share one path across counts, extrema and numeric results; the comparat
 receives transient framing metadata, without another durable representation.
 The Wasm witness checks sparse pages,
 byte refusal, cursor binding and upgrade without changing backing bytes.
+
+Blob suffix matching shares this comparator, checking that the matched suffix
+does not begin at the `FF` continuation of an escaped zero (`00 FF`). Removing
+framing first and checking the preceding byte preserves exact raw-byte semantics
+without decoding buffers or a new predicate representation. Frozen IcyDB's
+`predicate/runtime/mod.rs` at `6d421e3` permits suffixes for Text but only Eq/Ne
+for Blob; this is an IC DB extension using its owned key encoding. Blob substring
+matching stays deferred: naive overlapping searches can lose the existing
+linear-time Text search guarantee, while nonoverlapping searches can miss valid
+matches after a false escape-boundary match. Suffix qualification is native only;
+the earlier text/prefix Wasm evidence is not a suffix claim.
 
 Mandatory `StartsWith` on the first index field after the admitted fixed prefix
 now narrows that same scan interval. Remove only the encoded Text terminator,
@@ -3659,6 +3748,34 @@ primary-key suffix where present. Query prefixes reserve the minimum valid
 completion for unknown components and owner identity; per-field bounds apply
 independently. Nonunique indexes append the primary key. Index values are the exact encoded primary
 key; entity metadata is little-endian `u64` revision followed by `u64` row count.
+
+Account remains the largest supported scalar primary-key encoding: one owner
+length byte, 0–29 owner bytes and 32 effective subaccount bytes (33–62 total).
+This is not the largest stored value: Text, Blob and structured values have their
+own declared bounds within the 4096-byte row envelope. Account's row-field codec
+uses a four-byte owner length instead, giving 36–65 bytes before optional framing.
+
+| Primary-key type | Encoded identity bytes | Complete row-key bytes |
+| --- | ---: | ---: |
+| Nat64 / Int64 | 8 | 13 |
+| Ulid / Nat128 / Int128 | 16 | 21 |
+| U256 / Subaccount | 32 | 37 |
+| Principal | 1–30 | 6–35 |
+| Account | 33–62 | 38–67 |
+
+Row keys add a one-byte tag and four-byte entity handle. Secondary keys start
+with nine namespace bytes; actual component bytes and any nonunique primary-key
+suffix consume the shared 512-byte limit. Four required Account components and
+an Account owner suffix therefore need at most 319 bytes. Text/Blob escaping and
+compound components, not Account alone, motivate the independent complete-key cap.
+The shared map's variable-length `StoreKey` advertises 512 bytes for all key kinds;
+encoded keys are not padded to either 62 or 512 bytes. Supplier allocation overhead
+is a separate measurement, not implied by these encoded lengths. Frozen IcyDB
+`6d421e3` derives its scalar primary-key maximum from Account and its composite
+maximum from four such components (`db/key_taxonomy/mod.rs`); its complete
+secondary-index cap is independently 512 bytes too. IC DB does not import that
+composite primary-key representation or reserve its maximum in every row key.
+
 Row values are database-encoded fields in
 canonical field-name order, without a per-row schema catalog or checksum claim.
 Integers use exactly 1/2/4/8/16 little-endian bytes for their declared 8/16/32/64/128-bit
