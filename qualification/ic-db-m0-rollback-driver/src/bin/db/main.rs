@@ -69,12 +69,34 @@ async fn measured_call(
 #[command(
     name = "db",
     about = "Inspect a Canic application or query a local IC DB fixture (no SQL)",
-    after_help = "Without a command, read commands interactively or from standard input.\nUse inspect with an explicit provider, canister and identity for application metadata. Other commands use a local fixture discarded on exit.\nSchema inspection covers all declared entities; query supports Entry, Document, DecimalRow and BinaryObject.\nCall statistics follow normal results; JSON and failed-command statistics use stderr. Seconds measure the local simulator call, excluding startup, fixture setup and cycle sampling. Cycles charged are the observed canister balance decrease, not an instruction-derived estimate; zero charged cycles does not mean zero execution work. Aggregate and migration commands report each database call separately.",
+    styles = help_styles(),
+    color = help_color(),
     disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+fn help_styles() -> clap::builder::Styles {
+    use clap::builder::styling::AnsiColor;
+    clap::builder::Styles::styled()
+        .header(AnsiColor::Cyan.on_default().bold())
+        .usage(AnsiColor::Cyan.on_default().bold())
+        .literal(AnsiColor::Green.on_default())
+        .placeholder(AnsiColor::Yellow.on_default())
+}
+
+fn help_color() -> clap::ColorChoice {
+    // The foreground terminal is relayed through pipes by the simulator launcher.
+    if std::env::var_os("IC_DB_TERMINAL_INPUT").as_deref() == Some(std::ffi::OsStr::new("1"))
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var_os("TERM").as_deref() != Some(std::ffi::OsStr::new("dumb"))
+    {
+        clap::ColorChoice::Always
+    } else {
+        clap::ColorChoice::Auto
+    }
 }
 
 fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
@@ -96,11 +118,18 @@ mod tests;
 mod witness_listing;
 
 #[derive(Subcommand)]
+#[command(mut_subcommands = |command| command.display_order(0))]
 enum Command {
     /// Inspect an explicitly selected application through Canic inspection v1.
     Inspect(inspect::Options),
     /// Read one page from the Canic qualification application's fixed Item listing.
     WitnessList(witness_listing::Options),
+    /// List entity names and column counts in the current local database.
+    Entities {
+        /// Emit a JSON array with name and columns for each entity.
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect generated fields, types, indexes and admitted schema identity.
     #[command(
         after_help = "Optional fields can be absent. Text limits count UTF-8 bytes; Blob limits count raw bytes.\nPresent references require an existing target and restrict its deletion; absent references have no target.\nUse db status for stored schema admission and storage details."
@@ -117,10 +146,10 @@ enum Command {
     Status,
     /// Read the exact maintained whole-entity row count without scanning rows.
     #[command(
-        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports Entry, Document, DecimalRow and BinaryObject in this temporary local fixture."
+        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports every entity listed by db entities."
     )]
     Count {
-        #[arg(value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
+        /// Exact declared entity name; use db entities to list names.
         entity: String,
     },
     /// Run a fixed migration with a real local canister upgrade during copying.
@@ -489,7 +518,7 @@ fn print_status((schema, incarnation, revision, pages): Status) {
         ],
         vec!["Entry revision".into(), revision.to_string()],
         vec![
-            "Physical allocation".into(),
+            "Wasm linear memory".into(),
             format!("{pages} pages (64 KiB each)"),
         ],
     ];
@@ -619,7 +648,10 @@ async fn session(
     )
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("decimal fixture setup failed: {e}"))?;
-    if !matches!(cli.command, Some(Command::Schema { json: true, .. })) {
+    if !matches!(
+        cli.command,
+        Some(Command::Schema { json: true, .. } | Command::Entities { json: true })
+    ) {
         println!("IC DB — LOCAL M1 FIXTURE (fresh temporary database; discarded on exit)");
     }
     let interactive = cli.command.is_none()
@@ -627,7 +659,10 @@ async fn session(
             || std::env::var_os("IC_DB_TERMINAL_INPUT").as_deref()
                 == Some(std::ffi::OsStr::new("1")));
     let execute = async |command: Command| -> Result<(), String> {
-        let json = matches!(command, Command::Schema { json: true, .. });
+        let json = matches!(
+            command,
+            Command::Schema { json: true, .. } | Command::Entities { json: true }
+        );
         let statistics = RefCell::new(Vec::new());
         let invoke = async |kind, method: &str, payload| {
             let (result, line) = measured_call(pic, canister, kind, method, payload).await;
@@ -864,9 +899,11 @@ async fn session(
                     bordered_table(&["count"], &[vec![count.to_string()]])
                 );
             }
-            Command::Schema { .. } | Command::Status => {
+            Command::Schema { .. } | Command::Entities { .. } | Command::Status => {
+                let entity_summary = matches!(command, Command::Entities { .. });
                 let (id, selected, json) = match command {
                     Command::Schema { entity, json } => (2, entity, json),
+                    Command::Entities { json } => (2, None, json),
                     _ => (1, None, false),
                 };
                 let endpoint = if id == 2 { "schema" } else { "inspect" };
@@ -908,11 +945,24 @@ async fn session(
                         && let Some(name) = selected
                     {
                         return Err(format!(
-                            "Unknown entity '{}'. Use db schema to list entities.",
+                            "Unknown entity '{}'. Use db entities to list entities.",
                             escape(&name)
                         ));
                     }
-                    if json {
+                    if entity_summary {
+                        let mut summaries: Vec<_> = entities.into_iter()
+                            .map(|entity| (entity.0, entity.3.len())).collect();
+                        summaries.sort_by(|a, b| a.0.cmp(&b.0));
+                        if json {
+                            let rows: Vec<_> = summaries.into_iter()
+                                .map(|(name, columns)| serde_json::json!({"name": name, "columns": columns})).collect();
+                            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
+                        } else {
+                            let rows: Vec<_> = summaries.into_iter()
+                                .map(|(name, columns)| vec![name, columns.to_string()]).collect();
+                            println!("{}", bordered_table(&["Entity", "Columns"], &rows));
+                        }
+                    } else if json {
                         print_schema_json(status.0, &entities, &types)?;
                     } else {
                         print_schema(entities, types);

@@ -61,7 +61,6 @@ fn map(host: &MemoryRuntime<DefaultMemoryImpl>, slot: usize) -> Map {
         host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
             .unwrap(),
     )
-    .unwrap()
 }
 
 fn target(host: &MemoryRuntime<DefaultMemoryImpl>) -> Target {
@@ -69,7 +68,6 @@ fn target(host: &MemoryRuntime<DefaultMemoryImpl>) -> Target {
         host.open_memory(&StableKey::parse(KEYS[2]).unwrap())
             .unwrap(),
     )
-    .unwrap()
 }
 
 fn field(control: &Map, key: u64) -> Result<u64, u8> {
@@ -124,21 +122,15 @@ fn fail_at(selected: u8, boundary: u8) {
 fn initialize((): ()) {
     let host = runtime();
     for slot in [0, 1, 3] {
-        drop(
-            Map::create(
-                host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
-                    .unwrap(),
-            )
-            .unwrap(),
-        );
-    }
-    drop(
-        Target::create(
-            host.open_memory(&StableKey::parse(KEYS[2]).unwrap())
+        drop(Map::create(
+            host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
                 .unwrap(),
-        )
-        .unwrap(),
-    );
+        ));
+    }
+    drop(Target::create(
+        host.open_memory(&StableKey::parse(KEYS[2]).unwrap())
+            .unwrap(),
+    ));
     let mut control = map(&host, 0);
     for key in 0..=5 {
         control.insert(key, 0);
@@ -174,7 +166,7 @@ fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
         map(host, 1).len(),
         target(host).len(),
         map(host, 3).len(),
-        host.diagnostics().unwrap().physical_pages,
+        ic_storage::Memory::size(&ic_storage::DefaultMemoryImpl::default()),
     ]
 }
 

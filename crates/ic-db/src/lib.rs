@@ -142,8 +142,6 @@ pub enum Error {
     ReferenceViolation,
     /// A declared resource bound or revision range is exceeded.
     Limit,
-    /// The supplier refused collection creation or opening.
-    Storage(ic_storage::adapter::CollectionError),
 }
 
 impl std::fmt::Display for Error {
@@ -151,14 +149,7 @@ impl std::fmt::Display for Error {
         write!(f, "{self:?}")
     }
 }
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+impl std::error::Error for Error {}
 
 pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
 

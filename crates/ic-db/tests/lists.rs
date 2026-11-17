@@ -312,8 +312,7 @@ fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
         Err(Error::IncompatibleSchema)
     ));
     assert_eq!(*backing.borrow(), before);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
     row_key.extend(ListRow::ID.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());

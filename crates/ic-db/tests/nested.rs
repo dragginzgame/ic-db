@@ -224,8 +224,7 @@ fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_m
     batch.replace(&asset(loops(31))).unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
     row_key.extend(Asset::ID.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());

@@ -61,6 +61,13 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
     let h = host(m.clone());
     let mut db = create(&h);
     assert_eq!(db.cardinality::<Row>().unwrap(), 0);
+    assert_eq!(db.cardinality_by_name("Row").unwrap(), 0);
+    for unknown in ["row", "Missing"] {
+        assert!(matches!(
+            db.cardinality_by_name(unknown),
+            Err(Error::UnknownEntity)
+        ));
+    }
     let mut b = Batch::new();
     for id in 1..=3 {
         b.insert(&Row { id, value: 1 }).unwrap();
@@ -85,6 +92,7 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
     b.replace(&Row { id: 2, value: 2 }).unwrap();
     db.commit(b).unwrap();
     assert_eq!(db.cardinality::<Row>().unwrap(), 3);
+    assert_eq!(db.cardinality_by_name("Row").unwrap(), 3);
     let before = m.borrow().clone();
     let mut b = Batch::new();
     b.insert(&Row { id: 5, value: 1 }).unwrap();
@@ -100,6 +108,7 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
     drop(db);
     let db = Database::open(h.open_memory(&key("test.source.v1")).unwrap(), schema()).unwrap();
     assert_eq!(db.cardinality::<Other>().unwrap(), 1);
+    assert_eq!(db.cardinality_by_name("Other").unwrap(), 1);
 }
 #[test]
 fn metadata_refusal_is_before_persistent_mutation() {
@@ -113,8 +122,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
         drop(db);
         let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
             h.open_memory(&key("test.source.v1")).unwrap(),
-        )
-        .unwrap();
+        );
         let mut k = vec![1];
         k.extend(Row::ID.to_be_bytes());
         match case {
@@ -150,6 +158,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
         assert_eq!(*m.borrow(), before);
         if case < 2 {
             assert!(matches!(db.cardinality::<Row>(), Err(Error::Corrupt)));
+            assert!(matches!(db.cardinality_by_name("Row"), Err(Error::Corrupt)));
         }
     }
 }
@@ -163,8 +172,7 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     db.commit(batch).unwrap();
     drop(db);
     let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap())
-            .unwrap();
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap());
     let mut manifest = raw.get(&vec![0]).unwrap();
     assert_eq!(&manifest[..8], b"ICDBMF02");
     manifest[..8].copy_from_slice(b"ICDBMF01");
@@ -178,8 +186,7 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     assert_eq!(*m.borrow(), before);
     // Restore the test's current-format manifest, then damage only its row bytes.
     let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap())
-            .unwrap();
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap());
     manifest[..8].copy_from_slice(b"ICDBMF02");
     raw.insert(vec![0], manifest);
     let mut row = vec![2];
@@ -252,8 +259,7 @@ fn copy_counts(corrupt_target: bool) {
         drop(copy);
         let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
             h.open_memory(&key("test.target.v1")).unwrap(),
-        )
-        .unwrap();
+        );
         let mut k = vec![1];
         k.extend(Wide::ID.to_be_bytes());
         let mut value = raw.get(&k).unwrap();

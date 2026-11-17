@@ -59,7 +59,7 @@ fn next_index<M: Memory>(
     }
     let id = RowKey::decode(&entry.value(), key_type)?;
     let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
-    Ok(Some((entry.into_key(), id, bytes)))
+    Ok(Some((entry.key().clone(), id, bytes)))
 }
 
 #[inline(never)]
@@ -293,7 +293,10 @@ impl<M: Memory> Database<M> {
         if incarnation == [0; 16] {
             return Err(Error::InvalidSchema);
         }
-        let mut map = Map::create(memory).map_err(Error::Storage)?;
+        if memory.size() != 0 {
+            return Err(Error::Exists);
+        }
+        let mut map = Map::create(memory);
         map.insert(
             manifest_key(),
             live_manifest(schema.fingerprint, incarnation),
@@ -315,7 +318,10 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier corruption, including overlong stored keys, traps without repair.
     pub fn open(memory: RuntimeMemory<M>, schema: Schema) -> Result<Self, Error> {
-        let map = Map::load(memory).map_err(Error::Storage)?;
+        if memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let map = Map::load(memory);
         let manifest = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
         if maintenance::admits_gate(&manifest)? {
             return Err(Error::Maintenance);
@@ -362,6 +368,21 @@ impl<M: Memory> Database<M> {
     /// Supplier corruption may trap; this operation never repairs storage.
     pub fn cardinality<E: Entity>(&self) -> Result<u64, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+        Ok(read_entity_state(&self.map, entity.id)?.count)
+    }
+    /// Inspect the maintained whole-entity count by exact admitted schema name.
+    /// Like [`Self::cardinality`], this reads metadata without validating rows or indexes.
+    /// # Errors
+    /// Refuses unknown names and missing or malformed entity metadata.
+    /// # Panics
+    /// Supplier corruption may trap; this operation never repairs storage.
+    pub fn cardinality_by_name(&self, name: &str) -> Result<u64, Error> {
+        let entity = self
+            .schema
+            .entities
+            .iter()
+            .find(|entity| entity.name == name)
+            .ok_or(Error::UnknownEntity)?;
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
     fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {

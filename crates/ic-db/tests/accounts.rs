@@ -240,8 +240,7 @@ fn indexed_default_account_refusal_noop_and_final_state_exchange() {
         assert_eq!(db.get::<AccountRow>(row.id).unwrap(), Some(row));
     }
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = AccountRow::SCHEMA
         .indexes
         .iter()
@@ -295,8 +294,7 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut rk = vec![2];
     rk.extend(Collections::ID.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());

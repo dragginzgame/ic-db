@@ -148,7 +148,10 @@ impl<M: Memory> Maintenance<M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary database admission.
     pub fn resume(memory: RuntimeMemory<M>, expected: &SchemaTransition) -> Result<Self, Error> {
-        let map = Map::load(memory).map_err(Error::Storage)?;
+        if memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let map = Map::load(memory);
         let bytes = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
         let (transition, incarnation) = decode(&bytes)?;
         if transition != *expected {

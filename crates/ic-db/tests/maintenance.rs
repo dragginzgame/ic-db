@@ -62,8 +62,7 @@ fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
     db
 }
 fn entries(runtime: &MemoryRuntime<VectorMemory>) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
     raw.iter()
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect()
@@ -216,8 +215,7 @@ fn corrupt_source_rows_and_revisions_refuse_without_repair() {
         let transition = identity("widen-value", 1, &[]);
         drop(create(&runtime).begin_maintenance(&transition).unwrap());
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
         let mut stored_key = vec![tag];
         stored_key.extend(Source::ID.to_be_bytes());
         if tag == 2 {
@@ -371,8 +369,7 @@ fn malformed_or_future_maintenance_records_never_reopen_or_cancel() {
     cases.push(same);
     for bytes in cases {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
         raw.insert(vec![0], bytes);
         drop(raw);
         let before = entries(&runtime);

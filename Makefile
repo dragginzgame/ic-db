@@ -82,8 +82,10 @@ qualification-tooling-check:
 	  printf '%s\n' 'Qualification tooling declarations and lock match the product selection.'
 
 m0-setup:
-	@launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.106.0 --bin ic-testkit-server --profile release --features cli)" && \
-	  "$$launcher" setup --directory "$(CURDIR)/.tools/m0-pocketic"
+	@umask 077; launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.110.0 --bin ic-testkit-server --profile release --features cli)" && \
+	  mkdir -p "$(CURDIR)/qualification/target/evidence/testkit" && \
+	  attempt="$$(mktemp -d "$(CURDIR)/qualification/target/evidence/testkit/setup.XXXXXX")" && \
+	  "$$launcher" setup "$(CURDIR)/.tools/testkit-server" "$$attempt/evidence" "$$(command -v curl)" "$$(command -v gzip)"
 
 m0-contracts:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test nested_row_codec --test query_composition -- --nocapture
@@ -139,20 +141,23 @@ m1-entity-growth:
 m2-query-growth:
 	bash scripts/measure-records.sh queries
 
-m0-rollback:
+.PHONY: m0-core-artifact m0-core
+m0-core-artifact:
 	@mkdir -p qualification/target/evidence/m0
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/rollback-build.jsonl
-	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/rollback-build.jsonl)" && \
-	  export IC_DB_M0_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback message_rollback -- --nocapture
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/core-build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/core-build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/m0/core.wasm
+
+# One artifact and server session, with the same four independent test binaries.
+m0-core: m0-core-artifact
+	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints --test rollback --test batch --test reads -- --nocapture
+
+m0-rollback: m0-core-artifact
+	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test rollback message_rollback -- --nocapture
 
 .PHONY: m0-endpoints
-m0-endpoints:
-	@mkdir -p qualification/target/evidence/m0
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/entrypoints-build.jsonl
-	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/entrypoints-build.jsonl)" && \
-	  export IC_DB_M0_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints -- --nocapture
+m0-endpoints: m0-core-artifact
+	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test entrypoints -- --nocapture
 
 m0-aggregation:
 	@mkdir -p qualification/target/evidence/m0
@@ -161,12 +166,8 @@ m0-aggregation:
 	  export IC_DB_M0_AGGREGATION_WASM && \
 	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test aggregation revision_aggregation -- --nocapture
 
-m0-batch:
-	@mkdir -p qualification/target/evidence/m0
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/batch-build.jsonl
-	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/batch-build.jsonl)" && \
-	  export IC_DB_M0_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test batch final_state_batches -- --nocapture
+m0-batch: m0-core-artifact
+	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test batch final_state_batches -- --nocapture
 
 m0-maintenance-artifacts:
 	@set -eu; out=qualification/target/evidence/m0; mkdir -p "$$out"; \
@@ -177,12 +178,8 @@ m0-maintenance-artifacts:
 	    cp "$$artifact" "$$out/maintenance-$$variant.wasm"; \
 	  done
 
-m0-reads:
-	@mkdir -p qualification/target/evidence/m0
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/reads-build.jsonl
-	@IC_DB_M0_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/reads-build.jsonl)" && \
-	  export IC_DB_M0_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test reads bounded_reads -- --nocapture
+m0-reads: m0-core-artifact
+	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test reads bounded_reads -- --nocapture
 
 m0-maintenance: m0-maintenance-artifacts
 	IC_DB_M0_MAINTENANCE_DIR="$(CURDIR)/qualification/target/evidence/m0" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test maintenance -- --nocapture
@@ -206,7 +203,7 @@ m1-records-wasm: m1-records-artifact
 .PHONY: m2-queries m2-sort-costs m2-sort-costs-artifact
 m2-queries: m1-records-artifact
 	cargo test --locked -p ic-db --test queries
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting --test live_pages -- --nocapture
 
 m2-sort-costs-artifact:
 	@mkdir -p qualification/target/evidence/m2
@@ -321,7 +318,18 @@ db: m2-cli-artifact
 	  install -m 755 "$$binary" "$(DB_INSTALL_PREFIX)/bin/db"; \
 	  printf 'Installed %s/bin/db. Run db (ensure %s/bin is on PATH).\n' "$(DB_INSTALL_PREFIX)" "$(DB_INSTALL_PREFIX)"
 
-ci: fmt-check clippy test doc docs-check
+.PHONY: release-adapter-test release-setup
+release-adapter-test:
+	perl scripts/tests/release.t
+
+release-setup:
+	cargo fetch --locked
+	cargo fetch --manifest-path qualification/Cargo.toml --locked
+	$(MAKE) install-tools
+	$(MAKE) release-tools
+	$(MAKE) m0-setup
+
+ci: fmt-check clippy test doc docs-check release-adapter-test
 
 .PHONY: release-version release-preflight release-verify release-prepare-version release-prepared-check release-files release-commit-check release-committed-check release-tagged-check release-push-check release-lint release-tools
 release-version release-preflight release-verify release-prepare-version release-prepared-check release-files release-commit-check release-committed-check release-tagged-check release-push-check:
@@ -333,8 +341,8 @@ release-tools:
 release-lint:
 	$(MAKE) clippy
 	# Native callers/schema builds and IC-only fixtures have different target APIs.
-	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema -p ic-db-icydb-baseline-schema --all-targets -- -D warnings
-	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --exclude ic-db-m0-rollback-driver --lib --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema --all-targets -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --exclude ic-db-m0-rollback-driver --exclude ic-db-icydb-baseline-schema --exclude ic-db-icydb-baseline-canister --lib --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings

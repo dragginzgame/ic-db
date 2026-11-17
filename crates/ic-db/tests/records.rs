@@ -276,8 +276,7 @@ fn previous_codec_identities_are_refused_without_changing_storage() {
         "0b7e8c6d325ad8572c3bc388975ceebf7d26a03c266ea2e724ecf7b078aac3db",
     ] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         let mut manifest = raw.get(&vec![0]).unwrap();
         for i in 0..32 {
             manifest[8 + i] = u8::from_str_radix(&old[i * 2..i * 2 + 2], 16).unwrap();
@@ -855,12 +854,11 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     assert_eq!(*backing.borrow(), before);
     assert!(matches!(
         Database::create(runtime.open_memory(&key).unwrap(), schema(), [2; 16]),
-        Err(Error::Storage(_))
+        Err(Error::Exists)
     ));
     assert_eq!(*backing.borrow(), before);
     // Independent corruption control removes authority, never reconstructs it.
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     // Literal physical keys independently check row/index representation. A stale
     // index pointing at a decodable row must not silently return that wrong row.
     let row = vec![2, 156, 191, 237, 51, 0, 0, 0, 0, 0, 0, 0, 1];
@@ -881,8 +879,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         Err(Error::Corrupt)
     ));
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(index, 1_u64.to_be_bytes().to_vec());
     drop(raw);
     // Each read boundary must still reject malformed bytes and a decoded key
@@ -891,8 +888,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     wrong_key[16] = 2;
     for corrupt in [vec![0x80], wrong_key] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         raw.insert(row.clone(), corrupt);
         drop(raw);
         let before = backing.borrow().clone();
@@ -905,8 +901,7 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
         ));
         assert_eq!(*backing.borrow(), before);
     }
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(row, original);
     raw.remove(&vec![0]);
     drop(raw);
@@ -1149,8 +1144,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
         [original.as_slice(), &[0]].concat(),
     ] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         raw.insert(physical_key.clone(), malformed);
         drop(raw);
         let before = backing.borrow().clone();
@@ -1167,8 +1161,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
         assert!(matches!(db.commit(reference), Err(Error::Corrupt)));
         assert_eq!(*backing.borrow(), before);
     }
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(physical_key, original);
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
@@ -1180,8 +1173,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     let dependent_key = vec![2, 25, 91, 71, 26, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut invalid = vec![1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 255];
     invalid.extend([1, 0, 0, 0, 0, 0, 0, 0]);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(dependent_key.clone(), invalid);
     drop(raw);
     let before = backing.borrow().clone();
@@ -1191,8 +1183,7 @@ fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(dependent_key, dependent.encode().unwrap());
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
@@ -1641,8 +1632,7 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
     for bytes in invalid {
         assert!(matches!(PrincipalRow::decode(&bytes), Err(Error::Corrupt)));
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         raw.insert(physical_key.clone(), bytes);
         drop(raw);
         let before = backing.borrow().clone();
@@ -1929,8 +1919,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
         3, 66, 196, 205, 224, 22, 173, 240, 168, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 30,
     ];
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     assert_eq!(raw.get(&physical), Some(30_u64.to_be_bytes().to_vec()));
     raw.insert(physical.clone(), right.id.to_be_bytes().to_vec());
     drop(raw);
@@ -1945,8 +1934,7 @@ fn principal_indexes_preserve_order_compound_boundaries_and_final_state_uniquene
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(physical, 30_u64.to_be_bytes().to_vec());
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
@@ -2185,8 +2173,7 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
             .is_empty()
     );
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     // Independent literal unique key: entity32/index2, "a", "NULb".
     let physical = vec![
         3, 197, 121, 161, 226, 150, 181, 59, 31, 97, 0, 0, 0, 255, 98, 0, 0,
@@ -2429,8 +2416,7 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
         8
     );
     drop(db);
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let unique_prefix = vec![3, 55, 73, 182, 239, 202, 184, 185, 40];
     assert_eq!(
         raw.range(unique_prefix.clone()..)
@@ -2547,8 +2533,7 @@ fn optional_membership_admission_and_corrupt_presence_fail_closed() {
         Err(Error::IncompatibleSchema)
     ));
     assert_eq!(*backing.borrow(), before);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let row_key = vec![2, 55, 73, 182, 239, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut bytes = raw.get(&row_key).unwrap();
     bytes[0] = 2; // invalid active presence; this row has no unique-index entry.
@@ -2729,8 +2714,7 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
         Err(Error::IncompatibleSchema)
     ));
     assert_eq!(*backing.borrow(), before);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     // Literal independent reverse keys: OptionalLink/next,id handles, presence, target,
     // explicit id component, then nonunique primary-key tie-breaker.
     let absent = vec![
@@ -2759,8 +2743,7 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
         assert_eq!(*backing.borrow(), before);
     }
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(row_key, original);
     raw.insert(present, vec![0; 8]); // Valid owner bytes pointing at an unrelated row.
     drop(raw);
@@ -3018,8 +3001,7 @@ fn named_enums_use_canonical_ordinals_and_exact_admission() {
     ));
     assert_eq!(*backing.borrow(), before);
     // Corrupt an unindexed enum; shared preparation must inspect it before deletion.
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
     row_key.extend(EnumRow::ID.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());
@@ -3103,8 +3085,7 @@ fn earlier_unit_enum_contract_is_refused_without_touching_its_bytes() {
         .unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut manifest = raw.get(&vec![0]).unwrap();
     let old = "3fc6bb4b60668c7a04518cbad5659ce829b313eb2e35cda7d30a38ec3d73a715";
     for i in 0..32 {

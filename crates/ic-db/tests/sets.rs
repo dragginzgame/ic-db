@@ -174,8 +174,7 @@ fn stored_duplicates_refuse_mutation_and_schema_changes_refuse_reopen() {
         let mut corrupt = row.encode().unwrap();
         corrupt[12..].copy_from_slice(&suffix);
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         raw.insert(row_key.clone(), corrupt);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();

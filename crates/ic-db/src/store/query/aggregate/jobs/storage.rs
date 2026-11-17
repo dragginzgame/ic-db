@@ -32,7 +32,10 @@ impl<M: Memory> AggregateJobs<M> {
         if incarnation == [0; 16] {
             return Err(Error::InvalidJob);
         }
-        let mut map = StableBTreeMap::create(memory).map_err(Error::Storage)?;
+        if memory.size() != 0 {
+            return Err(Error::Exists);
+        }
+        let mut map = StableBTreeMap::create(memory);
         map.insert(0, header(incarnation, 0));
         Ok(Self {
             map,
@@ -49,8 +52,10 @@ impl<M: Memory> AggregateJobs<M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn open(memory: RuntimeMemory<M>) -> Result<Self, Error> {
-        let map: StableBTreeMap<u8, Vec<u8>, M> =
-            StableBTreeMap::load(memory).map_err(Error::Storage)?;
+        if memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let map: StableBTreeMap<u8, Vec<u8>, M> = StableBTreeMap::load(memory);
         let bytes = map.get(&0).ok_or(Error::Corrupt)?;
         let (incarnation, _, legacy) = read_header(&bytes)?;
         if map.len() > u64::from(SLOTS) + 1
@@ -77,7 +82,7 @@ impl<M: Memory> AggregateJobs<M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn cancel(&mut self, handle: &JobHandle) -> Result<(), Error> {
         self.with_record(handle, |_| ())?;
-        self.map.remove_discard(&handle.slot);
+        self.map.remove(&handle.slot);
         Ok(())
     }
 
@@ -102,7 +107,7 @@ impl<M: Memory> AggregateJobs<M> {
             }
         }
         for slot in &expired {
-            self.map.remove_discard(slot);
+            self.map.remove(slot);
         }
         Ok(expired.len())
     }

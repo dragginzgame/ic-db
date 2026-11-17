@@ -158,8 +158,7 @@ fn corrupt_collections_refuse_before_materialization_or_mutation() {
         key.extend(Row::ID.to_be_bytes());
         key.extend(1_u64.to_be_bytes());
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.insert(key, bytes);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -206,8 +205,7 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
     let mut key = vec![2];
     key.extend(Nested::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     raw.insert(key, bytes);
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();

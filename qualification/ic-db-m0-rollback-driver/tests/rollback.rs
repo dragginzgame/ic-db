@@ -5,7 +5,7 @@ use ic_wire::{Direction, Encoding};
 
 use support::LIMITS;
 type Entries = Vec<(u64, u64)>;
-type Snapshot = (Entries, Entries, Entries, [u64; 4]);
+type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 #[tokio::test]
 async fn message_rollback() {
@@ -116,12 +116,10 @@ async fn message_rollback() {
             }
         );
         println!(
-            "mode={mode} retained_bytes={} generation={} data_pages={} physical_pages={} extents={}",
+            "mode={mode} retained_bytes={} generation={} physical_pages={}",
             after.len(),
             snapshot.3[0],
-            snapshot.3[1],
-            snapshot.3[2],
-            snapshot.3[3]
+            snapshot.3[1]
         );
         if mode == 0 {
             // Uniqueness refusal must not change existing data or allocation controls.

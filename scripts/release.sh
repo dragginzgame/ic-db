@@ -35,21 +35,27 @@ case "${1:-}" in
         [[ "$(git remote get-url --push origin)" == https://github.com/dragginzgame/ic-db.git ]]
         [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]]
         bash "$shared/check-release-changelog.sh" "$RELEASE_VERSION" "$RELEASE_PREVIOUS" "$RELEASE_DATE" CHANGELOG.md
-        cargo fetch --locked
-        cargo fetch --manifest-path qualification/Cargo.toml --locked
-        make install-tools
-        make tools-check
-        make release-tools
-        make m0-setup
         ;;
     release-verify)
+        [[ "${RELEASE_SOURCE:?}" =~ ^[0-9a-f]{40}$ ]]
+        receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"
+        # A failed recheck must not leave an earlier whole-gate pass admissible.
+        rm -f -- "$receipt"
         [[ "$(git rev-parse HEAD)" == "${RELEASE_SOURCE:?}" ]]
         bash "$shared/check-release-source.sh"
+        printf '%s\n' 'Running the complete IC DB gate; partial prior passes are diagnostics, not reusable proof.'
+        printf '%s\n' 'Validation failure reruns this gate; saved post-validation attempts resume their recorded phase.'
+        # Preflight is repeated by the shared runner before metadata preparation.
+        # Prepare once here; a later metadata retry only repeats fresh admission.
+        VALIDATION_REPOSITORY_ROOT="$PWD" \
+          VALIDATION_LOG_DIR="$PWD/target/release-validation/$RELEASE_SOURCE" \
+          bash "$shared/run-validation-targets.sh" --fail-fast release-setup
         # The shared logger retains failure logs; each gate executes once, in order.
         CARGO_NET_OFFLINE=true VALIDATION_REPOSITORY_ROOT="$PWD" \
+          VALIDATION_LOG_DIR="$PWD/target/release-validation/$RELEASE_SOURCE" \
           bash "$shared/run-validation-targets.sh" --fail-fast \
           tools-check release-lint fmt-check test doc docs-check m0-contracts \
-          m0-endpoints m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance \
+          m0-core m0-aggregation m0-maintenance \
           m1-records-wasm m1-commit-failures m3-maintenance-wasm m3-cli
         bash "$shared/check-release-source.sh"
         [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]]

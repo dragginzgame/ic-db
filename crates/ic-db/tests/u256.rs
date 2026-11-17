@@ -231,8 +231,7 @@ fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
     ));
     assert_eq!(*backing.borrow(), before);
     // Inspect the physical ordered components independently of the typed reader.
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let index = BigNumbers::SCHEMA
         .indexes
         .iter()
@@ -297,8 +296,7 @@ fn collections_keep_high_bits_and_validate_unindexed_payloads() {
     b.replace(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut rk = vec![2];
     rk.extend(Collections::ID.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());

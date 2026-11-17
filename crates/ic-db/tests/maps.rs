@@ -293,8 +293,7 @@ fn persisted_keys_cannot_be_overwritten_by_decode_or_repair_writes() {
     invalid[30] = 255;
     for bad in [duplicate, descending, invalid] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
         raw.insert(row_key.clone(), bad);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();

@@ -1,5 +1,7 @@
 # IC DB system design
 
+IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
 0.20 separates 16 KiB job frames from 4 KiB rows and improves console inspection
@@ -984,13 +986,11 @@ cutover is committed and recovery obligations are settled. Prove peak space and
 bounded cleanup; reject this candidate if it exceeds the declared capacity envelope.
 In-place rewriting is not an automatic fallback.
 
-Maintainer direction (2026-11-14): IC Storage is expected to be overhauled when
-Rust OP is available. Do not optimize IC DB around today's supplier internals,
-allocation layout, reclamation limits or performance quirks. Specify the storage
-capabilities the database needs, retain version-specific probe evidence, and
-requalify the revised supplier. Current correctness and capacity limits still
-apply to experiments using the selected version; future capabilities are not
-yet established. Defer supplier-specific optimization until that overhaul.
+Specify the allocation, traversal and recovery guarantees IC DB needs. Qualify these against each selected supplier release before using its measurements to guide optimization.
+
+#### Stable storage supplier
+
+IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 IC Storage's existing allocation reset is an investigated candidate for alternating reusable
 collection slots: a later target may use a fully retired slot after source
@@ -1329,6 +1329,10 @@ identity and requires the same explicit transition as any other added index.
 `Database::cardinality::<E>()` reads the maintained whole-entity count without
 enumeration. It admits the entity and requires well-formed metadata; it does not
 validate stored rows/indexes or detect an arbitrary well-formed counter corruption.
+`cardinality_by_name()` exposes the same metadata for inspection of an exact
+name in the admitted schema. The CLI uses it for every listed entity; unknown
+names refuse. Typed calls retain full type-contract admission. This adds no
+dynamic query frontend, per-entity dispatch registry or persisted representation.
 Fluent `count()` retains its bounded, row-validating query semantics, including
 filters. Prefix metadata counts remain unimplemented. A work limit is never
 silently reinterpreted as a partial exact result.
@@ -1489,6 +1493,19 @@ rows separately. If a qualifying row cannot fit the remaining output bytes,
 retain a position before it so the next page retries it; a row exceeding the
 whole response allowance produces an explicit size refusal, not an endless
 empty page or silent skip. These are the implemented progress/retry semantics.
+
+The 0.22.2 [live-page witness](../../qualification/README.md#live-pages-across-writes-and-upgrades-0222)
+combines both directions, changed ordering keys and predicate membership, inserts
+and unchanged-schema upgrade. A plain tuple oracle fixes the expected repeats,
+omissions and new matches independently of cursor/key decoding. One-candidate
+pages and exact 16-byte projections prove sparse progress and retry after a
+15-byte refusal; read/refusal calls preserve backing. It extends the native
+update regression without adding snapshots, cursor state or a second executor.
+A second installed case deletes the cursor row with its dependent, upgrades,
+then reinserts the same primary/index key with a different payload and upgrades
+again. The saved exclusive position continues to exclude that key, while a fresh
+query sees the replacement. This preserves IcyDB's delete/reinsert visibility
+lesson without its positioned journal-overlay retirement machinery.
 
 Bound requests using visible limits: bytes, terms/depth, batch size, rows examined,
 rows returned and work per continuation. A small query language should not need
@@ -2179,8 +2196,10 @@ retained aggregate commands, combining it with inclusive byte bounds through one
 shared predicate builder. The private query/retained request tuples change with
 their callers; durable row, index and job formats do not. Qualification evidence
 and its exact Wasm identity are recorded in the qualification guide.
-The private query request changes with
-its callers; it is not an application protocol or backward-compatible service.
+Version 0.22.1 also exposes `--payload-suffix` for both commands through that same
+builder. Prefix, suffix and inclusive bounds compose; suffixes use the existing
+residual predicate, and retained jobs bind them across resume. The private
+transport is not an application protocol or backward-compatible service.
 IcyDB `6d421e3`'s `sql_query_result_from_statement_keeps_blob_projection_typed_until_rendering`
 regression supplies the binary-versus-display distinction; its SQL packaging and
 dynamic result hierarchy are not copied.
@@ -2190,7 +2209,8 @@ reference target/index columns, per-call measured charges, history and quoted
 arguments. These remain fixture presentation and input handling, not a new query
 engine, schema authority or transport contract. The foreground CLI owns editing;
 the prepared Testkit launcher owns the server, including a console-specific
-24-hour idle timeout and cleanup on exit. No heartbeat or silent restart is added.
+one-hour total command limit with Testkit 0.110.0 and cleanup on exit (the earlier
+0.106.0 launcher used a 24-hour console idle timeout). No heartbeat or silent restart is added.
 Exact commands, limits and regression evidence live in the
 [installed-console guide](../../qualification/README.md#installed-console).
 Frozen IcyDB `6d421e3` supplies the named-schema rendering lesson
@@ -2240,6 +2260,10 @@ binds the catalogue schema and requires unchanged admission/incarnation across
 its two observations. Counts remain application-selected maintained metadata.
 Tables/JSON separate executable identity from readable/closed/unsupported storage;
 remote cycles are reported as unavailable. No engine or stored format changes.
+The pending 0.22.2 client bounds each complete query and its verification reads
+with an explicit 1–300 second deadline (default 30); local root fetching has a
+separate deadline. Busy-provider replies refuse without implicit transport retries.
+Cancellation reports elapsed time without producing partial inspection output.
 Agent remains a direct, pending native dependency: Platform 0.34.13 supplies
 Ed25519 signed queries but not the CLI's secp256k1 PEM query path. The remaining
 boundary migration is recorded in [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4);
@@ -3853,7 +3877,7 @@ and [assembly/membership tests](https://github.com/dragginzgame/icydb/blob/6d421
 inform the independent [native cases](../../crates/ic-db/tests/key_bounds.rs):
 512 accepted/513 refused, escaping, combined fields, wider primary keys, sparse
 omission, unchanged backing on refusal, no-op admission and successful retries.
-The supplier read test verifies that an overlong key is rejected before payload IO.
+Storage 0.78 may read an oversized stored key before the DB codec traps. The corruption test checks that the backing remains intact.
 The Wasm maximum-batch witness audits every row/index byte independently, with
 512-byte keys, full 4 KiB rows, rollback, upgrade, no-ops and deletion.
 
@@ -4726,8 +4750,8 @@ redundant engines or a defensible whole-subsystem deletion count. This design
 therefore challenges the required breadth and representation/state ownership;
 it does not promise savings from renaming crates or repeating completed cleanups.
 
-The current tooling baseline is Toko Tooling 0.44.11. Qualification selects
-IC Storage 0.74.1, PocketIC 16.1.0 through Testkit 0.108.0, Platform Runtime 0.23.13
+The current tooling baseline is Toko Tooling 0.45.0. Qualification selects
+IC Storage 0.78.0, PocketIC 16.1.0 through Testkit 0.110.0, Platform Runtime 0.23.17
 and Wire 0.24.3, with exact resolution in its own lockfile. The product selects
 Platform Types 0.21.2. Wire Endpoint and its
 macro package have been removed in favor of Platform's generic hooks. Versions

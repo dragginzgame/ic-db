@@ -43,7 +43,7 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
     assert!((2..=4).contains(&mode));
     let host = runtime();
     let map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+        host.open_memory(&StableKey::parse(KEY).unwrap()),
     )
     .unwrap();
     let opened = ic_platform_runtime::raw::instruction_counter();

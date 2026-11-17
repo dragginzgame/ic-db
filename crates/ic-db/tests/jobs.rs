@@ -1426,7 +1426,7 @@ fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save()
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
         let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         // V1's header and record layout are unchanged except for the admitted
         // envelope marker. Build the predecessor header independently of its writer.
         let mut header = b"ICDBAJ01".to_vec();
@@ -1468,7 +1468,7 @@ fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save()
         }
         drop(jobs);
         let raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         if action < 2 {
             header[..8].copy_from_slice(b"ICDBAJ02");
         }
@@ -1505,7 +1505,7 @@ fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
         let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         let mut record = raw.get(&2).unwrap();
         // Scalar count carries a final 32-byte accumulator with a u32 prefix.
         // Damage the tail while keeping the lifecycle metadata untouched.
@@ -1565,7 +1565,7 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
     let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap()).unwrap();
+        StableBTreeMap::load(host.open_memory(&key).unwrap());
     raw.insert(2, vec![255]);
     drop(raw);
     let mut jobs = AggregateJobs::open(host.open_memory(&key).unwrap()).unwrap();
@@ -1578,7 +1578,7 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
     );
     drop(jobs);
     let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap()).unwrap();
+        StableBTreeMap::load(host.open_memory(&key).unwrap());
     let mut header = raw.get(&0).unwrap();
     header[0] ^= 1;
     raw.insert(0, header);
@@ -2464,7 +2464,7 @@ fn grouped_jobs_handle_empty_sparse_and_corrupt_checkpoints() {
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
     let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap()).unwrap();
+        StableBTreeMap::load(host.open_memory(&key).unwrap());
     let mut record = raw.get(&1).unwrap();
     *record.last_mut().unwrap() ^= 1;
     raw.insert(1, record);
@@ -2915,7 +2915,7 @@ fn grouped_numeric_corrupt_absent_total_refuses_and_remains_cancellable() {
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
     let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap()).unwrap();
+        StableBTreeMap::load(host.open_memory(&key).unwrap());
     let mut record = raw.get(&1).unwrap();
     *record.last_mut().unwrap() = 1; // Nonzero total with a zero present count.
     raw.insert(1, record);
@@ -3602,7 +3602,7 @@ fn retained_distinct_malformed_and_duplicate_keys_refuse_intact() {
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
         let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         let mut record = raw.get(&1).unwrap();
         *record.last_mut().unwrap() = if duplicate { 0 } else { 2 };
         raw.insert(1, record);
@@ -3941,7 +3941,7 @@ fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
     let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
     let mut record = raw.get(&1).unwrap();
     *record.last_mut().unwrap() = 2; // Invalid optional-key tag within the group's set.
     raw.insert(1, record);
@@ -4683,7 +4683,7 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
         let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         let mut record = raw.get(&1).unwrap();
         // One optional i128 winner: 17 payload bytes after its u32 byte count.
         let payload = record.len() - 17;
@@ -5172,7 +5172,7 @@ fn retained_group_extrema_corrupt_winner_framing_refuses_intact() {
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
         let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         let mut record = raw.get(&1).unwrap();
         let winner = record.len() - 17;
         match corruption {

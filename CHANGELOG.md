@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.22.2] - Unreleased
+
+### 🔧 Changed
+
+- Let `db count ENTITY` count every entity listed by `db entities`, including
+  empty entities such as `SetRow`. Resolve exact names against the admitted
+  schema and read maintained count metadata, with no row scan or extra storage.
+  Unknown names still refuse. Filtered fluent query coverage is unchanged.
+
+  ```sh
+  db count SetRow
+  db count IdentityRow
+  ```
+- Add `db entities` to list declared entity names alphabetically with column
+  counts, including primary keys and optional fields. `db entities --json`
+  emits objects with `name` and `columns`. The interactive console accepts
+  the same command and retains the query-call statistics footer. Main help now
+  alphabetizes commands, uses terminal colours and omits the long explanatory footer.
+
+  ```sh
+  db entities
+  db entities --json
+  db --help
+  ```
+
+- Keep the 512-byte key limit on writes and decoding. Reading malformed backing can incur supplier I/O before rejection.
+- Adopt Storage 0.78.0 named stable allocations. Remove the OP heap preparation, scoped adapter and Keep-upgrade fixture. Storage owns its directory codec. Existing OP images and 0.77 backing require explicit migration or fresh backing.
+- Review the release gate for [IC DB #5](https://github.com/dragginzgame/ic-db/issues/5):
+  prepare dependencies/tools/server once per validation attempt, consolidate four
+  M0 checks around one artifact/session, and exclude the frozen comparison packages
+  from routine release lint. Retain all selected product checks and fresh delivery
+  admission; keep setup/validation logs and timings on success or failure. Failed
+  rechecks invalidate old whole-gate receipts. All 63 disposable wiring assertions
+  pass, including the real runner's saved-phase resume and fresh admission. Five
+  installed M0 tests also pass with the combined session against the retained
+  pre-cutover artifact; this qualifies orchestration, not the Storage 0.76 port.
+  Real releases still require fresh builds and the complete selected gate.
+- Adopt Testkit 0.110.0 for the default-feature-free client and external launcher.
+  Setup/run use explicit fresh evidence directories and the new prepared asset
+  location. Commands, including the console, have a one-hour total limit; the
+  former 24-hour console idle setting is no longer supported by this launcher.
+
+### 🔧 Fixed
+
+- Bound each remote query, including its signature-verification reads, with
+  `--timeout-secs` (1–300, default 30). The explicit local root-key fetch gets
+  the same separate deadline. A timed-out query still reports elapsed time and
+  unavailable cycles. HTTP 429/503 responses now refuse immediately instead of
+  taking Agent's implicit retries; signature verification remains enabled.
+- Qualify both remote commands against stalled/busy root-key setup, redirects
+  and HTTP replies exceeding 2 MiB. Failed setup dispatches no database query;
+  real Canic replies require explicit local-root trust before they can render.
+- Add a Wasm live-pagination witness combining ordering-key updates, predicate
+  entry/exit, inserts and upgrade between pages. Both directions match an
+  independent tuple oracle, including permitted repeats/omissions, empty-page
+  progress, changed-query refusal and exact byte-limit retries. No engine or
+  stored-format changes are needed; `make m2-queries` includes this witness.
+- Extend live-page qualification to deleting the cursor row with its dependent,
+  then reinserting the same key with a new payload across two upgrades. Both
+  directions retain the exclusive position; a fresh query sees the replacement.
+
+### ▶️ Try it
+
+Run `make m0-setup` and `make db` to prepare the simulator and install the CLI.
+Application inspection requires an explicit provider, canister and identity;
+the local query uses a fresh temporary fixture.
+
+```sh
+db inspect --help
+db inspect --provider "${IC_DB_PROVIDER:?}" --canister "${IC_DB_CANISTER:?}" --identity "${IC_DB_IDENTITY_PEM:?}" --timeout-secs 10 --json
+db query Entry --order-by category --min 50 --limit 1 --work 1 --select id,amount
+```
+
+The fixture query demonstrates an empty page with continuation: one examined
+candidate failed the filter, so enumeration is not finished.
+
 ## [0.22.1] - 2026-11-17
 
 ### 🔧 Changed

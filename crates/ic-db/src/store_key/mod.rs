@@ -1,10 +1,6 @@
-//! One complete-key bound for the shared map, enforced before stored payload reads.
+//! One complete-key bound for the shared map, enforced when constructing or decoding a key.
 use crate::Error;
-use ic_storage::adapter::{
-    Storable,
-    storable::{Bound, CodecError},
-};
-use std::{borrow::Cow, ops::Deref};
+use std::ops::Deref;
 
 #[cfg(test)]
 mod tests;
@@ -29,21 +25,22 @@ impl Deref for StoreKey {
         &self.0
     }
 }
-impl Storable for StoreKey {
-    const BOUND: Bound = Bound::Bounded {
+
+impl ic_storage::adapter::Storable for StoreKey {
+    const BOUND: ic_storage::storable::Bound = ic_storage::storable::Bound::Bounded {
         max_size: MAX_INDEX_KEY_BYTES as u32,
         is_fixed_size: false,
     };
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, CodecError> {
-        Ok(Cow::Borrowed(&self.0))
+
+    fn to_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        std::borrow::Cow::Borrowed(&self.0)
     }
-    fn into_bytes(self) -> Result<Vec<u8>, CodecError> {
-        Ok(self.0)
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.0
     }
-    fn from_bytes(bytes: Cow<'_, [u8]>) -> Result<Self, CodecError> {
-        if bytes.len() > MAX_INDEX_KEY_BYTES {
-            return Err(CodecError::Bounds);
-        }
-        Ok(Self(bytes.into_owned()))
+
+    fn from_bytes(bytes: std::borrow::Cow<'_, [u8]>) -> Self {
+        Self::new(bytes.into_owned()).expect("oversized stored DB key")
     }
 }

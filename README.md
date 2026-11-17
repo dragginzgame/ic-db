@@ -1,5 +1,7 @@
 # ic-db
 
+IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+
 A fresh design workspace for a smaller embedded Internet Computer database.
 This repository explores replacing IcyDB's accumulated mechanisms with a system
 built around broad bounded fluent queries and familiar attribute-based schemas.
@@ -12,6 +14,8 @@ It does not replace IcyDB yet.
 application's Canic inspection v1 catalogue. Add `--entity NAME --count` for its
 schema and permitted maintained count, or `--json` for structured output.
 Use `--anonymous` instead of a PEM only when intentionally selecting that caller.
+`--timeout-secs` bounds each complete query, including verification reads (default
+30, range 1–300). Busy providers refuse without automatic retries.
 Loopback development providers need explicit `--local-root-key` trust. Remote
 inspection never falls back to the temporary fixture. `db witness-list` reads one
 bounded page from Canic's specific qualification application; other `query`
@@ -812,11 +816,13 @@ make db        # install/update the binary; does not start the console
 db             # open the console
 ```
 
-At the `db>` prompt, use `schema`, `status`, `query Entry --limit 3`,
+At the `db>` prompt, use `entities`, `schema`, `status`, `query Entry --limit 3`,
 `query Entry --min 40 --select id,amount`, `help` or `quit`.
 For one command, try:
 
 ```sh
+db entities
+db entities --json
 db schema Document --json
 db schema --json > schema.json
 db query Entry --category 1 --order-by id --desc --select id,amount
@@ -848,7 +854,7 @@ Aggregates and migrations show each constituent database call separately.
 For repeated commands, launch `db` without arguments. Wait for `db>`, then enter
 `count Document`, `query Entry` or `aggregate Entry --select count --work 2`.
 The same temporary canister stays open until `quit` or end of input, with a
-24-hour idle timeout for a server started by the console.
+one-hour total command limit for a server started by the console.
 Use ↑/↓ to recall commands and ←/→ to edit them. Ctrl-C clears the current
 input; Ctrl-D on an empty line exits. History retains the last 100 commands in
 this session only. Interactive input accepts one command at a time; piped stdin
@@ -870,6 +876,15 @@ The current console reads an explicitly labelled, temporary M1 database with six
 `Entry` rows, three `DecimalRow` samples, one record each for `Document`, `WideNumbers`, `BinaryObject`, `NarrowNumbers` and `IdentityRow`,
 and an empty `OptionalLink` entity showing an optional self-reference,
 running in local PocketIC. Each session starts fresh and is discarded on exit.
+`db entities` lists declared entity names alphabetically with a **Columns** count.
+The count includes the primary key and optional fields; nested fields are not
+expanded. `--json` emits an array of `{ "name": "Entry", "columns": 3 }` objects
+to stdout, with call statistics on stderr.
+It uses the current local fixture's schema, including entities beyond the demo
+query roster. `db count ENTITY` supports every listed entity and reads its
+maintained metadata; an empty entity returns zero. For example, `db count SetRow`.
+Main help alphabetizes commands, uses terminal colours (respecting `NO_COLOR`) and keeps
+redirected output plain; detailed options remain under each command's `--help`.
 `db schema` presents generated fields and indexes in bordered tables, with the
 primary key first and separate Type, Optional and Info columns. Info contains
 byte/item/entry limits, including list-element bounds; type names stay uncluttered. The CLI
@@ -882,15 +897,15 @@ appear once and references retain their target names. Inside the console, use
 `query` reads Entry, Document or DecimalRow through the fluent engine and displays the chosen
 record shape, work counts and continuation cursor. Terminal layout belongs to
 the CLI, not the runtime.
-It has no SQL, remote-canister connection or production credentials. Broader
+The fixture uses no production credentials. Broader
 entity coverage remains required in the eventual product CLI;
 Canic will own its endpoint integration. See [probe details](qualification/README.md).
 The installed fixture lives under the prefix's `share/ic-db/m1`; PocketIC still
-uses this checkout's explicitly prepared `.tools/m0-pocketic` server.
+uses this checkout's explicitly prepared `.tools/testkit-server` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.44.11 are pinned. Read [AGENTS.md](AGENTS.md)
+Rust 1.100.0 and published Toko Tooling 0.45.0 are pinned. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 
@@ -973,8 +988,8 @@ IcyDB and Canic remain separate; there is no path dependency on either repositor
 
 `make release-patch`, `make release-minor` and `make release-major` use the same
 shared runner and local adapter. They require clean committed source on `main`,
-prepare the locked dependencies/tools and PocketIC server, run the scaffold and
-all M0 gates, finalize version/changelog metadata, then atomically push `main`
+prepare the locked dependencies/tools and PocketIC server once, run the selected
+native and installed contracts below, finalize version/changelog metadata, then atomically push `main`
 and the annotated version tag to the public repository. `make release-resume
 VERSION=X.Y.Z` recovers a specific interrupted attempt. There is no crates.io
 upload or live-canister deployment. Creating the GitHub prerelease is a separate
@@ -984,3 +999,89 @@ The release metadata editor is the explicitly prepared IC Build 0.84.1 tool.
 Validation logs and the shared runner's recovery state remain local; generated
 Wasm/server assets are not shipped as a portable production binary. Build the
 fixture CLI from the source checkout with `make m0-setup` and `make db`.
+
+### Validation scope and recovery
+
+Development selects the affected check: docs use `make docs-check`, native engine
+changes use the relevant Cargo test, and storage/upgrade changes select their
+installed probe from the qualification guide. Release orchestration changes run
+`make release-adapter-test`; CI includes it alongside the native checks. This is
+consumer wiring qualification, not the upstream tooling test suite.
+
+Tooling adoption checks the published snapshot against both Cargo locks with
+`make toko-tooling-check`, admits prepared tools and exercises changed local
+callers. Testkit adoption additionally runs the driver's focused Clippy and
+server/terminal checks after explicit `make m0-setup`; launcher lifetime changes
+select the ignored idle regression. These are development checks, not a release
+or publication request. Generic Tooling and Testkit regression suites stay upstream.
+
+The single product release includes the engine and macros. Their generated code,
+fixture schemas, two Cargo locks and native/Wasm feature combinations make a
+file-extension-based reduced release unsafe. Keep this complete selected roster
+until narrower input/guarantee mappings are qualified. CLI-only development can
+use focused checks; that does not make the release gate optional. Independent
+performance/comparison workloads remain explicitly selected.
+
+| Phase / owner | Actual checks and guarantees | Inputs / trigger |
+| --- | --- | --- |
+| Fresh admission / shared runner + local adapter | Clean source, branch/remote/public visibility, changelog and exact saved release intent | Every release and relevant recovery hook; no setup effects in preflight |
+| Preparation / `release-setup` | Locked fetch for both workspaces; `install-tools`, `release-tools`, `m0-setup` | Once per validation attempt; failure withholds the offline gate |
+| Native/target lint / `release-lint` | Root `clippy`; native driver/schema all targets; non-baseline Wasm libraries; fault, maintenance-v2, maintenance-faults and retained-console features | Product, macro/generated schema and qualification source; both locks, compiler, flags and selected toolchain |
+| Native contracts / shared logger | `tools-check`, `fmt-check`, `test` (engine/macros with build feature), `doc`, `docs-check`, `m0-contracts` (numeric/schema/row/nested/query examples) | Each release; tools/source/docs and both workspace inputs |
+| Installed M0 / fixture owners | `m0-core`: one artifact/session, entrypoints + rollback + batch + reads; separate `m0-aggregation` and `m0-maintenance` variants | Message boundaries, final-state constraints, pages, revision invalidation and interrupted migration; fixture source/features, server and compiler |
+| Installed product / fixture owners | `m1-records-wasm`, `m1-commit-failures`, `m3-maintenance-wasm` (including `m3-jobs`), `m3-cli` | Generated types, product rollback, copy/cancel/publish/reclaim, retained jobs and CLI/terminal composition; exact built artifacts and native callers |
+| Version/delivery / shared runner + IC Build | Two-lock metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; no crates.io upload |
+| Hosted CI | Secret scan once; `make ci` on Linux and both supported macOS architectures | Push/PR; independent hosted evidence, not a reason to repeat that whole matrix locally |
+| Frozen comparison / explicit consumer selection | Pinned IcyDB schema/canister and comparison targets remain isolated | A changed comparison question or explicit benchmark request; excluded from routine release lint and gates |
+
+Required stages execute once per attempt, fail fast, and retain raw logs plus
+`timings.tsv` under `target/release-validation/<source>/validation.*`. Preparation
+and offline validation have separate directories. An earlier pass is invalidated
+before a new verification attempt; only complete success creates its source receipt.
+Missing, changed or symlinked receipts refuse version preparation. Source and
+destination checks still run after validation and at delivery boundaries.
+
+If validation or evidence finalization fails, repair that failure first. This
+adapter does not admit partial-stage reuse: retrying validation reruns preparation
+and the complete roster, with a new log directory. Old logs are diagnostic evidence,
+not permission to skip a stage. If no saved post-validation plan exists, retry the
+original release command. After validation saved a plan, use `make release-resume
+VERSION=X.Y.Z` for the exact attempt; metadata/delivery recovery repeats fresh
+admission without running setup or database validation again. Changed source,
+toolchain or validation configuration requires a fresh validation attempt, not
+manual receipt editing. Uncertain pushes retain the shared runner's reconciliation
+and remote identity checks.
+
+`scripts/tests/release.t` has 63 passing assertions using the actual adapter,
+shared logger, phase runner and Make recipes in a disposable repository. It checks
+fail-fast, failure-log/timing retention, evidence-finalization failure, complete
+retry, receipt refusal, source drift, all four M0 binaries, failed artifact builds
+and baseline lint exclusions. The runner witness reaches a deliberately refusing
+metadata owner, retains the `prepare` phase, and resumes it without setup or
+validation. Changed visibility or a tampered receipt refuses that resume. Remote
+observations, version selection, expensive leaves and metadata effects are
+substituted; it creates no release commit/tag and forbids pushing. Generic runner
+and metadata-transaction qualification remain with their shared owners.
+
+Local Linux qualification on 2026-11-17 also ran all five installed tests from the
+four M0 binaries through one real Testkit 0.109.0/PocketIC session, then through
+four separate sessions. Both passed with the same retained pre-cutover Wasm
+(`7c683c4f258c81e788399b9c8d01359d29e8c84b290d481a1af1f519cee12fe0`).
+
+| Observation | Elapsed wall time | Scope |
+| --- | ---: | --- |
+| One server session / all four binaries | 8.71 s | Five installed tests; prepared tools and compiled driver |
+| Four server sessions / one binary each | 20.49 s | Same five tests and retained Wasm; prepared tools and compiled driver |
+| Runner fixture / complete validation through metadata refusal | 0.675 s | Three phases; expensive work and remote effects substituted |
+| Runner fixture / metadata resume | 0.197 s | One phase; fresh admission, no setup or validation |
+
+These are single local orchestration observations, not IC instruction/cycle
+savings, cold-install measurements or whole-release speedups. Logs, timings,
+artifact/lock identities and source observations are retained under
+`qualification/target/evidence/release-flow/`; launcher evidence is under
+`qualification/target/evidence/testkit/`. The initial sandbox startup refusal is
+retained separately from the successful loopback-server runs. Hosted macOS
+qualification remains CI-owned.
+
+This closes the release-wiring qualification independently of the Storage port.
+Release qualification builds fresh Wasm with the selected Storage supplier.

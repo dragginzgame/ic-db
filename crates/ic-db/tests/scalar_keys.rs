@@ -63,8 +63,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
         rows
     );
     drop(db);
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = E::SCHEMA.indexes.iter().find(|i| i.name == "rank").unwrap();
     let mut index_prefix = vec![3];
     index_prefix.extend(E::ID.to_be_bytes());
@@ -99,8 +98,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     long.push(0);
     for invalid in [owner[..owner.len() - 1].to_vec(), long] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.insert(unique.clone(), invalid);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -115,8 +113,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
         assert_eq!(*backing.borrow(), before);
         drop(db);
     }
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     raw.insert(unique, owner.clone());
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -408,8 +405,7 @@ fn malformed_owners<E: Entity>(row: &E, invalid: Vec<Vec<u8>>) {
     // valid but wrong owner all fail at the storage boundary.
     for invalid in invalid {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.insert(key.clone(), invalid);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();

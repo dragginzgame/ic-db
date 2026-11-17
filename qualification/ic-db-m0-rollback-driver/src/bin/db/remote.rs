@@ -8,6 +8,7 @@ use ic_agent::{
 use ic_host_text::{bordered_table, escape};
 use std::{
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 #[derive(Args)]
@@ -31,6 +32,9 @@ pub(super) struct Target {
     /// Trust the root key fetched from an explicitly selected loopback provider.
     #[arg(long)]
     local_root_key: bool,
+    /// Whole query deadline in seconds, including signature-verification reads.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
+    timeout_secs: u64,
 }
 pub(super) fn provider(value: &str, local_root_key: bool) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(value).map_err(|_| "invalid provider URL")?;
@@ -59,6 +63,7 @@ pub(super) struct Connection {
     canister: Principal,
     caller: Principal,
     provider: String,
+    timeout: Duration,
 }
 impl Connection {
     pub(super) async fn connect(target: &Target, label: &str, json: bool) -> Result<Self, String> {
@@ -83,15 +88,17 @@ impl Connection {
         let caller = identity
             .sender()
             .map_err(|e| format!("cannot derive caller: {e}"))?;
+        let timeout = Duration::from_secs(target.timeout_secs);
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .build()
             .map_err(|e| e.to_string())?;
         let agent = Agent::builder()
             .with_url(url.as_str())
             .with_boxed_identity(identity)
-            .with_http_client(client)
+            // The direct upstream service omits Agent's implicit 429/503 retries.
+            .with_arc_http_middleware(Arc::new(client))
             .with_max_tcp_error_retries(0)
             .with_max_response_body_size(2 * 1024 * 1024)
             .build()
@@ -110,9 +117,9 @@ impl Connection {
             );
         }
         if target.local_root_key {
-            agent
-                .fetch_root_key()
+            tokio::time::timeout(timeout, agent.fetch_root_key())
                 .await
+                .map_err(|_| "local root-key query deadline exceeded")?
                 .map_err(|e| format!("cannot fetch local root key: {e}"))?;
         }
 
@@ -121,6 +128,7 @@ impl Connection {
             canister,
             caller,
             provider: url.to_string(),
+            timeout,
         })
     }
     pub(super) async fn query(
@@ -130,17 +138,26 @@ impl Connection {
         statistics: &mut Vec<String>,
     ) -> Result<Vec<u8>, String> {
         let start = Instant::now();
-        let result = self
-            .agent
-            .query(&self.canister, method)
-            .with_arg(payload)
-            .call()
-            .await;
+        let result = tokio::time::timeout(
+            self.timeout,
+            self.agent
+                .query(&self.canister, method)
+                .with_arg(payload)
+                .call(),
+        )
+        .await;
         statistics.push(format!(
             "query call ({method}): {:.2} sec, cycles unavailable",
             start.elapsed().as_secs_f64()
         ));
-        result.map_err(|e| format!("{method} query failed: {}", escape(&e.to_string())))
+        result
+            .map_err(|_| {
+                format!(
+                    "{method} query deadline exceeded ({} sec)",
+                    self.timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("{method} query failed: {}", escape(&e.to_string())))
     }
     pub(super) fn envelope(&self, key: &str, value: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(serde_json::Map::from_iter([

@@ -1,4 +1,4 @@
-//! Retained Decimal rounding and Blob results through the console, across heap loss.
+//! Retained Decimal rounding and Blob results through the console, across retained upgrades.
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};

@@ -17,7 +17,7 @@ use ic_storage::{
 
 type Map = StableBTreeMap<u64, u64, DefaultMemoryImpl>;
 type Entries = Vec<(u64, u64)>;
-type Snapshot = (Entries, Entries, Entries, [u64; 4]);
+type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 const NAMES: [&str; 3] = ["m0.rows.v1", "m0.unique.v1", "m0.order.v1"];
 
@@ -37,7 +37,7 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
 }
 
 fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
-    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap()).unwrap()
+    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
 }
 
 #[ic_platform_runtime::init(
@@ -51,7 +51,7 @@ fn initialize((): ()) {
     let host = runtime();
     for name in NAMES {
         let memory = host.open_memory(&StableKey::parse(name).unwrap()).unwrap();
-        drop(Map::create(memory).unwrap());
+        drop(Map::create(memory));
     }
 }
 
@@ -124,16 +124,13 @@ fn inspect((): ()) -> Snapshot {
     let rows = entries(NAMES[0]);
     let unique = entries(NAMES[1]);
     let order = entries(NAMES[2]);
-    let stats = host.diagnostics().unwrap();
     (
         rows,
         unique,
         order,
         [
-            stats.generation,
-            stats.data_pages,
-            stats.physical_pages,
-            stats.extents as u64,
+            host.committed_generation().unwrap(),
+            ic_storage::Memory::size(&DefaultMemoryImpl::default()),
         ],
     )
 }

@@ -1,4 +1,4 @@
-//! Real product records in Wasm, with raw stable backing as the rollback oracle.
+//! Real product records in Wasm, with stable backing bytes as the rollback oracle.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -59,7 +59,6 @@ fn console_counts_use_entity_metadata() {
     // Admission/help must work without loading the adjacent fixture.
     for args in [
         vec!["count"],
-        vec!["count", "Unknown"],
         vec!["count", "Entry", "--category", "1"],
         vec!["count", "Entry", "--limit", "1"],
     ] {
@@ -93,13 +92,27 @@ fn console_counts_use_entity_metadata() {
     .unwrap();
     let output = run_console(
         &binary,
-        "count Entry\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\nquit\n",
+        "count Entry\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\ncount SetRow\ncount IdentityRow\nquit\n",
     );
     assert_eq!(
         result_table_rows(&output),
-        [vec!["6"], vec!["1"], vec!["3"], vec!["3"], vec!["6"]]
+        [
+            vec!["6"],
+            vec!["1"],
+            vec!["3"],
+            vec!["3"],
+            vec!["6"],
+            vec!["0"],
+            vec!["1"]
+        ]
     );
     assert!(!output.contains("atomic entity metadata"));
+    let refused = Command::new(&binary)
+        .args(["count", "Unknown"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("Unknown entity"));
     // Standalone db preserves its normal launch behavior through the prepared
     // command owner, without requiring the caller to supply an endpoint.
     let standalone = Command::new(&binary)
@@ -248,6 +261,10 @@ async fn console_counts_preserve_backing_and_reopen() {
     let backing = pic.get_stable_memory(canister).await;
     for upgraded in [false, true] {
         if upgraded {
+            // Queries do not advance replicated time. Let the real IC install-code
+            // allowance recover after installation; do not disable its rate limit.
+            pic.advance_time(std::time::Duration::from_secs(300)).await;
+            pic.tick().await;
             ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
@@ -256,6 +273,8 @@ async fn console_counts_preserve_backing_and_reopen() {
             ("Entry", Some(6)),
             ("Document", Some(1)),
             ("DecimalRow", Some(0)),
+            ("SetRow", Some(0)),
+            ("IdentityRow", Some(1)),
             ("Unknown", None),
         ] {
             let reply = pic
@@ -286,7 +305,7 @@ async fn console_counts_preserve_backing_and_reopen() {
             .unwrap();
             match expected {
                 Some(count) => assert_eq!(actual, Ok(count)),
-                None => assert!(actual.unwrap_err().contains("count supports")),
+                None => assert!(actual.unwrap_err().contains("Unknown entity")),
             }
             assert_eq!(pic.get_stable_memory(canister).await, backing);
         }

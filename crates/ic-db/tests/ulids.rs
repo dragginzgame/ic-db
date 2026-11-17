@@ -203,8 +203,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         assert_eq!(db.get::<UlidRow>(r.id).unwrap(), Some(r));
     }
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = UlidRow::SCHEMA
         .indexes
         .iter()
@@ -260,8 +259,7 @@ fn collections_reject_duplicate_keys_before_materialization() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Collections::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

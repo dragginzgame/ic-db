@@ -149,8 +149,7 @@ fn enum_keys_preserve_identity_order_uniqueness_and_reopen() {
         rows
     );
     drop(db);
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = Row::SCHEMA
         .indexes
         .iter()
@@ -191,8 +190,7 @@ fn sparse_membership_and_corrupt_ordinals_refuse_without_mutation() {
     let golden = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     assert_eq!(r.encode().unwrap(), golden);
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Row::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
@@ -264,8 +262,7 @@ fn malformed_or_wrong_owner_index_entries_refuse() {
     original.push(0);
     original.extend(1_u64.to_be_bytes());
     original.extend(1_u64.to_be_bytes());
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     assert!(raw.remove(&original).is_some());
     drop(raw);
     // Invalid ordinal, valid but incorrect ordinal, truncated component and wrong owner.
@@ -275,8 +272,7 @@ fn malformed_or_wrong_owner_index_entries_refuse() {
         bad.extend(1_u64.to_be_bytes());
         bad.extend(1_u64.to_be_bytes());
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.insert(bad.clone(), owner.to_be_bytes().to_vec());
         drop(raw);
         let before = backing.borrow().clone();
@@ -288,8 +284,7 @@ fn malformed_or_wrong_owner_index_entries_refuse() {
         assert_eq!(*backing.borrow(), before);
         drop(db);
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&bad);
     }
 }

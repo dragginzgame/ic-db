@@ -9,6 +9,8 @@ fn explicit_target_identity_and_local_trust() {
         "inspect --provider http://localhost:8000 --canister aaaaa-aa",
         "inspect --provider http://localhost:8000 --canister aaaaa-aa --anonymous --identity key.pem",
         "inspect --provider http://localhost:8000 --canister aaaaa-aa --anonymous --count",
+        "inspect --provider http://localhost:8000 --canister aaaaa-aa --anonymous --timeout-secs 0",
+        "inspect --provider http://localhost:8000 --canister aaaaa-aa --anonymous --timeout-secs 301",
     ] {
         assert!(parse_console_line(args).is_err());
     }

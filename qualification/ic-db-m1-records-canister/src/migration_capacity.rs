@@ -133,7 +133,7 @@ fn migration_capacity(
     let result = control(operation, first, limit, bytes).map_err(|error| match error {
         Failure::Database(Error::Limit) => 1,
         Failure::Database(Error::RowTooLarge) => 2,
-        Failure::Database(Error::Storage(_)) => 3,
+        Failure::Database(Error::Exists) => 3,
         Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
         Failure::Runtime => 4,
     });
@@ -162,8 +162,7 @@ fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         host.open_memory(&StableKey::parse(COPY_TARGET).unwrap())
             .unwrap(),
-    )
-    .unwrap();
+    );
     let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
     // Match the existing write-envelope inspector: two maximal rows fit Wire.
     let rows: Vec<_> = raw

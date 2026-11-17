@@ -215,7 +215,10 @@ impl<M: Memory> Maintenance<M> {
             .iter()
             .map(|entity| entity_state_key(entity.id))
             .collect();
-        let mut map = Map::create(memory).map_err(Error::Storage)?;
+        if memory.size() != 0 {
+            return Err(Error::Exists);
+        }
+        let mut map = Map::create(memory);
         map.insert(manifest_key(), target_gate);
         for key in metadata {
             map.insert(key, EntityState::default().encode());
@@ -249,8 +252,14 @@ impl<M: Memory> SchemaCopy<M> {
         expected: &SchemaTransition,
     ) -> Result<Self, Error> {
         admit(&source_schema, &target_schema, expected)?;
-        let source = Map::load(source_memory).map_err(Error::Storage)?;
-        let target = Map::load(target_memory).map_err(Error::Storage)?;
+        if source_memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let source = Map::load(source_memory);
+        if target_memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let target = Map::load(target_memory);
         let (identity, role) = decode(&source.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
         let (target_identity, phase) = decode(&target.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
         if !matches!(role, Phase::Source)
@@ -404,7 +413,7 @@ impl<M: Memory> SchemaCopy<M> {
         let checkpoint = self.identity.encode(&phase)?;
         let live = live_manifest(self.identity.transition.source, self.identity.source);
         for key in &keys {
-            self.target.map.remove_discard(key);
+            self.target.map.remove(key);
         }
         self.target.map.insert(manifest_key(), checkpoint);
         if complete {
@@ -512,7 +521,10 @@ impl<M: Memory> RetiredSource<M> {
         source_incarnation: [u8; 16],
         target_incarnation: [u8; 16],
     ) -> Result<Self, Error> {
-        let map = Map::load(memory).map_err(Error::Storage)?;
+        if memory.size() == 0 {
+            return Err(Error::Corrupt);
+        }
+        let map = Map::load(memory);
         let (identity, phase) = decode(&map.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
         if !matches!(phase, Phase::Retired)
             || identity.transition != *expected
@@ -535,7 +547,7 @@ impl<M: Memory> RetiredSource<M> {
     pub fn cleanup_step(&mut self, limit: usize) -> Result<bool, Error> {
         let (keys, complete) = cleanup_keys(&self.map, limit)?;
         for key in &keys {
-            self.map.remove_discard(key);
+            self.map.remove(key);
         }
         Ok(complete)
     }

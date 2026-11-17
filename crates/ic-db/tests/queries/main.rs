@@ -2249,8 +2249,7 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
     let db = create(&runtime, 6);
     drop(db);
     let slot = StableKey::parse("test.db.v1").unwrap();
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Entry::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
@@ -2735,8 +2734,7 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
     trailing.push(0);
     for bytes in [bad_tag, trailing] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         let mut key = vec![2];
         key.extend(PresenceData::ID.to_be_bytes());
         key.extend(0_u64.to_be_bytes());

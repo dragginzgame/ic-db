@@ -206,8 +206,7 @@ fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
     let host = runtime();
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-    )
-    .unwrap();
+    );
     let mut prefix = vec![tag];
     prefix.extend(EnvelopeRow::ID.to_be_bytes());
     let lower = match after {

@@ -90,6 +90,26 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
     let invoke =
         async |extra: &[&str], anonymous: bool| invoke_command("inspect", extra, anonymous).await;
     let before = pic.get_stable_memory(canister).await;
+    // Selecting a local provider does not implicitly trust its root key.
+    for command_name in ["inspect", "witness-list"] {
+        let mut args = base.clone();
+        args[0] = command_name.into();
+        args.retain(|arg| arg != "--local-root-key");
+        args.extend([
+            "--identity".into(),
+            key.to_string_lossy().into_owned(),
+            "--json".into(),
+        ]);
+        let refused = command(args).await;
+        assert!(!refused.status.success());
+        assert!(
+            refused.stdout.is_empty(),
+            "untrusted replies must not render"
+        );
+        let error = String::from_utf8(refused.stderr).unwrap();
+        assert!(error.contains("Certificate verification failed"), "{error}");
+        assert!(error.contains("cycles unavailable"), "{error}");
+    }
     let catalogue = invoke(&["--json"], false).await;
     assert!(
         catalogue.status.success(),

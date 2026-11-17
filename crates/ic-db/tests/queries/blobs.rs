@@ -692,8 +692,7 @@ fn malformed_blob_index_components_refuse_without_mutation() {
     valid.extend(1_u64.to_be_bytes());
     for component in [vec![255, 0, 1], vec![255], vec![0, 255, 0]] {
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         assert!(raw.remove(&valid).is_some());
         let mut bad = prefix.clone();
         bad.extend(component);
@@ -708,8 +707,7 @@ fn malformed_blob_index_components_refuse_without_mutation() {
         assert_eq!(*backing.borrow(), before);
         drop(db);
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&bad);
         raw.insert(valid.clone(), 1_u64.to_be_bytes().to_vec());
     }

@@ -82,7 +82,7 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
     revision_key.extend(Entry::ID.to_be_bytes());
     for failure in 0..4 {
         let mut raw: StableBTreeMap<Vec<u8>, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         let manifest = raw.get(&vec![0]).unwrap();
         let revision = raw.get(&revision_key).unwrap();
         match failure {
@@ -167,7 +167,7 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
             assert_eq!(*backing.borrow(), before);
         }
         let mut raw: StableBTreeMap<Vec<u8>, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap()).unwrap();
+            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
         raw.insert(vec![0], manifest);
         raw.insert(revision_key.clone(), revision);
     }

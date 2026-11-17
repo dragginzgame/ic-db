@@ -106,8 +106,7 @@ fn complete_keys_count_escaping_and_owner_before_any_mutation() {
     db.commit(batch).unwrap();
     assert_eq!(*backing.borrow(), before);
     drop(db);
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut prefix = vec![3];
     prefix.extend(TextKey::ID.to_be_bytes());
     let keys: Vec<_> = raw
@@ -200,8 +199,7 @@ fn no_op_cannot_admit_an_overlong_stored_after_image() {
         text: "x".repeat(494),
         padding: vec![],
     };
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(TextKey::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

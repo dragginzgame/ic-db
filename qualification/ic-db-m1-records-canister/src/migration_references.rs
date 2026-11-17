@@ -198,8 +198,7 @@ fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage
     let key = if target { COPY_TARGET } else { COPY_SOURCE };
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         host.open_memory(&StableKey::parse(key).unwrap()).unwrap(),
-    )
-    .unwrap();
+    );
     let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
     let rows: Vec<_> = raw
         .range((lower, Bound::Unbounded))

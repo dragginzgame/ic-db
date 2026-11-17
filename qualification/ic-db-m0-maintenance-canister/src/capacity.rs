@@ -45,13 +45,10 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
             return Err(3);
         }
         // Only this recorded retired slot is disposable. Release custody before reset.
-        drop(
-            Candidate::reset(
-                host.open_memory(&StableKey::parse(KEYS[1]).unwrap())
-                    .unwrap(),
-            )
-            .unwrap(),
-        );
+        drop(Candidate::reset(
+            host.open_memory(&StableKey::parse(KEYS[1]).unwrap())
+                .unwrap(),
+        ));
         fail_at(failure, 1);
         control.insert(STATE, 1);
         control.insert(POSITION, 0);
@@ -64,8 +61,7 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
     let mut candidate = Candidate::load(
         host.open_memory(&StableKey::parse(KEYS[1]).unwrap())
             .unwrap(),
-    )
-    .unwrap();
+    );
     let source = target(&host);
     let width = field(&control, WIDTH)? as usize;
     let position = field(&control, POSITION)?;
@@ -105,8 +101,7 @@ fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
     let candidate = Candidate::load(
         host.open_memory(&StableKey::parse(KEYS[1]).unwrap())
             .unwrap(),
-    )
-    .unwrap();
+    );
     let bytes = if id == 0 {
         Vec::new()
     } else {
@@ -120,7 +115,7 @@ fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
     let (_, pages) = candidate.allocated_pages();
     Ok((
         [
-            host.diagnostics().unwrap().physical_pages,
+            ic_storage::Memory::size(&ic_storage::DefaultMemoryImpl::default()),
             pages,
             count,
             field(&control, POSITION)?,

@@ -194,12 +194,12 @@ fn initialize((): ()) {
     #[cfg(feature = "mixed-lifecycle")]
     mixed_lifecycle::initialize(&host);
 }
-fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
+fn status(db: &Database<Backing>) -> Status {
     (
         db.schema().fingerprint(),
         db.incarnation(),
         db.revision::<Entry>().unwrap(),
-        host.diagnostics().unwrap().physical_pages,
+        ic_storage::Memory::size(&DefaultMemoryImpl::default()),
     )
 }
 #[ic_platform_runtime::query(
@@ -214,7 +214,7 @@ fn status(db: &Database<Backing>, host: &MemoryRuntime<Backing>) -> Status {
 fn inspect((): ()) -> Status {
     let host = runtime();
     let db = open(&host);
-    status(&db, &host)
+    status(&db)
 }
 // Private fixture transport: entity identity, fields and indexes, without terminal layout.
 type FieldView = (String, String, bool, String, Option<(String, String)>);
@@ -388,7 +388,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
             (definition.name.into(), kind.into(), members)
         })
         .collect();
-    (status(&db, &host), entities, types)
+    (status(&db), entities, types)
 }
 
 // Presentation selection over an already admitted graph. Names terminate recursive

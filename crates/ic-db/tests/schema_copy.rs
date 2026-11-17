@@ -161,8 +161,7 @@ fn transform(row: Source, inputs: &[u8]) -> Result<Target, Error> {
     })
 }
 fn entries(host: &MemoryRuntime<VectorMemory>, name: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(host.open_memory(&key(name)).unwrap()).unwrap();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(host.open_memory(&key(name)).unwrap());
     raw.iter()
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect()
@@ -565,8 +564,7 @@ fn malformed_and_future_copy_checkpoints_refuse_intact() {
         drop(begin(&runtime));
         let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
             runtime.open_memory(&key("copy.target.v1")).unwrap(),
-        )
-        .unwrap();
+        );
         let mut frame = raw.get(&vec![0]).unwrap();
         match case {
             0 => {
@@ -726,8 +724,7 @@ fn incomplete_or_inconsistent_collections_never_validate_or_publish() {
             "copy.target.v1"
         };
         let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key(name)).unwrap())
-                .unwrap();
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key(name)).unwrap());
         let row = raw.keys().find(|key| key[0] == 2).unwrap();
         let index = raw.keys().find(|key| key[0] == 3);
         match case {
@@ -996,8 +993,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
     // Independently inspect the exact target encoding, including renamed fields.
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         runtime.open_memory(&key("copy.target.v1")).unwrap(),
-    )
-    .unwrap();
+    );
     let rows: Vec<_> = raw
         .iter()
         .filter(|entry| entry.key()[0] == 2)
@@ -1030,8 +1026,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
     drop(copy);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         runtime.open_memory(&key("copy.target.v1")).unwrap(),
-    )
-    .unwrap();
+    );
     raw.insert(rows[1].0.clone(), rows[1].1.clone());
     drop(raw);
     let mut copy = SchemaCopy::resume(
@@ -1340,8 +1335,7 @@ fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
         drop(copy);
         let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
             runtime.open_memory(&key("copy.target.v1")).unwrap(),
-        )
-        .unwrap();
+        );
         if malformed_position {
             let mut frame = raw.get(&vec![0]).unwrap();
             let entity = frame.len() - 5;

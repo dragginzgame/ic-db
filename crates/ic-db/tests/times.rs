@@ -218,8 +218,7 @@ fn exact_indexes_final_state_swaps_and_reopen() {
     }
     assert_eq!(read(&db, "zone,duration,id"), vec![1, 6, 2, 3, 4, 5]);
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = TimeRow::SCHEMA
         .indexes
         .iter()
@@ -274,8 +273,7 @@ fn collection_order_and_unindexed_validation() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap()).unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Collections::ID.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

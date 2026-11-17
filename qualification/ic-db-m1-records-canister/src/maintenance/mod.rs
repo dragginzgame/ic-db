@@ -237,8 +237,7 @@ fn maintenance_copy_entries(target: bool) -> CopyEntries {
     .is_ok();
     let raw = ic_storage::adapter::StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         host.open_memory(&key).unwrap(),
-    )
-    .unwrap();
+    );
     (
         open,
         raw.iter()

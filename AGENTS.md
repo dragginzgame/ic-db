@@ -41,8 +41,9 @@ This overlay owns local authority, product boundaries and qualification choices.
   original async client through Testkit's default-feature-free export; a prepared
   command-scoped launcher owns the server.
   Keep setup explicit and attempt instance deletion explicitly; no replacement
-  lifecycle framework belongs in IC DB. The released 0.106.0 launcher remains
-  an external bootstrap tool, independent of the lightweight Testkit library.
+  lifecycle framework belongs in IC DB. The released 0.110.0 launcher remains
+  an external bootstrap tool, independent of the lightweight Testkit library;
+  retain per-attempt diagnostics and its explicit one-hour command bound.
   Canic's adapter owns endpoints, guards and composition; applications own
   authorization. Standalone qualification may use Platform hooks and bounded
   Wire transport outside product crates, never a second executor/endpoint registry.
@@ -90,44 +91,38 @@ Read the owning design contract before changing its behavior:
   simulator; `make m0-contracts` needs no server. The immutable IcyDB baseline is
   an explicit comparison, never an implicit CI run or mutation of its checkout.
 - Measures are total uncompressed Wasm/code bytes, IC cycles and instructions;
-  native wall-clock timings are not IC performance proof. Keep matched workloads,
-  complete write journeys, cold/post-upgrade and warm costs separate.
-- Keep the [IcyDB comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
-  current when comparison evidence or delivered scope changes. Link exact receipts;
-  distinguish matched measurements, historical references and unmeasured gaps.
-- The maintainer's entity-growth objective is roughly 2 KB per added entity;
-  roughly 4 KB from IcyDB is the working comparison ceiling. Reachable entity
-  growth remains above that ceiling; the design owns current measurements. Do not
-  weaken reachable behavior or increase the budget to pass. Common read/write
-  regressions require an explicit tradeoff even when Wasm shrinks.
-- IC Storage is expected to change. Do not shape IC DB around its current
-  allocation/reclamation quirks; retain version-bound probes and requalify after
-  the overhaul while preserving correctness, bounded execution and data safety.
+  native time is not IC performance proof. Keep complete, matched write journeys
+  and cold/post-upgrade/warm costs separate. The [comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
+  owns receipts, historical baselines and unmeasured gaps. Retain the isolated
+  baseline until the maintainer revisits retirement; it is not a release gate.
+- Entity-growth objective remains roughly 2 KB per entity, with roughly 4 KB as
+  the IcyDB comparison ceiling. The design owns current measurements. Do not
+  weaken reachable behavior or increase budgets to pass; read/write regressions
+  require an explicit tradeoff even when Wasm shrinks.
+- Use Storage’s named stable-memory allocations. Keep Wire out of the product dependency graph. Preserve the DB-owned codecs and reject incompatible backing intact.
+- Storage source changes needed for this experimental integration are authorized.
+  Preserve concurrent sibling work and follow Storage's local instructions; this
+  permission does not authorize sibling publication or deployment.
 - After each patch, review its responsibility and callers for drift; remove new
   sediment in the same scope without broadening tests. Report responsibility,
   durable-state and representation changes, with LOC only when requested.
 
-## IcyDB research and explanations
+## IcyDB research
 
-Existence in IcyDB is not evidence of best practice or a requirement to restore
-parity. Some features, attributes and abstractions were mistakes or experiments
-that persisted. Evaluate each against a current requirement and its total cost;
-keep the solved invariant where needed, but change or omit the mechanism when
-justified. Describe missing legacy behavior separately from accepted IC DB work:
-do not call every difference unfinished work or automatically recreate it.
-
-Before substantive subsystem work, inspect the relevant frozen implementation,
-regressions and explanatory history. Identify the original failure, solution and
-changed assumptions. Reuse sound code/algorithms when they fit; independent
-reimplementation is not itself a benefit. Carry applicable regressions into IC DB
-and qualify them here. Explain concrete replacements, exclusions, lost guarantees
-and moved responsibilities; cite source/revision and distinguish adapted code
-from retained behavior or independently implemented lessons. Keep enduring
-rationale in the existing system design, not another comparison ledger. Historical
-passes, feature deferrals and design hypotheses do not establish parity, savings
-or full Toko adoption.
+Before substantive subsystem work, inspect the relevant frozen predecessor,
+regressions and explanatory history read-only. Identify the solved invariant and
+changed assumptions; existing APIs and plans do not establish current requirements.
+Reuse sound solutions when they fit, bring applicable regressions into the new
+owner and qualify them here. Cite exact source/revisions and explain exclusions,
+lost guarantees and moved responsibilities. Keep enduring rationale in the
+system design; historical passes do not establish parity, savings or Toko adoption.
 
 ## Local commands and presentation
+
+The [release scope and recovery contract](README.md#validation-scope-and-recovery)
+owns gate selection. Run `make release-adapter-test` after orchestration changes;
+use the shared runner's retained evidence and saved phases. Partial failed-gate
+logs are not reusable proof; do not add local skip flags or another receipt framework.
 
 `make clippy`, `make check`, `make test` and `make doc` select the native library;
 they are aggregate library checks, not automatically focused. `make docs-check`

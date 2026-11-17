@@ -6,6 +6,10 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
+IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+
+Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
+
 Package directories match their Cargo package names. Qualification callers use
 Wire 0.24's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
@@ -19,7 +23,7 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
 ## External simulator ownership (0.19)
 
-The native driver uses PocketIC 16.1.0 through Testkit 0.108.0 with default
+The native driver uses PocketIC 16.1.0 through Testkit 0.110.0 with default
 features disabled. It requires
 `IC_TESTKIT_POCKET_IC_URL`, borrows the upstream async client on the caller's Tokio
 runtime and explicitly attempts instance deletion. It has no binary discovery,
@@ -28,10 +32,30 @@ bounded to 30 seconds; timeout/cancellation can leave remote effects. Upstream
 async `drop` is best-effort, not proof of successful deletion.
 
 `make m0-setup` explicitly prepares an optimized release-profile build of the
-released `ic-testkit-server` 0.106.0 CLI
+released `ic-testkit-server` 0.110.0 CLI
 and authenticates the server assets. This retained executable is a development
 bootstrap outside the Cargo driver graph; the lightweight library selects only
 the upstream client, not Testkit's optional server manager.
+Assets now live in `.tools/testkit-server`. Setup and every owned command get a
+fresh directory under `target/evidence/testkit` for bounded process diagnostics;
+the runner uses the launcher's maximum one-hour total command budget. Preparation
+is still explicit; inherited server endpoints remain externally owned.
+
+The 0.109.0 adoption passed focused Clippy, endpoint refusal/instance deletion,
+both live-page Wasm witnesses, terminal interaction and the 90-second idle test.
+Those six tests used Storage 0.74.1 artifacts. Their logs are in `target/evidence/testkit/adoption-109-{tests,console}.log`.
+
+The 0.110.0 adoption (2026-11-17) keeps PocketIC 16.1.0 and the default-feature-free
+client; its external launcher now selects Host Process 0.81.0. Both locked Cargo
+graphs, snapshot admission and focused driver Clippy pass. The new launcher
+passes endpoint refusal, instance deletion, the retained rollback/Keep-upgrade
+witness and both terminal tests, including 90 seconds idle without keepalive.
+`make db` rebuilt and installed the client; `db count Document` returned one row
+and its query-call footer. Launcher receipts report no abandoned instances or
+cleanup errors. Logs are `target/evidence/testkit/adoption-110-{tests,console,installed-cli}.log`;
+setup, installation and the 63 passing release-adapter assertions use the same
+prefix. Those launcher checks used the historical OP artifacts.
+
 [The command runner](../scripts/with-pocketic.sh) checks that
 prepared selection, then delegates process ownership to it. Existing Make probes
 use this runner. Standalone `db` re-enters itself through the same runner before
@@ -285,6 +309,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
+| Stable Storage adoption | Storage 0.78.0 uses the DB codec to reject oversized keys. The installed count upgrade witness passes. | Current-supplier performance comparison remains open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
@@ -2725,6 +2750,52 @@ Wire primitive decoding can accept noncanonical bytes; original-byte identity
 must not be reconstructed by decoding and re-encoding. The product must bind
 supported normalization and stored traversal to its versioned contract.
 
+## Live pages across writes and upgrades (0.22.2)
+
+`tests/live_pages.rs` uses the existing `write` and `fluent_ordered` Wasm endpoints.
+For each direction, it captures a cursor, moves the returned row after that
+position and an unseen row before it, changes filter membership, inserts on both
+sides, then upgrades before resuming. The removed old index entry is not needed
+to recover the logical position. Ordinary tuple sorting/comparison supplies the
+oracle; expected resumed IDs are `[4, 6, 7, 1]` ascending and `[3, 1, 7, 6]`
+descending. The first returned row deliberately repeats. This proves the accepted
+live browsing contract, not snapshot or at-most-once enumeration.
+
+Each page examines at most one candidate and returns at most one 16-byte
+projection. Nonmatches yield empty pages with forward progress. A 15-byte result
+allowance refuses without skipping the candidate; the same cursor succeeds with
+16 bytes. Changed-filter cursors refuse even when the new predicate would select
+the same current rows. Raw backing remains unchanged by the upgrade/read/refusal
+sequence. The focused Wasm run and strict Clippy pass; the run log is retained at
+`target/evidence/m2/live-pages.log`. The artifact was rebuilt with the current
+qualification lock (Runtime/macros 0.23.17); this is scoped behavior evidence,
+not blanket qualification of the concurrent dependency refresh.
+
+Frozen IcyDB `6d421e3`, `db/cursor/boundary.rs`, supplies the ordered-boundary and
+direction principle. IC DB keeps its existing compact logical position; no legacy
+`Value` slots, cursor hierarchy or new runtime mechanism are copied.
+
+A second installed case uses the existing `reference_batch` endpoint to delete
+the cursor row and its dependent in one batch. After upgrade the old cursor still
+seeks to the next key; after reinsertion at the identical primary/index key and a
+second upgrade it returns the same next page. A fresh enumeration sees the new
+payload. Literal remaining IDs `[2, 3, 4, 5, 6]` and `[6, 5, 4, 3, 2]` check both
+directions independently, with one-candidate pages and unchanged backing during
+upgrade/reads. This retains the visibility obligation from frozen IcyDB's
+`positioned_data_overlay_retires_exactly_across_delete_and_reinsert`, without
+copying its journal retirement mechanism. Both live-page tests and focused strict
+Clippy pass; `target/evidence/m2/live-pages-delete.log` records the run against
+Wasm SHA-256 `21f3571ab7318c2b0e7aec31366de07e0a51d9f33c01c85568dc602f7d72b658`.
+These are current-supplier regressions to rerun at cutover, not evidence for the
+rewritten Storage.
+
+```sh
+make m1-records-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test live_pages
+```
+
+`make m2-queries` includes this witness alongside existing query/sorting checks.
+
 ## Query composition contracts
 
 `make m0-contracts` also runs the four-row examples from design section 5.
@@ -3739,8 +3810,9 @@ SIGTTIN when it inherited the foreground terminal. The foreground CLI now forwar
 terminal input through a pipe and retains interactive prompting in the child;
 Testkit still owns server and child cleanup. Linux execution passes; the macOS
 `script` invocation is supplied but awaits native qualification.
-Console launches select the prepared launcher's `--idle-ttl 86400`; ordinary
-test launches keep PocketIC's default. The explicitly selected idle regression
+The earlier launcher used `--idle-ttl 86400` for the console. Since Testkit 0.109.0,
+the selected launcher instead imposes a one-hour total command budget for console and test launches.
+The explicitly selected idle regression
 waits 90 seconds without server requests, then exercises queries and normal quit:
 
 ```sh
@@ -4108,7 +4180,7 @@ make db
 db schema DefaultRow
 ```
 
-### Native Canic inspection client (pending)
+### Native Canic inspection client (0.22.1)
 
 `db inspect` consumes Canic 0.219.0, revision
 `3d2ef2719450e57484638b4f1db6cb6bcc41d64c`, with IC Agent 0.49.3.
@@ -4143,7 +4215,31 @@ query failures from updates with unknown outcomes. The client retains that
 call-lane distinction by admitting only inspection queries here; it copies no
 subprocess transport, SQL surface, retries or update reconciliation machinery.
 
-### Native typed witness listing (pending)
+The pending 0.22.2 client applies one Tokio deadline to a complete verified query,
+including node-key reads, and a separate deadline to an explicit local root fetch.
+`--timeout-secs` accepts 1–300 seconds (default 30). Agent's direct upstream HTTP
+service omits its implicit 429/503 retry wrapper; Reqwest and TCP retries are also
+disabled. No local transport implementation, retry state or engine state is added.
+The independent HTTP peer in `tests/remote.rs` checks immediate busy-provider
+refusal and stalled-call termination for both inspection and witness listing,
+with statistics and no partial JSON/fixture fallback. Distinct verification
+requests are counted separately from retries. Four HTTP checks additionally cover
+stalled/busy local-root setup without database dispatch, redirect refusal and
+2 MiB HTTP response enforcement before protocol decoding. The peer captures
+bounded request lines across TCP fragments and has an independent child watchdog.
+The earlier 11 native CLI checks and first two HTTP checks passed with the
+independently changed Testkit 0.108.1 lock selection;
+the released 0.22.1 source retains its qualified 0.108.0 graph.
+The signed Canic HTTP journey also passes with the changed transport, preserving
+authorization, upgrade/maintenance refusals and unchanged backing. Both commands
+reject the actual witness's certificate under default mainnet trust, then succeed
+with explicit local-root admission; selecting a local URL alone grants no trust.
+The extended checks use the existing producer Wasm and native qualification lock;
+concurrent Runtime/macros lock updates are preserved, not requalified as Wasm changes
+by this client-only run. Focused Clippy,
+formatting and documentation checks pass; this is not a second release.
+
+### Native typed witness listing (0.22.1)
 
 The same pinned Canic witness now serves `db witness-list` over verified HTTP.
 Setup inserts six literal rows through the application's bounded write endpoint;

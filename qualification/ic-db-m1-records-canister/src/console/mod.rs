@@ -8,7 +8,7 @@ use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
     runtime,
-    schema::{BinaryObject, DecimalRow, Document, Entry},
+    schema::{DecimalRow, Document, Entry},
 };
 use ic_db::{
     Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
@@ -100,19 +100,11 @@ type Page = (
 fn cardinality(entity: String) -> Result<u64, String> {
     let host = runtime();
     let db = open(&host);
-    match entity.as_str() {
-        "Entry" => db.cardinality::<Entry>(),
-        "Document" => db.cardinality::<Document>(),
-        "DecimalRow" => db.cardinality::<DecimalRow>(),
-        "BinaryObject" => db.cardinality::<BinaryObject>(),
-        _ => {
-            return Err(
-                "count supports Entry, Document, DecimalRow and BinaryObject in this fixture"
-                    .into(),
-            );
-        }
-    }
-    .map_err(message)
+    db.cardinality_by_name(&entity)
+        .map_err(|error| match error {
+            Error::UnknownEntity => "Unknown entity. Use db entities to list entities.".into(),
+            other => message(other),
+        })
 }
 
 // Measure the exact console path, including open/admission/result formatting.

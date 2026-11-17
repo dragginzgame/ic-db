@@ -47,7 +47,7 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
 }
 
 fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
-    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap()).unwrap()
+    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
 }
 
 #[ic_platform_runtime::init(
@@ -60,7 +60,9 @@ fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
 fn initialize((): ()) {
     let host = runtime();
     for name in NAMES {
-        drop(Map::create(host.open_memory(&StableKey::parse(name).unwrap()).unwrap()).unwrap());
+        drop(Map::create(
+            host.open_memory(&StableKey::parse(name).unwrap()).unwrap(),
+        ));
     }
     let mut rows = open(&host, NAMES[0]);
     for id in 1..=12 {
