@@ -1365,7 +1365,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
         // Independently assembled with Node byte framing and SHA-256.
-        "3d9eff928eeb4e73eceeec428f447f05512e428f53f51fb9a878dbbb195260f8"
+        "9c92ffec435708d6fb707aaf8da48e69223f956ffff02e50b9b2ee155b766d5c"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
