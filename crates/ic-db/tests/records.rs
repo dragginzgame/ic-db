@@ -2002,7 +2002,14 @@ fn runtime_schema_admission_rejects_unsupported_index_shapes() {
     for (value, optional) in [
         (ic_db::FieldType::Bool, true),
         (ic_db::FieldType::Text { max_bytes: 32 }, true),
-        (ic_db::FieldType::Blob { max_bytes: 32 }, false),
+        (ic_db::FieldType::Blob { max_bytes: 32 }, true),
+        (
+            ic_db::FieldType::List {
+                item: &ic_db::FieldType::Nat8,
+                max_items: 32,
+            },
+            false,
+        ),
         (ic_db::FieldType::Principal, true),
     ] {
         let mut fields = IndexedIdentity::SCHEMA.fields.to_vec();
