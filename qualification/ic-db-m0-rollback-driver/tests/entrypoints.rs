@@ -5,7 +5,7 @@ use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{ByteBuf, Direction, Encoding};
 
 type Entries = Vec<(u64, u64)>;
-type Snapshot = (Entries, Entries, Entries, [u64; 4]);
+type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 fn wasm() -> Vec<u8> {
     std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-endpoints")).unwrap()

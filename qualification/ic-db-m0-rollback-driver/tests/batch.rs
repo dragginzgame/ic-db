@@ -5,7 +5,7 @@ use ic_wire::{Direction, Encoding};
 
 type Command = (u8, u64, u64, u64);
 type Entries = Vec<(u64, u64)>;
-type Snapshot = (Entries, Entries, Entries, [u64; 4]);
+type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 #[tokio::test]
 async fn final_state_batches() {
