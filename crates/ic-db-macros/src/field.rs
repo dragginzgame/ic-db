@@ -116,7 +116,7 @@ impl Field {
         let (kind, optional, many) =
             value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
         if managed.is_some()
-            && (!matches!(kind, Kind::Timestamp)
+            && (!matches!(kind, Kind::Timestamp | Kind::Named(..))
                 || optional
                 || many.is_some()
                 || default.is_some()

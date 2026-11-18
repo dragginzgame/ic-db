@@ -10,7 +10,8 @@ use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Sum one integer or Decimal field into a single-field result record with the same field
-    /// name and optionality. Its integer width may match or widen the source within
+    /// name and optionality. Scalar newtype inputs use their declared primitive.
+    /// The result field uses a primitive whose integer width may match or widen the source within
     /// the same signed/unsigned family. Unsigned results may widen to U256.
     /// Decimal results preserve the source's declared scale; coefficients accumulate
     /// exactly in I256 and must fit i128 at completion. No rescaling or rounding.
@@ -45,7 +46,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.group_values(&plan, reducer)
     }
 
-    /// Average an integer or Decimal field into a single-field Decimal record.
+    /// Average an integer or Decimal field (including a scalar newtype) into a single-field Decimal record.
     /// Preserve the field name and optionality; the result declares scale 0–28.
     /// Ignore absent operands, returning `None` for empty/all-absent input.
     /// Divide the exact total by the present count once, rounding to nearest with
@@ -128,7 +129,8 @@ impl NumericAggregate {
         if source.optional != result.optional {
             return Err(Error::InvalidQuery);
         }
-        let source_scale = match source.value {
+        let input = crate::key::operand_type(source.value);
+        let source_scale = match input {
             FieldType::Decimal { scale } => scale,
             _ => 0,
         };
@@ -136,12 +138,12 @@ impl NumericAggregate {
             if !matches!(result.value, FieldType::Decimal { scale: 0..=28 }) {
                 return Err(Error::InvalidQuery);
             }
-            match source.value {
+            match input {
                 FieldType::Decimal { .. } => true,
                 value => integer(value).ok_or(Error::InvalidQuery)?.0,
             }
         } else {
-            match (source.value, result.value) {
+            match (input, result.value) {
                 (FieldType::Decimal { scale: source }, FieldType::Decimal { scale: result })
                     if source == result =>
                 {

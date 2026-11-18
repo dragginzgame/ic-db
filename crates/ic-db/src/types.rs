@@ -40,7 +40,7 @@ pub enum TypeBody {
     Wrapped(FieldType),
     /// Canonical map with scalar/unit-enum keys and arbitrary admitted value shapes.
     Map {
-        /// Required ordered scalar or unit-enum key.
+        /// Required primitive, scalar newtype or unit-enum key.
         key: FieldType,
         /// Value type and optionality, independent of map presence.
         value: ValueSchema,
@@ -49,7 +49,7 @@ pub enum TypeBody {
     },
     /// Canonical scalar/unit-enum set. Stored elements must be strictly increasing.
     Set {
-        /// Exact ordered scalar or unit enum; other named/container elements refuse.
+        /// Primitive, scalar newtype or unit enum with a strict logical order.
         item: FieldType,
         /// Maximum entries, also subject to the enclosing row's shared budget.
         max_items: u32,
@@ -195,7 +195,7 @@ impl TypeGraph {
         Ok(())
     }
     fn include_ordered(&mut self, value: FieldType) -> Result<(), Error> {
-        match value {
+        match crate::key::operand_type(value) {
             FieldType::List { .. } => return Err(Error::InvalidSchema),
             FieldType::Named(link) if unit_enum_len((link.definition)()).is_none() => {
                 return Err(Error::InvalidSchema);

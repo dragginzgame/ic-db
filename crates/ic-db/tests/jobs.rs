@@ -5243,3 +5243,81 @@ fn retained_group_text_extrema_restore_winners_and_apply_completed_order() {
     }
     panic!("groups did not complete");
 }
+
+#[ic_db::newtype(item(prim = "Decimal", scale = 2))]
+struct UnitPrice {}
+#[ic_db::newtype(item(prim = "Int16"))]
+struct Quantity {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "flag", value(item(prim = "Nat8"))),
+        field(name = "price", value(item(is = "UnitPrice"))),
+        field(name = "amount", value(opt, item(is = "Quantity")))
+    )
+)]
+struct Line {}
+
+#[test]
+fn numeric_newtype_inputs_share_widening_and_retained_decimal_rounding() {
+    let runtime = host(VectorMemory::default());
+    let (mut db, mut jobs) = create_stores(&runtime, Schema::new(&[Line::SCHEMA]).unwrap());
+    let decimal = |n| ic_db::Decimal::try_new(n, 2).unwrap();
+    let mut batch = Batch::new();
+    for (id, flag, cents, quantity) in [
+        (1, 0, 124, Some(i16::MAX)),
+        (2, 0, 125, Some(1)),
+        (3, 1, -100, None),
+    ] {
+        batch
+            .insert(&Line {
+                id,
+                flag,
+                price: UnitPrice(decimal(cents)),
+                amount: quantity.map(Quantity),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let groups = db
+        .query::<Line>()
+        .group_sum::<Flag, Amount>()
+        .unwrap()
+        .value;
+    assert_eq!(
+        groups
+            .into_iter()
+            .map(|g| (g.key.flag, g.value.and_then(|r| r.amount)))
+            .collect::<Vec<_>>(),
+        [(0, Some(32768)), (1, None)]
+    );
+    let query = || db.query::<Line>().filter("flag", Comparison::Eq, 0_u8);
+    assert_eq!(
+        query().sum::<Price>().unwrap().value.unwrap().price,
+        decimal(249)
+    );
+    assert!(matches!(
+        query().sum::<WrongScale>(),
+        Err(Error::InvalidQuery)
+    ));
+    let expected = Price {
+        price: decimal(124),
+    };
+    assert_eq!(
+        query().avg::<Price>().unwrap().value,
+        Some(expected.clone())
+    );
+    let handle = query()
+        .start_avg::<Price>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query()
+        .work_limit(1)
+        .resume_avg::<Price>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    let rest = query()
+        .resume_avg::<Price>(&mut jobs, &handle, first.sequence, time(2))
+        .unwrap();
+    assert!(matches!(rest.outcome, JobOutcome::Complete(Some(value)) if value == expected));
+}

@@ -5,6 +5,14 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
+#[ic_db::newtype(item(prim = "Timestamp"))]
+struct CreatedAt {}
+#[ic_db::newtype(item(prim = "Timestamp"))]
+struct UpdatedAt {}
+type Changed = UpdatedAt;
+#[ic_db::newtype(item(prim = "Int64"))]
+struct Counter {}
+
 #[entity(
     pk(field = "id"),
     index(field = "body", unique),
@@ -16,10 +24,10 @@ use ic_storage::{
             value(item(prim = "Text", max_bytes = 32)),
             default = "ready"
         ),
-        field(name = "born", value(item(prim = "Timestamp")), managed = "created_at"),
+        field(name = "born", value(item(is = "CreatedAt")), managed = "created_at"),
         field(
             name = "changed",
-            value(item(prim = "Timestamp")),
+            value(item(is = "Changed", indirect)),
             managed = "updated_at"
         )
     )
@@ -115,7 +123,12 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
         .insert_input(Entry::insert().id(2).body("second".into()))
         .unwrap();
     assert_eq!(
-        (first.born, first.changed, second.born, second.changed),
+        (
+            first.born.0,
+            first.changed.0,
+            second.born.0,
+            second.changed.0
+        ),
         (time(100), time(100), time(100), time(100))
     );
     assert!(matches!(
@@ -129,7 +142,7 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
     batch.replace(&updated).unwrap();
     db.commit(batch).unwrap();
     let current = db.get::<Entry>(1).unwrap().unwrap();
-    assert_eq!((current.born, current.changed), (time(100), time(200)));
+    assert_eq!((current.born.0, current.changed.0), (time(100), time(200)));
     assert_eq!(
         db.index_prefix::<Entry>("changed", &[time(100).into()], 32)
             .unwrap(),
@@ -176,8 +189,8 @@ fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchang
         let mut candidate = row.clone();
         candidate.body = "changed".into();
         match mode {
-            0 => candidate.born = time(90),
-            1 => candidate.changed = time(101),
+            0 => candidate.born.0 = time(90),
+            1 => candidate.changed.0 = time(101),
             _ => {}
         }
         let mut batch = Batch::at(time(if mode == 2 { 99 } else { 200 }));
@@ -274,7 +287,7 @@ fn managed_policy_changes_identity_and_refuses_incompatible_reopen_intact() {
         Err(Error::IncompatibleSchema)
     ));
     assert_eq!(*backing.borrow(), before);
-    for mode in 0..4 {
+    for mode in 0..5 {
         let mut fields = Entry::SCHEMA.fields.to_vec();
         let born = fields.iter_mut().find(|f| f.name == "born").unwrap();
         match mode {
@@ -282,6 +295,13 @@ fn managed_policy_changes_identity_and_refuses_incompatible_reopen_intact() {
             1 => born.value = ic_db::FieldType::Int64,
             2 => born.default = Some(&ic_db::LiteralDefault::Int(0)),
             3 => born.managed = Some(ic_db::ManagedTimestamp::UpdatedAt),
+            4 => {
+                use ic_db::Value;
+                born.value = ic_db::FieldType::Named(ic_db::TypeLink {
+                    name: Counter::NAME,
+                    definition: Counter::definition,
+                });
+            }
             _ => unreachable!(),
         }
         let invalid = Box::leak(Box::new(ic_db::EntitySchema {

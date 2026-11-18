@@ -215,3 +215,69 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+#[ic_db::newtype(item(prim = "Nat16"))]
+struct Rank {}
+#[map(key(is = "Rank"), value(item(prim = "Bool")), max_items = 2)]
+struct Flags {}
+#[set(item(is = "Rank"), max_items = 2)]
+struct Ranks {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "flags", value(item(is = "Flags"))),
+        field(name = "ranks", value(item(is = "Ranks")))
+    )
+)]
+struct Ranked {}
+
+#[test]
+fn wrapped_collection_keys_keep_numeric_order_on_typed_and_borrowed_reads() {
+    let row = Ranked {
+        id: 1,
+        flags: Flags(BTreeMap::from([(Rank(256), true), (Rank(255), false)])),
+        ranks: Ranks(BTreeSet::from([Rank(256), Rank(255)])),
+    };
+    // Stored u16s are little-endian, so raw byte order would reverse these keys.
+    let bytes = [
+        2, 0, 0, 0, 255, 0, 0, 0, 1, 1, // flags
+        1, 0, 0, 0, 0, 0, 0, 0, // id
+        2, 0, 0, 0, 255, 0, 0, 1, // ranks
+    ];
+    assert_eq!(row.encode().unwrap(), bytes);
+    let schema = || Schema::new(&[Ranked::SCHEMA]).unwrap();
+    assert_eq!(
+        schema().types().map(|ty| ty.name).collect::<Vec<_>>(),
+        ["Flags", "Rank", "Ranks"]
+    );
+    let runtime = host(VectorMemory::default());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [20; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+    assert_eq!(db.get::<Ranked>(1).unwrap(), Some(row));
+    drop(db);
+
+    for second_key in [7, 24] {
+        for invalid in [255_u16, 254] {
+            let mut corrupt = bytes;
+            corrupt[second_key..second_key + 2].copy_from_slice(&invalid.to_le_bytes());
+            assert!(matches!(Ranked::decode(&corrupt), Err(Error::Corrupt)));
+            let mut key = vec![2];
+            key.extend(Ranked::ID.to_be_bytes());
+            key.extend(1_u64.to_be_bytes());
+            let mut raw =
+                StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+            raw.insert(key, corrupt.to_vec());
+            drop(raw);
+            let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+            let mut batch = Batch::new();
+            batch.delete::<Ranked>(1).unwrap();
+            assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+        }
+    }
+}

@@ -40,7 +40,7 @@ use field::Field;
 /// `Entity::insert()` builds typed omission-aware input for `Batch::insert_input`;
 /// explicit optional `None` is never replaced by a default. Primary-key and nested
 /// record defaults are not implemented. Defaults never run on decode/replacement.
-/// Nonoptional Timestamp fields may declare `managed = "created_at"` or
+/// Required Timestamp fields and their scalar newtypes may declare `managed = "created_at"` or
 /// `managed = "updated_at"`, once per role. These fields have no insert setters;
 /// use `Batch::at(time)` to supply one operation time for the entire batch.
 #[proc_macro_attribute]
@@ -79,9 +79,9 @@ pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Declare a scalar/unit-enum set with `item(...)` and `max_items = N` (0..256).
-/// The empty struct becomes a tuple wrapper over `BTreeSet<T>`. Stored elements
-/// use strict logical order; malformed duplicates/order refuse on decoding.
+/// Declare a bounded ordered set with `item(...)` and `max_items = N` (0..256).
+/// Elements can be primitives, scalar newtypes or unit enums. The generated
+/// wrapper contains a `BTreeSet<T>`. Decoding requires strictly increasing keys.
 #[proc_macro_attribute]
 pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
     set::expand(args.into(), item.into())
@@ -90,7 +90,7 @@ pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Declare a named `BTreeMap` wrapper using `key(...)`, `value(...)` and
-/// `max_items = N` (0..256). Keys are required ordered scalars or unit enums. Values use the
+/// `max_items = N` (0..256). Keys are primitives, scalar newtypes or unit enums. Values use the
 /// ordinary optional/list/named field rules; stored duplicate keys refuse.
 #[proc_macro_attribute]
 pub fn map(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -421,11 +421,16 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         ));
     }
     let insert_input = insert::emit(&item, &authored)?;
-    let mut managed_ids = [None, None];
+    let mut managed_fields = [None, None];
     for (field, id) in authored.iter().zip(&field_ids) {
         if let Some(policy) = field.managed {
             let slot = usize::from(policy == field::Management::UpdatedAt);
-            if managed_ids[slot].replace(id).is_some() {
+            let timestamp = if matches!(field.kind, field::Kind::Named(..)) {
+                quote!(#id.0)
+            } else {
+                quote!(#id)
+            };
+            if managed_fields[slot].replace(timestamp).is_some() {
                 return Err(syn::Error::new_spanned(
                     id,
                     "each managed timestamp role may appear once per entity",
@@ -434,12 +439,14 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         }
     }
     let managed_check = |owner: Tokens| {
-        if managed_ids.iter().all(Option::is_none) {
+        if managed_fields.iter().all(Option::is_none) {
             return quote!();
         }
-        let values = managed_ids
-            .iter()
-            .map(|id| id.map_or_else(|| quote!(None), |id| quote!(Some(#owner.#id))));
+        let values = managed_fields.iter().map(|field| {
+            field
+                .as_ref()
+                .map_or_else(|| quote!(None), |field| quote!(Some(#owner.#field)))
+        });
         quote!(::ic_db::__private::validate_managed_order([#(#values),*])?;)
     };
     let validate_managed = managed_check(quote!(self));

@@ -13,7 +13,7 @@ Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration
 remain open; this is not a production-readiness or IcyDB-parity declaration.
-Public source releases to `dragginzgame/ic-db` are authorized when requested;
+Requested releases deliver public source to `dragginzgame/ic-db` and both product crates to crates.io;
 live deployment and replacement of IcyDB are not. Written 2026-11-13.
 
 Read sections 4–6 for contracts and supported mechanisms, and
@@ -638,8 +638,17 @@ still consumes the ordinary collection, depth and node budgets.
 Scalar newtypes use the primitive comparator and secondary-key encoding.
 Borrowing a wrapper produces the inner scalar operand for fluent predicates and
 index prefixes. Rust fields and record projections retain the nominal type.
-Primary/reference keys, managed timestamps, numeric sum/average and collection
-keys retain their existing admission rules. This adopts frozen IcyDB's named
+Set elements and map keys use the same primitive order, retaining the wrapper
+in the compiled schema. Sum and average accept newtypes over their supported
+integer and Decimal inputs. The result record declares a primitive field with
+the usual width or scale. Grouped and retained operations use the same rule.
+Frozen IcyDB delegated newtype numeric conversion to the wrapped item
+(`icydb-model-macros/src/imp/numeric_value.rs` at `6d421e3`). IC DB reads the
+compiled primitive descriptor so exact accumulation needs no generated
+conversion through Decimal. A required Timestamp newtype can carry either
+managed-time role. Insert inputs construct the named type from the batch time;
+replacement and maintenance use the existing fixed-width timestamp codec.
+Primary and reference keys retain their existing admission rules. This adopts frozen IcyDB's named
 list and distinct Rust wrapper ergonomics without its generated arithmetic or
 normalization/validation visitors. Canic owns support for the added kind in
 its remote inspection protocol.
@@ -680,7 +689,7 @@ or descending stored entries refuse as Corrupt. Application construction retains
 normal `BTreeSet` behavior, including explicit insert's duplicate result. No
 database normalizer or implicit transformation runs on keys.
 
-All existing scalar families and unit enums are supported; other named/container
+All existing scalar families, primitive-backed newtypes and unit enums are supported; other named/container
 elements await an explicit logical comparator. Sets are usable in entity/record fields, enum
 payloads and lists through existing named links. Optional sets distinguish absence
 from empty. Empty sets are finite constructors and consume one structured value;
@@ -702,8 +711,8 @@ from `icydb-model-macros/src/node/map/mod.rs` and
 `icydb-model/tests/ui/collection_normalizers/immutable_keys.rs` at `6d421e3`.
 Key order is the same exact scalar/unit-enum order as sets. Values use ordinary scalar,
 optional, bounded-list and named-type semantics, without an ordering requirement.
-Keys cannot be optional or containers. Named keys admit only unit enums; boxing
-a unit enum does not change its logical order or stored contract.
+Keys cannot be optional or containers. Named keys admit unit enums and primitive-backed newtypes. Boxing
+a unit enum preserves its logical order and stored contract.
 Nested entity references, normalizers and member indexes remain unimplemented.
 
 Map bytes are a u32 entry count followed by ordered key/value pairs. One shared

@@ -768,7 +768,7 @@ current manifest; explicit revision reads and write preparation validate only
 the counters they need. Unrelated broken counters do not block ordinary row
 reads or other entities' writes. No revision values are cached across calls.
 The public source repository is [dragginzgame/ic-db](https://github.com/dragginzgame/ic-db).
-No public licence or crates.io publication has been selected; packages are unpublished.
+The product crates use the [Toko Studios Network Licence](LICENSE.md).
 
 M0 investigation has begun in the independent [qualification workspace](qualification/README.md).
 Its synchronous write-rollback probe passes in PocketIC with published IC Storage.
@@ -951,12 +951,12 @@ after hosted runs of the changed workflow. GitHub documents
 [step and job timeouts](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepstimeout-minutes).
 
 Compiler, tool and scanner setup failures retain sanitized diagnostics for seven
-days, linked from the job summary. The wrapper uses core Perl before tool setup;
+days, linked from the job summary. The wrapper uses Toko Tooling’s core-Perl setup diagnostic helper before tool setup;
 it preserves the original exit status and reports collection/upload failures
 separately. It keeps a bounded output tail and at most ten selected attempt logs,
 including hidden attempt directories, from the job-local tool/asset roots.
 Symlinks, configs, binaries and environment dumps are excluded. Each excerpt is
-limited to 64 KiB/300 lines, with oversized lines/logs explicitly omitted; total
+limited to 32 KiB/100 lines, with oversized lines/logs explicitly omitted; total
 retained text stays below 768 KiB. Known credential fields, token patterns, private
 key blocks and sensitive environment values are removed before printing/upload.
 Raw logs are never uploaded. No general guarantee can be made for arbitrary
@@ -984,16 +984,29 @@ Keep `~/.local/bin` on `PATH`; the launcher uses the current checkout's installe
 
 IcyDB and Canic remain separate; there is no path dependency on either repository.
 
-## Public source releases
+## Public releases
 
 `make release-patch`, `make release-minor` and `make release-major` use the same
 shared runner and local adapter. They require clean committed source on `main`,
 prepare the locked dependencies/tools and PocketIC server once, run the selected
 native and installed contracts below, finalize version/changelog metadata, then atomically push `main`
 and the annotated version tag to the public repository. `make release-resume
-VERSION=X.Y.Z` recovers a specific interrupted attempt. There is no crates.io
-upload or live-canister deployment. Creating the GitHub prerelease is a separate
-delivery step after tag verification.
+VERSION=X.Y.Z` recovers a specific interrupted source delivery.
+
+From the verified release checkout, run `make publish` to upload
+`ic-db-macros` and `ic-db` together. Cargo orders the macro dependency first.
+For a normal patch release, run both steps together:
+
+```sh
+make release-patch && make publish
+```
+
+A release is complete once both exact versions are visible on crates.io.
+For a rehearsal use `make publish-check`. If an upload stops partway, inspect
+the retained publication evidence and registry versions before publishing a
+missing crate with `make publish PACKAGE=ic-db` or `PACKAGE=ic-db-macros`.
+The fixture CLI remains a local install. Creating the GitHub prerelease is a
+separate delivery step after tag verification.
 
 The release metadata editor is the explicitly prepared IC Build 0.84.1 tool.
 Validation logs and the shared runner's recovery state remain local; generated
@@ -1030,7 +1043,7 @@ performance/comparison workloads remain explicitly selected.
 | Native contracts / shared logger | `tools-check`, `fmt-check`, `test` (engine/macros with build feature), `doc`, `docs-check`, `m0-contracts` (numeric/schema/row/nested/query examples) | Each release; tools/source/docs and both workspace inputs |
 | Installed M0 / fixture owners | `m0-core`: one artifact/session, entrypoints + rollback + batch + reads; separate `m0-aggregation` and `m0-maintenance` variants | Message boundaries, final-state constraints, pages, revision invalidation and interrupted migration; fixture source/features, server and compiler |
 | Installed product / fixture owners | `m1-records-wasm`, `m1-commit-failures`, `m3-maintenance-wasm` (including `m3-jobs`), `m3-cli` | Generated types, product rollback, copy/cancel/publish/reclaim, retained jobs and CLI/terminal composition; exact built artifacts and native callers |
-| Version/delivery / shared runner + IC Build | Two-lock metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; no crates.io upload |
+| Version/delivery / shared runner + IC Build | Two-lock metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; follow verified tag delivery with `make publish` |
 | Hosted CI | Secret scan once; `make ci` on Linux and both supported macOS architectures | Push/PR; independent hosted evidence, not a reason to repeat that whole matrix locally |
 | Frozen comparison / explicit consumer selection | Pinned IcyDB schema/canister and comparison targets remain isolated | A changed comparison question or explicit benchmark request; excluded from routine release lint and gates |
 

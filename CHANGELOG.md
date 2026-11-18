@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.23.1] - Unreleased
+
+### ➕ Added
+
+- Entity fields can use a Timestamp `#[newtype]` for `managed = "created_at"`
+  or `managed = "updated_at"`. The insert builder supplies the typed value
+  from the batch clock.
+
+- Fluent sums and averages accept integer- and Decimal-backed newtype inputs,
+  including grouped and resumable queries. Result records declare the usual
+  primitive width or Decimal scale.
+
+- Use a primitive-backed `#[newtype]` as a `#[set]` element or `#[map]` key.
+  The macro derives `Ord` and `PartialOrd` from the primitive. Remove any
+  manual implementations or duplicate derives when upgrading.
+
+### 🔧 Changed
+
+- Release delivery now includes the `ic-db` and `ic-db-macros` packages on crates.io.
+
+- Adopt Toko Tooling 0.45.1 in both workspaces. CI setup failures retain the
+  original command status and up to 100 lines or 32 KiB per sanitized excerpt.
+
 ## [0.23.0] - 2026-11-18
 
 ### ➕ Added

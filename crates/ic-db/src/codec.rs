@@ -415,7 +415,7 @@ impl<'a> Decoder<'a> {
             }
             Ok(())
         };
-        match item {
+        match crate::key::operand_type(item) {
             FieldType::Nat8 => self.ordered(count, Self::nat8, read_value, |_, ()| {}),
             FieldType::Nat16 => self.ordered(count, Self::nat16, read_value, |_, ()| {}),
             FieldType::Nat32 => self.ordered(count, Self::nat32, read_value, |_, ()| {}),

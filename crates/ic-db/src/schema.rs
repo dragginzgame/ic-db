@@ -430,7 +430,7 @@ impl Schema {
             let mut seen = [false; 2];
             for field in entity.fields {
                 if let Some(managed) = field.managed {
-                    if field.value != FieldType::Timestamp
+                    if crate::key::operand_type(field.value) != FieldType::Timestamp
                         || field.optional
                         || field.default.is_some()
                         || field.reference.is_some()

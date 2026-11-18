@@ -150,7 +150,13 @@ pub(super) fn emit(item: &ItemStruct, fields: &[Field]) -> syn::Result<TokenStre
         .collect::<syn::Result<Vec<_>>>()?;
     let resolved = fields.iter().zip(&all_ids).map(|(field, id)| {
         if field.managed.is_some() {
-            return quote!(#id: _time.ok_or(::ic_db::Error::MissingOperationTime)?);
+            let time = quote!(_time.ok_or(::ic_db::Error::MissingOperationTime)?);
+            let value = match &field.kind {
+                Kind::Named(path, false) => quote!(#path { 0: #time }),
+                Kind::Named(path, true) => quote!(::std::boxed::Box::new(#path { 0: #time })),
+                _ => time,
+            };
+            return quote!(#id: #value);
         }
         let name = &field.name;
         let omitted = match &field.default {

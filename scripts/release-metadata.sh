@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Source-only adapter for the product workspace and its qualification lockfile.
+# Release metadata adapter for the product workspace and its qualification lockfile.
 # Shared tooling owns transactional replacement and Cargo/changelog editing.
 # shellcheck disable=SC2154 # shared and installer are supplied by release.sh.
 

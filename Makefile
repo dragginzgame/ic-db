@@ -5,6 +5,11 @@ TOKO_TOOLING_RELEASE := 1
 RELEASE_REMOTE := origin
 RELEASE_BRANCH := main
 RELEASE_DELIVERY_POLICY := scripts/release-delivery.txt
+CARGO_PUBLISH_PACKAGES := ic-db-macros ic-db
+CARGO_PUBLISH_REGISTRY := crates-io
+CARGO_PUBLISH_ALL_FEATURES := 1
+override CARGO_PUBLISH_VERIFY_TARGETS := publication-tag
+publish-check: override CARGO_PUBLISH_VERIFY_TARGETS := check
 include vendor/toko-tooling/make/consumer.mk
 include vendor/toko-tooling/make/cargo-dependencies.mk
 
@@ -46,6 +51,7 @@ help:
 	  'make m2-aggregate-paths         Compare primary and explicit-index aggregates' \
 	  'make m2-prefix-candidate        Measure isolated maintained-prefix experiment' \
 	  'make db                         Install db; run db to open the console' \
+	  'make publish / publish-check     Upload tagged product crates / rehearse publication' \
 	  'make release-patch/minor/major   Qualify and deliver a public source release' \
 	  'make fmt / fmt-check             Format / check Rust and manifests' \
 	  'make deps-list / deps-update     Inspect / update Cargo dependencies' \
@@ -317,6 +323,10 @@ db: m2-cli-artifact
 	  install -m 644 "$$fixture" "$(DB_INSTALL_PREFIX)/share/ic-db/m1/records.wasm"; \
 	  install -m 755 "$$binary" "$(DB_INSTALL_PREFIX)/bin/db"; \
 	  printf 'Installed %s/bin/db. Run db (ensure %s/bin is on PATH).\n' "$(DB_INSTALL_PREFIX)" "$(DB_INSTALL_PREFIX)"
+
+.PHONY: publication-tag
+publication-tag:
+	@bash vendor/toko-tooling/scripts/ci/check-release-tag.sh "$$(git rev-parse HEAD)" "$$($(MAKE) --no-print-directory -s release-version)"
 
 .PHONY: release-adapter-test release-setup
 release-adapter-test:

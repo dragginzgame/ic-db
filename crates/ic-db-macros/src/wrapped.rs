@@ -58,6 +58,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     let read = field.read_result();
     let vis = item.vis;
     let attrs = item.attrs;
+    let order = (!many).then(|| quote!(#[derive(PartialOrd, Ord)]));
     let operand = if many {
         None
     } else {
@@ -74,6 +75,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     };
     Ok(quote! {
         #(#attrs)*
+        #order
         #[derive(Clone, Debug, PartialEq, Eq)]
         #vis struct #ident(#[doc="Wrapped value."] pub #ty);
         impl ::ic_db::Value for #ident {
