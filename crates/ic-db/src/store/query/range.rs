@@ -65,6 +65,33 @@ fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Opti
     Ok((prefix_len + operand.len() <= crate::MAX_INDEX_KEY_BYTES).then_some(operand))
 }
 
+// Both path ranking and key-only counting require an encodable bound on
+// the first varying field. Callers separately establish mandatory clauses.
+pub(super) fn bounds_secondary_field(
+    field: &str,
+    next: Option<&str>,
+    term: &Term,
+    prefix_len: usize,
+) -> bool {
+    next == Some(field) && matches!(bound_operand(term, true, prefix_len), Ok(Some(_)))
+}
+
+// Rank only bounds the traversal can actually encode on the next index field.
+pub(super) fn has_secondary_bound(
+    entity: &EntitySchema,
+    plan: &Plan<'_>,
+    path: &super::order::IndexPath<'_>,
+) -> bool {
+    let next = path.index.fields.get(path.fixed).copied();
+    plan.terms
+        .split_inclusive(|term| !term.or_next)
+        .any(|clause| {
+            matches!(clause, [term] if bounds_secondary_field(
+                entity.fields[term.position].name, next, term, path.prefix.len()
+            ))
+        })
+}
+
 // Every predicate must independently constrain this same primary-key interval.
 pub(super) fn covers_primary(plan: &Plan<'_>) -> bool {
     plan.index.is_none()

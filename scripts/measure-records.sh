@@ -116,10 +116,10 @@ for engine in "${engines[@]}"; do
         build_features=aggregate-comparison
     fi
     if [[ "$workload" == count || "$workload" == count-paths ]]; then
-        build_features=count-comparison
+        build_features="count-comparison"
     fi
     if [[ "$workload" == count-profile || ( "$workload" == count-paths && "$engine" == records-benchmark ) ]]; then
-        build_features=count-profile
+        build_features="count-profile"
     fi
     if [[ "$workload" == growth ]]; then
         package=ic-db-entity-growth-canister

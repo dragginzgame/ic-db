@@ -88,15 +88,19 @@ struct Other {}
 fn source() -> Schema {
     Schema::new(&[Source::SCHEMA]).unwrap()
 }
+
 fn target() -> Schema {
     Schema::new(&[Target::SCHEMA]).unwrap()
 }
+
 fn transition(version: u32) -> SchemaTransition {
     SchemaTransition::new(&source(), &target(), "widen", version, &[7]).unwrap()
 }
+
 fn key(name: &str) -> StableKey {
     StableKey::parse(name).unwrap()
 }
+
 fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(memory).unwrap();
     host.bootstrap(
@@ -113,6 +117,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     .unwrap();
     host
 }
+
 fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance<VectorMemory> {
     let mut db = Database::create(
         host.open_memory(&key("copy.source.v1")).unwrap(),
@@ -132,6 +137,7 @@ fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance<VectorMemory> {
     db.commit(batch).unwrap();
     db.begin_maintenance(&transition(1)).unwrap()
 }
+
 fn begin(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
     create(host)
         .begin_copy(
@@ -142,6 +148,7 @@ fn begin(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
         )
         .unwrap()
 }
+
 fn resume(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
     SchemaCopy::resume(
         host.open_memory(&key("copy.source.v1")).unwrap(),
@@ -160,6 +167,7 @@ fn transform(row: Source, inputs: &[u8]) -> Result<Target, Error> {
         value: u16::from(row.value) + u16::from(inputs[0]),
     })
 }
+
 fn entries(host: &MemoryRuntime<VectorMemory>, name: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(host.open_memory(&key(name)).unwrap());
     raw.iter()
@@ -1129,6 +1137,7 @@ fn multi_schemas() -> (Schema, Schema, SchemaTransition) {
     let transition = SchemaTransition::new(&source, &target, "whole-db", 1, &[]).unwrap();
     (source, target, transition)
 }
+
 fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
     let (source, target, transition) = multi_schemas();
     let mut db = Database::create(
@@ -1163,6 +1172,7 @@ fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory
         )
         .unwrap()
 }
+
 fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
     let (source, target, transition) = multi_schemas();
     SchemaCopy::resume(
@@ -1174,6 +1184,7 @@ fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemor
     )
     .unwrap()
 }
+
 #[expect(
     clippy::needless_pass_by_value,
     reason = "matches consuming transform API"

@@ -52,6 +52,7 @@ const KEY: &str = "m1.records.v1";
 type Status = ([u8; 32], [u8; 16], u64, u64);
 
 include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+
 fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
     // Host custody survives calls; Database handles and leases remain local.
     // Upgrade clears this heap state and the next access re-admits the runtime.
@@ -60,6 +61,7 @@ fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
     }
     HOST.with(std::rc::Rc::clone)
 }
+
 fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
     let requests = vec![MemoryRequest::new("m1", KEY).unwrap()];
@@ -103,6 +105,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
         .unwrap();
     host
 }
+
 fn open(host: &MemoryRuntime<Backing>) -> Database<Backing> {
     Database::open(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
@@ -110,6 +113,8 @@ fn open(host: &MemoryRuntime<Backing>) -> Database<Backing> {
     )
     .unwrap()
 }
+
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -194,6 +199,7 @@ fn initialize((): ()) {
     #[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
     mixed_lifecycle::initialize(&host);
 }
+
 fn status(db: &Database<Backing>) -> Status {
     (
         db.schema().fingerprint(),
@@ -202,6 +208,8 @@ fn status(db: &Database<Backing>) -> Status {
         ic_storage::Memory::size(&DefaultMemoryImpl::default()),
     )
 }
+
+/// Read the fixture’s persisted state for comparison across calls.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",
@@ -221,6 +229,8 @@ type FieldView = (String, String, bool, String, Option<(String, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
+
+/// Inspect the schema admitted by the installed fixture.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "schema",
@@ -428,6 +438,8 @@ fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&
         _ => {}
     }
 }
+
+/// Apply the selected mutation to a fixture entry.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "write",
@@ -463,6 +475,8 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// List entry IDs and amounts for the supplied category.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "category",
@@ -483,6 +497,8 @@ fn category(category: u64) -> Vec<(u64, u64)> {
 }
 
 type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
+
+/// Read the fixture document and its entity revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "document",
@@ -508,6 +524,8 @@ fn document((): ()) -> (DocumentValue, u64) {
         db.revision::<Document>().unwrap(),
     )
 }
+
+/// Replace the fixture document with the supplied fields.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_document",
@@ -538,6 +556,7 @@ fn replace_document(
     db.commit(batch).map_err(|_| 2)
 }
 
+/// Look up the entry reference stored on the requested document.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "document_reference",
@@ -555,6 +574,7 @@ fn document_reference(id: u64) -> Option<u64> {
         .map(|row| row.entry_id)
 }
 
+/// Apply the selected cross-record reference scenario as one batch.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "reference_batch",
@@ -622,6 +642,8 @@ fn reference_batch(mode: u8) -> Result<(), u8> {
 }
 
 type WideValue = (i128, u128, Option<i128>, Option<u128>);
+
+/// Read the wide integer fields and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "wide_numbers",
@@ -645,6 +667,8 @@ fn wide_numbers((): ()) -> (WideValue, u64) {
         db.revision::<WideNumbers>().unwrap(),
     )
 }
+
+/// Replace the fixture’s wide numbers fields with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_wide_numbers",
@@ -687,6 +711,7 @@ type NarrowOptional = (
 );
 type NarrowValue = (NarrowRequired, NarrowOptional);
 
+/// Read the narrow integer fields and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "narrow_numbers",
@@ -723,6 +748,7 @@ fn narrow_numbers((): ()) -> (NarrowValue, u64) {
     )
 }
 
+/// Replace the fixture’s narrow numbers fields with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_narrow_numbers",
@@ -771,6 +797,8 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
 }
 
 // Private decoder probe: transport carries opaque bytes, never decodes a row.
+
+/// Validate the supplied bytes with the `BinaryObject` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "binary_decodes",
@@ -788,6 +816,7 @@ fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
     BinaryObject::decode(bytes.as_ref()).is_ok()
 }
 
+/// Read the stored blob fields and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "binary_object",
@@ -806,6 +835,8 @@ fn binary_object((): ()) -> (BinaryValue, u64) {
         db.revision::<BinaryObject>().unwrap(),
     )
 }
+
+/// Replace the fixture’s binary object fields with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_binary_object",
@@ -836,6 +867,8 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
 // Bytes cross the test transport; Principal admission and persistence belong to
 // their respective owners, never Wire's representation of an identity.
 type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+
+/// Read the stored principal fields and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_record",
@@ -857,6 +890,8 @@ fn principal_record((): ()) -> (PrincipalValue, u64) {
         db.revision::<IdentityRow>().unwrap(),
     )
 }
+
+/// Replace the fixture’s principal record fields with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_principal_record",
@@ -886,6 +921,8 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     }
     Ok(())
 }
+
+/// Validate the supplied bytes with the `IdentityRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_decodes",
@@ -905,6 +942,8 @@ fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
 
 // Private qualification controls; product endpoints remain adapter-owned.
 type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
+
+/// Apply the supplied indexed writes with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "indexed_batch",
@@ -949,6 +988,8 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
 }
 
 type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
+
+/// Inspect the fixture indexes for the supplied principal.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "typed_indexes",
@@ -980,6 +1021,7 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     ))
 }
 
+/// Populate the published/title index with the supplied records.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "text_index_batch",
@@ -1014,6 +1056,7 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
     Ok(())
 }
 
+/// List indexed titles and IDs under the selected published/title prefix.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "text_index",
@@ -1037,6 +1080,8 @@ fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String,
 
 type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
 type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
+
+/// Apply the supplied optional-index mutations as a batch.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "optional_index_batch",
@@ -1087,6 +1132,7 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     Ok(())
 }
 
+/// Inspect optional index entries for the supplied value or absence.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "optional_indexes",
@@ -1123,6 +1169,8 @@ fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
 
 // Optional relationships share the product batch; these are private probe controls.
 type OptionalLinks = Vec<(u64, Option<u64>)>;
+
+/// Apply optional reference changes and deletions in one batch.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "optional_reference_batch",
@@ -1157,6 +1205,7 @@ fn optional_reference_batch(
     Ok(())
 }
 
+/// Read optional links and reverse lookups for the selected target.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "optional_references",
@@ -1193,6 +1242,8 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
 
 // Private enum qualification controls. Transport uses ordinals solely to exercise
 // the typed database boundary; it does not define the persisted enum codec.
+
+/// Exercise bounded enum encoding and storage for the requested fixture case.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "enum_write",
@@ -1267,6 +1318,8 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
         db.revision::<EnumRow>().unwrap(),
     ))
 }
+
+/// Validate the supplied bytes with the `EnumRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "enum_decode",
@@ -1321,6 +1374,7 @@ fn type_view(value: FieldType) -> (String, String) {
         scalar => (format!("{scalar:?}"), String::new()),
     }
 }
+
 fn joined_info(bound: String, nested: &str) -> String {
     if bound.is_empty() {
         nested.to_owned()
@@ -1331,6 +1385,7 @@ fn joined_info(bound: String, nested: &str) -> String {
     }
 }
 
+/// Exercise bounded nested encoding and storage for the requested fixture case.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "nested_write",
@@ -1394,6 +1449,8 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
         db.revision::<NestedRow>().unwrap(),
     ))
 }
+
+/// Validate the supplied bytes with the `NestedRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "nested_decodes",
@@ -1411,6 +1468,7 @@ fn nested_decodes(bytes: Vec<u8>) -> bool {
     schema::NestedRow::decode(&bytes).is_ok()
 }
 
+/// Exercise bounded list encoding and storage for the requested fixture case.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "list_write",
@@ -1477,6 +1535,8 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<ListRow>().unwrap(),
     ))
 }
+
+/// Validate the supplied bytes with the `ListRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "list_decodes",
@@ -1494,6 +1554,7 @@ fn list_decodes(bytes: Vec<u8>) -> bool {
     schema::ListRow::decode(&bytes).is_ok()
 }
 
+/// Exercise bounded set encoding and storage for the requested fixture case.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "set_write",
@@ -1536,6 +1597,8 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
         db.revision::<SetRow>().unwrap(),
     ))
 }
+
+/// Validate the supplied bytes with the `SetRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "set_decodes",
@@ -1553,6 +1616,7 @@ fn set_decodes(bytes: Vec<u8>) -> bool {
     schema::SetRow::decode(&bytes).is_ok()
 }
 
+/// Exercise bounded map encoding and storage for the requested fixture case.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "map_write",
@@ -1604,6 +1668,8 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         db.revision::<MapRow>().unwrap(),
     ))
 }
+
+/// Validate the supplied bytes with the `MapRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_decodes",
@@ -1621,6 +1687,7 @@ fn map_decodes(bytes: Vec<u8>) -> bool {
     schema::MapRow::decode(&bytes).is_ok()
 }
 
+/// Encode a recursive map of the requested shape and size.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_tree_encode",
@@ -1642,6 +1709,8 @@ fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     };
     MapTreeRow { id: 1, tree }.encode().map_err(|_| 1)
 }
+
+/// Validate the supplied bytes with the `MapTreeRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_tree_decodes",
@@ -1660,6 +1729,8 @@ fn map_tree_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
+
+/// Apply the supplied U256 rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "u256_batch",
@@ -1694,6 +1765,8 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored U256 rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_rows",
@@ -1716,6 +1789,8 @@ fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<BigNumbers>().unwrap(),
     )
 }
+
+/// Look up matching row IDs for the supplied U256 value.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_lookup",
@@ -1738,6 +1813,8 @@ fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
+
+/// Validate the supplied bytes with the `BigNumbers` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_decodes",
@@ -1756,6 +1833,8 @@ fn u256_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type FloatInput = (u64, Option<u64>, u32, u64);
+
+/// Apply the supplied float rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "float_batch",
@@ -1795,6 +1874,8 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored float rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_rows",
@@ -1822,6 +1903,8 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<FloatRow>().unwrap(),
     )
 }
+
+/// Look up matching row IDs for the supplied float value.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_lookup",
@@ -1841,6 +1924,8 @@ fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
+
+/// Validate the supplied bytes with the `FloatRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_decodes",
@@ -1866,6 +1951,8 @@ fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account,
         subaccount,
     })
 }
+
+/// Apply the supplied account rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "account_batch",
@@ -1901,6 +1988,8 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored account rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_rows",
@@ -1924,6 +2013,8 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<AccountRow>().unwrap(),
     )
 }
+
+/// Look up matching row IDs for the supplied account value.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_lookup",
@@ -1943,6 +2034,8 @@ fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
         .map(|r| r.id)
         .collect())
 }
+
+/// Validate the supplied bytes with the `AccountRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_decodes",
@@ -1961,6 +2054,8 @@ fn account_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
+
+/// Apply the supplied ULID rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "ulid_batch",
@@ -1995,6 +2090,8 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored ULID rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_rows",
@@ -2017,6 +2114,8 @@ fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<UlidRow>().unwrap(),
     )
 }
+
+/// Look up matching row IDs for the supplied ULID value.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_lookup",
@@ -2039,6 +2138,8 @@ fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
         .map(|row| row.id)
         .collect()
 }
+
+/// Validate the supplied bytes with the `UlidRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_decodes",
@@ -2056,6 +2157,7 @@ fn ulid_decodes(bytes: Vec<u8>) -> bool {
     schema::UlidRow::decode(&bytes).is_ok()
 }
 
+/// Parse a ULID and return its formatted text and bytes.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_text",
@@ -2075,6 +2177,8 @@ fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
 }
 
 type DateInput = (u64, Option<i32>, i32);
+
+/// Apply the supplied date rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "date_batch",
@@ -2112,6 +2216,8 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored date rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_rows",
@@ -2134,6 +2240,8 @@ fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<DateRow>().unwrap(),
     )
 }
+
+/// Look up matching row IDs for the supplied date value.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_lookup",
@@ -2161,6 +2269,8 @@ fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
         .map(|row| row.id)
         .collect())
 }
+
+/// Validate the supplied bytes with the `DateRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_decodes",
@@ -2179,6 +2289,8 @@ fn date_decodes(bytes: Vec<u8>) -> bool {
 }
 
 type TimeInput = (u64, Option<u64>, u64, Option<i64>, i64);
+
+/// Apply the supplied time rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "time_batch",
@@ -2215,6 +2327,8 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored time rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_rows",
@@ -2242,6 +2356,8 @@ fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<TimeRow>().unwrap(),
     )
 }
+
+/// Validate the supplied bytes with the `TimeRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_decodes",
@@ -2258,6 +2374,8 @@ fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
 fn time_decodes(bytes: Vec<u8>) -> bool {
     schema::TimeRow::decode(&bytes).is_ok()
 }
+
+/// Parse the supplied duration and timestamp strings.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_text",
@@ -2278,6 +2396,7 @@ fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> 
     ))
 }
 
+/// Exercise conversions and arithmetic on the supplied time operands.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_math",
@@ -2299,6 +2418,8 @@ fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64)
 
 // Strings are private transport inputs; the database receives exact Decimal values.
 type DecimalInput = (u64, Option<String>, String);
+
+/// Apply the supplied decimal rows in one batch with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "decimal_batch",
@@ -2333,6 +2454,8 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     }
     Ok(())
 }
+
+/// Read the stored decimal rows and their revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "decimal_rows",
@@ -2355,6 +2478,8 @@ fn decimal_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
         db.revision::<DecimalRow>().unwrap(),
     )
 }
+
+/// Validate the supplied bytes with the `DecimalRow` row decoder.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "decimal_decodes",
@@ -2381,6 +2506,8 @@ type KeyBatchInput = (
     Vec<u64>,
     bool,
 );
+
+/// Apply ULID-key changes, links and deletions in one batch.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "key_batch",
@@ -2434,6 +2561,8 @@ fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> R
     }
     Ok(())
 }
+
+/// Page ULID-keyed rows after the supplied position.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "key_page",
@@ -2459,6 +2588,8 @@ fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u
         db.revision::<KeyRow>().unwrap(),
     )
 }
+
+/// Read a ULID-keyed row and its indexed lookup results.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "key_lookup",
@@ -2494,6 +2625,8 @@ type IntegerKeyBatch = (
     Vec<[u8; 32]>,
     bool,
 );
+
+/// Apply signed and wide primary-key changes in one batch.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "integer_key_batch",
@@ -2550,6 +2683,8 @@ fn integer_key_batch(
     }
     Ok(())
 }
+
+/// Page signed integer primary keys after the supplied position.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "signed_key_page",
@@ -2573,6 +2708,8 @@ fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Opt
         db.revision::<SignedKey>().unwrap(),
     )
 }
+
+/// Page wide integer primary keys after the supplied position.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "wide_key_page",
@@ -2600,6 +2737,8 @@ fn wide_key_page(
         db.revision::<WideKey>().unwrap(),
     )
 }
+
+/// Look up signed-key and wide-key rows by rank.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "integer_key_lookup",

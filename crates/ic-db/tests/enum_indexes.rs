@@ -123,6 +123,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn row(id: u64, state: State) -> Row {
     Row {
         id,
@@ -132,6 +133,7 @@ fn row(id: u64, state: State) -> Row {
         boxed: Some(Box::new(state)),
     }
 }
+
 fn schema() -> Schema {
     Schema::new(&[Row::SCHEMA]).unwrap()
 }

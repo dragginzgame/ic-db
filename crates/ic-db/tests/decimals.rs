@@ -39,6 +39,7 @@ struct Collections {}
 fn d(value: i128, scale: u32) -> Decimal {
     Decimal::try_new(value, scale).unwrap()
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let req =
@@ -50,6 +51,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn row(id: u64, coefficient: i128) -> DecimalRow {
     DecimalRow {
         id,
@@ -58,6 +60,7 @@ fn row(id: u64, coefficient: i128) -> DecimalRow {
         zone: true,
     }
 }
+
 fn bytes(row: &DecimalRow) -> Vec<u8> {
     let mut b = row.id.to_le_bytes().to_vec();
     b.push(u8::from(row.maybe.is_some()));
@@ -69,6 +72,7 @@ fn bytes(row: &DecimalRow) -> Vec<u8> {
     b.extend([2, 1]);
     b
 }
+
 #[test]
 fn exact_value_text_hash_and_order() {
     let one = d(1, 0);
@@ -150,6 +154,7 @@ fn exact_value_text_hash_and_order() {
     assert_eq!(key(d(-1, 0)), vec![0, 127, 255, 255, 255, !b'1', 255]);
     assert_eq!(key(Decimal::ZERO), vec![1]);
 }
+
 #[test]
 fn fixed_scale_bytes_and_corruption() {
     for coefficient in [i128::MIN, -100, -1, 0, 1, 100, i128::MAX] {
@@ -228,6 +233,7 @@ fn fixed_scale_bytes_and_corruption() {
         Schema::new(&[DecimalRow::SCHEMA]).unwrap().fingerprint()
     );
 }
+
 #[test]
 fn uniqueness_reopen_and_key_integrity() {
     let backing = VectorMemory::default();
@@ -332,6 +338,7 @@ fn uniqueness_reopen_and_key_integrity() {
         raw.remove(&bad);
     }
 }
+
 #[test]
 fn collections_and_unindexed_scale_are_checked() {
     let row = Collections {

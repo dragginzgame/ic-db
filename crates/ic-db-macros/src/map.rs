@@ -82,9 +82,11 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     }
                 }; &DEFINITION
             }
+
             fn encode_into(&self, writer: &mut ::ic_db::__private::Encoder) -> Result<(), ::ic_db::Error> {
                 writer.map(&self.0, #max, |writer, key, value| { #kw; #vw; Ok(()) })
             }
+
             fn decode_from(reader: &mut ::ic_db::__private::Decoder<'_>) -> Result<Self, ::ic_db::Error> {
                 reader.map(#max, |reader| #kr, |reader| #vr).map(Self)
             }

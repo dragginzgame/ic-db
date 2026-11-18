@@ -8,8 +8,8 @@
  mod query;
  pub use maintenance::{CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition};
  pub use query::{
-@@ -19,7 +20,7 @@
-     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryPage, SortDirection,
+@@ -20,7 +21,7 @@
+     SortDirection,
  };
  
 -const MANIFEST: &[u8] = b"ICDBMF02";
@@ -17,7 +17,7 @@
  const MAX_BATCH: usize = 32;
  const MAX_BATCH_BYTES: usize = 128 * 1024;
  type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
-@@ -502,6 +503,7 @@
+@@ -542,6 +543,7 @@
          let mut removes = BTreeSet::new();
          let mut writes = BTreeMap::new();
          let mut unique = BTreeSet::new();
@@ -25,15 +25,15 @@
          // Observe each entity once, then apply its final net row delta. A balanced
          // delete/insert batch must not depend on mutation order. No state survives calls.
          let mut entities = BTreeMap::new();
-@@ -571,6 +573,7 @@
-                     return Err(Error::Corrupt);
-                 }
-                 for (key, _) in index_entries(mutation.entity, &info)? {
-+                    prefix_counts::delta(mutation.entity, &key, -1, &mut prefix_deltas)?;
-                     if self.map.get(&key) != Some(info.key.encode()) {
-                         return Err(Error::Corrupt);
+@@ -622,6 +624,7 @@
+                     {
+                         after_indexes.remove(position);
+                     } else {
++                        prefix_counts::delta(mutation.entity, &key, -1, &mut prefix_deltas)?;
+                         removes.insert(key);
                      }
-@@ -596,6 +599,7 @@
+                 }
+@@ -645,6 +648,7 @@
                  | Kind::Replace(bytes, info) => {
                      writes.insert(key, bytes);
                      for (key, is_unique) in after_indexes {
@@ -41,7 +41,7 @@
                          if is_unique && !unique.insert(key.clone()) {
                              return Err(Error::UniqueViolation);
                          }
-@@ -628,6 +632,7 @@
+@@ -677,6 +681,7 @@
                  writes.insert(entity_state_key(entity), state.encode());
              }
          }
@@ -183,15 +183,15 @@
 --- a/crates/ic-db/src/store/maintenance/copy.rs
 +++ b/crates/ic-db/src/store/maintenance/copy.rs
 @@ -13,7 +13,7 @@
- use std::collections::BTreeSet;
- use std::ops::Bound;
+ use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+ use std::{collections::BTreeSet, ops::Bound};
  
 -pub(super) const MAGIC: &[u8; 8] = b"ICDBCP02";
 +pub(super) const MAGIC: &[u8; 8] = b"ICDBPC01";
  const MAX_FRAME: usize = 8 + 4 + super::MAX_FRAME + 20 + 2 + 4 + QueryCursor::MAX_ENCODED_BYTES;
  
  #[derive(Clone, Debug, PartialEq, Eq)]
-@@ -645,6 +645,7 @@
+@@ -657,6 +657,7 @@
                      let row = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
                      validate_index_entry(entity, &entity.inspect_row(&row)?, owner, key)?;
                  }
@@ -573,8 +573,8 @@
 +}
 --- a/qualification/ic-db-records-benchmark-canister/src/lib.rs
 +++ b/qualification/ic-db-records-benchmark-canister/src/lib.rs
-@@ -322,3 +322,21 @@
-         }
+@@ -347,3 +347,21 @@
+             .value
      })
  }
 +

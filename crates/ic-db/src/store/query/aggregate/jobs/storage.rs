@@ -184,6 +184,7 @@ fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
     bytes.extend(generation.to_le_bytes());
     bytes
 }
+
 fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64, bool), Error> {
     if bytes.len() != 36 {
         return Err(Error::Corrupt);

@@ -131,6 +131,7 @@ impl Connection {
             timeout,
         })
     }
+
     pub(super) async fn query(
         &self,
         method: &str,
@@ -159,6 +160,7 @@ impl Connection {
             })?
             .map_err(|e| format!("{method} query failed: {}", escape(&e.to_string())))
     }
+
     pub(super) fn envelope(&self, key: &str, value: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(serde_json::Map::from_iter([
             ("provider".into(), self.provider.clone().into()),

@@ -4,8 +4,10 @@ mod distinct;
 mod order;
 mod range;
 mod sort;
-pub use aggregate::jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep};
-pub use aggregate::{Aggregate, GroupCount, GroupOrder, GroupValue};
+pub use aggregate::{
+    Aggregate, GroupCount, GroupOrder, GroupValue,
+    jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep},
+};
 
 use super::{Database, Map, prefix, row_key, validate_index_entry};
 use crate::{
@@ -181,6 +183,7 @@ impl QueryCursor {
         bytes.extend(&self.position);
         bytes
     }
+
     /// Decode framing; execution additionally checks query identity and key shape.
     /// # Errors
     /// Refuses unsupported versions, flags and oversized or incomplete frames.
@@ -449,6 +452,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.distinct = true;
         self
     }
+
     /// Add an AND term over a top-level field. Lists and sets support exact scalar membership with `Contains`.
     /// Eq/Ne with `IndexValue::Absent` also accept any optional stored field,
     /// including blobs and containers. Empty values are present, not absent.
@@ -469,6 +473,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .filter(field, comparison, QueryOperand::Literal(value.into()));
         self
     }
+
     /// Compare two top-level fields on the same row. Lists and sets support Contains
     /// with a present scalar field of the element type. Text and Blob also
     /// support StartsWith, EndsWith and Contains with a present right-hand field.
@@ -480,6 +485,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .filter(left, comparison, QueryOperand::Field(right));
         self
     }
+
     /// Compare UTF-8 bytes for Text, raw bytes for Blob, or the item count for a
     /// list, set or map. Accepts Eq, Ne, Lt, Le, Gt and Ge. An absent field
     /// matches Ne only; use Gt(0) for a present, nonempty value.
@@ -489,18 +495,21 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .filter(field, comparison, QueryOperand::Length(length));
         self
     }
+
     /// Match rows whose optional field has a value, including an empty value.
     /// Required and unknown fields return `InvalidQuery` at admission.
     #[must_use]
     pub fn filter_present(self, field: &'a str) -> Self {
         self.filter(field, Comparison::Ne, IndexValue::Absent)
     }
+
     /// Match rows whose optional field has no value.
     /// Required and unknown fields return `InvalidQuery` at admission.
     #[must_use]
     pub fn filter_absent(self, field: &'a str) -> Self {
         self.filter(field, Comparison::Eq, IndexValue::Absent)
     }
+
     /// Match a present field inside an inclusive range, ANDed with other filters.
     /// Equivalent to `filter(field, Comparison::Ge, lower)` followed by
     /// `filter(field, Comparison::Le, upper)`, including cursor/job identity.
@@ -517,6 +526,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.filter(field, Comparison::Ge, lower)
             .filter(field, Comparison::Le, upper)
     }
+
     /// Match a present field strictly outside an inclusive range.
     /// Equivalent to one `filter_any` clause containing `Lt lower` then `Gt upper`,
     /// including cursor/job identity. Both exact operands consume filter terms.
@@ -536,6 +546,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             (field, Comparison::Gt, upper.into()),
         ])
     }
+
     /// Match `lower <= field && field <= upper` using three top-level fields of the row.
     /// Both comparisons require present values of compatible types. Equal endpoints
     /// are inclusive. Uses the same two comparison terms and continuation as the
@@ -573,6 +584,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         );
         self
     }
+
     /// Add one OR clause of literal, field-to-field or length comparisons.
     /// Each alternative follows its corresponding single-filter admission rules.
     /// All alternatives share the eight-comparison budget with the other filters.
@@ -616,6 +628,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.filter_not_in(field, values);
         self
     }
+
     /// Select index order and exact leading components (at most four).
     /// All rows matching this prefix are considered. Sparse indexes require
     /// every optional indexed component to be proven present by the prefix or
@@ -625,6 +638,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.using_index(name, values);
         self
     }
+
     /// Order by 1..=4 distinct top-level ordered fields, then the primary key.
     /// An explicitly listed primary key must be last. All fields share one
     /// direction, reversed by `descending`. Prefer a complete ordered path.
@@ -639,6 +653,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.order_by(fields);
         self
     }
+
     /// Replace the order with 1..=4 fields and their individual directions.
     /// An explicit primary key must be last; otherwise append it ascending.
     /// `descending()` reverses every direction, including that tie-breaker.
@@ -648,12 +663,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.order_by_each(fields);
         self
     }
+
     /// Reverse the complete result order, including its unique tie-breaker.
     #[must_use]
     pub fn descending(mut self) -> Self {
         self.request.descending = true;
         self
     }
+
     /// Return at most 1..=32 matching rows in this page.
     /// Complete-collection DISTINCT refuses if the full result exceeds this cap.
     /// Complete sorting applies this cap after examining the entire input; it
@@ -665,24 +682,28 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.rows = rows;
         self
     }
+
     /// Examine at most 1..=512 candidates, independently of the returned row limit.
     #[must_use]
     pub fn work_limit(mut self, candidates: usize) -> Self {
         self.request.work = candidates;
         self
     }
+
     /// Allow 1..=131072 encoded result-row bytes. Transport framing is host-owned.
     #[must_use]
     pub fn byte_limit(mut self, bytes: usize) -> Self {
         self.request.bytes = bytes;
         self
     }
+
     /// Continue this query; page resource limits may change between calls.
     #[must_use]
     pub fn after(mut self, cursor: &'a QueryCursor) -> Self {
         self.request.cursor = Some(cursor);
         self
     }
+
     /// Admit and execute one page, then decode only its matching output rows.
     /// # Errors
     /// Refuses unsupported shapes, inexact operands, limits, invalid cursors and corruption.
@@ -692,6 +713,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn fetch(self) -> Result<QueryPage<E>, Error> {
         fetch_rows(self.db, E::SCHEMA, self.request, None)?.decode_entities()
     }
+
     /// Project matching top-level fields into an existing `#[record]` type.
     /// Names, optionality and complete value definitions must match exactly.
     /// The record is an output shape, not a new stored entity or schema entry.
@@ -1148,6 +1170,7 @@ impl<'a> Plan<'a> {
         }
         Ok(plan)
     }
+
     fn validate_position(&self, entity: &EntitySchema, bytes: &[u8]) -> Result<(), Error> {
         if bytes.len() > crate::MAX_INDEX_KEY_BYTES || !bytes.starts_with(&self.prefix) {
             return Err(Error::InvalidCursor);
@@ -1171,6 +1194,7 @@ impl<'a> Plan<'a> {
         }
         Ok(())
     }
+
     fn cursor(&self, position: &[u8], inclusive: bool) -> QueryCursor {
         QueryCursor {
             binding: self.binding,

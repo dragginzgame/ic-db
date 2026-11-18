@@ -40,6 +40,7 @@ fn transform(row: Before, _: &[u8]) -> Result<After, Error> {
 // seed, freeze, copy, validate, publish, cleanup, target read, source read.
 type Reply = (bool, Vec<Vec<String>>);
 
+/// Run the selected step of the console migration demonstration.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "migration_demo",

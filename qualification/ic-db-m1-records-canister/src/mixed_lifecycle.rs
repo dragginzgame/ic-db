@@ -57,17 +57,21 @@ fn schema(target: bool) -> Schema {
     ])
     .unwrap()
 }
+
 fn memory(host: &MemoryRuntime<Backing>, slot: usize) -> RuntimeMemory<Backing> {
     host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
         .unwrap()
 }
+
 fn open(host: &MemoryRuntime<Backing>, target: bool) -> Result<Database<Backing>, Error> {
     Database::open(memory(host, usize::from(target)), schema(target))
 }
+
 pub(super) fn initialize(host: &MemoryRuntime<Backing>) {
     Database::create(memory(host, 0), schema(false), [21; 16]).unwrap();
     AggregateJobs::create(memory(host, 2), [23; 16]).unwrap();
 }
+
 fn refusal(error: Error) -> u8 {
     match error {
         Error::Exists => 1,
@@ -81,6 +85,7 @@ fn refusal(error: Error) -> u8 {
         other => panic!("unexpected mixed-history error: {other:?}"),
     }
 }
+
 fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
     let host = runtime();
     let mut db = open(&host, target)?;
@@ -407,6 +412,7 @@ fn item_page<E: Entity<Key = u64>>(
         examined: page.examined as u64,
     })
 }
+
 fn migrate(operation: u8) -> Result<(u64, bool), Error> {
     let host = runtime();
     let source = schema(false);
@@ -459,6 +465,8 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
 }
 
 // Drive one explicit maintenance step for the installed qualification workload.
+
+/// Run one migration operation in the mixed-history fixture.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "mixed_migrate",

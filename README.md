@@ -325,8 +325,7 @@ let count = db.query::<Entry>()
     .value;
 ```
 
-An unfiltered count reads maintained entity metadata. When literal equalities cover
-a complete index prefix, the engine counts its entries within the work budget.
+An unfiltered count reads maintained entity metadata. An indexed count can use fixed leading fields and a range on the next field, including a range on the first field. When the index enforces every filter, the engine counts entries within the work budget.
 A range defined entirely by primary-key equality or inequalities (`<`, `<=`,
 `>`, `>=`) counts physical row keys within the same budget. Other filters use
 row execution. Metadata and key-only counts trust stored
@@ -968,7 +967,7 @@ uses this checkout's explicitly prepared `.tools/testkit-server` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.45.5 are pinned. Read [AGENTS.md](AGENTS.md)
+The [toolchain](rust-toolchain.toml) pins Rust and the [workspace manifest](Cargo.toml) pins Toko Tooling. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 

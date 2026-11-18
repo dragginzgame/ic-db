@@ -4,6 +4,7 @@ use ic_db::{Comparison, Entity, Error};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
+/// Measure database opening and the selected count separately.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "count_profile",

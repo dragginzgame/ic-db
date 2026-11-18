@@ -84,7 +84,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
                 static DEFINITION: ::ic_db::TypeSchema = ::ic_db::TypeSchema {name:#name, body: ::ic_db::TypeBody::Wrapped(#desc)};
                 &DEFINITION
             }
+
             fn encode_into(&self, writer: &mut ::ic_db::__private::Encoder) -> Result<(), ::ic_db::Error> { #write; Ok(()) }
+
             fn decode_from(reader: &mut ::ic_db::__private::Decoder<'_>) -> Result<Self, ::ic_db::Error> { (#read).map(Self) }
         }
         #operand

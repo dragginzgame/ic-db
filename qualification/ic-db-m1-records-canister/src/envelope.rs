@@ -57,6 +57,7 @@ fn write(
     db.commit(batch)
 }
 
+/// Measure a bounded batch at the selected record and index sizes.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "envelope_write",
@@ -87,6 +88,7 @@ fn envelope_write(
     )
 }
 
+/// Inspect the selected index and generation after an envelope write.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_read",
@@ -121,6 +123,7 @@ fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
     )
 }
 
+/// Read the fixture’s four text fields by row ID.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_row",
@@ -138,6 +141,7 @@ fn envelope_row(id: u64) -> (String, String, String, String) {
     (row.a, row.b, row.c, row.d)
 }
 
+/// Measure the matched write workload at the requested text length.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "envelope_comparison_write",
@@ -163,6 +167,7 @@ fn envelope_comparison_write(
     )
 }
 
+/// List matching fixture IDs for the requested generation.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_listing",
@@ -192,6 +197,8 @@ fn envelope_listing(generation: u8) -> Vec<u64> {
 }
 
 type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// Page physical entries for the independent write-envelope oracle.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_raw",

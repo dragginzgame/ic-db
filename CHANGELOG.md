@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.23.9] - Unreleased
+
+### 🔎 Queries
+
+- Synchronous existence checks and scalar and grouped counts now seek mandatory
+  indexed equalities and ranges. At equal prefix length, the planner prefers
+  an index that can also bound the next field. A range on the first indexed
+  field works without an equality or an explicit index hint.
+- Ordinary `.count()` reads just the index keys when they enforce every filter.
+  Other counts check candidate rows for remaining predicates, field presence
+  or distinct values. `.count_validated()` checks each visited owner.
+
+### 🎯 Qualification
+
+In the local fixture, existence finds ID 4 on its second category-0 candidate.
+The count commands examine three category-0 rows, of which two meet the minimum
+amount. The document title-prefix count reads one index key and zero rows.
+
+```sh
+db query Entry --category 0 --min 40 --select exists --work 2
+db query Entry --category 0 --min 40 --select count --work 4
+db query Entry --category 0 --min 40 --select count:amount --work 4
+db query Entry --category 0 --min 40 --select distinct-count:category --work 4
+db query Entry --category 0 --min 40 --select category,count --work 4
+db query Document --bool published false --text title starts-with First --select count
+```
+
+### 🧪 Testing
+
+- Restored the isolated prefix-counter experiment against the current write path.
+  Replacing a row subtracts a counter only when the old index entry is removed.
+
+### 🔧 Tooling
+
+- Updated both workspaces and their shared snapshot to Toko Tooling 0.45.8.
+
 ## [0.23.8] - 2026-11-18
 
 - Enable `test-support` on a native `ic-db` dev-dependency to use

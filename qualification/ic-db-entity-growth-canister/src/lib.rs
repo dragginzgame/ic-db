@@ -73,6 +73,7 @@ macro_rules! entities {
         fn compiled() -> Schema {
             Schema::new(&[$($(#[$configuration])* $name::SCHEMA),*]).unwrap()
         }
+
         fn dispatch(db: &mut Database, selector: u8, mode: u8, input: Row) -> Observation {
             match selector {
                 $(
@@ -162,6 +163,7 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
     host
 }
 
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -223,6 +225,7 @@ fn operate<E: Entity<Key = u64>>(
     )
 }
 
+/// Measure the selected entity-growth workload and return its observations.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "exercise",

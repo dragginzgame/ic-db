@@ -38,9 +38,11 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn values() -> [Date; 6] {
     [-719528, -365, -1, 0, 1, 2932896].map(|d| Date::try_from_days_since_epoch(d).unwrap())
 }
+
 #[test]
 fn calendar_and_epoch_days_agree_with_an_independent_day_counter() {
     // Walk calendar months independently of the March-cycle implementation.
@@ -112,6 +114,7 @@ fn calendar_and_epoch_days_agree_with_an_independent_day_counter() {
     assert!(Date::EPOCH.checked_add_days(i64::MAX).is_none());
     assert!(Date::EPOCH.checked_sub_days(i64::MIN).is_none());
 }
+
 #[test]
 fn exact_date_bytes_and_invalid_stored_domains() {
     assert_eq!(
@@ -154,6 +157,7 @@ fn exact_date_bytes_and_invalid_stored_domains() {
         assert!(matches!(DateRow::decode(&bad), Err(Error::Corrupt)));
     }
 }
+
 #[test]
 fn ordered_indexes_swaps_noops_refusals_and_reopen() {
     let backing = VectorMemory::default();
@@ -254,6 +258,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collections_reject_duplicate_keys_before_materialization() {
     let row = Collections {

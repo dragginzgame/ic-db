@@ -353,7 +353,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
 }
 
 #[tokio::test]
-async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
+async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
             .unwrap();
@@ -363,24 +363,29 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let call = async |minimum: Option<u64>, work: u32| {
+    let query = async |entity: &'static str,
+                       filters: RowFilters,
+                       minimum: Option<u64>,
+                       category: Option<u64>,
+                       work: u32,
+                       terminal: &'static str| {
         let request = (
-            "Entry",
+            entity,
             None::<Vec<u8>>,
             32_u32,
             minimum,
-            None::<u64>,
+            category,
             None::<u64>,
             Vec::<String>::new(),
             false,
             work,
-            1_u32,
-            "exists",
+            if terminal == "exists" { 1_u32 } else { 128_u32 },
+            terminal,
             (
                 false,
                 (None::<String>, None::<String>),
                 None::<String>,
-                RowFilters::default(),
+                filters,
             ),
         );
         let reply = pic
@@ -410,6 +415,16 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
         )
         .unwrap()
     };
+    let call = |minimum, category, work, terminal| {
+        query(
+            "Entry",
+            RowFilters::default(),
+            minimum,
+            category,
+            work,
+            terminal,
+        )
+    };
     let before = pic.get_stable_memory(canister).await;
     for upgraded in [false, true] {
         if upgraded {
@@ -419,18 +434,54 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
                 .await
                 .unwrap();
         }
-        for (minimum, work, expected, examined) in [
-            (None, 1, "true", 1),
-            (Some(50), 5, "true", 5),
-            (Some(999), 7, "false", 6),
+        for (minimum, category, work, expected, examined) in [
+            (None, None, 1, "true", 1),
+            (Some(50), None, 5, "true", 5),
+            (Some(999), None, 7, "false", 6),
+            (Some(40), Some(0), 2, "true", 2),
+            (Some(99), Some(0), 4, "false", 3),
+            (Some(40), Some(7), 1, "false", 0),
         ] {
-            let result = call(minimum, work).await.unwrap();
+            let result = call(minimum, category, work, "exists").await.unwrap();
             assert_eq!(result.0, vec!["exists"]);
             assert_eq!(result.1, vec![vec![expected]]);
             assert!(result.2.is_none());
             assert_eq!((result.3, result.4, result.5), (examined, examined, 1));
         }
-        assert!(call(Some(999), 6).await.is_err());
+        assert!(call(Some(999), None, 6, "exists").await.is_err());
+        assert!(call(Some(40), Some(0), 1, "exists").await.is_err());
+        for (terminal, expected) in [
+            ("count", "2"),
+            ("count:amount", "2"),
+            ("distinct-count:category", "1"),
+        ] {
+            let count = call(Some(40), Some(0), 4, terminal).await.unwrap();
+            assert_eq!(count.1, vec![vec![expected]]);
+            assert_eq!((count.3, count.4, count.5), (3, 3, 8));
+            assert!(call(Some(40), Some(0), 2, terminal).await.is_err());
+        }
+        for (terminal, expected) in [
+            ("category,count", "2"),
+            ("category,count:amount", "2"),
+            ("category,distinct-count:category", "1"),
+        ] {
+            let groups = call(Some(40), Some(0), 4, terminal).await.unwrap();
+            assert_eq!(groups.1, vec![vec!["0", expected]]);
+            assert_eq!((groups.3, groups.4), (3, 3));
+            assert!(call(Some(40), Some(0), 2, terminal).await.is_err());
+        }
+        for (op, fetched) in [("starts-with", 0), ("contains", 1)] {
+            let filters = RowFilters {
+                boolean: Some(("published".into(), false)),
+                text: Some(["title".into(), op.into(), "First".into()]),
+                ..RowFilters::default()
+            };
+            let count = query("Document", filters, None, None, 2, "count")
+                .await
+                .unwrap();
+            assert_eq!(count.1, vec![vec!["1"]]);
+            assert_eq!((count.3, count.4), (1, fetched));
+        }
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     owned.drop().await;

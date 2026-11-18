@@ -74,6 +74,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn asset(payload: Event) -> Asset {
     Asset {
         id: 7,
@@ -81,9 +82,11 @@ fn asset(payload: Event) -> Asset {
         payload,
     }
 }
+
 fn loops(count: usize) -> Event {
     (0..count).fold(Event::Idle, |value, _| Event::Loop(Box::new(value)))
 }
+
 fn tree(depth: u8) -> Event {
     if depth == 0 {
         Event::Idle

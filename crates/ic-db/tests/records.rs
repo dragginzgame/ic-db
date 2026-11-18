@@ -189,6 +189,7 @@ struct OptionalLink {}
 fn schema() -> Schema {
     Schema::new(&[TokenRow::SCHEMA, Entry::SCHEMA]).unwrap()
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let declarations =

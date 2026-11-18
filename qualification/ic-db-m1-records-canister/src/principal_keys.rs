@@ -6,6 +6,7 @@ use ic_db_m1_records_schema::PrincipalKey;
 type Row = (Vec<u8>, Option<Vec<u8>>, u64);
 type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);
 
+/// Apply the supplied principal-key mutations with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "principal_keys_write",
@@ -53,6 +54,7 @@ fn principal_keys_write((mode, rows, trap): (u8, Vec<Row>, bool)) -> Result<(), 
     Ok(())
 }
 
+/// Page principal keys and inspect the selected rank.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_keys_page",

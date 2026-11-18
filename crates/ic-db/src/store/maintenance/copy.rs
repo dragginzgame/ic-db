@@ -1,17 +1,17 @@
 //! Whole-database copy with private target admission and message-atomic checkpoints.
 use super::{Maintenance, SchemaTransition, decode as decode_source};
-use crate::codec::{Decoder, Encoder};
-use crate::store::{
-    EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
-    manifest_key, read_entity_state, row_key, validate_index_entry, validate_reference_target,
-};
 use crate::{
-    Batch, Database, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema, primary::RowKey,
+    Batch, Database, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
+    codec::{Decoder, Encoder},
+    primary::RowKey,
+    store::{
+        EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
+        manifest_key, read_entity_state, row_key, validate_index_entry, validate_reference_target,
+    },
     store_key::StoreKey,
 };
 use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
-use std::collections::BTreeSet;
-use std::ops::Bound;
+use std::{collections::BTreeSet, ops::Bound};
 
 pub(super) const MAGIC: &[u8; 8] = b"ICDBCP02";
 const MAX_FRAME: usize = 8 + 4 + super::MAX_FRAME + 20 + 2 + 4 + QueryCursor::MAX_ENCODED_BYTES;

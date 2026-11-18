@@ -12,6 +12,7 @@ fn view(row: ManagedRow) -> Row {
     )
 }
 
+/// Apply a managed-field mutation at the supplied operation time.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "managed_write",
@@ -63,6 +64,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
     }
     Ok(())
 }
+
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Result::map_err consumes the error through this fixture callback."
@@ -77,6 +79,7 @@ fn error(error: Error) -> u8 {
     }
 }
 
+/// Read the managed rows and their timestamp index at the requested time.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "managed_rows",

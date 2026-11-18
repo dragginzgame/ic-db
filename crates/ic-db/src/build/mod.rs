@@ -4,6 +4,9 @@
 //! Adapted from IcyDB 6d421e3's constructor registration and graph sealing. No
 //! registration state or constructor dependency is included in Wasm builds.
 
+#[cfg(test)]
+mod tests;
+
 use crate::{EntitySchema, Schema};
 use std::{fmt::Write, sync::Mutex};
 
@@ -191,6 +194,3 @@ pub fn write_schema(
     std::fs::write(std::path::PathBuf::from(out).join("schema.rs"), assembly)?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

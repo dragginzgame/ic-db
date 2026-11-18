@@ -21,10 +21,12 @@ fn account((owner, subaccount): Identity) -> Account {
         subaccount,
     }
 }
+
 fn identity(value: Account) -> Identity {
     (value.owner.as_slice().to_vec(), value.subaccount)
 }
 
+/// Apply a batch to the Account and Subaccount key fixtures.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "account_keys_write",
@@ -83,6 +85,7 @@ fn account_keys_write(
     Ok(())
 }
 
+/// Page the Account and Subaccount key spaces from their supplied positions.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_keys_page",

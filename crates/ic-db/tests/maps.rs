@@ -103,6 +103,7 @@ fn sample() -> MapRow {
         ])),
     }
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let requests =
@@ -114,6 +115,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 #[test]
 fn canonical_map_bytes_distinguish_missing_absent_and_empty() {
     let row = sample();
@@ -198,6 +200,7 @@ fn canonical_map_bytes_distinguish_missing_absent_and_empty() {
     zero.values.0.insert(false, 0);
     assert!(matches!(zero.encode(), Err(Error::Limit)));
 }
+
 #[test]
 fn map_values_share_collection_depth_node_and_byte_bounds() {
     let mut row = ListMapRow {
@@ -253,6 +256,7 @@ fn map_values_share_collection_depth_node_and_byte_bounds() {
     over.push(0);
     assert!(matches!(BlobRow::decode(&over), Err(Error::Corrupt)));
 }
+
 #[test]
 fn persisted_keys_cannot_be_overwritten_by_decode_or_repair_writes() {
     let backing = VectorMemory::default();

@@ -80,6 +80,8 @@ fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> P
         value,
     )
 }
+
+/// Start a retained aggregate with the supplied observation time and expiry.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_start",
@@ -185,6 +187,8 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
         .map(|handle| handle.to_bytes())
         .map_err(|e| e.to_string())
 }
+
+/// Advance a retained job with a sequence and work budget.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_advance",
@@ -366,6 +370,8 @@ fn job_advance(
 // Measurements wrap the same fixture operations, including reopen and refusals.
 // Transport decoding/encoding is outside the instruction interval; balance
 // deltas in the driver include the whole update. No product telemetry is added.
+
+/// Measure one retained job advancement.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_advance_cost",
@@ -384,6 +390,7 @@ fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) 
     )
 }
 
+/// Measure a page read from completed group output.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_page_cost",
@@ -404,6 +411,8 @@ fn job_page_cost(request: PageRequest) -> (Result<PageResponse, String>, u64) {
 // operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
 // 4 unrelated entity mutation; 5 mutate source then trap.
 type ControlRequest = (u8, Vec<u8>, i64, u32);
+
+/// Apply the selected cleanup or lifecycle operation to retained jobs.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_control",
@@ -450,6 +459,8 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
 
 // Observe the existing lifecycle operations and inject rollback faults only in
 // this qualification host. Cleanup policy stays in AggregateJobs.
+
+/// Measure the selected retained-job control operation under fault injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_control_cost",
@@ -479,6 +490,8 @@ fn job_control_cost(
 // Private qualification endpoint; product endpoints remain adapter-owned.
 type PageRequest = (Vec<u8>, u64, Option<Vec<u8>>, u32, u32, i64, u64, bool);
 type PageResponse = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
+
+/// Read a bounded page of completed group output.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_page",
@@ -529,6 +542,8 @@ fn job_page(
 // Grouped extrema use the same query/result page boundary, with optional winners.
 type ExtremumRequest = (Vec<u8>, u8, u64, u32, Option<Vec<u8>>, u32, i64, u64, bool);
 type ExtremumResponse = (u64, u8, Vec<(u64, Option<u64>)>, Option<Vec<u8>>, u64, u64);
+
+/// Run the selected retained grouped minimum or maximum operation.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_group_extremum",

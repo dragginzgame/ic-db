@@ -1,6 +1,5 @@
 //! Integer/decimal sums and averages over one exact total, without numeric coercion.
-use super::super::Plan;
-use super::{Aggregate, Completed, GroupValue, Query, Reducer};
+use super::{super::Plan, Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
     ValueSchema, codec::Encoder,
@@ -30,6 +29,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Sum)?;
         self.scalar_value(&plan, reducer)
     }
+
     /// Sum one integer or Decimal operand per exact grouping record, retaining absent keys
     /// and all-absent groups. R selects the same explicit result widening as sum.
     /// Group predicates use R's result type; e.g. Nat128 totals require u128 operands.

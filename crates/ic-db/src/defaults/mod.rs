@@ -1,9 +1,9 @@
 //! Literal insert policy metadata, encoded through the owned scalar codec.
 
-use crate::{Error, FieldType, codec::Encoder};
-
 #[cfg(test)]
 mod tests;
+
+use crate::{Error, FieldType, codec::Encoder};
 
 /// A compiled literal used only when an insert input omits its field.
 /// These are schema constants, not a dynamic query or mutation value model.
@@ -75,6 +75,7 @@ pub trait InsertInput: Sized {
     fn into_entity(self) -> Result<Self::Entity, Error> {
         self.__into_entity(None)
     }
+
     /// Materialize generated input using the batch's captured time.
     #[doc(hidden)]
     fn __into_entity(self, time: Option<crate::Timestamp>) -> Result<Self::Entity, Error>;

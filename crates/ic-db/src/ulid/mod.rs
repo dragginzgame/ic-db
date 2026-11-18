@@ -22,11 +22,13 @@ impl Ulid {
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
+
     /// Construct from the unsigned big-endian integer representation.
     #[must_use]
     pub const fn from_u128(value: u128) -> Self {
         Self(value.to_be_bytes())
     }
+
     /// Return the exact 16-byte representation.
     #[must_use]
     pub const fn to_bytes(self) -> [u8; 16] {

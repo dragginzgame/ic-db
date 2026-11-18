@@ -334,7 +334,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Whether at least one row matches, without materializing an entity.
-    /// Automatically seeks a secondary index when its equality prefix covers every predicate.
+    /// Can seek a mandatory equality prefix and evaluate remaining filters on its owner rows.
     /// Stops after validating the first matching row; later rows are not inspected.
     /// Returns false only after observing the end of the selected input.
     /// `limit` does not truncate input. The boolean result occupies one byte.
@@ -347,9 +347,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
         let mut plan = self.aggregate_plan(None, false)?;
-        if plan.index.is_none() && !super::range::covers_primary(&plan) {
-            super::order::select_covered_prefix(E::SCHEMA, &self.request, &mut plan)?;
-        }
+        self.select_aggregate_row_path(&mut plan)?;
         let mut found = false;
         let page = execute(
             &self.db.map,
@@ -368,7 +366,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
     /// Uses maintained cardinality for unfiltered input and physical index keys for
-    /// covered equality prefixes or primary-key comparison ranges. Other predicates use row execution. Use
+    /// fully covered index ranges or primary-key comparison ranges. A partially covered
+    /// equality prefix narrows the owner rows checked by the remaining predicates. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be established within `work_limit`; an exact-boundary
@@ -393,7 +392,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             });
         }
         if super::range::covers_primary(&plan)
-            || super::order::select_covered_prefix(E::SCHEMA, &self.request, &mut plan)?
+            || super::order::select_aggregate_prefix(E::SCHEMA, &self.request, &mut plan)?
         {
             return self.count_keys(&plan);
         }
@@ -462,7 +461,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.scalar_count(Some(field))
     }
 
-    /// Count distinct projected tuples, including absent values, without an index.
+    /// Count distinct projected tuples, including absent values. An indexed filter can narrow the input.
     /// Retain at most 32 distinct comparison keys, each at most 4096 bytes, within
     /// the shared 128-KiB state bound. No projected records are retained. `limit`
     /// never truncates this count. The scalar result occupies eight bytes.
@@ -474,7 +473,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
-        let (plan, reducer) = self.distinct_plan::<K>()?;
+        let (mut plan, reducer) = self.distinct_plan::<K>()?;
+        self.select_aggregate_row_path(&mut plan)?;
         self.scalar_count_value(&plan, reducer)
     }
 
@@ -484,11 +484,19 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok((plan, reducer))
     }
 
+    fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
+        if plan.index.is_none() && !super::range::covers_primary(plan) {
+            super::order::select_aggregate_prefix(E::SCHEMA, &self.request, plan)?;
+        }
+        Ok(())
+    }
+
     fn scalar_count(self, field: Option<&str>) -> Result<Aggregate<u64>, Error> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
-        let plan = self.aggregate_plan(None, false)?;
+        let mut plan = self.aggregate_plan(None, false)?;
+        self.select_aggregate_row_path(&mut plan)?;
         let reducer = self.count_reducer(field)?;
         self.scalar_count_value(&plan, reducer)
     }
@@ -564,7 +572,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-        self.group_count_values(&plan, reducer)
+        self.group_count_values(plan, reducer)
     }
 
     fn group_distinct_plan<K: Value, R: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
@@ -581,15 +589,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
         let reducer = self.count_reducer(field)?;
-        self.group_count_values(&plan, reducer)
+        self.group_count_values(plan, reducer)
     }
 
     fn group_count_values<K: Value>(
         self,
-        plan: &Plan<'_>,
+        mut plan: Plan<'static>,
         reducer: Reducer,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        let (groups, page) = self.grouped(plan, reducer)?;
+        self.select_aggregate_row_path(&mut plan)?;
+        let (groups, page) = self.grouped(&plan, reducer)?;
         let (value, output_bytes) = count_output(groups, self.request.rows, self.request.bytes)?;
         Ok(Aggregate {
             value,
@@ -924,12 +933,14 @@ impl Completed {
                 .map_or(0, |(key, bytes)| key.capacity() + bytes.capacity()),
         }
     }
+
     fn into_count(self) -> Result<u64, Error> {
         match self {
             Self::Count(count) => Ok(count),
             _ => Err(Error::Corrupt),
         }
     }
+
     fn into_value(self) -> Result<Option<Vec<u8>>, Error> {
         match self {
             Self::Value(value) => Ok(value.map(|(_, bytes)| bytes)),

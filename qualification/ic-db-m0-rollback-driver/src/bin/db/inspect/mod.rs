@@ -1,4 +1,7 @@
 //! Read-only Canic inspection. Applications retain query/write and exposure policy.
+#[cfg(test)]
+mod tests;
+
 use canic::db::{RPC_LIMITS, inspection as protocol};
 use clap::Args;
 use ic_host_text::{bordered_table, escape};
@@ -144,6 +147,7 @@ fn kind(kind: &protocol::Kind) -> (String, String) {
         | K::Duration => (format!("{kind:?}"), String::new()),
     }
 }
+
 fn fields(fields: &[protocol::Field]) -> String {
     bordered_table(
         &[
@@ -174,6 +178,7 @@ fn fields(fields: &[protocol::Field]) -> String {
             .collect::<Vec<_>>(),
     )
 }
+
 fn render(response: &protocol::Response) -> String {
     let (admission, incarnation) = match response.admission {
         protocol::Admission::Readable { incarnation } => {
@@ -303,6 +308,3 @@ fn render(response: &protocol::Response) -> String {
     out.push('\n');
     out
 }
-
-#[cfg(test)]
-mod tests;

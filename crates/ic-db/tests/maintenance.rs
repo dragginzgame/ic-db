@@ -31,15 +31,19 @@ struct Target {}
 fn source() -> Schema {
     Schema::new(&[Source::SCHEMA]).unwrap()
 }
+
 fn target() -> Schema {
     Schema::new(&[Target::SCHEMA]).unwrap()
 }
+
 fn identity(name: &str, version: u32, inputs: &[u8]) -> SchemaTransition {
     SchemaTransition::new(&source(), &target(), name, version, inputs).unwrap()
 }
+
 fn key() -> StableKey {
     StableKey::parse("test.db.v1").unwrap()
 }
+
 fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut runtime = MemoryRuntime::new(memory).unwrap();
     runtime
@@ -54,6 +58,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     runtime
 }
+
 fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
     let mut db = Database::create(runtime.open_memory(&key()).unwrap(), source(), [7; 16]).unwrap();
     let mut batch = Batch::new();
@@ -61,6 +66,7 @@ fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
     db.commit(batch).unwrap();
     db
 }
+
 fn entries(runtime: &MemoryRuntime<VectorMemory>) -> Vec<(Vec<u8>, Vec<u8>)> {
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
     raw.iter()

@@ -1411,7 +1411,7 @@ dependencies = [
  "ethnum",
  "ic-db-macros",
  "ic-platform-types 0.21.2",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "memchr",
  "sha2 0.11.1",
  "ulid",
@@ -1424,7 +1424,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "toko-tooling",
 ]
 
@@ -1436,7 +1436,7 @@ dependencies = [
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "icydb",
  "rusqlite",
  "toko-tooling",
@@ -1456,7 +1456,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "toko-tooling",
 ]
 
@@ -1466,7 +1466,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "toko-tooling",
 ]
 
@@ -1476,7 +1476,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "ic-wire 0.25.0",
  "toko-tooling",
 ]
@@ -1513,7 +1513,7 @@ dependencies = [
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "ic-wire 0.25.0",
  "toko-tooling",
 ]
@@ -1552,7 +1552,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "toko-tooling",
 ]
 
@@ -1561,7 +1561,7 @@ name = "ic-db-sqlite-reference"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-storage 0.78.2",
+ "ic-storage 0.78.3",
  "rusqlite",
  "toko-tooling",
 ]
@@ -1716,9 +1716,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.2"
+version = "0.78.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f92a5e8b6e284e5de24ed7eee39d6a55b9a3c5bc81d3a53f6c0fad3828eff73"
+checksum = "71f944acc53d41720d70856cb5f81b0b3af9491833b70d22e836772899ac12de"
 dependencies = [
  "ic-platform",
  "ic-platform-runtime 0.23.17",
@@ -3585,9 +3585,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.7"
+version = "0.45.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81d14bd09e3a2cc71dc12c17af6221eeae4377030bee77848496d00eb7f505b7"
+checksum = "adbc76769b2231de6704851c363550ddc486bb6204a0f89c2ad365eb7cf740a3"
 
 [[package]]
 name = "toml_datetime"

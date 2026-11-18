@@ -23,6 +23,8 @@ fn eligible(control: &Map) -> Result<(), u8> {
 
 // Start/reset or copy at most two rows. Width is an explicit fixed probe input.
 // Errors reuse the fixture's closed-phase=3 and invalid-bounds=5 codes.
+
+/// Advance the allocation probe with the selected size and failure point.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "capacity_step",
@@ -81,6 +83,8 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
 }
 
 // Full row bytes are independently checked in <=8 KiB pieces by the driver.
+
+/// Inspect the allocation state and bytes at the requested offset.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "capacity_inspect",

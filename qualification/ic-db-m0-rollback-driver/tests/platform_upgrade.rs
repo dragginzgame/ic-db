@@ -15,6 +15,7 @@ fn encode<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
     )
     .unwrap()
 }
+
 fn decode<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
     ic_wire::decode(
         bytes,
@@ -26,6 +27,7 @@ fn decode<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
     )
     .unwrap()
 }
+
 fn wasm(variable: &str) -> Vec<u8> {
     std::fs::read(std::env::var_os(variable).expect("select both old/new Wasm explicitly")).unwrap()
 }

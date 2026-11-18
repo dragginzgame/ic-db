@@ -57,9 +57,11 @@ impl Memory for FaultMemory {
     fn size(&self) -> u64 {
         self.0.size()
     }
+
     fn read(&self, offset: u64, bytes: &mut [u8]) {
         self.0.read(offset, bytes);
     }
+
     fn grow(&self, pages: u64) -> i64 {
         let refused = INJECTION.with(|slot| {
             let Some(mut state) = slot.get() else {
@@ -71,6 +73,7 @@ impl Memory for FaultMemory {
         });
         if refused { -1 } else { self.0.grow(pages) }
     }
+
     fn write(&self, offset: u64, bytes: &[u8]) {
         self.0.write(offset, bytes);
         INJECTION.with(|slot| {
@@ -98,6 +101,8 @@ impl Memory for FaultMemory {
 // first=0 changes two entries and repoints their dependent. Otherwise insert
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
+
+/// Run a batch with the selected supplier-write, growth or instruction failure.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "fault_batch",
@@ -145,6 +150,7 @@ fn fault_batch(
     finish()
 }
 
+/// Read the persisted observations used to check rollback after a failed batch.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fault_status",

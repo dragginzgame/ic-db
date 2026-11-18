@@ -141,6 +141,7 @@ fn validate_reference_target<M: Memory>(
 fn manifest_key() -> StoreKey {
     StoreKey::new(vec![0]).expect("manifest key fits")
 }
+
 fn live_manifest(schema: [u8; 32], incarnation: [u8; 16]) -> Vec<u8> {
     let mut bytes = MANIFEST.to_vec();
     bytes.extend(schema);
@@ -174,6 +175,7 @@ impl Batch {
     pub fn new() -> Self {
         Self::default()
     }
+
     /// Begin a batch with one host-captured operation time for all managed fields.
     /// The database reads no clock; this value remains fixed for the whole batch.
     #[must_use]
@@ -183,6 +185,7 @@ impl Batch {
             ..Self::default()
         }
     }
+
     /// Insert a typed record. Primary-key/uniqueness admission happens at commit.
     /// # Errors
     /// Refuses managed-field entities (use `insert_input`), encoding or batch capacity.
@@ -192,6 +195,7 @@ impl Batch {
         }
         self.put(row, Kind::Insert)
     }
+
     /// Resolve a typed insert input, append it to this batch and return its full row.
     /// This is preparation, not a commit; the returned row is not yet persistent.
     /// Explicit `None` remains absence, while omitted fields select their declared
@@ -204,6 +208,7 @@ impl Batch {
         self.put(&row, Kind::Insert)?;
         Ok(row)
     }
+
     /// Replace an existing typed record, retaining its primary key.
     /// Managed fields must echo the current stored values; commit sets update time
     /// only on a real change. Read the row after commit to obtain that assigned time.
@@ -212,6 +217,7 @@ impl Batch {
     pub fn replace<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
         self.put(row, Kind::Replace)
     }
+
     /// Delete an existing primary key; no recursive cascades are implied.
     /// # Errors
     /// Refuses batch capacity before persistent mutation.
@@ -225,6 +231,7 @@ impl Batch {
             0,
         )
     }
+
     fn put<E: Entity>(
         &mut self,
         row: &E,
@@ -255,6 +262,7 @@ impl Batch {
             len,
         )
     }
+
     fn push(&mut self, mutation: Mutation, bytes: usize) -> Result<(), Error> {
         if self.mutations.len() == MAX_BATCH || bytes > MAX_BATCH_BYTES - self.bytes {
             return Err(Error::Limit);
@@ -311,6 +319,7 @@ impl<M: Memory> Database<M> {
             incarnation,
         })
     }
+
     /// Open only an exact manifest/compiled-contract match, without mutation.
     /// This is not a whole-database integrity scan. Entity metadata is checked
     /// when read explicitly or when preparing a write to that entity.
@@ -343,16 +352,19 @@ impl<M: Memory> Database<M> {
             incarnation,
         })
     }
+
     /// Borrow the admitted executable description for inspection.
     #[must_use]
     pub const fn schema(&self) -> &Schema {
         &self.schema
     }
+
     /// Durable database identity, distinct from schema identity.
     #[must_use]
     pub const fn incarnation(&self) -> [u8; 16] {
         self.incarnation
     }
+
     /// Read the atomic revision of one admitted entity.
     /// # Errors
     /// Refuses unknown entities and malformed revision metadata.
@@ -360,6 +372,7 @@ impl<M: Memory> Database<M> {
         let entity = self.schema.admits(E::SCHEMA)?;
         read_revision(&self.map, entity.id)
     }
+
     /// Read the exact maintained whole-entity row count without scanning rows.
     /// This trusts atomic entity metadata; it does not validate row/index integrity.
     /// Filtered counts and row-validating enumeration use the fluent query API.
@@ -371,6 +384,7 @@ impl<M: Memory> Database<M> {
         let entity = self.schema.admits(E::SCHEMA)?;
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
+
     /// Inspect the maintained whole-entity count by exact admitted schema name.
     /// Like [`Self::cardinality`], this reads metadata without validating rows or indexes.
     /// # Errors
@@ -386,12 +400,14 @@ impl<M: Memory> Database<M> {
             .ok_or(Error::UnknownEntity)?;
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
+
     fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
         if !self.schema.entities.iter().any(|value| value.id == entity) {
             return Err(Error::UnknownEntity);
         }
         read_revision(&self.map, entity)
     }
+
     /// Read a typed primary key without planning a scan.
     /// # Errors
     /// Refuses unadmitted types or malformed rows.
@@ -416,6 +432,7 @@ impl<M: Memory> Database<M> {
             })
             .transpose()
     }
+
     /// Read at most 32 rows in primary-key order; continuation is live, not a snapshot.
     /// # Errors
     /// Refuses zero/oversized limits, unadmitted types or corrupt rows.
@@ -468,6 +485,7 @@ impl<M: Memory> Database<M> {
             rows,
         })
     }
+
     /// Read the first bounded collection under an exact, nonempty leading index prefix.
     /// Exact operands obey field bounds and the 512-byte complete-key budget.
     /// Use `IndexValue::Absent` for an absent optional component. A present-only
@@ -735,9 +753,11 @@ fn prefix(tag: u8, entity: u32) -> Vec<u8> {
     key.extend(entity.to_be_bytes());
     key
 }
+
 fn entity_state_key(entity: u32) -> StoreKey {
     StoreKey::new(prefix(1, entity)).expect("entity state key fits")
 }
+
 fn read_revision<M: Memory>(map: &Map<M>, entity: u32) -> Result<u64, Error> {
     Ok(read_entity_state(map, entity)?.revision)
 }
@@ -765,6 +785,7 @@ fn read_entity_state<M: Memory>(map: &Map<M>, entity: u32) -> Result<EntityState
         count: u64::from_le_bytes(bytes[8..].try_into().map_err(|_| Error::Corrupt)?),
     })
 }
+
 fn row_key(entity: u32, id: RowKey) -> StoreKey {
     let mut key = prefix(2, entity);
     id.append_to(&mut key);

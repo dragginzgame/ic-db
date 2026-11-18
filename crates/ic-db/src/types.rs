@@ -98,11 +98,13 @@ pub trait Value: Sized {
     const NAME: &'static str;
     /// Compiled descriptor, including recursive links.
     fn definition() -> &'static TypeSchema;
+
     /// Append a value within the enclosing row's shared budget.
     /// # Errors
     /// Refuses field, byte, depth or node bounds.
     #[doc(hidden)]
     fn encode_into(&self, writer: &mut Encoder) -> Result<(), Error>;
+
     /// Decode within the enclosing row's shared budget.
     /// # Errors
     /// Refuses malformed values and exceeded bounds.
@@ -194,6 +196,7 @@ impl TypeGraph {
         }
         Ok(())
     }
+
     fn include_ordered(&mut self, value: FieldType) -> Result<(), Error> {
         match crate::key::operand_type(value) {
             FieldType::List { .. } => return Err(Error::InvalidSchema),
@@ -204,15 +207,18 @@ impl TypeGraph {
         }
         self.include(value)
     }
+
     pub fn definitions(&self) -> impl Iterator<Item = &'static TypeSchema> + '_ {
         self.definitions.values().copied()
     }
+
     pub fn contains(&self, other: &Self) -> bool {
         other
             .definitions
             .iter()
             .all(|(name, definition)| self.definitions.get(name) == Some(definition))
     }
+
     pub fn encode(&mut self, bytes: &mut Vec<u8>) -> Result<(), Error> {
         if self.definitions.is_empty() {
             return Ok(());

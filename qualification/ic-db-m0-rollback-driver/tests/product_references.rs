@@ -44,6 +44,7 @@ fn expected(target: bool, ids: impl Iterator<Item = u64>, fan_in: bool) -> Entri
     }
     result
 }
+
 fn data(mut entries: Entries) -> Entries {
     entries.retain(|key, _| matches!(key.first(), Some(2 | 3)));
     entries

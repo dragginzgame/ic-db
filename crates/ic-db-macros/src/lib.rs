@@ -4,19 +4,22 @@
 //! All declarations use empty, nongeneric struct bodies without `where` clauses;
 //! unsupported Rust constraints are rejected rather than discarded during expansion.
 
-use proc_macro::TokenStream;
-use proc_macro2::TokenStream as Tokens;
-use quote::quote;
-use std::collections::BTreeSet;
-use syn::{Expr, ItemStruct, Lit, Meta, Token, parse::Parser, punctuated::Punctuated};
-
 mod enumeration;
 mod field;
 mod insert;
 mod map;
 mod record;
 mod set;
+#[cfg(test)]
+mod tests;
 mod wrapped;
+
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as Tokens;
+use quote::quote;
+use std::collections::BTreeSet;
+use syn::{Expr, ItemStruct, Lit, Meta, Token, parse::Parser, punctuated::Punctuated};
+
 use field::Field;
 
 /// Author a typed record with named fields, a supplied scalar key and indexes.
@@ -120,12 +123,14 @@ fn metas(tokens: Tokens) -> syn::Result<Vec<Meta>> {
         .into_iter()
         .collect())
 }
+
 fn meta_items(meta: &Meta) -> syn::Result<Vec<Meta>> {
     match meta {
         Meta::List(value) => metas(value.tokens.clone()),
         _ => Err(syn::Error::new_spanned(meta, "expected attribute list")),
     }
 }
+
 fn literal(meta: &Meta) -> syn::Result<&Lit> {
     if let Meta::NameValue(value) = meta
         && let Expr::Lit(value) = &value.value
@@ -134,18 +139,21 @@ fn literal(meta: &Meta) -> syn::Result<&Lit> {
     }
     Err(syn::Error::new_spanned(meta, "expected literal value"))
 }
+
 fn text(meta: &Meta) -> syn::Result<String> {
     if let Lit::Str(value) = literal(meta)? {
         return Ok(value.value());
     }
     Err(syn::Error::new_spanned(meta, "expected a string"))
 }
+
 fn once<T>(slot: &mut Option<T>, value: T, meta: &Meta) -> syn::Result<()> {
     if slot.replace(value).is_some() {
         return Err(syn::Error::new_spanned(meta, "duplicate attribute"));
     }
     Ok(())
 }
+
 fn fields(meta: &Meta) -> syn::Result<Vec<String>> {
     if let Meta::NameValue(value) = meta
         && let Expr::Array(values) = &value.value
@@ -466,6 +474,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 indexes: &[#(#descriptions),*],
             };
             fn key(&self) -> Self::Key { self.#key_id }
+
             fn __row_info(&self) -> ::ic_db::__private::RowInfo {
                 let row = self;
                 ::ic_db::__private::RowInfo {
@@ -473,18 +482,21 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                     indexes: ::std::vec![#(#encoded_indexes),*]
                 }
             }
+
             fn validate(&self) -> Result<(), ::ic_db::Error> {
                 #validate_managed
                 #(#validations)*
                 #nested_validation
                 Ok(())
             }
+
             fn encode(&self) -> Result<::std::vec::Vec<u8>, ::ic_db::Error> {
                 #validate_managed
                 let mut writer = ::ic_db::__private::Encoder::new();
                 #(#writes)*
                 Ok(writer.finish())
             }
+
             fn decode(bytes: &[u8]) -> Result<Self, ::ic_db::Error> {
                 let mut reader = ::ic_db::__private::Decoder::new(bytes)?;
                 let row = Self { #(#reads)* };
@@ -503,6 +515,3 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         }
     })
 }
-
-#[cfg(test)]
-mod tests;

@@ -5,6 +5,7 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 use std::fmt::Debug;
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let req =
@@ -164,6 +165,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     assert!(db.page::<E>(None, 32).unwrap().rows.is_empty());
     assert_eq!(db.revision::<E>().unwrap(), 3);
 }
+
 macro_rules! unsigned_case {
     ($module:ident,$prim:literal,$ty:ty,$width:literal)=>{mod $module {
         use super::*;
@@ -431,6 +433,7 @@ fn malformed_owners<E: Entity>(row: &E, invalid: Vec<Vec<u8>>) {
         assert_eq!(*backing.borrow(), before);
     }
 }
+
 #[test]
 fn u256_keeps_high_half() {
     let mut one = vec![0; 32];

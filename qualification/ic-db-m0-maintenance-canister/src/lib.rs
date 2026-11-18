@@ -112,6 +112,7 @@ fn fail_at(selected: u8, boundary: u8) {
     }
 }
 
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -142,6 +143,7 @@ fn initialize((): ()) {
     }
 }
 
+/// Trap during upgrade when the bad-upgrade fixture is installed.
 #[ic_platform_runtime::post_upgrade(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -170,6 +172,7 @@ fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
     ]
 }
 
+/// Read the fixture’s persisted state for comparison across calls.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",
@@ -183,6 +186,7 @@ fn inspect((): ()) -> Status {
     status(&runtime())
 }
 
+/// Inspect the schema admitted by the installed fixture.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "schema",
@@ -202,6 +206,8 @@ fn schema((): ()) -> (Status, String) {
 }
 
 // Three candidates maximum per page, including residual nonmatches; IDs are bounded.
+
+/// Read the requested bounded result from the local fixture.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "query",
@@ -250,6 +256,8 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
 // start, copy, publish, cleanup, cancel, cancel-cleanup, source-write, damage-manifest.
 // Errors: missing manifest=1, incompatible schema=2, closed phase=3,
 // unsupported transformation=4, invalid bounds=5, unique/validation refusal=6.
+
+/// Advance the selected operation and return the resulting fixture state.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "command",

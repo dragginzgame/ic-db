@@ -1,9 +1,12 @@
 //! Bounded pages over immutable completed groups; no additional durable state.
-use super::super::{
-    Completed, GroupCount, GroupValue, Groups, MAX_GROUPS, admit_output, decode_group_count,
-    decode_group_value,
+use super::{
+    super::{
+        Completed, GroupCount, GroupValue, Groups, MAX_GROUPS, admit_output, decode_group_count,
+        decode_group_value,
+    },
+    JobHandle, JobOutcome,
+    storage::Record,
 };
-use super::{JobHandle, JobOutcome, storage::Record};
 use crate::{Error, Value};
 
 /// One page of completed retained groups. Keep `next` when mapping `rows`.
@@ -32,6 +35,7 @@ impl GroupCursor {
         bytes.push(self.position);
         bytes
     }
+
     /// Decode bounded framing; resume also checks the live job and result bounds.
     /// # Errors
     /// Refuses unsupported versions, malformed handles or positions outside 1..=32.

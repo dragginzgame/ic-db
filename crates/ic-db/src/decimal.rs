@@ -45,11 +45,13 @@ impl Decimal {
             Some(Self { mantissa, scale })
         }
     }
+
     /// Canonical signed coefficient.
     #[must_use]
     pub const fn mantissa(self) -> i128 {
         self.mantissa
     }
+
     /// Canonical fractional scale.
     #[must_use]
     pub const fn scale(self) -> u32 {

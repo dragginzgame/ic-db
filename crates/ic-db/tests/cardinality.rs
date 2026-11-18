@@ -30,9 +30,11 @@ struct Other {}
 fn schema() -> Schema {
     Schema::new(&[Row::SCHEMA, Other::SCHEMA]).unwrap()
 }
+
 fn key(name: &str) -> StableKey {
     StableKey::parse(name).unwrap()
 }
+
 fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut h = MemoryRuntime::new(memory).unwrap();
     h.bootstrap(
@@ -47,6 +49,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     .unwrap();
     h
 }
+
 fn create(h: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
     Database::create(
         h.open_memory(&key("test.source.v1")).unwrap(),
@@ -55,6 +58,7 @@ fn create(h: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
     )
     .unwrap()
 }
+
 #[test]
 fn counts_use_final_batch_deltas_and_preserve_noops() {
     let m = VectorMemory::default();
@@ -110,6 +114,7 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
     assert_eq!(db.cardinality::<Other>().unwrap(), 1);
     assert_eq!(db.cardinality_by_name("Other").unwrap(), 1);
 }
+
 #[test]
 fn metadata_refusal_is_before_persistent_mutation() {
     for case in 0..4 {
@@ -162,6 +167,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
         }
     }
 }
+
 #[test]
 fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     let m = VectorMemory::default();
@@ -201,14 +207,17 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn copied_counts_resume_and_validate_before_publication() {
     copy_counts(false);
 }
+
 #[test]
 fn mismatched_copy_counts_refuse_publication() {
     copy_counts(true);
 }
+
 fn copy_counts(corrupt_target: bool) {
     let m = VectorMemory::default();
     let h = host(m.clone());

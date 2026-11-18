@@ -21,6 +21,8 @@ struct Note {}
 struct Payload {}
 
 type WriteRequest = (Vec<(u64, u64, Option<String>)>, Vec<(u64, String)>);
+
+/// Populate the value and text inputs for retained aggregates.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_write",
@@ -74,6 +76,8 @@ fn job_values_write((documents, texts): WriteRequest) -> Result<(), String> {
 
 // 0/1: optional-text min/max; 2: wide text; 3: Blob max. These are compiled
 // fixture operations, not a schema-driven dynamic frontend.
+
+/// Start the selected retained value aggregate.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_start",
@@ -113,6 +117,8 @@ fn job_values_start((operation, limit): (u8, u32)) -> Result<Vec<u8>, String> {
 
 type AdvanceRequest = (Vec<u8>, u8, u32, u64, u32, u32, Option<Vec<u8>>, u32);
 type Response = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
+
+/// Advance the value aggregate and measure the step.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_advance",

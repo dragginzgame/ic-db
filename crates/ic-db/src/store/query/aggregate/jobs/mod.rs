@@ -8,8 +8,11 @@ mod storage;
 pub use pages::{GroupCursor, GroupPage};
 pub use storage::AggregateJobs;
 
-use super::super::{Database, Plan, Query, QueryCursor, Request, execute_inner};
-use super::{Accumulator, Reducer, decode_record, numeric::Operation};
+use super::{
+    super::{Database, Plan, Query, QueryCursor, Request, execute_inner},
+    Accumulator, Reducer, decode_record,
+    numeric::Operation,
+};
 use crate::{Entity, EntitySchema, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
@@ -34,6 +37,7 @@ impl JobHandle {
         bytes.extend(self.generation.to_le_bytes());
         bytes
     }
+
     /// Decode framing; the job store also validates incarnation and slot generation.
     /// # Errors
     /// Refuses unsupported, malformed, zero or oversized handles.
@@ -413,6 +417,7 @@ fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
     }
     Ok(hash.finalize().into())
 }
+
 fn start<M: Memory>(
     jobs: &mut AggregateJobs<M>,
     binding: [u8; 32],

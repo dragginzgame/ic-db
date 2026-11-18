@@ -50,6 +50,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn values() -> [U256; 7] {
     [
         U256::ZERO,
@@ -64,6 +65,7 @@ fn values() -> [U256; 7] {
         ),
     ]
 }
+
 #[test]
 fn exact_bytes_and_schema_do_not_narrow_large_integers() {
     // Independently framed schema bytes, hashed with Node SHA-256.
@@ -131,6 +133,7 @@ fn exact_bytes_and_schema_do_not_narrow_large_integers() {
         Schema::new(&[Narrower::SCHEMA]).unwrap().fingerprint()
     );
 }
+
 #[test]
 fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
     let backing = VectorMemory::default();
@@ -257,6 +260,7 @@ fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collections_keep_high_bits_and_validate_unindexed_payloads() {
     let row = Collections {

@@ -1,9 +1,11 @@
 //! Query-bound checkpoint payloads; the store owns only the enclosing bounded frame.
-use super::super::{
-    Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_GROUPS, MAX_STATE_BYTES,
-    Reducer, comparison_key,
+use super::{
+    super::{
+        Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_GROUPS, MAX_STATE_BYTES,
+        Reducer, comparison_key,
+    },
+    storage::{MAX_JOB_BYTES, Record},
 };
-use super::storage::{MAX_JOB_BYTES, Record};
 use crate::{
     EntitySchema, Error, IndexValue,
     codec::{Decoder, Encoder, MAX_ROW_BYTES},

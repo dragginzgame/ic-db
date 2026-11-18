@@ -150,6 +150,7 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
     }
 }
 
+/// Advance the reference migration probe with optional failure injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "migration_references",
@@ -183,6 +184,8 @@ fn migration_references(
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
+
+/// Page raw source or target entries for the reference migration oracle.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "migration_references_raw",

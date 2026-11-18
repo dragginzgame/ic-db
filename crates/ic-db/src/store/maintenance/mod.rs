@@ -65,26 +65,31 @@ impl SchemaTransition {
             inputs: inputs.into(),
         })
     }
+
     /// Required source contract fingerprint.
     #[must_use]
     pub const fn source(&self) -> [u8; 32] {
         self.source
     }
+
     /// Intended target contract fingerprint.
     #[must_use]
     pub const fn target(&self) -> [u8; 32] {
         self.target
     }
+
     /// Exact semantic transformation name, without normalization.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
+
     /// Declared version of the transformation's behavior.
     #[must_use]
     pub const fn version(&self) -> u32 {
         self.version
     }
+
     /// Fixed transformation inputs, bound byte-for-byte.
     #[must_use]
     pub fn inputs(&self) -> &[u8] {
@@ -163,16 +168,19 @@ impl<M: Memory> Maintenance<M> {
             incarnation,
         })
     }
+
     /// Inspect the admitted transformation identity.
     #[must_use]
     pub const fn transition(&self) -> &SchemaTransition {
         &self.transition
     }
+
     /// Original database incarnation, preserved by cancellation.
     #[must_use]
     pub const fn incarnation(&self) -> [u8; 16] {
         self.incarnation
     }
+
     /// Read frozen source entities in ascending primary-key order through their
     /// explicitly supplied compiled source schema and decoder. Limits are 1..=32
     /// candidates and 1..=128 KiB of encoded output per call. Only `next == None`
@@ -212,6 +220,7 @@ impl<M: Memory> Maintenance<M> {
         )?
         .decode_entities()
     }
+
     /// Cancel before target allocation/copy and restore the original live manifest.
     /// Reopening then requires an executable compatible with the source contract.
     /// A later trap in this IC message restores the frozen state.

@@ -26,6 +26,7 @@ enum Shape {
     Membership,
 }
 
+/// Return a bounded page of matching fixture entities.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_query",
@@ -38,6 +39,8 @@ enum Shape {
 fn fluent_query(request: Request) -> Result<Page, u8> {
     read(request, Shape::Entity)
 }
+
+/// Project matching entries into the fixture result record.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_projection",
@@ -50,6 +53,8 @@ fn fluent_query(request: Request) -> Result<Page, u8> {
 fn fluent_projection(request: Request) -> Result<Page, u8> {
     read(request, Shape::Projection)
 }
+
+/// Page matching entries in the requested order.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_ordered",
@@ -62,6 +67,8 @@ fn fluent_projection(request: Request) -> Result<Page, u8> {
 fn fluent_ordered(request: Request) -> Result<Page, u8> {
     read(request, Shape::Ordered)
 }
+
+/// Page entries matching the fixture’s alternative predicates.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_any",
@@ -74,6 +81,8 @@ fn fluent_ordered(request: Request) -> Result<Page, u8> {
 fn fluent_any(request: Request) -> Result<Page, u8> {
     read(request, Shape::Any)
 }
+
+/// Page entries matching the fixture’s membership filter.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_membership",
@@ -89,6 +98,8 @@ fn fluent_membership(request: Request) -> Result<Page, u8> {
 
 type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
 type TextRequest = (String, Option<Vec<u8>>, u32, u32);
+
+/// Page matching text prefixes.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_prefix",
@@ -101,6 +112,8 @@ type TextRequest = (String, Option<Vec<u8>>, u32, u32);
 fn fluent_text_prefix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::StartsWith)
 }
+
+/// Page matching text suffixes.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_suffix",
@@ -113,6 +126,8 @@ fn fluent_text_prefix(request: TextRequest) -> Result<TextPage, u8> {
 fn fluent_text_suffix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::EndsWith)
 }
+
+/// Page rows containing the supplied text.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_contains",
@@ -129,6 +144,8 @@ fn fluent_text_contains(request: TextRequest) -> Result<TextPage, u8> {
 type SparseRequest = (bool, bool, Option<Vec<u8>>, u32);
 type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
 type TextSeekRequest = (String, bool, Option<Vec<u8>>, u32, u32);
+
+/// Seek document titles by prefix and continue in the requested direction.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_seek",
@@ -171,6 +188,8 @@ fn fluent_text_seek(
 }
 
 type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
+
+/// Page IDs in the requested primary-key range.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_primary_range",
@@ -185,6 +204,8 @@ fn fluent_primary_range(request: PrimaryRangeRequest) -> Result<IdPage, u8> {
 }
 
 type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
+
+/// Page IDs in the selected index range, optionally within one category.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_index_range",
@@ -241,6 +262,7 @@ fn range_read(
     ))
 }
 
+/// Page the sparse-index fixture with the requested absence policy.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_sparse_presence",
@@ -293,6 +315,7 @@ fn fluent_sparse_presence(
     ))
 }
 
+/// Page rows under the selected list-presence predicate.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_list_presence",
@@ -451,6 +474,8 @@ fn query_error(error: &ic_db::Error) -> u8 {
 }
 
 // Same source, predicate, result and warm open; only materialization differs.
+
+/// Measure entity and ID-only reads of the binary fixture.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_binary_projection",
@@ -491,6 +516,8 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
 type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
 
 // Both measurements use the same admitted query. Only the optional hint varies.
+
+/// Compare bounded listings with and without the explicit index hint.
 #[cfg(feature = "query-measurements")]
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime, name = "measured_listing",

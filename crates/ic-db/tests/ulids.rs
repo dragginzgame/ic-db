@@ -38,6 +38,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn values() -> [Ulid; 6] {
     // Includes randomness overflow into the next millisecond and the top bit.
     [
@@ -50,6 +51,7 @@ fn values() -> [Ulid; 6] {
     ]
     .map(Ulid::from_u128)
 }
+
 #[test]
 fn canonical_text_exact_bytes_and_distinct_schema_identity() {
     assert_eq!(
@@ -131,6 +133,7 @@ fn canonical_text_exact_bytes_and_distinct_schema_identity() {
             .fingerprint()
     );
 }
+
 #[test]
 fn ordered_indexes_swaps_noops_refusals_and_reopen() {
     let backing = VectorMemory::default();
@@ -228,6 +231,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collections_reject_duplicate_keys_before_materialization() {
     let row = Collections {

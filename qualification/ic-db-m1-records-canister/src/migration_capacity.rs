@@ -116,6 +116,8 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
 
 // Counts include host reopen/allocation admission, product work and supplier calls.
 // Typed refusal is returned normally; it must not be turned into a trap by the probe.
+
+/// Run a bounded migration operation under the selected supplier limits.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "migration_capacity",
@@ -147,6 +149,8 @@ fn migration_capacity(
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
+
+/// Page physical entries to check migration capacity and preservation.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "migration_capacity_raw",

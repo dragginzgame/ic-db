@@ -35,6 +35,7 @@ fn encode<T: Serialize>(id: u64, value: &T) -> Vec<u8> {
     )
     .unwrap()
 }
+
 fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     ic_wire::decode(
         bytes,
@@ -46,6 +47,7 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     )
     .unwrap()
 }
+
 fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
     match id {
         3 => {
@@ -473,6 +475,7 @@ async fn matched_query_matrix() {
     }
     report(&directory, &samples);
 }
+
 fn report(directory: &std::path::Path, samples: &[Sample]) {
     let mut csv =
         String::from("engine,profile,population,phase,case,family,outcome,instructions\n");

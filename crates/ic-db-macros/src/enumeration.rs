@@ -127,7 +127,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 static DEFINITION: ::ic_db::TypeSchema = ::ic_db::TypeSchema {name:#name,body: ::ic_db::TypeBody::Enum(&[#(#descriptions),*])};
                 &DEFINITION
             }
+
             fn encode_into(&self,writer:&mut ::ic_db::__private::Encoder) -> Result<(),::ic_db::Error> { match self {#(#writes,)*} Ok(()) }
+
             fn decode_from(reader:&mut ::ic_db::__private::Decoder<'_>) -> Result<Self,::ic_db::Error> { match reader.nat8()? {#(#reads,)* _=>Err(::ic_db::Error::Corrupt)} }
         }
     })

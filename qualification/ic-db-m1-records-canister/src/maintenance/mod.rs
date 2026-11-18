@@ -45,6 +45,7 @@ fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
     Ok((source, transition))
 }
 
+/// Start, cancel or inspect the selected maintenance transition.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_control",
@@ -81,6 +82,7 @@ fn maintenance_control((operation, inputs, trap): (u8, Vec<u8>, bool)) -> Result
 
 type SourcePage = (Vec<(u64, u64, u64)>, Option<Vec<u8>>);
 
+/// Read a bounded page from the preserved source.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "maintenance_source",
@@ -197,6 +199,7 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
     }
 }
 
+/// Advance the selected copy phase with a bounded chunk.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_copy",
@@ -217,6 +220,7 @@ fn maintenance_copy((operation, limit, trap): (u8, u8, bool)) -> Result<(u64, bo
 // Independent supplier inspection, not a product escape hatch for candidate reads.
 type CopyEntries = (bool, Vec<(Vec<u8>, Vec<u8>)>);
 
+/// Inspect physical entries on the source or target side of the copy.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "maintenance_copy_entries",
@@ -364,6 +368,7 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
     Ok((complete, vec![]))
 }
 
+/// Exercise managed-field preservation through a schema copy.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_managed_copy",
@@ -516,6 +521,7 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
 }
 
+/// Exercise the whole-database copy and publication sequence.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_whole_copy",
@@ -653,6 +659,7 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     Ok((complete, copy.next_entity().map(str::to_owned), vec![]))
 }
 
+/// Exercise a subsequent copy after the initial transition.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_next_copy",

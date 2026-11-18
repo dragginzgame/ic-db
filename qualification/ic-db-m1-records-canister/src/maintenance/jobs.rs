@@ -77,6 +77,7 @@ fn control(
     }
 }
 
+/// Exercise retained aggregate custody during schema maintenance.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "maintenance_job",

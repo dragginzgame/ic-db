@@ -8,6 +8,7 @@ thread_local! {
     static ISSUER: RefCell<UlidGenerator> = const { RefCell::new(UlidGenerator::new()) };
 }
 
+/// Issue a ULID using the supplied time and randomness.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "issue_key",
@@ -48,6 +49,7 @@ fn issue_key((millis, randomness, value, mode): (i64, [u8; 10], u64, u8)) -> Res
     Ok(id.to_bytes())
 }
 
+/// Read the issuer checkpoint for the next restore.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "last_issued_key",
@@ -61,6 +63,7 @@ fn last_issued_key((): ()) -> Option<[u8; 16]> {
     ISSUER.with(|issuer| issuer.borrow().last().map(Ulid::to_bytes))
 }
 
+/// Restore the supplied last-issued ULID for subsequent issuance.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "restore_issuer",

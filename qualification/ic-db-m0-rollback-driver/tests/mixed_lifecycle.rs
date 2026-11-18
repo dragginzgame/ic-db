@@ -90,6 +90,7 @@ impl Model {
         *self = next;
         Ok(())
     }
+
     fn snapshot(&self, parent: u64, minimum: u64) -> Snapshot {
         let mut groups = BTreeMap::<u64, u64>::new();
         for &(parent, _) in self.items.values() {
@@ -135,6 +136,7 @@ fn encode<T: Serialize>(id: u64, value: &T) -> Vec<u8> {
     )
     .unwrap()
 }
+
 fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     ic_wire::decode(
         bytes,

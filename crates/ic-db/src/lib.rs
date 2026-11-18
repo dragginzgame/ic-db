@@ -9,7 +9,7 @@
 //! indirection and ordered lists; traversals share byte, depth, structured-value
 //! and total collection-item limits. Sets/maps use strict scalar/unit-enum key order.
 //! Secondary indexes admit integers, Ulid, Date, Timestamp, Duration, Decimal, finite floats,
-//! Account/Subaccount, Principal, Bool, Text and unit enums, including optional values; primary keys
+//! Account/Subaccount, Principal, Bool, Text, Blob and unit enums, including optional values; primary keys
 //! require non-optional integer, U256, Ulid, Principal, Account or Subaccount fields. References use
 //! the target’s exact key type;
 //! absence has no target, while every present target must survive the batch.
@@ -230,17 +230,21 @@ pub trait Entity: Sized {
     const SCHEMA: &'static EntitySchema;
     /// Read the application's primary key without encoding or inspecting indexes.
     fn key(&self) -> Self::Key;
+
     /// Extract keys from an already typed value for the shared mutation/index paths.
     #[doc(hidden)]
     fn __row_info(&self) -> __private::RowInfo;
+
     /// Validate declared field bounds before encoding; no persistent effects.
     /// # Errors
     /// Refuses values outside the authored field contract.
     fn validate(&self) -> Result<(), Error>;
+
     /// Encode canonical stored fields within the row envelope.
     /// # Errors
     /// Returns a limit refusal when the row cannot be encoded within its bounds.
     fn encode(&self) -> Result<Vec<u8>, Error>;
+
     /// Decode an admitted row; this does not open a database or admit a schema.
     /// # Errors
     /// Returns corruption for malformed stored bytes.

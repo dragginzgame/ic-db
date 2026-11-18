@@ -3,6 +3,7 @@ use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
 #[test]
 fn oversized_stored_key_traps_and_preserves_backing() {
     let backing = VectorMemory::default();

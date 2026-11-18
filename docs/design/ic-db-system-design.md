@@ -1400,7 +1400,7 @@ names refuse. Typed calls retain full type-contract admission. This adds no
 dynamic query frontend, per-entity dispatch registry or persisted representation.
 Fluent `count()` admits the request before reading maintained cardinality for an
 unfiltered entity, counting physical index entries for a fully covered literal
-equality prefix with complete membership, or counting physical row keys when
+equality prefix and any representable literal bounds on the next index field with complete membership, or counting physical row keys when
 every predicate is a mandatory literal comparison represented by the primary-key
 interval. Other shapes execute against rows. As in frozen IcyDB's exact count
 admission (`6d421e3`, `db/session/query/exact_count.rs`), a shortcut requires
@@ -2984,8 +2984,12 @@ A secondary equality prefix may still contain many owners. Existence does not ma
 inspect later rows after a match. The result occupies one logical byte. Output
 `limit` does not truncate input; cursors, DISTINCT, input ordering and group
 modifiers refuse under the scalar admission rules. Without an explicit index,
-a covered primary range takes precedence. For literal equalities, the same
-complete secondary-prefix proof used by count can select an index. A hit
+a covered primary range takes precedence. An index equality prefix covering
+every predicate uses the same proof as count. Otherwise, when no predicate
+filters the primary field, existence and synchronous row count may use a mandatory leading equality
+prefix or a mandatory range on the first index field. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Both terminals check the remaining filters on each visited owner. Count must establish exhaustion within the candidate budget.
+This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
+residual predicates in `db/query/plan/planner/index_select/mod.rs`. A hit
 still fetches and validates its owner. An empty prefix range returns false
 without fetching a row. The transient existence accumulator has no admitted job checkpoint.
 This retains frozen IcyDB `6d421e3`'s false-initial/true-on-match reducer semantics
@@ -3005,6 +3009,8 @@ operand. Empty scalar counts yield zero and empty grouped counts yield no groups
 `count_field("field")` counts present values of any top-level stored type,
 including present empty blobs/collections. It reads validated presence tags from
 the existing row spans, without requiring ordered-value support or typed decoding.
+Synchronous field counts, distinct tuple counts and validated row counts use the same equality-prefix
+selection as existence and check every visited owner before counting matches.
 `group_count_field::<Record>("field")` applies that rule to each group and retains
 groups with zero present operands. `count_distinct::<Record>()` counts projected
 tuples, including absence, using a bounded comparison-key set; output `limit` does
@@ -3015,6 +3021,7 @@ require an index or contiguous groups: a bounded transient map uses the existing
 ordered component codec for tuple equality and order. Output keys follow canonical
 field-name order, independent of the source declaration or traversal order.
 
+Synchronous grouped row, field and distinct counts use the same index-prefix selection as scalar counts. They validate visited owners and apply all row filters before grouping.
 All matching input is counted before `limit` selects the first completed groups.
 Synchronous output has no continuation; retained grouped terminals provide
 completed-output pagination under the job contract above. Input cursors, DISTINCT, explicit

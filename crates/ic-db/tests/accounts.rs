@@ -46,6 +46,7 @@ fn account(owner: &[u8], subaccount: Option<Subaccount>) -> Account {
         subaccount,
     }
 }
+
 fn accounts() -> Vec<Account> {
     vec![
         account(&[], None),
@@ -58,6 +59,7 @@ fn accounts() -> Vec<Account> {
         account(&[255; 29], Some([255; 32])),
     ]
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let req =
@@ -69,9 +71,11 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn key(value: IndexValue<'_>) -> Vec<u8> {
     ic_db::__private::encode_index(&[(value, false)], false).unwrap()
 }
+
 #[test]
 fn default_identity_and_exact_fixed_bytes_share_one_canonical_representation() {
     // Independent Node byte framing and SHA-256.
@@ -143,6 +147,7 @@ fn default_identity_and_exact_fixed_bytes_share_one_canonical_representation() {
     short.remove(9);
     assert!(matches!(AccountRow::decode(&short), Err(Error::Corrupt)));
 }
+
 #[test]
 fn ordered_components_follow_owner_then_effective_subaccount() {
     let values = accounts();
@@ -161,6 +166,7 @@ fn ordered_components_follow_owner_then_effective_subaccount() {
         assert!(key(a.into()) < key(b.into()));
     }
 }
+
 #[test]
 fn indexed_default_account_refusal_noop_and_final_state_exchange() {
     let backing = VectorMemory::default();
@@ -264,6 +270,7 @@ fn indexed_default_account_refusal_noop_and_final_state_exchange() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
     let default = account(&[], None);

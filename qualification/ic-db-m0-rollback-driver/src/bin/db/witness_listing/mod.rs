@@ -1,6 +1,9 @@
 //! Explicit native binding to canic-db-witness.query.v1.
 //! These DTOs describe that application's Wire contract, not an IC DB query API.
 //! Importing its witness package would enable db-schema and an unnecessary engine.
+#[cfg(test)]
+mod tests;
+
 use super::{CursorArg, parse_cursor, remote};
 use canic::db::RPC_LIMITS;
 use clap::Args;
@@ -145,6 +148,3 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
     remote::report(statistics, options.json || outcome.is_err());
     outcome.map(|_| ())
 }
-
-#[cfg(test)]
-mod tests;

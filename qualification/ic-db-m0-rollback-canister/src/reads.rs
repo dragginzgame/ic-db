@@ -47,6 +47,7 @@ fn optional(score: u64) -> Option<u64> {
     (score != 0).then_some(score)
 }
 
+/// Seed the bounded-read fixture and return its new incarnation.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "seed_reads",
@@ -92,6 +93,7 @@ fn seed_reads((): ()) -> u64 {
     incarnation
 }
 
+/// Replace or remove a fixture row between page requests.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "change_read_row",
@@ -121,6 +123,8 @@ fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u
 }
 
 // Errors: bounds=1, cursor mismatch=2, oversized row=3, unsupported order/path=4.
+
+/// Read one ordered page under the candidate and response budgets.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "bounded_page",
@@ -246,6 +250,8 @@ fn bounded_page(
 }
 
 // Only the unfiltered ordered-key DISTINCT witness is admitted here.
+
+/// Read one bounded page of distinct optional values.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "distinct_page",

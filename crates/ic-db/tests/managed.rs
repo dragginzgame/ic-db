@@ -87,6 +87,7 @@ fn independent_roles_share_batch_time_and_deletes_need_no_clock() {
 fn time(n: i64) -> Timestamp {
     Timestamp::from_millis(n)
 }
+
 fn runtime(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut runtime = MemoryRuntime::new(backing).unwrap();
     runtime

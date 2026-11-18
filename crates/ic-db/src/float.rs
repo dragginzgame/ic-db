@@ -28,11 +28,13 @@ macro_rules! finite_float {
                 let value = Self::try_new(<$float>::from_bits(bits))?;
                 (value.0.to_bits() == bits).then_some(value)
             }
+
             pub(crate) fn ordered_bytes(self) -> [u8; $width] {
                 let bits = self.0.to_bits();
                 let sign = 1 << (<$bits>::BITS - 1);
                 (if bits & sign != 0 { !bits } else { bits ^ sign }).to_be_bytes()
             }
+
             pub(crate) fn from_ordered_bytes(bytes: [u8; $width]) -> Option<Self> {
                 let bits = <$bits>::from_be_bytes(bytes);
                 let sign = 1 << (<$bits>::BITS - 1);

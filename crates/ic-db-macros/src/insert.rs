@@ -113,6 +113,7 @@ impl Literal {
             }
         }
     }
+
     fn value(&self) -> TokenStream {
         match self {
             Self::Nat(v) => syn::parse_str::<Expr>(&v.to_string())

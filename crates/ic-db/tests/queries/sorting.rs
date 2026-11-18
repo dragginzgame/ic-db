@@ -1,7 +1,10 @@
 //! Complete sorting compared with independent Rust tuple/text order.
 use super::{C, DecimalSale, Entry, OptionalPrice, Summary, create, decimal_sales, host, ids, row};
-use ic_db::SortDirection::{Ascending as Asc, Descending as Desc};
-use ic_db::{Batch, Database, Entity, Error, Schema, entity};
+use ic_db::{
+    Batch, Database, Entity, Error, Schema,
+    SortDirection::{Ascending as Asc, Descending as Desc},
+    entity,
+};
 use ic_storage::{StableKey, VectorMemory};
 
 #[test]

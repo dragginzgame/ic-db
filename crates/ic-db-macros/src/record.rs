@@ -96,11 +96,14 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 static DEFINITION: ::ic_db::TypeSchema = ::ic_db::TypeSchema {name:#name, body: ::ic_db::TypeBody::Record(&[#(#descriptions),*])};
                 &DEFINITION
             }
+
             fn encode_into(&self, #writer:&mut ::ic_db::__private::Encoder) -> Result<(),::ic_db::Error> { #(#writes)* Ok(()) }
+
             fn decode_from(#reader:&mut ::ic_db::__private::Decoder<'_>) -> Result<Self,::ic_db::Error> { Ok(Self { #(#reads)* }) }
         }
     })
 }
+
 pub(super) fn resolve_self(field: &mut Field, ident: &syn::Ident) {
     if let Kind::Named(path, _) = &mut field.kind
         && path.is_ident("Self")

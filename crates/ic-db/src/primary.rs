@@ -11,6 +11,7 @@ pub trait PrimaryKey: sealed::Sealed + Copy + Eq {
     /// Convert at the generated entity boundary.
     #[doc(hidden)]
     fn into_row_key(self) -> RowKey;
+
     /// Restore the exact key type after shared storage validation.
     #[doc(hidden)]
     fn from_row_key(key: RowKey) -> Result<Self, Error>;
@@ -25,6 +26,7 @@ macro_rules! primary_keys {
             impl sealed::Sealed for $ty {}
             impl PrimaryKey for $ty {
                 fn into_row_key(self) -> RowKey { RowKey::$variant(self) }
+
                 fn from_row_key(key: RowKey) -> Result<Self, Error> {
                     match key { RowKey::$variant(value) => Ok(value), _ => Err(Error::Corrupt) }
                 }
@@ -34,9 +36,11 @@ macro_rules! primary_keys {
             pub(crate) fn supports(field: FieldType) -> bool {
                 matches!(field, $( FieldType::$variant )|*)
             }
+
             pub(crate) fn from_index(value: IndexValue<'_>) -> Result<Self, Error> {
                 match value { $( IndexValue::$variant(value) => Ok(Self::$variant(value)), )* _ => Err(Error::Corrupt) }
             }
+
             pub(crate) fn index_value(self) -> IndexValue<'static> {
                 match self { $( Self::$variant(value) => value.into(), )* }
             }
@@ -137,9 +141,11 @@ impl RowKey {
             _ => Err(Error::Corrupt),
         }
     }
+
     pub(crate) fn append_to(self, bytes: &mut Vec<u8>) {
         self.index_value().append_component(false, bytes);
     }
+
     pub(crate) fn encode(self) -> Vec<u8> {
         let mut bytes = Vec::new();
         self.append_to(&mut bytes);

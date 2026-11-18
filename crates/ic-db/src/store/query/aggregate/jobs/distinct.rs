@@ -1,7 +1,9 @@
 //! Retained tuple DISTINCT counts using the existing exact key-set reducer.
-use super::super::{Accumulator, GroupCount, Query};
 use super::{
-    AggregateJobs, GroupPage, JobHandle, JobStep, grouped::group_binding, pages, prepare, start,
+    super::{Accumulator, GroupCount, Query},
+    AggregateJobs, GroupPage, JobHandle, JobStep,
+    grouped::group_binding,
+    pages, prepare, start,
 };
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;

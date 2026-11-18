@@ -1,6 +1,5 @@
 use super::*;
-use crate::remote::provider;
-use crate::{Command, parse_console_line};
+use crate::{Command, parse_console_line, remote::provider};
 
 #[test]
 fn explicit_target_identity_and_local_trust() {
@@ -44,9 +43,11 @@ fn response() -> protocol::Response {
         ),
     }
 }
+
 fn frame(response: &protocol::Reply, method: u64, direction: Direction) -> Vec<u8> {
     ic_wire::encode(response, Encoding::Frame { method, direction }, RPC_LIMITS).unwrap()
 }
+
 #[test]
 fn inspection_frames_and_selection_are_exact() {
     let response = response();

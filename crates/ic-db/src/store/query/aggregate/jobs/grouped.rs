@@ -1,9 +1,11 @@
 //! Retained grouped aggregates with bounded complete finalization.
-use super::super::super::Plan;
-use super::super::{
-    Accumulator, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer, numeric::Operation,
+use super::{
+    super::super::Plan,
+    super::{
+        Accumulator, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer, numeric::Operation,
+    },
+    AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start,
 };
-use super::{AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start};
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};

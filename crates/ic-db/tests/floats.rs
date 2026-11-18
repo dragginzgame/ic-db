@@ -46,9 +46,11 @@ struct Collections {}
 fn f32v(value: f32) -> Float32 {
     Float32::try_new(value).unwrap()
 }
+
 fn f64v(value: f64) -> Float64 {
     Float64::try_new(value).unwrap()
 }
+
 fn values32() -> [f32; 9] {
     [
         -f32::MAX,
@@ -62,6 +64,7 @@ fn values32() -> [f32; 9] {
         f32::MAX,
     ]
 }
+
 fn values64() -> [f64; 9] {
     [
         -f64::MAX,
@@ -75,6 +78,7 @@ fn values64() -> [f64; 9] {
         f64::MAX,
     ]
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let requests =
@@ -86,11 +90,13 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn hash(value: impl Hash) -> u64 {
     let mut state = DefaultHasher::new();
     value.hash(&mut state);
     state.finish()
 }
+
 fn key(value: IndexValue<'_>) -> Vec<u8> {
     ic_db::__private::encode_index(&[(value, false)], false).unwrap()
 }
@@ -172,6 +178,7 @@ fn canonical_equality_hash_and_encoded_order_agree_over_the_finite_domain() {
         }
     }
 }
+
 #[test]
 fn exact_rows_refuse_nonfinite_and_noncanonical_stored_values() {
     // Independent Node framing and SHA-256, not the product serializer.
@@ -249,6 +256,7 @@ fn exact_rows_refuse_nonfinite_and_noncanonical_stored_values() {
     };
     assert_eq!(a.encode().unwrap(), b.encode().unwrap());
 }
+
 #[test]
 fn indexes_preserve_full_domain_zero_uniqueness_and_final_state_swaps() {
     let backing = VectorMemory::default();
@@ -351,6 +359,7 @@ fn indexes_preserve_full_domain_zero_uniqueness_and_final_state_swaps() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collection_keys_canonicalize_zero_and_inspection_checks_unindexed_payloads() {
     let row = Collections {

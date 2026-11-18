@@ -93,6 +93,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 #[test]
 fn list_order_duplicates_absence_and_element_bounds_are_exact() {
     let row = ListRow {
@@ -188,6 +189,7 @@ fn list_order_duplicates_absence_and_element_bounds_are_exact() {
         Err(Error::Limit)
     ));
 }
+
 #[test]
 fn lists_share_total_item_depth_and_structured_value_bounds() {
     // Individually legal items must still fit the whole framed row.
@@ -266,6 +268,7 @@ fn lists_share_total_item_depth_and_structured_value_bounds() {
     over.extend(0_u32.to_le_bytes());
     assert!(matches!(ForestRow::decode(&over), Err(Error::Corrupt)));
 }
+
 #[test]
 fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
     let backing = VectorMemory::default();

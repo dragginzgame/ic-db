@@ -78,6 +78,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn row() -> Row {
     Row {
         id: 1,
@@ -88,12 +89,14 @@ fn row() -> Row {
         states: States(BTreeSet::from([State::Ready, State::Archived])),
     }
 }
+
 fn golden() -> Vec<u8> {
     // counts: two entries (Archived/absent, Ready/256); id; two set ordinals.
     vec![
         2, 0, 0, 0, 0, 0, 2, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2,
     ]
 }
+
 #[test]
 fn order_and_transitive_identity_are_shared() {
     assert_eq!(
@@ -129,6 +132,7 @@ fn order_and_transitive_identity_are_shared() {
         Err(Error::InvalidSchema)
     ));
 }
+
 #[test]
 fn corrupt_collections_refuse_before_materialization_or_mutation() {
     let backing = VectorMemory::default();
@@ -175,6 +179,7 @@ fn corrupt_collections_refuse_before_materialization_or_mutation() {
         }
     }
 }
+
 #[test]
 fn enum_keys_count_toward_the_shared_structured_budget() {
     let set = States(BTreeSet::from([

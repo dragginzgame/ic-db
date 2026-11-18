@@ -17,6 +17,7 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
         )
         .unwrap()
     }
+
     fn response<T: serde::de::DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
         ic_wire::decode(
             bytes,

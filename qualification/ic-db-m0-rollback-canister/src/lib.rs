@@ -40,6 +40,7 @@ fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
     Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
 }
 
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -63,6 +64,8 @@ fn fail_at(selected: u8, boundary: u8) {
 
 // Mode 6 intentionally violates the candidate contract: it returns Err after a row write.
 // This negative control proves that an application error is not a rollback instruction.
+
+/// Exercise rollback at the selected row or mapping write boundary.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "mutate",
@@ -104,6 +107,7 @@ fn mutate((mode, id, principal): (u8, u64, u64)) -> Result<(), u8> {
     Ok(())
 }
 
+/// Read the fixture’s persisted state for comparison across calls.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",

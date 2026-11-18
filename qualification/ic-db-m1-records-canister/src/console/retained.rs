@@ -44,6 +44,7 @@ fn configured<'a, E: Entity>(
     )
 }
 
+/// Start a retained console aggregate and return its handle.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "aggregate_start",
@@ -173,6 +174,7 @@ fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> Output) -> Response {
         output,
     )
 }
+
 fn scalar(label: &str, value: Option<String>) -> Output {
     (
         vec![label.into()],
@@ -180,6 +182,7 @@ fn scalar(label: &str, value: Option<String>) -> Output {
         None,
     )
 }
+
 fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> Output {
     (
         vec![column.into(), "count".into()],
@@ -190,6 +193,7 @@ fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String)
         page.next.map(|c| c.to_bytes()),
     )
 }
+
 fn values<K, R>(
     page: GroupPage<GroupValue<K, R>>,
     columns: [&str; 2],
@@ -205,6 +209,8 @@ fn values<K, R>(
         page.next.map(|c| c.to_bytes()),
     )
 }
+
+/// Advance the retained selection or read a completed result page.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "aggregate_resume",
@@ -498,6 +504,7 @@ fn resume_entry(
     }
 }
 
+/// Cancel the retained aggregate identified by the supplied handle.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "aggregate_cancel",

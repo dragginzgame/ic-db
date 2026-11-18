@@ -4,12 +4,12 @@ mod blob;
 pub(crate) mod migration;
 #[cfg(feature = "retained-console")]
 mod retained;
-use crate::transport::RowFilters;
 use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
     runtime,
     schema::{DecimalRow, Document, Entry},
+    transport::RowFilters,
 };
 use ic_db::{
     Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
@@ -141,6 +141,7 @@ type Page = (
     u32,
 );
 
+/// Read the maintained row count for the named entity.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "cardinality",
@@ -167,6 +168,8 @@ fn cardinality(entity: String) -> Result<u64, String> {
 // Measure the exact console path, including open/admission/result formatting.
 // An update permits complete-call cycle accounting; the driver verifies that
 // both successful and refused reads preserve the backing bytes.
+
+/// Execute a console query and report its instruction count.
 #[cfg(feature = "query-measurements")]
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
@@ -186,6 +189,7 @@ fn measured_query(request: Request) -> (Result<Page, String>, u64) {
     )
 }
 
+/// Read the requested bounded result from the local fixture.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "query",
@@ -725,6 +729,7 @@ fn execute<'a, E: Entity>(
     }
     .map_err(message)
 }
+
 fn grouped_extremum<E: Entity, K: Value, R: Value>(
     query: Query<'_, E, Backing>,
     maximum: bool,
@@ -739,6 +744,7 @@ fn grouped_extremum<E: Entity, K: Value, R: Value>(
     };
     Ok(display_group_values(r, columns, key, render))
 }
+
 fn display_group_values<K, R>(
     r: Aggregate<Vec<GroupValue<K, R>>>,
     columns: &[&str; 2],
@@ -757,6 +763,7 @@ fn display_group_values<K, R>(
         r.output_bytes as u32,
     )
 }
+
 fn extremum<E: Entity, R: Value>(
     query: Query<'_, E, Backing>,
     maximum: bool,
@@ -770,6 +777,7 @@ fn extremum<E: Entity, R: Value>(
     };
     Ok(display_value(r, column, render))
 }
+
 fn display_value<R>(r: Aggregate<Option<R>>, column: &str, render: fn(R) -> String) -> Page {
     (
         vec![column.into()],
@@ -783,6 +791,7 @@ fn display_value<R>(r: Aggregate<Option<R>>, column: &str, render: fn(R) -> Stri
         r.output_bytes as u32,
     )
 }
+
 fn display_scalar<T: ToString>(r: &Aggregate<T>, column: &str) -> Page {
     (
         vec![column.into()],
@@ -793,6 +802,7 @@ fn display_scalar<T: ToString>(r: &Aggregate<T>, column: &str) -> Page {
         r.output_bytes as u32,
     )
 }
+
 fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) -> String) -> Page {
     (
         vec![column.into(), "count".into()],
@@ -806,6 +816,7 @@ fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) 
         r.output_bytes as u32,
     )
 }
+
 fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>) -> Page {
     (
         columns.iter().map(|c| (*c).to_owned()).collect(),
@@ -816,9 +827,11 @@ fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>
         page.output_bytes as u32,
     )
 }
+
 fn optional(value: Option<impl ToString>) -> String {
     value.map_or_else(|| "—".into(), |v| v.to_string())
 }
+
 fn message(error: Error) -> String {
     match error {
         Error::InvalidCursor => {

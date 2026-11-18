@@ -73,6 +73,7 @@ impl Encoder {
         self.budget.depth -= 1;
         result
     }
+
     pub fn list<T>(
         &mut self,
         values: &[T],
@@ -90,6 +91,7 @@ impl Encoder {
         self.budget.depth -= 1;
         result
     }
+
     pub fn nat64(&mut self, value: u64) -> Result<(), Error> {
         self.append(&value.to_le_bytes())
     }
@@ -149,12 +151,15 @@ impl Encoder {
     pub fn subaccount(&mut self, value: Subaccount) -> Result<(), Error> {
         self.append(&value)
     }
+
     pub fn ulid(&mut self, value: Ulid) -> Result<(), Error> {
         self.append(&value.to_bytes())
     }
+
     pub fn timestamp(&mut self, value: Timestamp) -> Result<(), Error> {
         self.int64(value.as_millis())
     }
+
     pub fn decimal(&mut self, value: Decimal, scale: u32) -> Result<(), Error> {
         let coefficient = value
             .coefficient_at_scale(scale)
@@ -162,12 +167,15 @@ impl Encoder {
         self.append(&coefficient.to_be_bytes())?;
         self.nat8(scale as u8)
     }
+
     pub fn duration(&mut self, value: Duration) -> Result<(), Error> {
         self.nat64(value.as_millis())
     }
+
     pub fn date(&mut self, value: Date) -> Result<(), Error> {
         self.int32(value.as_days_since_epoch())
     }
+
     pub fn account(&mut self, value: Account) -> Result<(), Error> {
         self.principal(&value.owner)?;
         self.subaccount(*value.effective_subaccount())
@@ -242,6 +250,7 @@ impl<'a> Decoder<'a> {
     pub(crate) const fn position(&self) -> usize {
         self.position
     }
+
     pub fn new(bytes: &'a [u8]) -> Result<Self, Error> {
         Self::with_byte_limit(bytes, MAX_ROW_BYTES)
     }
@@ -260,6 +269,7 @@ impl<'a> Decoder<'a> {
     pub fn named<T: Value>(&mut self) -> Result<T, Error> {
         self.with_named(T::definition(), T::decode_from)
     }
+
     fn with_named<T>(
         &mut self,
         definition: &crate::TypeSchema,
@@ -286,16 +296,19 @@ impl<'a> Decoder<'a> {
         self.budget.depth -= 1;
         result
     }
+
     fn list_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = self.collection_count(max)?;
         self.budget.enter()?;
         Ok(count)
     }
+
     fn collection_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = usize::try_from(self.nat32()?).map_err(|_| Error::Corrupt)?;
         self.budget.items(count, max)?;
         Ok(count)
     }
+
     pub fn list<T>(
         &mut self,
         max: u32,
@@ -312,6 +325,7 @@ impl<'a> Decoder<'a> {
         self.budget.depth -= 1;
         result
     }
+
     fn skip_named(&mut self, link: TypeLink) -> Result<(), Error> {
         let definition = (link.definition)();
         self.with_named(definition, |reader| {
@@ -346,6 +360,7 @@ impl<'a> Decoder<'a> {
             Ok(())
         })
     }
+
     fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
         let end = self.position.checked_add(len).ok_or(Error::Corrupt)?;
         let bytes = self.bytes.get(self.position..end).ok_or(Error::Corrupt)?;
@@ -485,15 +500,19 @@ impl<'a> Decoder<'a> {
     pub fn nat64(&mut self) -> Result<u64, Error> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
+
     pub fn nat8(&mut self) -> Result<u8, Error> {
         Ok(u8::from_le_bytes(self.fixed()?))
     }
+
     pub fn nat16(&mut self) -> Result<u16, Error> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
+
     pub fn nat32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
+
     pub fn float32(&mut self) -> Result<Float32, Error> {
         Float32::from_canonical_bits(u32::from_le_bytes(self.fixed()?)).ok_or(Error::Corrupt)
     }
@@ -505,12 +524,15 @@ impl<'a> Decoder<'a> {
     pub fn subaccount(&mut self) -> Result<Subaccount, Error> {
         self.fixed()
     }
+
     pub fn ulid(&mut self) -> Result<Ulid, Error> {
         Ok(Ulid::from_bytes(self.fixed()?))
     }
+
     pub fn timestamp(&mut self) -> Result<Timestamp, Error> {
         Ok(Timestamp::from_millis(self.int64()?))
     }
+
     pub fn decimal(&mut self, scale: u32) -> Result<Decimal, Error> {
         let coefficient = i128::from_be_bytes(self.fixed()?);
         let stored_scale = u32::from(self.nat8()?);
@@ -519,12 +541,15 @@ impl<'a> Decoder<'a> {
         }
         Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)
     }
+
     pub fn duration(&mut self) -> Result<Duration, Error> {
         Ok(Duration::from_millis(self.nat64()?))
     }
+
     pub fn date(&mut self) -> Result<Date, Error> {
         Date::try_from_days_since_epoch(self.int32()?).ok_or(Error::Corrupt)
     }
+
     pub fn account(&mut self) -> Result<Account, Error> {
         let owner = self.principal()?;
         let bytes = self.subaccount()?;
@@ -537,12 +562,15 @@ impl<'a> Decoder<'a> {
     pub fn int8(&mut self) -> Result<i8, Error> {
         Ok(i8::from_le_bytes(self.fixed()?))
     }
+
     pub fn int16(&mut self) -> Result<i16, Error> {
         Ok(i16::from_le_bytes(self.fixed()?))
     }
+
     pub fn int32(&mut self) -> Result<i32, Error> {
         Ok(i32::from_le_bytes(self.fixed()?))
     }
+
     pub fn nat128(&mut self) -> Result<u128, Error> {
         Ok(u128::from_le_bytes(self.fixed()?))
     }
@@ -550,12 +578,15 @@ impl<'a> Decoder<'a> {
     pub fn u256(&mut self) -> Result<U256, Error> {
         Ok(U256::from_be_bytes(self.fixed()?))
     }
+
     pub fn int64(&mut self) -> Result<i64, Error> {
         Ok(i64::from_le_bytes(self.fixed()?))
     }
+
     pub fn int128(&mut self) -> Result<i128, Error> {
         Ok(i128::from_le_bytes(self.fixed()?))
     }
+
     pub fn boolean(&mut self) -> Result<bool, Error> {
         match self.take(1)?[0] {
             0 => Ok(false),
@@ -571,14 +602,17 @@ impl<'a> Decoder<'a> {
         }
         self.take(len)
     }
+
     pub fn blob(&mut self, max: usize) -> Result<Vec<u8>, Error> {
         Ok(self.blob_ref(max)?.to_vec())
     }
+
     pub fn principal(&mut self) -> Result<Principal, Error> {
         // IcyDB's owned scalar decoder admits raw identity bytes, not text or Wire.
         Principal::try_from_slice(self.bounded_bytes(MAX_PRINCIPAL_BYTES)?)
             .map_err(|_| Error::Corrupt)
     }
+
     pub fn text(&mut self, max: usize) -> Result<String, Error> {
         Ok(self.text_ref(max)?.to_owned())
     }
@@ -587,6 +621,7 @@ impl<'a> Decoder<'a> {
     pub(crate) fn blob_ref(&mut self, max: usize) -> Result<&'a [u8], Error> {
         self.bounded_bytes(max)
     }
+
     pub(crate) fn text_ref(&mut self, max: usize) -> Result<&'a str, Error> {
         std::str::from_utf8(self.bounded_bytes(max)?).map_err(|_| Error::Corrupt)
     }
@@ -681,6 +716,7 @@ impl<'a> Decoder<'a> {
         }
         Ok(())
     }
+
     pub fn finish(self) -> Result<(), Error> {
         if self.position != self.bytes.len() {
             return Err(Error::Corrupt);
@@ -707,6 +743,7 @@ impl Budget {
         self.collection_items += count;
         Ok(())
     }
+
     fn enter(&mut self) -> Result<(), Error> {
         if self.depth >= MAX_DEPTH || self.nodes >= MAX_NODES {
             return Err(Error::Corrupt);

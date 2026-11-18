@@ -18,6 +18,7 @@ icydb::__icydb_start_actor!();
 // measurement cannot silently continue after a recovery-triggering failure.
 mod __icydb_host {
     use std::cell::Cell;
+
     thread_local! {
         pub(super) static RECOVERY_PENDING: Cell<bool> = const { Cell::new(false) };
     }
@@ -53,6 +54,7 @@ fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
     )
 }
 
+/// Measure one startup step and report whether the database is ready.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "advance_startup",
@@ -77,6 +79,7 @@ fn advance_startup((): ()) -> (bool, u64) {
     )
 }
 
+/// Insert a benchmark row and report its instruction cost.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "insert",
@@ -101,6 +104,7 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
+/// Look up a benchmark row by ID and report its instruction cost.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "lookup",
@@ -120,6 +124,7 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     })
 }
 
+/// Measure the complete journey from lookup through replacement.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "read_modify_write",
@@ -148,6 +153,7 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
+/// List rows in the requested category for the engine comparison.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "listing",
@@ -174,6 +180,7 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     })
 }
 
+/// Run the selected filtered listing and report its result and instruction cost.
 #[cfg(feature = "fluent-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -215,6 +222,7 @@ fn fluent_listing(
     })
 }
 
+/// Measure the requested aggregate over matching benchmark entries.
 #[cfg(feature = "aggregate-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -289,6 +297,7 @@ fn grouped_aggregate(
     })
 }
 
+/// Count all benchmark rows or the selected category under the work limit.
 #[cfg(feature = "count-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -311,6 +320,7 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     })
 }
 
+/// Check whether the benchmark category has an owner and measure the lookup.
 #[cfg(feature = "exists-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,

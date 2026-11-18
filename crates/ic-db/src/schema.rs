@@ -1,7 +1,13 @@
 //! One compiled contract, canonical fingerprint and inspection projection.
 
-use crate::types::{TypeGraph, TypeLink};
-use crate::{__private::RowInfo, Error, IndexValue, codec::Decoder, key, primary::RowKey};
+use crate::{
+    __private::RowInfo,
+    Error, IndexValue,
+    codec::Decoder,
+    key,
+    primary::RowKey,
+    types::{TypeGraph, TypeLink},
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -159,6 +165,7 @@ impl EntitySchema {
     pub(crate) fn has_managed(&self) -> bool {
         self.fields.iter().any(|field| field.managed.is_some())
     }
+
     pub(crate) fn key_type(&self) -> Result<FieldType, Error> {
         self.fields
             .iter()
@@ -173,6 +180,7 @@ impl EntitySchema {
         self.inspect_values(bytes, self.key_fields(), &mut values)?;
         self.row_info(&values)
     }
+
     pub(crate) fn key_fields(&self) -> u16 {
         self.fields
             .iter()
@@ -232,6 +240,7 @@ impl EntitySchema {
         crate::managed::validate_order(times)?;
         Ok(())
     }
+
     pub(crate) fn row_info(&self, keys: &[IndexValue<'_>; MAX_FIELDS]) -> Result<RowInfo, Error> {
         let position = |name: &str| {
             self.fields

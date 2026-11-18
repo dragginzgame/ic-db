@@ -14,6 +14,7 @@ fn view(row: DefaultRow) -> Row {
     )
 }
 
+/// Apply an insert-default scenario with optional rollback injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "default_write",
@@ -74,6 +75,7 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
     Ok(view(row))
 }
 
+/// Read the stored defaulted rows, index observations and revision.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "default_rows",

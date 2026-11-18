@@ -1,6 +1,6 @@
 //! Explicit native comparison of the three engines on the same scalar fixture.
 use ic_db::{Batch, Comparison, Database, Entity, Schema, SortDirection, entity, record};
-use ic_db_icydb_baseline_schema::{EntryInsert as LegacyInsert, EntryReplace};
+use ic_db_icydb_baseline_schema::{Entry as Legacy, EntryInsert as LegacyInsert, EntryReplace};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -9,7 +9,6 @@ use icydb::{db::WriteCell, types::Id};
 use rusqlite::{Connection, params};
 use std::{hint::black_box, time::Instant};
 
-use ic_db_icydb_baseline_schema::Entry as Legacy;
 icydb::__icydb_start_actor!();
 
 fn icydb_storage_grants() -> Result<icydb::db::AllocationGrants, icydb::db::AdmissionError> {
@@ -81,6 +80,7 @@ impl Read {
 fn category_label(c: Option<u64>) -> String {
     c.map_or_else(|| "all".into(), |n| n.to_string())
 }
+
 fn cases(n: u64) -> Vec<Read> {
     let mut out = Vec::new();
     for id in [1, n / 2, n, n + 1] {
@@ -347,6 +347,7 @@ impl Sql {
         };
         Self { text, args }
     }
+
     fn run(&self, db: &Connection, case: Read) -> ResultSet {
         let mut stmt = db.prepare(&self.text).unwrap();
         let mut rs = stmt.query(rusqlite::params_from_iter(&self.args)).unwrap();
@@ -399,6 +400,7 @@ fn write_ic(db: &mut Database<VectorMemory>, r: Row, insert: bool) {
     };
     db.commit(batch).unwrap();
 }
+
 fn write_legacy(r: Row, insert: bool) {
     icydb::db::with_request_execution(|| {
         let db = db().unwrap();
@@ -422,6 +424,7 @@ fn write_legacy(r: Row, insert: bool) {
     });
     settle();
 }
+
 fn write_sql(db: &Connection, r: Row, insert: bool) {
     let sql = if insert {
         "INSERT INTO entry VALUES (?1,?2,?3)"
@@ -440,6 +443,7 @@ fn median(values: &mut [u128]) -> u128 {
     values.sort_unstable();
     values[values.len() / 2]
 }
+
 #[expect(
     clippy::needless_range_loop,
     reason = "rotate engine order each round while recording samples by engine"

@@ -50,6 +50,7 @@ fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
     Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
 }
 
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -110,6 +111,8 @@ fn response(state: &Map) -> Response {
 
 // Commands: start, advance(job, sequence), put(id, value), cancel(job), delete(id).
 // Errors: input bound, wrong job, future sequence, not running, capacity, contract.
+
+/// Advance the selected operation and return the resulting fixture state.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "command",
@@ -241,6 +244,7 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
     Ok(response(&state))
 }
 
+/// Read the fixture’s persisted state for comparison across calls.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",

@@ -20,6 +20,8 @@ fn fail_at(selected: u8, boundary: u8) {
 // Kinds: insert user, delete user, put mapping, delete mapping.
 // Errors: bounds=1, duplicate target=2, existence=3, uniqueness=4, reference=5.
 // Success reports examined reverse-index candidates, independently of row count.
+
+/// Apply a bounded command batch with the selected failure injection.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "batch",

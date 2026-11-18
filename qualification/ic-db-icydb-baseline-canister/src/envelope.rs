@@ -7,6 +7,7 @@ use icydb::{
     types::Id,
 };
 
+/// Measure the matched write workload at the requested text length.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "envelope_comparison_write",
@@ -61,6 +62,7 @@ fn envelope_comparison_write(
     })
 }
 
+/// Read the fixture’s four text fields by row ID.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_row",
@@ -83,6 +85,7 @@ fn envelope_row(id: u64) -> (String, String, String, String) {
     .0
 }
 
+/// List matching fixture IDs for the requested generation.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "envelope_listing",

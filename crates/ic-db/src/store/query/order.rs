@@ -96,31 +96,17 @@ pub(super) fn select<'a>(
     let primary_fits = fits_order(None, 0);
     let mut best: Option<IndexPath<'_>> = None;
     for index in entity.indexes {
-        let values: Vec<_> = index
-            .fields
-            .iter()
-            .map_while(|name| equality(request, name))
-            .collect();
+        let values = leading_equalities(request, index);
         if (primary_fits && values.is_empty())
             || !complete_membership(entity, index, &values, request)
             || !fits_order(Some(index), values.len())
         {
             continue;
         }
-        // Deterministic, schema-only preference: more fixed leading components,
-        // then fewer index fields, then logical name. No data scans or statistics.
-        let rank = (
-            std::cmp::Reverse(values.len()),
-            index.fields.len(),
-            index.name,
-        );
-        if best.as_ref().is_none_or(|old| {
-            rank < (
-                std::cmp::Reverse(old.fixed),
-                old.index.fields.len(),
-                old.index.name,
-            )
-        }) && let Some(path) = automatic_prefix(entity, index, &values)?
+        if best
+            .as_ref()
+            .is_none_or(|old| rank(index, values.len()) < rank(old.index, old.fixed))
+            && let Some(path) = automatic_prefix(entity, index, &values)?
         {
             best = Some(path);
         }
@@ -152,19 +138,21 @@ pub(super) fn select<'a>(
     Ok(Path::Sort(positions))
 }
 
-// A key-only count can discard predicates only when the fixed prefix implies
-// every clause. Conflicting equalities, ORs and residuals use row execution.
-fn covers(request: &Request<'_>, index: &IndexSchema, values: &[IndexValue<'_>]) -> bool {
-    request.predicates.iter().all(|p| {
-        !p.or_next
-            && p.comparison == Comparison::Eq
-            && index.fields.iter().zip(values).any(|(name, value)| {
-                *name == p.field && matches!(p.operand, QueryOperand::Literal(v) if v == *value)
-            })
-    })
+// A fixed component implies an equality only when its selected value agrees.
+fn fixed_equality(
+    predicate: &Predicate<'_>,
+    index: &IndexSchema,
+    values: &[IndexValue<'_>],
+) -> bool {
+    predicate.comparison == Comparison::Eq
+        && index.fields.iter().zip(values).any(|(name, value)| {
+            *name == predicate.field
+                && matches!(predicate.operand, QueryOperand::Literal(v) if v == *value)
+        })
 }
 
-pub(super) fn select_covered_prefix<'a>(
+/// Select the aggregate input path and report whether its keys prove every predicate.
+pub(super) fn select_aggregate_prefix<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
@@ -172,24 +160,75 @@ pub(super) fn select_covered_prefix<'a>(
     if let Some((_, values)) = &request.index {
         return Ok(plan
             .index
-            .is_some_and(|index| covers(request, index, values)));
+            .is_some_and(|index| covers_index(request, plan, index, values)));
     }
+    // Preserve primary seeks when the equality prefix would leave an ID predicate
+    // to be checked only after fetching owners.
+    let allow_residual = !request
+        .predicates
+        .iter()
+        .any(|p| p.field == entity.primary_key);
+    let mut best = None;
     for index in entity.indexes {
-        let values: Vec<_> = index
-            .fields
+        let values = leading_equalities(request, index);
+        let covered = request
+            .predicates
             .iter()
-            .map_while(|field| equality(request, field))
-            .collect();
-        if !covers(request, index, &values) || !complete_membership(entity, index, &values, request)
-        {
+            .all(|p| !p.or_next && fixed_equality(p, index, &values));
+        if (!covered && !allow_residual) || !complete_membership(entity, index, &values, request) {
             continue;
         }
-        if let Some(path) = automatic_prefix(entity, index, &values)? {
+        let Some(path) = automatic_prefix(entity, index, &values)? else {
+            continue;
+        };
+        if covered {
             plan.use_index(entity, path);
             return Ok(true);
         }
+        let (fixed, width, name) = rank(index, path.fixed);
+        let bounded = super::range::has_secondary_bound(entity, plan, &path);
+        if values.is_empty() && !bounded {
+            continue;
+        }
+        let score = (fixed, !bounded, width, name);
+        if best.as_ref().is_none_or(|(old, _)| score < *old) {
+            best = Some((score, (path, values)));
+        }
+    }
+    if let Some((_, (path, values))) = best {
+        let index = path.index;
+        plan.use_index(entity, path);
+        return Ok(covers_index(request, plan, index, &values));
     }
     Ok(false)
+}
+
+// Plan admission emits one encoded term per predicate, in request order.
+fn covers_index(
+    request: &Request<'_>,
+    plan: &super::Plan<'_>,
+    index: &IndexSchema,
+    values: &[IndexValue<'_>],
+) -> bool {
+    let next = index.fields.get(values.len()).copied();
+    request.predicates.iter().zip(&plan.terms).all(|(p, term)| {
+        !p.or_next
+            && (fixed_equality(p, index, values)
+                || super::range::bounds_secondary_field(p.field, next, term, plan.prefix.len()))
+    })
+}
+
+fn leading_equalities<'a>(request: &Request<'a>, index: &IndexSchema) -> Vec<IndexValue<'a>> {
+    index
+        .fields
+        .iter()
+        .map_while(|field| equality(request, field))
+        .collect()
+}
+
+// Prefer a longer fixed prefix, then fewer fields, then the logical index name.
+fn rank(index: &IndexSchema, fixed: usize) -> (std::cmp::Reverse<usize>, usize, &str) {
+    (std::cmp::Reverse(fixed), index.fields.len(), index.name)
 }
 
 // Both operands have already passed admission. For a field operand, a row

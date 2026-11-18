@@ -52,6 +52,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn rows() -> Vec<TimeRow> {
     let mut rows: Vec<_> = [
         (0, i64::MIN),
@@ -81,6 +82,7 @@ fn rows() -> Vec<TimeRow> {
     });
     rows
 }
+
 #[test]
 fn independent_bytes_full_domains_and_absence() {
     assert_eq!(
@@ -140,6 +142,7 @@ fn independent_bytes_full_domains_and_absence() {
         assert!(key(pair[0].timestamp.into()) < key(pair[1].timestamp.into()));
     }
 }
+
 #[test]
 fn exact_indexes_final_state_swaps_and_reopen() {
     let backing = VectorMemory::default();
@@ -243,6 +246,7 @@ fn exact_indexes_final_state_swaps_and_reopen() {
         Err(Error::Corrupt)
     ));
 }
+
 #[test]
 fn collection_order_and_unindexed_validation() {
     let row = Collections {

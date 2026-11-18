@@ -1,9 +1,9 @@
 //! One complete-key bound for the shared map, enforced when constructing or decoding a key.
-use crate::Error;
-use std::ops::Deref;
-
 #[cfg(test)]
 mod tests;
+
+use crate::Error;
+use std::ops::Deref;
 
 /// Maximum complete encoded secondary-index key, including namespace and owner suffix.
 pub const MAX_INDEX_KEY_BYTES: usize = 512;

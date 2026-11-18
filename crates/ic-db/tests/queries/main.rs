@@ -54,6 +54,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn row(id: u64) -> Entry {
     Entry {
         id,
@@ -63,6 +64,7 @@ fn row(id: u64) -> Entry {
         payload: vec![7; 100],
     }
 }
+
 fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database<VectorMemory> {
     let mut db = Database::create(
         runtime
@@ -79,6 +81,7 @@ fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database<Ve
     db.commit(b).unwrap();
     db
 }
+
 fn ids(rows: &[Entry]) -> Vec<u64> {
     rows.iter().map(|r| r.id).collect()
 }
@@ -396,17 +399,26 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
                         expected.reverse();
                     }
                     let values: Vec<_> = prefix.into_iter().map(IndexValue::from).collect();
-                    let mut query = db
-                        .query::<Entry>()
-                        .using_index(
-                            if prefix.is_some() {
-                                "category,amount,id"
-                            } else {
-                                "amount,id"
-                            },
-                            &values,
-                        )
-                        .filter("amount", comparison, operand);
+                    let query = || {
+                        db.query::<Entry>()
+                            .using_index(
+                                if prefix.is_some() {
+                                    "category,amount,id"
+                                } else {
+                                    "amount,id"
+                                },
+                                &values,
+                            )
+                            .filter("amount", comparison, operand)
+                    };
+                    if !descending {
+                        let count = query().count().unwrap();
+                        assert_eq!(
+                            (count.value, count.examined, count.fetched),
+                            (expected.len() as u64, expected.len(), 0)
+                        );
+                    }
+                    let mut query = query();
                     if descending {
                         query = query.descending();
                     }
@@ -474,12 +486,14 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
                 })
                 .collect();
             expected.sort_by_key(|r| (&r.text, r.id));
-            let page = db
-                .query::<TextRow>()
-                .using_index("text,id", &[])
-                .filter("text", comparison, operand)
-                .fetch()
-                .unwrap();
+            let indexed = || {
+                db.query::<TextRow>()
+                    .using_index("text,id", &[])
+                    .filter("text", comparison, operand)
+            };
+            let count = indexed().count().unwrap();
+            assert_eq!((count.value, count.fetched), (expected.len() as u64, 0));
+            let page = indexed().fetch().unwrap();
             assert_eq!(
                 page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
                 expected.iter().map(|r| r.id).collect::<Vec<_>>()
@@ -664,12 +678,19 @@ fn oversized_index_range_operands_fall_back_to_admitted_residual_comparison() {
                 .filter("text", comparison, operand.as_str())
                 .fetch()
                 .unwrap();
-            let actual = db
-                .query::<WideRange>()
-                .using_index("text", &[])
-                .filter("text", comparison, operand.as_str())
-                .fetch()
-                .unwrap();
+            let indexed = || {
+                db.query::<WideRange>().using_index("text", &[]).filter(
+                    "text",
+                    comparison,
+                    operand.as_str(),
+                )
+            };
+            let actual = indexed().fetch().unwrap();
+            let count = indexed().count().unwrap();
+            assert_eq!(count.value, expected.rows.len() as u64);
+            if operand.len() > 501 {
+                assert_eq!(count.fetched, 2);
+            }
             assert_eq!(actual.rows, expected.rows);
             assert_eq!(
                 actual.examined,
@@ -1469,6 +1490,7 @@ fn text_groups_and_refusals_share_exact_admission() {
         ));
     }
 }
+
 #[test]
 fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
     let runtime = host(VectorMemory::default());
@@ -2222,34 +2244,61 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
     assert!(matches!(
         db.query::<Entry>()
             .filter("amount", C::Ge, 50_u64)
-            .work_limit(4)
+            .using_index("category", &[])
+            .work_limit(2)
             .exists(),
         Err(Error::Limit)
     ));
     let late = db
         .query::<Entry>()
         .filter("amount", C::Ge, 50_u64)
-        .work_limit(5)
+        .work_limit(1)
         .limit(1)
         .exists()
         .unwrap();
-    assert_eq!((late.value, late.examined), (true, 5));
+    assert_eq!((late.value, late.examined, late.fetched), (true, 1, 1));
     assert!(matches!(
         db.query::<Entry>()
             .filter("amount", C::Gt, 80_u64)
+            .using_index("category", &[])
             .work_limit(8)
             .exists(),
         Err(Error::Limit)
     ));
+    let range = db
+        .query::<Entry>()
+        .filter("amount", C::Gt, 40_u64)
+        .filter("amount", C::Le, 60_u64)
+        .work_limit(3)
+        .count()
+        .unwrap();
+    assert_eq!((range.value, range.examined, range.fetched), (2, 2, 0));
+    // A range in one alternative cannot exclude matches from the other.
+    let alternatives = db
+        .query::<Entry>()
+        .filter_any(&[
+            ("amount", C::Ge, 80_u64.into()),
+            ("category", C::Eq, 1_u8.into()),
+        ])
+        .count()
+        .unwrap();
+    assert_eq!(
+        (
+            alternatives.value,
+            alternatives.examined,
+            alternatives.fetched
+        ),
+        (5, 8, 8)
+    );
     let none = db
         .query::<Entry>()
         .filter("amount", C::Gt, 80_u64)
-        .work_limit(9)
+        .work_limit(1)
         .exists()
         .unwrap();
     assert_eq!(
         (none.value, none.examined, none.output_bytes),
-        (false, 8, 1)
+        (false, 0, 1)
     );
     for (amount, expected, reads) in [(80_u64, true, 1), (81_u64, false, 0)] {
         let result = db
@@ -2263,6 +2312,28 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
             (expected, reads, reads)
         );
     }
+    let lookup = |category, minimum, budget| {
+        db.query::<Entry>()
+            .filter("category", C::Eq, category)
+            .filter("amount", C::Ge, minimum)
+            .work_limit(budget)
+            .exists()
+    };
+    let hit = lookup(0_u8, 40_u64, 1).unwrap();
+    assert_eq!((hit.value, hit.examined, hit.fetched), (true, 1, 1));
+    let beyond = lookup(0, 81, 1).unwrap();
+    assert_eq!((beyond.value, beyond.examined), (false, 0));
+    // The next index component enforces the minimum amount without fetching owners.
+    let count = db
+        .query::<Entry>()
+        .filter("category", C::Eq, 0_u8)
+        .filter("amount", C::Ge, 40_u64)
+        .work_limit(5)
+        .count()
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (3, 3, 0));
+    let miss = lookup(7, 40, 1).unwrap();
+    assert_eq!((miss.value, miss.examined, miss.fetched), (false, 0, 0));
     let empty = db.query::<Other>().work_limit(1).exists().unwrap();
     assert_eq!((empty.value, empty.examined), (false, 0));
     let indexed = db
@@ -2733,6 +2804,14 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
         db.query::<Entry>().filter("amount", C::Eq, 10_u64).exists(),
         Err(Error::Corrupt)
     ));
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("category", C::Eq, 1_u8)
+            .filter("amount", C::Ne, 10_u64)
+            .work_limit(1)
+            .exists(),
+        Err(Error::Corrupt)
+    ));
     // This path reaches a valid category-0 row before the corrupt category-1 row.
     // Existence validates the matched row, but deliberately does not audit later rows.
     let exists = db
@@ -2764,9 +2843,17 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
             .min::<AmountOnly>(),
         Err(Error::Corrupt)
     ));
+    let missing = db
+        .query::<Entry>()
+        .filter("amount", C::Eq, 0_u64)
+        .group_count::<CategoryOnly>()
+        .unwrap();
+    assert!(missing.value.is_empty());
+    assert_eq!((missing.examined, missing.fetched), (0, 0));
     assert!(matches!(
         db.query::<Entry>()
-            .filter("amount", C::Eq, 0_u64)
+            .filter("category", C::Eq, 1_u8)
+            .filter("amount", C::Ne, 10_u64)
             .group_count::<CategoryOnly>(),
         Err(Error::Corrupt)
     ));
@@ -4529,6 +4616,51 @@ fn present_counts_and_distinct_tuple_counts_have_different_absence_semantics() {
     assert_eq!(db.query::<Entry>().count().unwrap().value, 8);
     assert_eq!(db.query::<Entry>().count_field("maybe").unwrap().value, 6);
     assert_eq!(db.query::<Entry>().count_field("payload").unwrap().value, 8);
+    let filtered = || {
+        db.query::<Entry>()
+            .filter("category", C::Eq, 0_u8)
+            .filter("amount", C::Ge, 40_u64)
+    };
+    // IDs 4, 6 and 8 match. Only ID 6 has an absent operand.
+    let present = filtered().work_limit(5).count_field("maybe").unwrap();
+    assert_eq!(
+        (present.value, present.examined, present.fetched),
+        (2, 3, 3)
+    );
+    let validated = filtered().work_limit(5).count_validated().unwrap();
+    assert_eq!(
+        (validated.value, validated.examined, validated.fetched),
+        (3, 3, 3)
+    );
+    assert!(matches!(
+        filtered().work_limit(2).count_field("maybe"),
+        Err(Error::Limit)
+    ));
+    let distinct = filtered()
+        .work_limit(5)
+        .count_distinct::<OptionalOnly>()
+        .unwrap();
+    assert_eq!(
+        (distinct.value, distinct.examined, distinct.fetched),
+        (3, 3, 3)
+    );
+    assert!(matches!(
+        filtered().work_limit(2).count_distinct::<CategoryOnly>(),
+        Err(Error::Limit)
+    ));
+    let grouped = filtered()
+        .work_limit(5)
+        .group_count_field::<OptionalOnly>("maybe")
+        .unwrap();
+    assert_eq!((grouped.examined, grouped.fetched), (3, 3));
+    assert_eq!(
+        grouped
+            .value
+            .iter()
+            .map(|g| (g.key.maybe, g.count))
+            .collect::<Vec<_>>(),
+        [(None, 0), (Some(4), 1), (Some(8), 1)]
+    );
     let distinct = db
         .query::<Entry>()
         .limit(1)
@@ -5576,7 +5708,7 @@ fn completed_group_selection_precedes_output_limits_not_input_bounds() {
             (result.value[0].key.category, result.value[0].count),
             (0, 2)
         );
-        assert_eq!((result.examined, result.output_bytes), (8, 9));
+        assert_eq!((result.examined, result.output_bytes), (3, 9));
     }
     for (order, expected) in [
         (O::AggregateAscending, vec![(1, 1), (0, 2)]),
@@ -5669,7 +5801,7 @@ fn group_or_clauses_select_completed_values_before_order_and_limits() {
                 .collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(result.examined, 8);
+        assert_eq!(result.examined, 3);
     }
     let result = db
         .query::<Entry>()
@@ -7449,6 +7581,13 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
             .value,
         0
     );
+    let conflicting = db
+        .query::<Entry>()
+        .filter("category", C::Eq, 0_u8)
+        .filter("category", C::Eq, 1_u8)
+        .count()
+        .unwrap();
+    assert_eq!(conflicting.value, 0);
     drop(db);
     let key = StableKey::parse("test.db.v1").unwrap();
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
@@ -7470,11 +7609,11 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         .count()
         .unwrap();
     assert_eq!((implicit.value, implicit.fetched), (4, 0));
-    let conflicting = db
-        .query::<Entry>()
-        .filter("category", C::Eq, 0_u8)
-        .filter("category", C::Eq, 1_u8)
-        .count()
-        .unwrap();
-    assert_eq!(conflicting.value, 0);
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("category", C::Eq, 0_u8)
+            .filter("category", C::Eq, 1_u8)
+            .count(),
+        Err(Error::Corrupt)
+    ));
 }

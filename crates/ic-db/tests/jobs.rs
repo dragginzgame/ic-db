@@ -975,6 +975,7 @@ fn any_clauses_resume_exact_counts_and_refuse_changed_boolean_structure() {
     }
     panic!("bounded input must complete");
 }
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let declarations = SealedDeclarationSnapshot::new(vec![
@@ -988,9 +989,11 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn schema() -> Schema {
     Schema::new(&[Row::SCHEMA, Other::SCHEMA]).unwrap()
 }
+
 fn create_stores(
     host: &MemoryRuntime<VectorMemory>,
     schema: Schema,
@@ -1010,6 +1013,7 @@ fn create_stores(
     .unwrap();
     (db, jobs)
 }
+
 fn create(
     host: &MemoryRuntime<VectorMemory>,
     values: &[Option<i128>],
@@ -1033,6 +1037,7 @@ fn create(
     }
     (db, jobs)
 }
+
 #[test]
 fn retained_length_filter_binds_threshold_and_resumes_the_same_clause() {
     use ic_db::QueryOperand::{Length, Literal};
@@ -1113,6 +1118,7 @@ fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
         }
     }
 }
+
 #[test]
 fn sparse_index_work_and_source_bytes_bound_progress_independently() {
     let host = host(VectorMemory::default());
@@ -1148,6 +1154,7 @@ fn sparse_index_work_and_source_bytes_bound_progress_independently() {
         }
     }
 }
+
 #[test]
 fn same_code_reopen_retains_exact_signed_sum_and_absence() {
     let backing = VectorMemory::default();
@@ -1215,6 +1222,7 @@ fn same_code_reopen_retains_exact_signed_sum_and_absence() {
         JobOutcome::Complete(None)
     ));
 }
+
 #[test]
 fn source_changes_invalidate_but_noops_refusals_other_entities_and_finished_jobs_do_not() {
     let host = host(VectorMemory::default());
@@ -1276,6 +1284,7 @@ fn source_changes_invalidate_but_noops_refusals_other_entities_and_finished_jobs
         JobOutcome::Complete(3)
     ));
 }
+
 #[test]
 fn query_result_shape_and_sequence_refusals_preserve_progress() {
     let backing = VectorMemory::default();
@@ -1328,6 +1337,7 @@ fn query_result_shape_and_sequence_refusals_preserve_progress() {
         Err(Error::TimestampRegression)
     ));
 }
+
 #[test]
 fn overflow_refuses_finalization_without_losing_the_checkpoint() {
     let backing = VectorMemory::default();
@@ -1356,6 +1366,7 @@ fn overflow_refuses_finalization_without_losing_the_checkpoint() {
     assert_eq!(retry.sequence, 1);
     jobs.cancel(&handle).unwrap();
 }
+
 #[test]
 fn capacity_expiry_cleanup_and_slot_generation_are_explicit() {
     let host = host(VectorMemory::default());

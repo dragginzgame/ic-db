@@ -26,6 +26,7 @@ type Row = (u64, u64, u64);
 fn compiled() -> Schema {
     Schema::new(&[Entry::SCHEMA]).unwrap()
 }
+
 fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
     let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
     let declarations =
@@ -35,6 +36,7 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
         .unwrap();
     host
 }
+
 fn database() -> Database<DefaultMemoryImpl> {
     let host = runtime();
     Database::open(
@@ -43,6 +45,7 @@ fn database() -> Database<DefaultMemoryImpl> {
     )
     .unwrap()
 }
+
 fn row(value: &Entry) -> Row {
     (value.id, value.category, value.amount)
 }
@@ -58,6 +61,7 @@ fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
     )
 }
 
+/// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -76,6 +80,7 @@ fn initialize((): ()) {
     .unwrap();
 }
 
+/// Measure one startup step and report whether the database is ready.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "advance_startup",
@@ -92,6 +97,7 @@ fn advance_startup((): ()) -> (bool, u64) {
     })
 }
 
+/// Insert a benchmark row and report its instruction cost.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "insert",
@@ -120,6 +126,7 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
+/// Look up a benchmark row by ID and report its instruction cost.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "lookup",
@@ -133,6 +140,7 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| database().get::<Entry>(id).unwrap().as_ref().map(row))
 }
 
+/// Measure the complete journey from lookup through replacement.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "read_modify_write",
@@ -155,6 +163,7 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
+/// List rows in the requested category for the engine comparison.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "listing",
@@ -177,6 +186,7 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     })
 }
 
+/// Run the selected filtered listing and report its result and instruction cost.
 #[cfg(feature = "fluent-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -226,6 +236,7 @@ struct AmountOnly {}
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
 struct CategoryOnly {}
 
+/// Measure the requested aggregate over matching benchmark entries.
 #[cfg(feature = "aggregate-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -290,6 +301,7 @@ fn grouped_aggregate(
     })
 }
 
+/// Count all benchmark rows or the selected category under the work limit.
 #[cfg(feature = "count-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -323,6 +335,7 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     })
 }
 
+/// Check whether the benchmark category has an owner and measure the lookup.
 #[cfg(feature = "exists-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,

@@ -40,9 +40,11 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 fn schema() -> Schema {
     Schema::new(&[KeyRow::SCHEMA, Numbered::SCHEMA]).unwrap()
 }
+
 fn rows() -> Vec<KeyRow> {
     [
         0,
@@ -61,12 +63,14 @@ fn rows() -> Vec<KeyRow> {
     })
     .collect()
 }
+
 fn physical_row(id: Ulid) -> Vec<u8> {
     let mut b = vec![2];
     b.extend(KeyRow::ID.to_be_bytes());
     b.extend(id.to_bytes());
     b
 }
+
 #[test]
 fn typed_keys_pages_unique_exchange_and_final_references() {
     assert!(matches!(
@@ -187,6 +191,7 @@ fn typed_keys_pages_unique_exchange_and_final_references() {
     // An absent reference does not point to the all-zero ULID.
     assert!(db.get::<Numbered>(2).unwrap().unwrap().target.is_none());
 }
+
 #[test]
 fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     let backing = VectorMemory::default();

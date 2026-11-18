@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Local product-record console and native client for Canic application inspection.
 
+mod inspect;
+mod remote;
+mod terminal;
+#[cfg(test)]
+mod tests;
+mod witness_listing;
+
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
@@ -110,13 +117,6 @@ fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
     })?;
     Cli::try_parse_from(std::iter::once("db".to_owned()).chain(words))
 }
-
-mod inspect;
-mod remote;
-mod terminal;
-#[cfg(test)]
-mod tests;
-mod witness_listing;
 
 #[derive(Subcommand)]
 #[command(mut_subcommands = |command| command.display_order(0))]
@@ -399,6 +399,7 @@ fn parse_blob(text: &str) -> Result<BlobArg, String> {
         .collect::<Result<Vec<_>, _>>()
         .map(BlobArg)
 }
+
 fn parse_cursor(text: &str) -> Result<CursorArg, String> {
     if !(70..=1092).contains(&text.len())
         || !text.len().is_multiple_of(2)
@@ -412,6 +413,7 @@ fn parse_cursor(text: &str) -> Result<CursorArg, String> {
         .collect::<Result<Vec<_>, _>>()
         .map(CursorArg)
 }
+
 fn help() {
     Cli::command().print_help().unwrap();
     println!();

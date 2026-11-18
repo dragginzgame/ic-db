@@ -61,6 +61,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         .unwrap();
     host
 }
+
 #[test]
 fn order_and_count_are_validated_before_materialization() {
     let row = SetRow {
@@ -103,6 +104,7 @@ fn order_and_count_are_validated_before_materialization() {
     over.scores.0.insert(1);
     assert!(matches!(over.encode(), Err(Error::Limit)));
 }
+
 #[test]
 fn set_and_list_counts_share_one_row_budget() {
     let mut row = Mixed {
@@ -136,6 +138,7 @@ fn set_and_list_counts_share_one_row_budget() {
     bad.push(0);
     assert!(matches!(BlobRow::decode(&bad), Err(Error::Corrupt)));
 }
+
 #[test]
 fn stored_duplicates_refuse_mutation_and_schema_changes_refuse_reopen() {
     let backing = VectorMemory::default();

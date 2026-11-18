@@ -5,6 +5,7 @@ use crate::{
 };
 use ic_db::{Batch, Comparison, Entity};
 
+/// Exercise stored enum collections with the selected operation and bytes.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "enum_collections",
@@ -50,6 +51,7 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
     ))
 }
 
+/// Check the fixture’s three enum set membership cases.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "enum_set_membership",

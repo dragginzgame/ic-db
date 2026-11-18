@@ -146,9 +146,11 @@ impl Field {
             reference,
         })
     }
+
     pub fn required_key(&self) -> bool {
         self.kind.primary_key() && !self.optional && self.many.is_none()
     }
+
     pub fn indexable(&self) -> bool {
         self.many.is_none()
             && matches!(
@@ -180,6 +182,7 @@ impl Field {
                     | Kind::Named(_, _)
             )
     }
+
     pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
         if let Kind::Named(_, indirect) = &self.kind {
             return match (self.optional, indirect) {
@@ -207,6 +210,7 @@ impl Field {
             quote!(::ic_db::IndexValue::from(row.#ident))
         }
     }
+
     pub fn rust_type(&self) -> TokenStream {
         let base = match &self.kind {
             Kind::Named(path, indirect) => {
@@ -252,6 +256,7 @@ impl Field {
             base
         }
     }
+
     pub fn description(&self) -> TokenStream {
         let managed = self.managed.map_or_else(
             || quote!(None),
@@ -283,6 +288,7 @@ impl Field {
         };
         quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference, default:#default, managed:#managed })
     }
+
     pub fn type_description(&self) -> TokenStream {
         let item = match &self.kind {
             Kind::Named(path, _) => {
@@ -319,6 +325,7 @@ impl Field {
             item
         }
     }
+
     pub fn validation(&self, ident: &syn::Ident) -> TokenStream {
         if self.many.is_some() {
             return quote!();
@@ -341,9 +348,11 @@ impl Field {
         };
         quote!(if #invalid { return Err(::ic_db::Error::Limit); })
     }
+
     pub fn encode(&self, ident: &syn::Ident) -> TokenStream {
         self.encode_with(&quote!(&self.#ident))
     }
+
     pub fn encode_with(&self, value: &TokenStream) -> TokenStream {
         let write = match &self.kind {
             Kind::Named(path, indirect) => {
@@ -396,10 +405,12 @@ impl Field {
             quote!({ let value = #value; #write; })
         }
     }
+
     pub fn decode(&self, ident: &syn::Ident) -> TokenStream {
         let value = self.read_value();
         quote!(#ident: #value,)
     }
+
     fn read_item_result(&self) -> TokenStream {
         match &self.kind {
             Kind::Named(path, indirect) => {
@@ -435,6 +446,7 @@ impl Field {
             Kind::Blob(max) => quote!(reader.blob(#max as usize)),
         }
     }
+
     pub fn read_result(&self) -> TokenStream {
         let item = self.read_item_result();
         let read = if let Some(max) = self.many {
@@ -448,6 +460,7 @@ impl Field {
             read
         }
     }
+
     pub fn read_value(&self) -> TokenStream {
         let read = self.read_result();
         quote!((#read)?)
@@ -496,6 +509,7 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
         max_items,
     ))
 }
+
 fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     let mut prim = None;
     let mut named = None;
