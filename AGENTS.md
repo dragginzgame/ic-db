@@ -13,9 +13,11 @@ This overlay owns local authority, product boundaries and qualification choices.
 - A request to deploy, ship or release IC DB authorizes both GitHub delivery on
   `dragginzgame/ic-db` `main` and crates.io publication of every crate in the
   Makefile’s `CARGO_PUBLISH_PACKAGES` selection (currently `ic-db-macros` and
-  `ic-db`). That request is the publication confirmation. After verifying the
-  tag, run `make publish` and verify each selected crate at the tagged version
-  in the registry. Honor an explicitly source-only request. Keep the CLI and
+  `ic-db`). The maintainer’s standing deploy authorization supersedes the old
+  source-only policy. A deploy request is sufficient confirmation for both steps.
+  From the verified tag, run `make publish`. Delivery is complete when the tag is
+  on GitHub and each selected crate is visible at that version on crates.io.
+  Honor an explicitly source-only request. Keep the CLI and
   qualification workspace unpublished. Live-canister deployment, IcyDB feature
   retirement and runtime migration remain excluded. A hard cut never authorizes deleting retained data.
 - Read the opening status and affected sections of the
