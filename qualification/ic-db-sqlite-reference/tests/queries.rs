@@ -9,7 +9,8 @@ use ic_storage::{
 };
 use rusqlite::{Connection, params};
 
-#[entity(pk(field="id"), index(fields=["lane","rank"]), fields(
+#[entity(pk(field="id"), index(fields=["lane","rank"]),
+    index(fields=["lane","price","id"], unique, present_only), fields(
     field(name="id",value(item(prim="Nat64"))),
     field(name="lane",value(item(prim="Nat8"))),
     field(name="rank",value(item(prim="Nat8"))),
@@ -115,57 +116,63 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let page = |after: Option<&QueryCursor>, bytes| {
-            let prefix = [0_u8.into()];
-            let mut q = db
-                .query::<Item>()
-                .using_index("lane,rank", &prefix)
-                .filter("visible", Comparison::Eq, true)
-                .byte_limit(bytes)
-                .work_limit(2);
-            if descending {
-                q = q.descending();
-            }
-            if let Some(cursor) = after {
-                q = q.after(cursor);
-            }
-            q.fetch_as::<Id>().unwrap()
-        };
-        let mut boundaries = vec![(None, 0)];
-        let mut saw_empty = false;
-        let mut saw_retry = false;
-        for _ in 0..=20 {
-            let (cursor, offset) = boundaries.last().unwrap();
-            let p = page(cursor.as_ref(), 8);
-            let ids: Vec<_> = p.rows.iter().map(|v| v.id).collect();
-            assert!(expected[*offset..].starts_with(&ids));
-            let end = offset + ids.len();
-            let Some(next) = p.next else {
-                assert_eq!(end, expected.len());
-                break;
-            };
-            saw_empty |= ids.is_empty();
-            // Same start and work budget, but room for two IDs. If the second
-            // candidate qualifies, the narrow page must retry it on continuation.
-            saw_retry |= ids.len() == 1 && page(cursor.as_ref(), 16).rows.len() == 2;
-            boundaries.push((
-                Some(QueryCursor::from_bytes(&next.to_bytes()).unwrap()),
-                end,
-            ));
-        }
-        assert!(saw_empty && saw_retry);
-        for (mut cursor, offset) in boundaries {
-            let mut suffix = Vec::new();
-            for _ in 0..=20 {
-                let p = page(cursor.as_ref(), 8);
-                suffix.extend(p.rows.into_iter().map(|r| r.id));
-                cursor = p.next;
-                if cursor.is_none() {
-                    break;
+        for hinted in [false, true] {
+            let page = |after: Option<&QueryCursor>, bytes| {
+                let prefix = [0_u8.into()];
+                let mut q = db
+                    .query::<Item>()
+                    .filter("lane", Comparison::Eq, 0_u8)
+                    .order_by(&["rank", "id"])
+                    .filter("visible", Comparison::Eq, true)
+                    .byte_limit(bytes)
+                    .work_limit(2);
+                if hinted {
+                    q = q.using_index("lane,rank", &prefix);
                 }
+                if descending {
+                    q = q.descending();
+                }
+                if let Some(cursor) = after {
+                    q = q.after(cursor);
+                }
+                q.fetch_as::<Id>().unwrap()
+            };
+            let mut boundaries = vec![(None, 0)];
+            let mut saw_empty = false;
+            let mut saw_retry = false;
+            for _ in 0..=20 {
+                let (cursor, offset) = boundaries.last().unwrap();
+                let p = page(cursor.as_ref(), 8);
+                let ids: Vec<_> = p.rows.iter().map(|v| v.id).collect();
+                assert!(expected[*offset..].starts_with(&ids));
+                let end = offset + ids.len();
+                let Some(next) = p.next else {
+                    assert_eq!(end, expected.len());
+                    break;
+                };
+                saw_empty |= ids.is_empty();
+                // Same start and work budget, but room for two IDs. If the second
+                // candidate qualifies, the narrow page must retry it on continuation.
+                saw_retry |= ids.len() == 1 && page(cursor.as_ref(), 16).rows.len() == 2;
+                boundaries.push((
+                    Some(QueryCursor::from_bytes(&next.to_bytes()).unwrap()),
+                    end,
+                ));
             }
-            assert!(cursor.is_none());
-            assert_eq!(suffix, expected[offset..]);
+            assert!(saw_empty && saw_retry);
+            for (mut cursor, offset) in boundaries {
+                let mut suffix = Vec::new();
+                for _ in 0..=20 {
+                    let p = page(cursor.as_ref(), 8);
+                    suffix.extend(p.rows.into_iter().map(|r| r.id));
+                    cursor = p.next;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                assert!(cursor.is_none());
+                assert_eq!(suffix, expected[offset..]);
+            }
         }
     }
 }
@@ -258,4 +265,111 @@ fn grouped_decimal_averages_agree_across_reopen_and_work_limits() {
         }
         assert!(completed);
     }
+}
+
+#[test]
+fn automatic_counts_follow_committed_index_membership_across_reopen() {
+    let (sql, host) = fixture();
+    let mut db = open(&host);
+    let price = Decimal::try_new(125, 2).unwrap();
+    let check =
+        |db: &Database<VectorMemory>| {
+            let total: u32 = sql
+                .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                db.query::<Item>().work_limit(1).count().unwrap().value,
+                u64::from(total)
+            );
+            for lane in [0_u8, 1, 2, 3] {
+                let (all, priced, absent): (u32, u32, u32) = sql
+                    .query_row(
+                        "SELECT COUNT(*), COUNT(*) FILTER (WHERE cents=125),
+                 COUNT(*) FILTER (WHERE cents IS NULL) FROM items WHERE lane=?1",
+                        [lane],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .unwrap();
+                let query = || db.query::<Item>().filter("lane", Comparison::Eq, lane);
+                let prefix = query().count().unwrap();
+                assert_eq!(
+                    (prefix.value, prefix.fetched),
+                    (u64::from(all), 0),
+                    "lane {lane}"
+                );
+                let sparse = query()
+                    .filter("price", Comparison::Eq, price)
+                    .count()
+                    .unwrap();
+                assert_eq!(
+                    (sparse.value, sparse.fetched),
+                    (u64::from(priced), 0),
+                    "priced lane {lane}"
+                );
+                // A lost entry and a stale entry in the same prefix can cancel in the total.
+                for id in [2_u32, 3, 9, 14, 15] {
+                    let present: bool = sql.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM items WHERE lane=?1 AND cents=125 AND id=?2)",
+                    params![lane, id], |r| r.get(0),
+                ).unwrap();
+                    let member = query()
+                        .filter("price", Comparison::Eq, price)
+                        .filter("id", Comparison::Eq, u64::from(id))
+                        .count()
+                        .unwrap();
+                    assert_eq!(
+                        (member.value, member.fetched),
+                        (u64::from(present), 0),
+                        "lane {lane}, id {id}"
+                    );
+                }
+                assert_eq!(
+                    query().filter_absent("price").count().unwrap().value,
+                    u64::from(absent),
+                    "absent lane {lane}"
+                );
+            }
+        };
+    check(&db);
+
+    let mut batch = Batch::new();
+    let mut moved = db.get::<Item>(3).unwrap().unwrap();
+    moved.lane = 1;
+    moved.price = None;
+    batch.replace(&moved).unwrap();
+    let mut priced = db.get::<Item>(2).unwrap().unwrap();
+    priced.price = Some(price);
+    batch.replace(&priced).unwrap();
+    batch.delete::<Item>(9).unwrap();
+    for id in [14, 15] {
+        batch
+            .insert(&Item {
+                id,
+                lane: 2,
+                rank: 1,
+                visible: true,
+                price: Some(price),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    sql.execute_batch(
+        "BEGIN;
+        UPDATE items SET lane=1, cents=NULL WHERE id=3;
+        UPDATE items SET cents=125 WHERE id=2;
+        DELETE FROM items WHERE id=9;
+        INSERT INTO items VALUES (14,2,1,1,125),(15,2,1,1,125);
+        COMMIT;",
+    )
+    .unwrap();
+    check(&db);
+
+    // The missing target refuses the whole batch. SQLite still holds the last commit.
+    let mut refused = Batch::new();
+    refused.delete::<Item>(14).unwrap();
+    refused.delete::<Item>(99).unwrap();
+    assert!(matches!(db.commit(refused), Err(ic_db::Error::Missing)));
+    check(&db);
+    drop(db);
+    check(&open(&host));
 }

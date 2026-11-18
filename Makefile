@@ -107,11 +107,11 @@ m0-contracts:
 m0-icydb-baseline:
 	@mkdir -p qualification/target/evidence/icydb-baseline
 	rustc -Vv > qualification/target/evidence/icydb-baseline/compiler.txt
-	cargo tree --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown -e normal,build --format '{p} features=[{f}]' > qualification/target/evidence/icydb-baseline/features.txt
-	cargo build --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/icydb-baseline/build.jsonl
+	cargo tree --manifest-path qualification/Cargo.toml --locked -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown -e normal,build --format '{p} features=[{f}]' > qualification/target/evidence/icydb-baseline/features.txt
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/icydb-baseline/build.jsonl
 	@IC_DB_ICYDB_BASELINE_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_icydb_baseline_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/icydb-baseline/build.jsonl)" && \
 	  export IC_DB_ICYDB_BASELINE_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked --offline -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
+	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
 
 .PHONY: m1-records-comparison m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
 m1-records-comparison:
@@ -229,6 +229,10 @@ m2-sort-costs-artifact:
 
 m2-sort-costs: m2-sort-costs-artifact
 	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
+
+.PHONY: m2-listing-costs
+m2-listing-costs: m2-sort-costs-artifact m2-sqlite-reference
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_aggregates ordered_listing_paths_match_sqlite_page_by_page -- --ignored --nocapture
 
 .PHONY: m2-jobs m2-jobs-artifact m2-contention m2-job-envelope
 m2-jobs: m2-jobs-artifact

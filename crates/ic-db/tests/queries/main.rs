@@ -7116,6 +7116,61 @@ fn distinct_count_keys_share_the_query_byte_budget_and_key_bound() {
 }
 
 #[test]
+fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for (lower, upper, expected) in [
+        (C::Ge, C::Le, 4),
+        (C::Gt, C::Le, 3),
+        (C::Ge, C::Lt, 3),
+        (C::Gt, C::Lt, 2),
+    ] {
+        let range = || {
+            db.query::<Entry>()
+                .filter("id", lower, 3_u64)
+                .filter("id", upper, 6_u64)
+        };
+        let count = range().work_limit(expected + 1).count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected as u64, expected, 0)
+        );
+        assert!(matches!(
+            range().work_limit(expected).count(),
+            Err(Error::Limit)
+        ));
+        assert_eq!(range().count_validated().unwrap().fetched, expected);
+    }
+    let empty = db
+        .query::<Entry>()
+        .filter("id", C::Ge, 5_u64)
+        .filter("id", C::Lt, 5_u64)
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!((empty.value, empty.examined), (0, 0));
+    let point = db
+        .query::<Entry>()
+        .filter("id", C::Eq, 1_u64)
+        .count()
+        .unwrap();
+    assert_eq!((point.value, point.fetched), (1, 0));
+    let residual = db
+        .query::<Entry>()
+        .filter("id", C::Gt, 4_u64)
+        .filter("amount", C::Lt, 70_u64)
+        .count()
+        .unwrap();
+    assert_eq!((residual.value, residual.fetched), (2, 4));
+    let alternatives = db
+        .query::<Entry>()
+        .filter_any(&[("id", C::Eq, 1_u64.into()), ("id", C::Eq, 8_u64.into())])
+        .count()
+        .unwrap();
+    assert_eq!((alternatives.value, alternatives.fetched), (2, 8));
+}
+
+#[test]
 fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

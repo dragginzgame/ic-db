@@ -133,7 +133,7 @@ fn ic_read(db: &Database<VectorMemory>, case: Read) -> ResultSet {
         Read::Count(Some(c)) => ResultSet::Count(
             q.using_index("category,id", &[c.into()])
                 .filter("category", Comparison::Eq, c)
-                .count()
+                .count_validated()
                 .unwrap()
                 .value,
         ),

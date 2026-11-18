@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.23.5] - Unreleased
+
+### 🔧 Changed
+
+- Fluent `.count()` counts primary keys directly for an exact key or an interval
+  defined by literal comparisons. The scan work limit still applies.
+  A 511-row range used 47.1% fewer instructions than `.count_validated()`
+  on the measured fixture, including opening. [Count comparison](qualification/README.md#primary-key-range-count-costs-0235)
+- Qualified automatic and hinted ordered listings against SQLite and PocketIC,
+  including tied keys, empty pages and retries at the output-byte limit.
+  [Listing comparison](qualification/README.md#filtered-ordered-listing-with-automatic-index-selection-0235)
+
+- Qualification fixtures and their CLI use IC Wire 0.25.0. The pinned Canic
+  inspection client uses Wire 0.24.6 for Canic’s public protocol types.
+  The native SQLite reference uses rusqlite 0.43.0. Both workspace locks select IC Storage 0.78.2.
+- Updated both workspaces and the tooling snapshot to Toko Tooling 0.45.6.
+  Release and benchmark commands honor the caller’s Cargo network settings.
+
 ## [0.23.4] - 2026-11-18
 
 ### ➕ Added

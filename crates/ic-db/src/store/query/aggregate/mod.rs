@@ -364,7 +364,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
     /// Uses maintained cardinality for unfiltered input and physical index keys for
-    /// covered equality prefixes. Other predicates use row execution. Use
+    /// covered equality prefixes or primary-key comparison ranges. Other predicates use row execution. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be observed before `work_limit` is reached; an exact-boundary
@@ -388,7 +388,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 output_bytes: 8,
             });
         }
-        if super::order::count_prefix(E::SCHEMA, &self.request, &mut plan)? {
+        if super::range::covers_primary(&plan)
+            || super::order::count_prefix(E::SCHEMA, &self.request, &mut plan)?
+        {
             return self.count_keys(&plan);
         }
         let reducer = self.count_reducer(None)?;

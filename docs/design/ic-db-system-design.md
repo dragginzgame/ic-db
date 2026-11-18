@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.1 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -1392,8 +1392,12 @@ names refuse. Typed calls retain full type-contract admission. This adds no
 dynamic query frontend, per-entity dispatch registry or persisted representation.
 Fluent `count()` admits the request before reading maintained cardinality for an
 unfiltered entity, counting physical index entries for a fully covered literal
-equality prefix with complete membership, or executing the remaining predicates
-against rows. Index scans retain the work budget. Metadata and index-only counts
+equality prefix with complete membership, or counting physical row keys when
+every predicate is a mandatory literal comparison represented by the primary-key
+interval. Other shapes execute against rows. As in frozen IcyDB's exact count
+admission (`6d421e3`, `db/session/query/exact_count.rs`), a shortcut requires
+proof for the full predicate. Primary intervals use the existing bounded
+traversal and require no maintained range counters. The [primary-range count measurements](../../qualification/README.md#primary-key-range-count-costs-0235) separate database opening and execution. Index scans retain the work budget. Metadata and index-only counts
 trust the corresponding stored state. Explicit `count_validated()` checks the
 visited rows and their selected index entries. Prefix metadata counts remain unimplemented. A work limit is never
 silently reinterpreted as a partial exact result.

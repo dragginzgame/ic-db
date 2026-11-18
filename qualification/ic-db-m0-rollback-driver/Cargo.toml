@@ -17,6 +17,7 @@ category = "tests"
 
 [dependencies]
 canic.workspace = true
+canic-wire.workspace = true
 clap.workspace = true
 ic-agent.workspace = true
 ic-db-qualification-transport.workspace = true
@@ -31,6 +32,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
 ic-host-artifacts.workspace = true
+rusqlite.workspace = true
 sha2.workspace = true
 wasmparser.workspace = true
 

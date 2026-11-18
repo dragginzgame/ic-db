@@ -147,7 +147,7 @@ enum Command {
     Status,
     /// Read the exact maintained whole-entity row count without scanning rows.
     #[command(
-        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered or row-validating counts, use db query ENTITY --select count.\nSupports every entity listed by db entities."
+        after_help = "Uses atomic entity metadata; it does not validate every row or index.\nFor filtered counts, use db query ENTITY --select count.\nSupports every entity listed by db entities."
     )]
     Count {
         /// Exact declared entity name; use db entities to list names.

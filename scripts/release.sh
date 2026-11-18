@@ -51,7 +51,7 @@ case "${1:-}" in
           VALIDATION_LOG_DIR="$PWD/target/release-validation/$RELEASE_SOURCE" \
           bash "$shared/run-validation-targets.sh" --fail-fast release-setup
         # The shared logger retains failure logs; each gate executes once, in order.
-        CARGO_NET_OFFLINE=true VALIDATION_REPOSITORY_ROOT="$PWD" \
+        VALIDATION_REPOSITORY_ROOT="$PWD" \
           VALIDATION_LOG_DIR="$PWD/target/release-validation/$RELEASE_SOURCE" \
           bash "$shared/run-validation-targets.sh" --fail-fast \
           tools-check release-lint fmt-check test doc docs-check m0-contracts \

@@ -1411,7 +1411,7 @@ dependencies = [
  "ethnum",
  "ic-db-macros",
  "ic-platform-types 0.21.2",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "memchr",
  "sha2 0.11.1",
  "ulid",
@@ -1424,7 +1424,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "toko-tooling",
 ]
 
@@ -1436,7 +1436,7 @@ dependencies = [
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "icydb",
  "rusqlite",
  "toko-tooling",
@@ -1456,7 +1456,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "toko-tooling",
 ]
 
@@ -1466,7 +1466,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "toko-tooling",
 ]
 
@@ -1476,8 +1476,8 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
- "ic-wire 0.24.6",
+ "ic-storage 0.78.2",
+ "ic-wire 0.25.0",
  "toko-tooling",
 ]
 
@@ -1493,6 +1493,8 @@ dependencies = [
  "ic-host-text",
  "ic-testkit",
  "ic-wire 0.24.6",
+ "ic-wire 0.25.0",
+ "rusqlite",
  "rustyline",
  "serde",
  "serde_json",
@@ -1511,8 +1513,8 @@ dependencies = [
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
- "ic-wire 0.24.6",
+ "ic-storage 0.78.2",
+ "ic-wire 0.25.0",
  "toko-tooling",
 ]
 
@@ -1538,7 +1540,7 @@ name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
  "ic-platform-runtime 0.23.17",
- "ic-wire 0.24.6",
+ "ic-wire 0.25.0",
  "serde",
  "toko-tooling",
 ]
@@ -1550,7 +1552,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "toko-tooling",
 ]
 
@@ -1559,7 +1561,7 @@ name = "ic-db-sqlite-reference"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-storage 0.78.1",
+ "ic-storage 0.78.2",
  "rusqlite",
  "toko-tooling",
 ]
@@ -1714,9 +1716,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.1"
+version = "0.78.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1c0763bc875711db48da5a4a046bd1e21f2faf93c5c4025239a97d199a1102"
+checksum = "2f92a5e8b6e284e5de24ed7eee39d6a55b9a3c5bc81d3a53f6c0fad3828eff73"
 dependencies = [
  "ic-platform",
  "ic-platform-runtime 0.23.17",
@@ -1782,6 +1784,18 @@ name = "ic-wire"
 version = "0.24.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c807d4a24382291f57bfdaacd200ccc38b4be57983612c978444999465a78295"
+dependencies = [
+ "bytemuck",
+ "postcard",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
+name = "ic-wire"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6060f57a051fb12d02f6140a8751fc122c1c23925ee6412ee600743f5c664eb"
 dependencies = [
  "bytemuck",
  "postcard",
@@ -2848,9 +2862,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.42.0"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4edff0039f148731aee2fd80f76dbfeb12d204ab3d1c544838d34e02151049b"
+checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
 dependencies = [
  "bitflags",
  "fallible-iterator",
@@ -3583,9 +3597,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.5"
+version = "0.45.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42002251ec98a21c0062fce98b8bf7ae650107995513e68693a3884bfb1a6ebf"
+checksum = "85a1ec2a953eb8c41f66fdb121591c64e7ae3b6d77196a982740e790f0ed021a"
 
 [[package]]
 name = "toml_datetime"

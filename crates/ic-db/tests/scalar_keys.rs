@@ -23,7 +23,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     encoded: &[Vec<u8>],
     make: impl Fn(E::Key, Option<E::Key>, u64) -> E,
 ) where
-    E::Key: Debug,
+    E::Key: Debug + for<'a> Into<ic_db::IndexValue<'a>>,
 {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -47,6 +47,17 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     db.commit(b).unwrap();
     for (row, &id) in rows.iter().zip(ids) {
         assert_eq!(db.get::<E>(id).unwrap(), Some(row.clone()));
+    }
+    for (offset, &id) in ids.iter().enumerate() {
+        let suffix = db
+            .query::<E>()
+            .filter(E::SCHEMA.primary_key, ic_db::Comparison::Ge, id)
+            .count()
+            .unwrap();
+        assert_eq!(
+            (suffix.value, suffix.fetched),
+            ((ids.len() - offset) as u64, 0)
+        );
     }
     let first = db.page::<E>(None, 2).unwrap();
     assert_eq!(first.rows, rows[..2]);

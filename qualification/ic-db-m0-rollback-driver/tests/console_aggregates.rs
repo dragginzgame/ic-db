@@ -884,3 +884,142 @@ async fn document_replacement_costs() {
     }
     pic.drop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the query-measurements Wasm; run make m2-listing-costs"]
+async fn ordered_listing_paths_match_sqlite_page_by_page() {
+    type Sample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    let sql = rusqlite::Connection::open_in_memory().unwrap();
+    sql.execute_batch("CREATE TABLE docs(id INTEGER PRIMARY KEY, entry_id INTEGER, score INTEGER, published INTEGER);
+        INSERT INTO docs VALUES (1,1,-10,0);").unwrap();
+    let set_template = async |visible| {
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "replace_document",
+            8,
+            &(
+                "template",
+                None::<String>,
+                visible,
+                None::<u64>,
+                -10_i64,
+                None::<i64>,
+            ),
+        )
+        .await
+        .unwrap();
+    };
+    // Move the visible template to entry 2 and seed a high-scoring distractor.
+    set_template(true).await;
+    call::<Result<(), u8>>(pic, canister, "reference_batch", 10, &3_u8)
+        .await
+        .unwrap();
+    let outside = [(
+        2_u64,
+        ic_wire::ByteBuf::from(2_u64.to_be_bytes().to_vec()),
+        99_i64,
+    )];
+    call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(&outside[..], false))
+        .await
+        .unwrap();
+    sql.execute("INSERT INTO docs VALUES (2,2,99,1)", [])
+        .unwrap();
+    call::<Result<(), u8>>(pic, canister, "write", 4, &(1_u64, 1_u64, 11_u64, 1_u8))
+        .await
+        .unwrap();
+
+    // replace_document selects entry 1; indexed_batch copies its visibility.
+    for visible in [true, false] {
+        set_template(visible).await;
+        let mut rows = Vec::new();
+        for id in 3..=130_u64 {
+            let score = (id % 12) as i64;
+            if (score % 4 == 0 || id % 13 == 0) == visible {
+                rows.push((id, ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()), score));
+                sql.execute(
+                    "INSERT INTO docs VALUES (?1,1,?2,?3)",
+                    rusqlite::params![id as i64, score, visible],
+                )
+                .unwrap();
+            }
+        }
+        for chunk in rows.chunks(8) {
+            call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
+                .await
+                .unwrap();
+        }
+    }
+    let expected = sql
+        .prepare("SELECT id FROM docs WHERE entry_id=1 AND published=1 ORDER BY score DESC,id DESC")
+        .unwrap()
+        .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let before = pic.get_stable_memory(canister).await;
+    let page = async |hinted: bool, cursor: &Option<Vec<u8>>, work: u32, bytes: u32| {
+        call::<Sample>(
+            pic,
+            canister,
+            "measured_listing",
+            189,
+            &(hinted, cursor, work, bytes),
+        )
+        .await
+    };
+    for (shape, work, bytes) in [("full", 128, 160), ("sparse", 5, 160), ("byte", 32, 16)] {
+        let (mut auto, mut hint) = (None, None);
+        let mut offset = 0;
+        let mut saw_boundary = false;
+        for number in 1..=150 {
+            let a = page(false, &auto, work, bytes).await;
+            let h = page(true, &hint, work, bytes).await;
+            assert_eq!(
+                (&a.0, a.1.is_some(), a.2, a.3),
+                (&h.0, h.1.is_some(), h.2, h.3)
+            );
+            let end = offset + a.0.len();
+            assert_eq!(a.0, expected[offset..end]);
+            assert!(a.2 <= work && a.3 <= a.2);
+            assert!(a.0.len() <= 20 && a.0.len() * 8 <= bytes as usize);
+            println!(
+                "listing-page,{shape},{number},{},{},{},{},{}",
+                a.0.len(),
+                a.2,
+                a.3,
+                a.4,
+                h.4
+            );
+            saw_boundary |= match shape {
+                "full" => a.0.len() == 20,
+                "sparse" => a.0.is_empty() && a.1.is_some() && a.2 == work,
+                "byte" if a.0.len() == 2 && a.1.is_some() => {
+                    let wider = page(false, &auto, work, 160).await;
+                    wider
+                        .0
+                        .get(2)
+                        .is_some_and(|id| Some(id) == expected.get(end))
+                }
+                _ => false,
+            };
+            offset = end;
+            if a.1.is_none() {
+                break;
+            }
+            assert!(number < 150 && a.1 != auto && h.1 != hint);
+            auto = a.1;
+            hint = h.1;
+        }
+        assert_eq!(offset, expected.len());
+        assert!(saw_boundary, "{shape} fixture missed its page boundary");
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
+}

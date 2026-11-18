@@ -76,7 +76,7 @@ ok(!-e $receipt, 'failed recheck invalidates an earlier whole-gate receipt');
 is_deeply([split /\n/, read_file("$temp/target/dispatch")], [@gates[0..8]],
     'required failure stops later leaves');
 my @attempts = glob "$temp/target/release-validation/$source/validation.*";
-is(scalar @attempts, 2, 'setup and offline validation have separate retained logger directories');
+is(scalar @attempts, 2, 'setup and locked validation have separate retained logger directories');
 my ($failed) = grep { read_file("$_/timings.tsv") =~ /m0-core\tFAIL\t/ } @attempts;
 ok(defined $failed, 'failed phase and elapsed time retained');
 like(read_file("$failed/7.log"), qr/selected leaf failed/, 'original failure output retained');
@@ -99,7 +99,7 @@ write_file("$temp/target/dispatch", '');
 ($status, $out) = run('bash', 'scripts/release.sh', 'release-verify');
 isnt($status, 0, 'failed evidence handoff refuses validation');
 ok(!-e $receipt, 'evidence handoff failure cannot leave a valid receipt');
-is(read_file("$temp/target/dispatch"), "release-setup\n", 'failed setup evidence withholds offline gate');
+is(read_file("$temp/target/dispatch"), "release-setup\n", 'failed setup evidence withholds validation gate');
 like($out, qr/complete summary retained/, 'handoff failure reports preserved evidence');
 $ENV{TEST_SUMMARY} = '';
 ($status, $out) = run('bash', 'scripts/release.sh', 'release-verify');

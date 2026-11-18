@@ -327,7 +327,9 @@ let count = db.query::<Entry>()
 
 An unfiltered count reads maintained entity metadata. When literal equalities cover
 a complete index prefix, the engine counts its entries within the work budget.
-Other filters use row execution. Metadata and index-only counts trust stored
+A range defined entirely by primary-key equality or inequalities (`<`, `<=`,
+`>`, `>=`) counts physical row keys within the same budget. Other filters use
+row execution. Metadata and key-only counts trust stored
 counts and keys. Use `.count_validated()` for diagnostics that check each visited
 row and its selected index entry. [Measured count paths](qualification/README.md#prefix-count-paths-0234)
 
@@ -1088,7 +1090,7 @@ performance/comparison workloads remain explicitly selected.
 | Phase / owner | Actual checks and guarantees | Inputs / trigger |
 | --- | --- | --- |
 | Fresh admission / shared runner + local adapter | Clean source, branch/remote/public visibility, changelog and exact saved release intent | Every release and relevant recovery hook; no setup effects in preflight |
-| Preparation / `release-setup` | Locked fetch for both workspaces; `install-tools`, `release-tools`, `m0-setup` | Once per validation attempt; failure withholds the offline gate |
+| Preparation / `release-setup` | Locked fetch for both workspaces; `install-tools`, `release-tools`, `m0-setup` | Once per validation attempt; failure withholds the validation gate |
 | Native/target lint / `release-lint` | Root `clippy`; native driver/schema all targets; non-baseline Wasm libraries; fault, maintenance-v2, maintenance-faults and retained-console features | Product, macro/generated schema and qualification source; both locks, compiler, flags and selected toolchain |
 | Native contracts / shared logger | `tools-check`, `fmt-check`, `test` (engine/macros with build feature), `doc`, `docs-check`, `m0-contracts` (numeric/schema/row/nested/query examples) | Each release; tools/source/docs and both workspace inputs |
 | Installed M0 / fixture owners | `m0-core`: one artifact/session, entrypoints + rollback + batch + reads; separate `m0-aggregation` and `m0-maintenance` variants | Message boundaries, final-state constraints, pages, revision invalidation and interrupted migration; fixture source/features, server and compiler |
@@ -1099,7 +1101,7 @@ performance/comparison workloads remain explicitly selected.
 
 Required stages execute once per attempt, fail fast, and retain raw logs plus
 `timings.tsv` under `target/release-validation/<source>/validation.*`. Preparation
-and offline validation have separate directories. An earlier pass is invalidated
+and locked validation have separate directories. An earlier pass is invalidated
 before a new verification attempt; only complete success creates its source receipt.
 Missing, changed or symlinked receipts refuse version preparation. Source and
 destination checks still run after validation and at delivery boundaries.

@@ -13,13 +13,19 @@ use std::ops::Bound;
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
+fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
     let start = ic_platform_runtime::raw::instruction_counter();
-    if mode <= 1 || mode == 5 {
+    if matches!(mode, 0 | 1 | 5..=8) {
         let db = database();
         let opened = ic_platform_runtime::raw::instruction_counter();
         let mut query = db.query::<Entry>().work_limit(512);
-        if let Some(category) = category {
+        if matches!(mode, 7 | 8) {
+            query = query.filter("id", Comparison::Ge, 1_u64).filter(
+                "id",
+                Comparison::Lt,
+                operand.expect("exclusive primary upper bound"),
+            );
+        } else if let Some(category) = operand {
             if mode != 5 {
                 query = query.filter("category", Comparison::Eq, category);
             }
@@ -27,11 +33,12 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
                 query = query.using_index("category,id", &[category.into()]);
             }
         }
-        let result = match if mode == 5 {
-            query.count_index_entries()
-        } else {
-            query.count_validated()
-        } {
+        let count = match mode {
+            5 => query.count_index_entries(),
+            6 | 7 => query.count(),
+            _ => query.count_validated(),
+        };
+        let result = match count {
             Ok(value) => Some(value.value),
             Err(Error::Limit) => None,
             Err(error) => panic!("unexpected profile refusal: {error:?}"),
@@ -55,10 +62,10 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
     let mut prefix = vec![if mode == 2 { 2 } else { 3 }];
     prefix.extend(Entry::ID.to_be_bytes());
     if mode == 2 {
-        assert!(category.is_none());
+        assert!(operand.is_none());
     } else {
         prefix.extend(Entry::SCHEMA.indexes[0].id.to_be_bytes());
-        prefix.extend(category.unwrap().to_be_bytes());
+        prefix.extend(operand.unwrap().to_be_bytes());
     }
     let mut end = prefix.clone();
     while end.last() == Some(&255) {

@@ -12,7 +12,7 @@ select_metadata_editor() {
 
 render_release_metadata() {
     local original="$1" candidate="$2" evidence="${2%/*}" lock
-    cargo metadata --locked --offline --format-version 1 --no-deps > "$evidence/metadata.json" || return
+    cargo metadata --locked --format-version 1 --no-deps > "$evidence/metadata.json" || return
     yq -p toml -o json '.' "$original/Cargo.toml" > "$evidence/manifest.json" || return
     jq -n --slurpfile manifest "$evidence/manifest.json" --slurpfile metadata "$evidence/metadata.json" '
         {manifest: $manifest[0], members: ($metadata[0] | . as $m |
@@ -43,7 +43,7 @@ check_qualification_lock() (
         git show "$RELEASE_COMMIT:qualification/Cargo.lock" > "$evidence/actual.lock"
     else
         cp qualification/Cargo.lock "$evidence/actual.lock"
-        cargo metadata --manifest-path qualification/Cargo.toml --locked --offline \
+        cargo metadata --manifest-path qualification/Cargo.toml --locked \
             --format-version 1 > "$evidence/metadata.json"
     fi
     cmp "$evidence/expected.lock" "$evidence/actual.lock"

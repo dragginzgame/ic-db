@@ -514,6 +514,34 @@ pub async fn run(
             }
         }
     };
+    let profile_count = async |mode: u8, operand: Option<u64>| {
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "count_profile",
+                ic_wire::encode(
+                    &(mode, operand),
+                    Encoding::Frame {
+                        method: 9,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        ic_wire::decode::<(Option<u64>, u64, u64)>(
+            &reply,
+            Encoding::Frame {
+                method: 9,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
     let compare_counts = async |phase: &str, expected_rows: &[Row]| {
         if !counts {
             return;
@@ -601,32 +629,7 @@ pub async fn run(
                     &[0, 1, 3, 4, 5]
                 };
                 for &mode in modes {
-                    let reply = pic
-                        .query_call(
-                            canister,
-                            canister,
-                            "count_profile",
-                            ic_wire::encode(
-                                &(mode, category),
-                                Encoding::Frame {
-                                    method: 9,
-                                    direction: Direction::Request,
-                                },
-                                LIMITS,
-                            )
-                            .unwrap(),
-                        )
-                        .await
-                        .unwrap();
-                    let (result, opening, work): (Option<u64>, u64, u64) = ic_wire::decode(
-                        &reply,
-                        Encoding::Frame {
-                            method: 9,
-                            direction: Direction::Response,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap();
+                    let (result, opening, work) = profile_count(mode, category).await;
                     let expected_result = if mode == 0 && expected_rows.len() >= 512 {
                         None
                     } else {
@@ -639,6 +642,25 @@ pub async fn run(
                     assert_eq!(pic.get_stable_memory(canister).await, backing);
                     eprintln!(
                         "ic-db count_profile phase={phase} rows={} mode={mode} category={category:?} result={result:?} opening={opening} work={work}",
+                        expected_rows.len()
+                    );
+                }
+            }
+        }
+        if profile {
+            let backing = pic.get_stable_memory(canister).await;
+            for upper in [1_u64, 2, 33, 257, 512, 513] {
+                let matches = expected_rows
+                    .iter()
+                    .filter(|row| (1..upper).contains(&row.0))
+                    .count();
+                let expected = (matches < 512).then_some(matches as u64);
+                for (mode, path) in [(7, "automatic"), (8, "validated")] {
+                    let (result, opening, work) = profile_count(mode, Some(upper)).await;
+                    assert_eq!(result, expected, "{path}, {phase}, id < {upper}");
+                    assert_eq!(pic.get_stable_memory(canister).await, backing);
+                    eprintln!(
+                        "ic-db primary_count phase={phase} rows={} upper={upper} path={path} matches={matches} result={result:?} opening={opening} work={work}",
                         expected_rows.len()
                     );
                 }

@@ -2,7 +2,6 @@
 # Explicit record comparisons or entity growth; no implicit release/CI selection.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export CARGO_NET_OFFLINE=true
 workload="${1:-scalar}"
 unset IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
 case "$workload" in

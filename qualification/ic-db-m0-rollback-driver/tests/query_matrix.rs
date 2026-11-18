@@ -87,7 +87,7 @@ fn prefix_counts(source: &[Row], legacy: bool) -> Vec<Case> {
     let mut cases = Vec::new();
     for category in [0_u64, 3, 99] {
         let count = source.iter().filter(|row| row.1 == category).count() as u64;
-        for (mode, family) in [(1_u8, "validated"), (5, "entries")] {
+        for (mode, family) in [(1_u8, "validated"), (5, "entries"), (6, "automatic")] {
             let (method, id, request) = if legacy {
                 ("count_rows", 8, encode(8, &Some(category)))
             } else {

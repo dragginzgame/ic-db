@@ -486,3 +486,50 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
         ic_platform_runtime::raw::instruction_counter() - start,
     )
 }
+
+#[cfg(feature = "query-measurements")]
+type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
+
+// Both measurements use the same admitted query. Only the optional hint varies.
+#[cfg(feature = "query-measurements")]
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime, name = "measured_listing",
+    guard = crate::transport::admit::<189>, decode = crate::transport::decode::<_, 189>,
+    encode = crate::transport::encode::<_, 189>, max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_listing(
+    (hinted, after, work, bytes): (bool, Option<Vec<u8>>, u32, u32),
+) -> ListingSample {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    let host = runtime();
+    let db = open(&host);
+    let cursor = after
+        .as_deref()
+        .map(QueryCursor::from_bytes)
+        .transpose()
+        .unwrap();
+    let mut q = db
+        .query::<Document>()
+        .filter("entry_id", Comparison::Eq, 1_u64)
+        .filter("published", Comparison::Eq, true)
+        .order_by(&["score", "id"])
+        .descending()
+        .limit(20)
+        .work_limit(work as usize)
+        .byte_limit(bytes as usize);
+    if hinted {
+        q = q.using_index("entry_id,score", &[1_u64.into()]);
+    }
+    if let Some(cursor) = &cursor {
+        q = q.after(cursor);
+    }
+    let page = q.fetch_as::<IdOnly>().unwrap();
+    (
+        page.rows.into_iter().map(|r| r.id).collect(),
+        page.next.map(|c| c.to_bytes()),
+        page.examined as u32,
+        page.fetched as u32,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
+}

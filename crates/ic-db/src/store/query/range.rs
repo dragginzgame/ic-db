@@ -1,6 +1,6 @@
 //! Tighten the selected traversal by mandatory leading-key predicates and continuation.
 //! Uses the admitted fixed prefix; this does not select new paths.
-use super::{Comparison, Plan, Request};
+use super::{Comparison, Plan, Request, Term, TermOperand};
 use crate::{EntitySchema, Error, store_key::StoreKey};
 use std::{cmp::Ordering, ops::Bound};
 
@@ -38,6 +38,35 @@ impl Endpoint {
     }
 }
 
+// Report the actual encoded operand used to tighten this path. A residual
+// operand may exceed the physical key bound even when its query is valid.
+fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Option<&[u8]>, Error> {
+    let TermOperand::Literal { bytes, .. } = &term.operand else {
+        return Ok(None);
+    };
+    let operand = match term.comparison {
+        Comparison::Eq | Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
+            bytes.as_slice()
+        }
+        // Drop the terminator but retain escaping and the optional-present tag.
+        Comparison::StartsWith if secondary => {
+            bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
+        }
+        _ => return Ok(None),
+    };
+    Ok((prefix_len + operand.len() <= crate::MAX_INDEX_KEY_BYTES).then_some(operand))
+}
+
+// Every predicate must independently constrain this same primary-key interval.
+pub(super) fn covers_primary(plan: &Plan<'_>) -> bool {
+    plan.index.is_none()
+        && plan.terms.iter().all(|term| {
+            !term.or_next
+                && term.position == plan.primary
+                && matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
+        })
+}
+
 pub(super) fn bounds(
     entity: &EntitySchema,
     request: &Request<'_>,
@@ -59,36 +88,12 @@ pub(super) fn bounds(
     if let Some(field) = field {
         for clause in plan.terms.split_inclusive(|term| !term.or_next) {
             let [term] = clause else { continue };
-            let super::TermOperand::Literal { bytes, .. } = &term.operand else {
-                continue;
-            };
-            let byte_prefix = secondary && term.comparison == Comparison::StartsWith;
-            if entity.fields[term.position].name != field
-                || !(byte_prefix
-                    || matches!(
-                        term.comparison,
-                        Comparison::Eq
-                            | Comparison::Lt
-                            | Comparison::Le
-                            | Comparison::Gt
-                            | Comparison::Ge
-                    ))
-            {
+            if entity.fields[term.position].name != field {
                 continue;
             }
-            // An admitted Text/Blob prefix keeps its optional-present tag and
-            // escaped bytes, but drops the terminator so extensions remain in range.
-            // Empty prefixes span all present values, excluding absence.
-            let operand = if byte_prefix {
-                bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
-            } else {
-                bytes.as_slice()
-            };
-            // A residual operand may legally exceed the physical key bound.
-            // Optimization must not introduce a refusal for that existing query.
-            if plan.prefix.len() + operand.len() > crate::MAX_INDEX_KEY_BYTES {
+            let Some(operand) = bound_operand(term, secondary, plan.prefix.len())? else {
                 continue;
-            }
+            };
             let mut bytes = plan.prefix.clone();
             bytes.extend_from_slice(operand);
             let end = if secondary

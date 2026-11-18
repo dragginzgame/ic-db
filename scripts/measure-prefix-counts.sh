@@ -3,7 +3,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-export CARGO_NET_OFFLINE=true
 unset IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_PROFILE IC_DB_PREFIX_CANDIDATE
 out="${IC_DB_PREFIX_EVIDENCE_DIR:-$root/qualification/target/evidence/prefix-count-candidate}"
 mkdir -p "$out"
