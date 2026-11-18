@@ -24,6 +24,7 @@ aggregate-comparison = []
 count-comparison = []
 exists-comparison = []
 fluent-comparison = []
+keyset-comparison = []
 query-matrix = ["fluent-comparison", "aggregate-comparison", "count-comparison"]
 
 [dependencies]

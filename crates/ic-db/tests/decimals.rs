@@ -251,7 +251,7 @@ fn uniqueness_reopen_and_key_integrity() {
         b.insert(r).unwrap();
     }
     db.commit(b).unwrap();
-    let read = |db: &Database<VectorMemory>| {
+    let read = |db: &Database| {
         db.index_prefix::<DecimalRow>("zone,value,id", &[true.into()], 32)
             .unwrap()
     };

@@ -1,8 +1,8 @@
 //! Bounded mixed-history witness. These private controls are not product endpoints.
+use crate::handles::{AggregateJobs, Database, RetiredSource, SchemaCopy};
 use crate::{Backing, MemoryRuntime, runtime};
 use ic_db::{
-    AggregateJobs, Batch, Comparison, Database, Entity, Error, JobHandle, JobOutcome,
-    RetiredSource, Schema, SchemaCopy, SchemaTransition, Timestamp,
+    Batch, Comparison, Entity, Error, JobHandle, JobOutcome, Schema, SchemaTransition, Timestamp,
 };
 use ic_db_qualification_transport::mixed::{
     Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
@@ -63,7 +63,7 @@ fn memory(host: &MemoryRuntime<Backing>, slot: usize) -> RuntimeMemory<Backing> 
         .unwrap()
 }
 
-fn open(host: &MemoryRuntime<Backing>, target: bool) -> Result<Database<Backing>, Error> {
+fn open(host: &MemoryRuntime<Backing>, target: bool) -> Result<Database, Error> {
     Database::open(memory(host, usize::from(target)), schema(target))
 }
 
@@ -242,8 +242,8 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
 }
 
 fn run_count<E: Entity>(
-    db: &Database<Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    db: &Database,
+    jobs: &mut AggregateJobs,
     action: CountAction,
     now_ms: i64,
 ) -> Result<CountReply, Error> {
@@ -363,8 +363,10 @@ fn query(_: ic_db::Principal, request: Query) -> QueryReply {
             target,
             parent,
             minimum,
+            work,
             after,
         } => {
+            let work = work.unwrap_or(8);
             let result = open(&runtime(), target)
                 .and_then(|db| {
                     if target {
@@ -372,10 +374,11 @@ fn query(_: ic_db::Principal, request: Query) -> QueryReply {
                             &db,
                             parent,
                             u128::from(minimum).into(),
+                            work,
                             after.as_deref(),
                         )
                     } else {
-                        item_page::<Item>(&db, parent, minimum.into(), after.as_deref())
+                        item_page::<Item>(&db, parent, minimum.into(), work, after.as_deref())
                     }
                 })
                 .map_err(refusal);
@@ -388,9 +391,10 @@ fn query(_: ic_db::Principal, request: Query) -> QueryReply {
 }
 
 fn item_page<E: Entity<Key = u64>>(
-    db: &Database<Backing>,
+    db: &Database,
     parent: u64,
     minimum: ic_db::IndexValue<'_>,
+    work: u16,
     after: Option<&[u8]>,
 ) -> Result<ItemPage, Error> {
     let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
@@ -400,7 +404,7 @@ fn item_page<E: Entity<Key = u64>>(
         .using_index("parent,id", &prefix)
         .filter("score", Comparison::Ge, minimum)
         .order_by(&["parent", "id"])
-        .work_limit(1)
+        .work_limit(usize::from(work))
         .limit(2);
     if let Some(cursor) = &cursor {
         query = query.after(cursor);

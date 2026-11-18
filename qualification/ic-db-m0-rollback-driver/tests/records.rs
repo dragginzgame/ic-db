@@ -504,11 +504,11 @@ fn console_inspects_and_queries() {
     assert!(sorted.contains("Next cursor: none"));
     let filtered_distinct = run_console(
         &binary,
-        "query Entry --select category --distinct --min 0 --order-by category\nquit\n",
+        "query Entry --select category --distinct --min 0 --order-by category\nquery Entry --category 1 --order-by amount:desc --select category --distinct\nquit\n",
     );
     assert_eq!(
         result_table_rows(&filtered_distinct),
-        [vec!["0"], vec!["1"]]
+        [vec!["0"], vec!["1"], vec!["1"]]
     );
     assert!(contains_row(&stdout, &["0", "120"]));
     assert!(contains_row(&stdout, &["1", "93"]));

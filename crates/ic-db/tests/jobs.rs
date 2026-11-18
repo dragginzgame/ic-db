@@ -994,10 +994,7 @@ fn schema() -> Schema {
     Schema::new(&[Row::SCHEMA, Other::SCHEMA]).unwrap()
 }
 
-fn create_stores(
-    host: &MemoryRuntime<VectorMemory>,
-    schema: Schema,
-) -> (Database<VectorMemory>, AggregateJobs<VectorMemory>) {
+fn create_stores(host: &MemoryRuntime<VectorMemory>, schema: Schema) -> (Database, AggregateJobs) {
     let db = Database::create(
         host.open_memory(&StableKey::parse("test.db.v1").unwrap())
             .unwrap(),
@@ -1018,7 +1015,7 @@ fn create(
     host: &MemoryRuntime<VectorMemory>,
     values: &[Option<i128>],
     payload: usize,
-) -> (Database<VectorMemory>, AggregateJobs<VectorMemory>) {
+) -> (Database, AggregateJobs) {
     let (mut db, jobs) = create_stores(host, schema());
     for (chunk, values) in values.chunks(32).enumerate() {
         let mut batch = Batch::new();

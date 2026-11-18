@@ -156,7 +156,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         batch.insert(r).unwrap();
     }
     db.commit(batch).unwrap();
-    let read = |db: &Database<VectorMemory>| {
+    let read = |db: &Database| {
         db.index_prefix::<UlidRow>("zone,value,id", &[true.into()], 32)
             .unwrap()
             .into_iter()

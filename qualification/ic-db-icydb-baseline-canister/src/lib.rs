@@ -180,6 +180,37 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     })
 }
 
+/// Read two matches after the last emitted ID on fixed benchmark input.
+#[cfg(feature = "keyset-comparison")]
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "keyset_listing",
+    guard = crate::transport::admit::<11>,
+    decode = crate::transport::decode::<_, 11>,
+    encode = crate::transport::encode::<_, 11>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn keyset_listing(after: Option<u64>) -> (Vec<Row>, u64) {
+    measure(|| {
+        use icydb::db::query::{FieldRef, asc};
+        let db = db().unwrap();
+        let mut query = db
+            .query::<Entry>()
+            .unwrap()
+            .filter(FieldRef::new("category").eq(1_u64))
+            .filter(FieldRef::new("amount").gte(10_u64))
+            .order_by(asc("id"))
+            .limit(2);
+        if let Some(id) = after {
+            query = query.filter(FieldRef::new("id").gt(id));
+        }
+        let page = query.execute_live_page(None).unwrap();
+        assert!(page.rows.len() == 2 || page.continuation.is_none());
+        page.rows.iter().map(row).collect()
+    })
+}
+
 /// Run the selected filtered listing and report its result and instruction cost.
 #[cfg(feature = "fluent-comparison")]
 #[ic_platform_runtime::query(

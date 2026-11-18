@@ -735,9 +735,98 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
             .fetch_as::<CategoryAmount>(),
         Err(Error::InvalidQuery)
     ));
+    let tuples = db
+        .query::<Entry>()
+        .order_by(&["amount", "category", "id"])
+        .distinct()
+        .fetch_as::<CategoryAmount>()
+        .unwrap();
+    assert_eq!(
+        tuples
+            .rows
+            .iter()
+            .map(|r| (r.amount, r.category))
+            .collect::<Vec<_>>(),
+        [(10, 0), (10, 1), (20, 0), (20, 1)]
+    );
+    let amounts = || {
+        db.query::<Entry>()
+            .order_by_each(&[("amount", Desc), ("category", Asc)])
+            .distinct()
+    };
+    assert_eq!(
+        amounts()
+            .fetch_as::<super::AmountOnly>()
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.amount)
+            .collect::<Vec<_>>(),
+        [20, 10]
+    );
+    assert_eq!(
+        amounts()
+            .descending()
+            .limit(1)
+            .fetch_as::<super::AmountOnly>()
+            .unwrap()
+            .rows[0]
+            .amount,
+        10
+    );
     assert!(matches!(
         db.query::<Entry>()
-            .order_by(&["amount", "category", "id"])
+            .order_by_each(&[("category", Asc), ("amount", Desc)])
+            .distinct()
+            .fetch_as::<super::AmountOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+    // A mandatory literal equality removes category from the varying tuple.
+    let fixed = || db.query::<Entry>().filter("category", C::Eq, 1_u8);
+    let tuples = fixed()
+        .order_by_each(&[("amount", Desc)])
+        .distinct()
+        .fetch_as::<CategoryAmount>()
+        .unwrap();
+    assert_eq!(
+        tuples
+            .rows
+            .iter()
+            .map(|r| (r.category, r.amount))
+            .collect::<Vec<_>>(),
+        [(1, 20), (1, 10)]
+    );
+    let amounts = fixed()
+        .order_by_each(&[("category", Asc), ("amount", Desc)])
+        .distinct()
+        .fetch_as::<super::AmountOnly>()
+        .unwrap();
+    assert_eq!(
+        amounts.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
+        [20, 10]
+    );
+    for (category, expected) in [(1_u8, vec![1]), (9, vec![])] {
+        let page = db
+            .query::<Entry>()
+            .filter("category", C::Eq, category)
+            .order_by_each(&[("amount", Desc)])
+            .distinct()
+            .fetch_as::<super::CategoryOnly>()
+            .unwrap();
+        assert_eq!(
+            page.rows.iter().map(|r| r.category).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(page.examined, 8);
+        assert!(page.next.is_none());
+    }
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_any(&[
+                ("category", C::Eq, 0_u8.into()),
+                ("category", C::Eq, 1_u8.into())
+            ])
+            .order_by_each(&[("amount", Desc)])
             .distinct()
             .fetch_as::<CategoryAmount>(),
         Err(Error::InvalidQuery)
@@ -772,14 +861,14 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
 }
 
 #[test]
-fn sorted_distinct_bounds_unique_tuples_not_matching_rows_or_output_limit() {
+fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let mut db = create(&runtime, 1);
     let rows: Vec<_> = (1..=128)
         .map(|id| Entry {
             category: 0,
-            amount: (id - 1) % 32,
+            amount: (id - 1) % 64,
             ..row(id)
         })
         .collect();
@@ -807,8 +896,8 @@ fn sorted_distinct_bounds_unique_tuples_not_matching_rows_or_output_limit() {
             let page = if reverse { query.descending() } else { query }
                 .fetch_as::<CategoryAmount>()
                 .unwrap();
-            let expected: Vec<_> = (0..32)
-                .map(|n| if reverse { n } else { 31 - n })
+            let expected: Vec<_> = (0..64)
+                .map(|n| if reverse { n } else { 63 - n })
                 .take(limit)
                 .map(|amount| (0, amount))
                 .collect();
@@ -838,19 +927,20 @@ fn sorted_distinct_bounds_unique_tuples_not_matching_rows_or_output_limit() {
     assert_eq!(*backing.borrow(), before);
     let mut extra = row(128);
     extra.category = 0;
-    extra.amount = 32;
+    extra.amount = 64;
     let mut batch = Batch::new();
     batch.replace(&extra).unwrap();
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
-    assert!(matches!(
-        db.query::<Entry>()
-            .order_by_each(&[("amount", Desc), ("category", Asc)])
-            .distinct()
-            .limit(1)
-            .work_limit(129)
-            .fetch_as::<CategoryAmount>(),
-        Err(Error::Limit)
-    ));
+    let page = db
+        .query::<Entry>()
+        .order_by_each(&[("amount", Desc), ("category", Asc)])
+        .distinct()
+        .limit(1)
+        .work_limit(129)
+        .fetch_as::<CategoryAmount>()
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!((page.rows[0].category, page.rows[0].amount), (0, 64));
     assert_eq!(*backing.borrow(), before);
 }

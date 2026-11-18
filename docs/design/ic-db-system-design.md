@@ -9,6 +9,12 @@ and local operation; it does not establish remote application support.
 The 0.22.1 native CLI adds Canic application inspection; section 9 separates
 its checked inspection/listing scope from broader application qualification.
 The changelog and Git tags record releases.
+Application helpers take `&Database` or `&mut Database`. Database, fluent query,
+maintenance and aggregate-job handles use IC Storage's target-default backing.
+This follows the concrete backing used in frozen IcyDB `6d421e3`,
+`db/schema/control_store/mod.rs`. Hosts still select named allocations at open.
+Only installed fault probes substitute a backing to observe or interrupt supplier writes.
+
 Native application tests can opt into `ic_db::testing::Fixture` with the
 `test-support` feature. A named vector-backed allocation is retained across
 database handles. Creation and reopen use ordinary schema admission and return
@@ -2229,6 +2235,15 @@ retained capability scope. Later detail explains the implementation and evidence
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter, native v1 inspection and one typed listing through signed HTTP | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
+The [skewed application workload](../../qualification/README.md#skewed-application-workload-02310)
+checks a 128-item listing and exact count on the same Canic mount. Moving an
+item changes indexed membership and invalidates an in-progress count. A new
+count finishes across upgrade. The fixture measures complete listings before
+and after the first post-upgrade update, with budgets of 1, 8 and 32
+candidates per page and a fixed two-row output limit. The qualification
+application uses eight candidates by default and accepts an explicit budget
+for sparse-page and larger-page comparisons.
+
 The CLI demonstrates product schemas, bounded queries and aggregates against a
 temporary local fixture. Version 0.18 adds `db migration-demo`
 with a real local canister upgrade during copying. The pending native `db inspect` command now consumes committed Canic inspection
@@ -2871,16 +2886,17 @@ index proofs; Wasm/CLI checks cover explicit directions, complete selection,
 resource refusal and direction-bound cursors across upgrades.
 
 Sorted DISTINCT accepts inherently unique entity/primary-bearing projections.
-For other projections, require the explicit order to contain exactly the projected
-fields. During scanning, compare each candidate's encoded prefix before the
-primary suffix with the retained tuples; keep only the first representative.
-After input exhaustion, sort the unique tuples and apply result count and bytes.
-No second key set or output buffer is needed; one bounded prefix offset per
-retained row identifies equality. Retain at most 32 distinct tuples within
-128 KiB; duplicates consume scan work but no additional retained capacity.
-A 33rd distinct tuple refuses even with `limit(1)`. Only identity results can
-discard worse candidates before finalization. Ambiguous hidden
-ordering and incomplete projected orders refuse. This retains IcyDB's projected
+For other projections, require all varying projected fields to lead the explicit
+order, ignoring components fixed by a mandatory literal equality. If every
+projected field is fixed, matching rows form one class with an empty comparison
+key. An empty input still returns zero rows and a full scan is still required.
+Trailing fields only distinguish source rows with an equal projection. Encode
+the leading components alone and use that key for both equality and ordering.
+Skip duplicates and retain the best `limit` distinct tuples within 128 KiB.
+A discarded tuple cannot qualify later under another primary key. After input
+exhaustion, sort the retained tuples and enforce output bytes. A varying unprojected
+field before the complete projected prefix makes the order ambiguous and the
+query refuses. This retains IcyDB's projected
 equivalence and post-deduplication window rules from
 `db/executor/projection/materialize/distinct` at `6d421e3`, without its global replay,
 canonical value/hash state or cursor machinery. Existing live and unsorted complete
@@ -3607,11 +3623,36 @@ overflow without changing the previous value. Commit `4cedc33e` changed the
 generator to accept the write operation's timestamp; generated fields must use
 that same captured time rather than independent clock reads.
 
-The explicit product `UlidGenerator` retains these ordering/overflow invariants
-without copying IcyDB's global generator or its target-specific randomness paths.
-Construction and suffix increment delegate to the existing feature-free `ulid`
-dependency. The caller supplies one operation `Timestamp` and 80 bits of host
-randomness. Negative or greater-than-48-bit millisecond times refuse before any
+The Wasm helper `Ulid::generate_prand()` owns a private heap-local stream
+and reads IC time, principal and version through Platform. Applications supply
+explicit time and randomness only on their own `UlidGenerator` instances.
+The helper keeps the heap-local
+monotonic increment from frozen IcyDB `6d421e3`,
+`icydb-core/src/types/ulid/generator.rs`. Legacy's time bits and local sequence
+can coincide on another canister or after a heap reset. On first issuance the
+host supplies the canister's raw principal and current version. IC DB hashes
+the domain tag `ic-db:ulid-stream:v1`, principal bytes and eight-byte big-endian
+version with SHA-256, retaining the first ten bytes and clearing the high bit
+to leave at least 2^79 increments in each millisecond. Each newer millisecond
+starts at this seed. Equal or earlier times increment the previous suffix.
+This requires no random source, stable allocation or network access. The
+system version changes on upgrade. The callback is evaluated only when the
+heap-local stream is first initialized. [IC canister version](https://legacy.internetcomputer.org/docs/references/ic-interface-spec#canister-version)
+
+Owned pseudo-random generators use the separate tag `ic-db:ulid-owned:v1`
+and append a checked heap-local 64-bit stream number to the seed input.
+The async generator constructor uses Platform's bounded `raw_rand` call before a
+write batch. It obtains a seed once and applies the same monotonic algorithm as an owned pseudo-random
+stream. Each owned generator advances independently with synchronous `next_id()`.
+
+An ordinary upgrade derives a new stream even at the same timestamp. Ordering
+across upgrades requires a checkpoint. The 79-bit seed allows collisions
+between independent streams; a restored heap snapshot can also replay stored
+generator state. These IDs are predictable. Native and Wasm checks exercise
+same-time ordering and a new stream after a version change.
+
+The explicitly owned `UlidGenerator` accepts a `Timestamp` and ten host-provided
+bytes for applications with their own issuance and recovery policy. Negative or greater-than-48-bit millisecond times refuse before any
 state change. A first issuance at epoch zero uses the supplied randomness rather
 than treating a nil ID as an earlier issuance. Equal/backward times increment
 the previous suffix; exhaustion refuses without wrapping into another timestamp.

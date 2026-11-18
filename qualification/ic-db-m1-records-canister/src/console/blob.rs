@@ -1,7 +1,8 @@
 //! Fixed Blob result shapes for the local console; the engine owns all query work.
 use super::{Page, display, display_groups, display_scalar, extremum, hex};
-use crate::{Backing, schema::BinaryObject};
-use ic_db::{Comparison, Entity, Error, Query};
+use crate::handles::Query;
+use crate::schema::BinaryObject;
+use ic_db::{Comparison, Entity, Error};
 
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 pub(super) struct Payload {}
@@ -12,11 +13,11 @@ pub(super) struct Payload {}
 pub(super) struct Optional {}
 
 pub(super) fn query(
-    db: &ic_db::Database<Backing>,
+    db: &crate::handles::Database,
     minimum: Option<u64>,
     category: Option<u64>,
     entry_id: Option<u64>,
-) -> Result<Query<'_, BinaryObject, Backing>, String> {
+) -> Result<Query<'_, BinaryObject>, String> {
     if minimum.is_some() || category.is_some() || entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to BinaryObject".into());
     }
@@ -36,10 +37,7 @@ pub(super) fn validate(entity: &str, filters: &Filters) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn filter<'a, E: Entity>(
-    mut query: Query<'a, E, Backing>,
-    filters: &'a Filters,
-) -> Query<'a, E, Backing> {
+pub(super) fn filter<'a, E: Entity>(mut query: Query<'a, E>, filters: &'a Filters) -> Query<'a, E> {
     for (comparison, operand) in [
         Comparison::Ge,
         Comparison::Le,
@@ -57,10 +55,7 @@ pub(super) fn filter<'a, E: Entity>(
     query
 }
 
-pub(super) fn execute<E: Entity>(
-    query: Query<'_, E, Backing>,
-    select: &str,
-) -> Result<Page, Error> {
+pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Page, Error> {
     match select {
         "payload" => query
             .fetch_as::<Payload>()

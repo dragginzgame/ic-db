@@ -344,12 +344,13 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         };
         (result, instructions)
     };
-    let items = async |target, minimum, after| {
+    let items = async |target, minimum, work, after| {
         let bytes = query(
             canister,
             Query::Items {
                 target,
                 parent: 1,
+                work,
                 minimum,
                 after,
             },
@@ -421,7 +422,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     // Repeat identical operations on unchanged rows across one executable upgrade.
     // A query can initialize the host heap only for its own execution.
     let measured_page = async |phase: &str| {
-        let (page, instructions) = items(false, 0, None).await;
+        let (page, instructions) = items(false, 0, Some(1), None).await;
         let page = page.unwrap();
         assert_eq!(page.ids, [4]);
         assert_eq!(page.examined, 1);
@@ -530,7 +531,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let mut matches = Vec::new();
     let mut empty_continued = 0;
     for step in 0..4 {
-        let (result, instructions) = items(false, 100, cursor.clone()).await;
+        let (result, instructions) = items(false, 100, Some(1), cursor.clone()).await;
         let ItemPage {
             ids: rows,
             next,
@@ -560,6 +561,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
                     target: false,
                     parent: 1,
                     minimum: 100,
+                    work: Some(1),
                     after: next.clone(),
                 },
             )
@@ -571,9 +573,12 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
                     .contains("mixed workload caller denied"),
                 "{denied:?}"
             );
-            assert!(matches!(items(false, 101, next.clone()).await.0, Err(8)));
             assert!(matches!(
-                items(false, 100, Some(vec![0xff])).await.0,
+                items(false, 101, Some(1), next.clone()).await.0,
+                Err(8)
+            ));
+            assert!(matches!(
+                items(false, 100, Some(1), Some(vec![0xff])).await.0,
                 Err(8)
             ));
             assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -751,7 +756,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     // The dependent-first batch is valid on either live schema.
     let chain = [(2, 0, 51, 51, 0), (1, 0, 51, 51, 1051), (0, 0, 51, 510, 0)];
     // Keep the same logical request across the score widening and copy.
-    let source_page = items(false, 1030, None).await.0.unwrap();
+    let source_page = items(false, 1030, Some(1), None).await.0.unwrap();
     assert!(source_page.ids.is_empty());
     let source_cursor = source_page.next.expect("continued source page");
     let source_job = start(false).await;
@@ -769,7 +774,9 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         assert_eq!(resume_source_job(target).await, Err("Maintenance".into()));
         assert_eq!(write(target, &chain).await.0, Err(7));
         assert!(matches!(
-            items(target, 1030, Some(source_cursor.clone())).await.0,
+            items(target, 1030, Some(1), Some(source_cursor.clone()))
+                .await
+                .0,
             Err(7)
         ));
         assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -828,13 +835,15 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     ];
     assert_eq!(read(true, 1, 25).await.0.unwrap(), model.snapshot(1, 25));
     assert!(matches!(
-        items(true, 1030, Some(source_cursor.clone())).await.0,
+        items(true, 1030, Some(1), Some(source_cursor.clone()))
+            .await
+            .0,
         Err(8)
     ));
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(resume_source_job(true).await, Err("InvalidJob".into()));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    let target_page = items(true, 1030, None).await.0.unwrap();
+    let target_page = items(true, 1030, Some(1), None).await.0.unwrap();
     let mut listed = target_page.ids;
     let mut after = target_page.next.expect("continued target page");
     check(
@@ -900,8 +909,11 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     // The intervening writes leave the membership of this parent listing intact.
     // Resume the target cursor obtained before cleanup and check every remaining page.
     for step in 0..=model.items.len() {
-        let page = items(true, 1030, Some(after.clone())).await.0.unwrap();
-        assert!(page.examined <= 1);
+        let page = items(true, 1030, None, Some(after.clone()))
+            .await
+            .0
+            .unwrap();
+        assert!(page.examined <= 8);
         listed.extend(page.ids);
         let Some(next) = page.next else {
             break;
@@ -931,4 +943,198 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         );
     }
     owned.drop().await;
+}
+
+#[tokio::test]
+async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+
+    let update = async |request: Update| {
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "db_write",
+                application_request(241, &request),
+            )
+            .await
+            .unwrap();
+        application_reply::<Reply>(241, &bytes)
+    };
+    let write = async |model: &mut Model, commands: Vec<Command>| {
+        model.apply(&commands).unwrap();
+        let Reply::Batch(result, instructions) = update(Update::Batch(false, commands)).await
+        else {
+            panic!("expected batch reply")
+        };
+        result.unwrap();
+        instructions
+    };
+    let mut model = Model::default();
+    write(&mut model, vec![(0, 0, 1, 10, 0), (0, 0, 2, 20, 0)]).await;
+    for chunk in (1..=128).collect::<Vec<u64>>().chunks(16) {
+        let mut batch = Vec::new();
+        for &id in chunk {
+            // Every eighth item belongs to the small parent. Sparse high scores
+            // in the large parent force empty continued pages.
+            batch.push((1, 0, id, if id % 8 == 0 { 2 } else { 1 }, id % 11));
+            if id % 8 == 0 {
+                batch.push((2, 0, id, id, 0));
+            }
+        }
+        write(&mut model, batch).await;
+    }
+    let list = async |phase: &str, model: &Model, requested_work: Option<u16>| {
+        let work = requested_work.unwrap_or(8);
+        let mut most_examined = 0;
+        let mut after = None;
+        let mut found = Vec::new();
+        let mut instructions = 0;
+        let mut examined = 0;
+        let mut peak_instructions = 0;
+        let mut empty_continued = 0;
+        for page_number in 1..=model.items.len() + 1 {
+            let request = Query::Items {
+                target: false,
+                parent: 1,
+                minimum: 10,
+                work: requested_work,
+                after: after.clone(),
+            };
+            let bytes = pic
+                .query_call(
+                    canister,
+                    canister,
+                    "db_query",
+                    application_request(242, &request),
+                )
+                .await
+                .unwrap();
+            let QueryReply::Items(result, cost) = application_reply(242, &bytes) else {
+                panic!("expected items reply")
+            };
+            let page = result.unwrap();
+            assert!(page.examined <= u64::from(work));
+            assert!(page.ids.len() <= 2);
+            peak_instructions = peak_instructions.max(cost);
+            instructions += cost;
+            examined += page.examined;
+            most_examined = most_examined.max(page.examined);
+            empty_continued += usize::from(page.ids.is_empty() && page.next.is_some());
+            found.extend(page.ids);
+            if page.next.is_none() {
+                assert_eq!(found, model.snapshot(1, 10).5);
+                assert_eq!(
+                    examined as usize,
+                    model
+                        .items
+                        .values()
+                        .filter(|(parent, _)| *parent == 1)
+                        .count()
+                );
+                if requested_work.is_none() {
+                    assert_eq!(
+                        most_examined, 8,
+                        "sparse listing exercises the application default"
+                    );
+                }
+                if work == 1 {
+                    assert!(empty_continued > 0);
+                }
+                println!(
+                    "skew/list phase={phase} work={work} peak_instructions={peak_instructions} pages={page_number} examined={examined} matched={} empty_continued={empty_continued} handler_instructions={instructions}",
+                    found.len()
+                );
+                return;
+            }
+            assert_ne!(page.next, after);
+            after = page.next;
+        }
+        panic!("listing did not finish");
+    };
+    let compare_budgets = async |phase: &str, model: &Model| {
+        for work in [Some(1), None, Some(32)] {
+            list(phase, model, work).await;
+        }
+    };
+    let count = async |request| {
+        let Reply::Count(result, instructions) = update(Update::Count(request)).await else {
+            panic!("expected count reply")
+        };
+        (result.unwrap(), instructions)
+    };
+    let start = async || {
+        let (CountReply::Started(handle), _) =
+            count(CountRequest::Run(false, CountAction::Start)).await
+        else {
+            panic!("expected handle")
+        };
+        handle
+    };
+    let resume = async |handle: &[u8], sequence| {
+        let (CountReply::Advanced(next, outcome), cost) = count(CountRequest::Run(
+            false,
+            CountAction::Resume(handle.to_vec(), sequence),
+        ))
+        .await
+        else {
+            panic!("expected progress")
+        };
+        assert_eq!(next, sequence + 1);
+        (outcome, cost)
+    };
+    compare_budgets("seeded", &model).await;
+    let handle = start().await;
+    assert_eq!(resume(&handle, 0).await.0, CountOutcome::Running);
+    // Move a referenced item from the small parent into the listing.
+    let before = pic.cycle_balance(canister).await;
+    let cost = write(&mut model, vec![(1, 1, 128, 1, 10)]).await;
+    let cycles = before - pic.cycle_balance(canister).await;
+    let (outcome, invalidate_cost) = resume(&handle, 1).await;
+    assert_eq!(outcome, CountOutcome::Invalidated);
+    assert_eq!(
+        count(CountRequest::Cancel(handle)).await.0,
+        CountReply::Cancelled
+    );
+    println!(
+        "skew/move handler_instructions={cost} update_balance_delta={cycles} invalidation_instructions={invalidate_cost}"
+    );
+    let handle = start().await;
+    let (outcome, first_cost) = resume(&handle, 0).await;
+    assert_eq!(outcome, CountOutcome::Running);
+    compare_budgets("after-write", &model).await;
+    ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    compare_budgets("after-upgrade", &model).await;
+    let mut advance_cost = first_cost;
+    for sequence in 1..=model.items.len() as u64 {
+        let (outcome, cost) = resume(&handle, sequence).await;
+        advance_cost += cost;
+        if sequence == 1 {
+            assert_eq!(outcome, CountOutcome::Running);
+            compare_budgets("after-first-update", &model).await;
+        }
+        if let CountOutcome::Complete(value) = outcome {
+            assert_eq!(value, model.items.len() as u64);
+            println!(
+                "skew/count advances={} result={value} total_advance_instructions={advance_cost}",
+                sequence + 1
+            );
+            assert_eq!(
+                count(CountRequest::Cancel(handle)).await.0,
+                CountReply::Cancelled
+            );
+            pic.drop().await;
+            return;
+        }
+        assert_eq!(outcome, CountOutcome::Running);
+    }
+    panic!("retained count did not finish");
 }

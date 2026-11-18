@@ -90,6 +90,8 @@ pub enum Query {
         parent: u64,
         /// Inclusive lower score bound.
         minimum: u64,
+        /// Optional candidate budget. The application selects its listing default when omitted.
+        work: Option<u16>,
         /// Opaque continuation returned by the previous page.
         after: Option<Vec<u8>>,
     },

@@ -75,11 +75,7 @@ impl Fixture {
     /// Returns the original [`Database::create`] refusal.
     /// # Panics
     /// Propagates allocation and supplier panics, including overlapping leases.
-    pub fn create(
-        &self,
-        schema: Schema,
-        incarnation: [u8; 16],
-    ) -> Result<Database<VectorMemory>, Error> {
+    pub fn create(&self, schema: Schema, incarnation: [u8; 16]) -> Result<Database, Error> {
         Database::create((self.allocation)(), schema, incarnation)
     }
 
@@ -88,7 +84,7 @@ impl Fixture {
     /// Returns the original [`Database::open`] refusal.
     /// # Panics
     /// Propagates allocation and supplier panics, including overlapping leases.
-    pub fn open(&self, schema: Schema) -> Result<Database<VectorMemory>, Error> {
+    pub fn open(&self, schema: Schema) -> Result<Database, Error> {
         Database::open((self.allocation)(), schema)
     }
 }

@@ -11,7 +11,7 @@ pub(super) enum Strategy {
     Identity,
     Adjacent(usize),
     Complete,
-    Sorted,
+    Sorted { prefix_len: usize },
 }
 
 fn complete(request: &Request<'_>) -> Result<Strategy, Error> {
@@ -44,16 +44,25 @@ pub(super) fn admit(
     }
     admit_ordered_fields(entity, remaining)?;
     if sorted {
-        // The sort-key prefix must identify exactly the projected tuple. This
-        // also avoids choosing a result order from hidden row values.
-        let mut ordered = 0;
-        for name in request.order.as_ref().ok_or(Error::InvalidQuery)? {
-            ordered |= 1 << position(name)?;
+        // Constant components cannot distinguish two matching rows. Stop the
+        // key once it distinguishes every varying component of the projection.
+        let mut constants = 0_u16;
+        for (name, _) in super::order::literal_equalities(request) {
+            constants |= 1 << position(name)?;
         }
-        if ordered != remaining {
-            return Err(Error::InvalidQuery);
+        remaining &= !constants;
+        let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
+        let mut prefix_len = 0;
+        while remaining != 0 {
+            let name = order.get(prefix_len).ok_or(Error::InvalidQuery)?;
+            let bit = 1 << position(name)?;
+            if (constants | remaining) & bit == 0 {
+                return Err(Error::InvalidQuery);
+            }
+            remaining &= !bit;
+            prefix_len += 1;
         }
-        return Ok(Strategy::Sorted);
+        return Ok(Strategy::Sorted { prefix_len });
     }
     let Some(index) = index else {
         return complete(request);

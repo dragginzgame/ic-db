@@ -1,7 +1,8 @@
 //! Cutover witness over the unchanged mapping entity; no host routing authority.
 use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, whole_declaration};
+use crate::handles::Database;
 use crate::{aggregate_store::open_jobs, runtime};
-use ic_db::{Database, Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
+use ic_db::{Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
 use ic_storage::StableKey;
 
 // Position bytes, sequence, source revision, examined rows, completed count.

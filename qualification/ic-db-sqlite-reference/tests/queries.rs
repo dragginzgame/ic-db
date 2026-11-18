@@ -91,7 +91,7 @@ fn fixture() -> (Connection, MemoryRuntime<VectorMemory>) {
     (sql, host)
 }
 
-fn open(host: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
+fn open(host: &MemoryRuntime<VectorMemory>) -> Database {
     Database::open(
         host.open_memory(&StableKey::parse("test.db.v1").unwrap())
             .unwrap(),
@@ -273,7 +273,7 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
     let mut db = open(&host);
     let price = Decimal::try_new(125, 2).unwrap();
     let check =
-        |db: &Database<VectorMemory>| {
+        |db: &Database| {
             let total: u32 = sql
                 .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
                 .unwrap();

@@ -1,13 +1,11 @@
 //! Cross-chunk references during copy, validation, cancellation and publication.
+use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
 use crate::{
     faults,
     maintenance::{COPY_SOURCE, COPY_TARGET},
     runtime,
 };
-use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, RetiredSource, Schema, SchemaCopy,
-    SchemaTransition,
-};
+use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
 use ic_db_m1_records_schema::OptionalLink;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;

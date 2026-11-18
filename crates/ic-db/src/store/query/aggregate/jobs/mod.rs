@@ -134,9 +134,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Ordinary count admission, invalid expiry, or all 16 retained slots occupied.
     /// # Panics
     /// Supplier mutation failures trap the enclosing message.
-    pub fn start_count<J: Memory>(
+    pub fn start_count(
         self,
-        jobs: &mut AggregateJobs<J>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -153,7 +153,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     pub fn start_count_field(
         self,
         field: &str,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -162,7 +162,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn start_count_job(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         field: Option<&str>,
@@ -193,9 +193,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// bounds or corruption without changing progress. No automatic restart.
     /// # Panics
     /// Supplier mutation failures trap the enclosing message.
-    pub fn resume_count<J: Memory>(
+    pub fn resume_count(
         self,
-        jobs: &mut AggregateJobs<J>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -212,7 +212,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     pub fn resume_count_field(
         self,
         field: &str,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -222,7 +222,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn resume_count_job(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -257,7 +257,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_sum<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -274,7 +274,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_sum<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -292,7 +292,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_avg<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -310,7 +310,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_avg<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -320,7 +320,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn start_numeric<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         operation: Operation,
@@ -338,7 +338,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn resume_numeric<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -350,7 +350,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn resume_value<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,

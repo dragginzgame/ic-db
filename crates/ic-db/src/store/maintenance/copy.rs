@@ -1,16 +1,17 @@
 //! Whole-database copy with private target admission and message-atomic checkpoints.
 use super::{Maintenance, SchemaTransition, decode as decode_source};
 use crate::{
-    Batch, Database, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
+    Batch, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
     codec::{Decoder, Encoder},
     primary::RowKey,
+    store::Database,
     store::{
         EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
         manifest_key, read_entity_state, row_key, validate_index_entry, validate_reference_target,
     },
     store_key::StoreKey,
 };
-use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+use ic_storage::{Memory, RuntimeMemory};
 use std::{collections::BTreeSet, ops::Bound};
 
 pub(super) const MAGIC: &[u8; 8] = b"ICDBCP02";
@@ -171,7 +172,7 @@ pub struct CopyStep {
 /// Exclusive source/target custody for a key-preserving whole-database transformation.
 /// Both allocations remain closed to ordinary access. Dropping preserves progress.
 /// Publication requires completed validation. Allocation reuse remains unsupported.
-pub struct SchemaCopy<M: Memory = DefaultMemoryImpl> {
+pub struct SchemaCopy<M: Memory> {
     source: Maintenance<M>,
     source_schema: Schema,
     target: Database<M>,
@@ -504,7 +505,7 @@ impl<M: Memory> SchemaCopy<M> {
 /// Exclusive cleanup authority for an entire source collection retired by cutover.
 /// Admission binds the exact transition and both database incarnations. Cleanup
 /// never opens the target and never clears the source's retired manifest.
-pub struct RetiredSource<M: Memory = DefaultMemoryImpl> {
+pub struct RetiredSource<M: Memory> {
     map: Map<M>,
 }
 

@@ -6,7 +6,7 @@ use crate::{
     codec::{Decoder, Encoder},
 };
 pub use copy::{CopyStep, RetiredSource, SchemaCopy};
-use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+use ic_storage::{Memory, RuntimeMemory};
 use sha2::{Digest, Sha256};
 
 pub(super) const MAGIC: &[u8; 8] = b"ICDBMT02";
@@ -114,7 +114,7 @@ impl SchemaTransition {
 /// Exclusive handle to a durably frozen source, before any target allocation/copy.
 /// Dropping this handle leaves maintenance active. Ordinary reads/writes remain closed.
 /// Host adapters own authorization and endpoint exposure.
-pub struct Maintenance<M: Memory = DefaultMemoryImpl> {
+pub struct Maintenance<M: Memory> {
     map: Map<M>,
     transition: SchemaTransition,
     incarnation: [u8; 16],

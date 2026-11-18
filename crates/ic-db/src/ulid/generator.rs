@@ -1,5 +1,4 @@
-//! Explicit monotonic issuance state; the host owns time, randomness and recovery.
-
+//! Monotonic issuance for explicitly owned generators.
 use super::Ulid;
 use crate::Timestamp;
 use std::fmt;
@@ -62,16 +61,14 @@ impl UlidGenerator {
             .filter(|value| *value < (1_u64 << 48))
             .ok_or(UlidGenerationError::InvalidTimestamp)?;
         let previous = self.last.map(|id| ::ulid::Ulid::from_bytes(id.to_bytes()));
-        let next = if let Some(previous) = previous.filter(|id| millis <= id.timestamp_ms()) {
-            previous
+        let id = if let Some(previous) = previous.filter(|id| millis <= id.timestamp_ms()) {
+            let next = previous
                 .increment()
-                .map_err(|_| UlidGenerationError::Exhausted)?
+                .map_err(|_| UlidGenerationError::Exhausted)?;
+            Ulid::from_bytes(next.to_bytes())
         } else {
-            let mut component = [0; 16];
-            component[6..].copy_from_slice(&randomness);
-            ::ulid::Ulid::from_parts(millis, u128::from_be_bytes(component))
+            Ulid::from_millis_and_suffix(millis, randomness)
         };
-        let id = Ulid::from_bytes(next.to_bytes());
         self.last = Some(id);
         Ok(id)
     }

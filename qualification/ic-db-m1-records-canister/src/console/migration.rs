@@ -1,6 +1,7 @@
 //! Fixed local demonstration; product manifests own all migration progress.
-use crate::{Backing, runtime};
-use ic_db::{Batch, Database, Entity, Error, RetiredSource, Schema, SchemaCopy, SchemaTransition};
+use crate::handles::{Database, RetiredSource, SchemaCopy};
+use crate::runtime;
+use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
 use ic_storage::StableKey;
 
 pub(crate) const SOURCE: &str = "m1.console.migration.source.v1";
@@ -123,7 +124,7 @@ fn run(action: u8) -> Result<Reply, Error> {
     Ok((complete, vec![]))
 }
 
-fn source_rows(db: &Database<Backing>) -> Result<Reply, Error> {
+fn source_rows(db: &Database) -> Result<Reply, Error> {
     Ok((
         true,
         db.page::<Before>(None, 32)?

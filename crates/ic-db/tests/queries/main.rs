@@ -65,7 +65,7 @@ fn row(id: u64) -> Entry {
     }
 }
 
-fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database<VectorMemory> {
+fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database {
     let mut db = Database::create(
         runtime
             .open_memory(&StableKey::parse("test.db.v1").unwrap())
@@ -1067,7 +1067,7 @@ struct RequiredText {}
 #[ic_db::record(fields(field(name = "bucket", value(item(prim = "Nat8")))))]
 struct TextBucket {}
 
-fn text_rows(runtime: &MemoryRuntime<VectorMemory>) -> (Database<VectorMemory>, Vec<TextRow>) {
+fn text_rows(runtime: &MemoryRuntime<VectorMemory>) -> (Database, Vec<TextRow>) {
     let mut db = Database::create(
         runtime
             .open_memory(&StableKey::parse("test.db.v1").unwrap())
@@ -6696,7 +6696,7 @@ struct RescaledPrice {}
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Int128")))))]
 struct IntegerPrice {}
 
-fn decimal_sales(coefficients: &[(u8, Option<i128>)]) -> Database<VectorMemory> {
+fn decimal_sales(coefficients: &[(u8, Option<i128>)]) -> Database {
     let runtime = host(VectorMemory::default());
     let mut db = Database::create(
         runtime

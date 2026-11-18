@@ -18,17 +18,36 @@ thread_local! {
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn issue_key((millis, randomness, value, mode): (i64, [u8; 10], u64, u8)) -> Result<[u8; 16], u8> {
-    let id = ISSUER
-        .with(|issuer| {
-            issuer
-                .borrow_mut()
-                .generate(Timestamp::from_millis(millis), randomness)
-        })
-        .map_err(|error| match error {
-            UlidGenerationError::InvalidTimestamp => 1_u8,
-            UlidGenerationError::Exhausted => 2,
-        })?;
+async fn issue_key(
+    (millis, randomness, value, mode): (i64, [u8; 10], u64, u8),
+) -> Result<[u8; 16], u8> {
+    let id = match mode {
+        3 => Ulid::generate_prand(),
+        4 | 5 => {
+            let mut stream = if mode == 4 {
+                Ulid::generator().await.map_err(|_| 6_u8)?
+            } else {
+                Ulid::generator_prand()
+            };
+            let first = stream.next_id();
+            let second = stream.next_id();
+            assert_eq!(
+                u128::from_be_bytes(second.to_bytes()),
+                u128::from_be_bytes(first.to_bytes()) + 1
+            );
+            second
+        }
+        _ => ISSUER
+            .with(|issuer| {
+                issuer
+                    .borrow_mut()
+                    .generate(Timestamp::from_millis(millis), randomness)
+            })
+            .map_err(|error| match error {
+                UlidGenerationError::InvalidTimestamp => 1_u8,
+                UlidGenerationError::Exhausted => 2,
+            })?,
+    };
     if mode == 2 {
         return Err(3); // Expected application refusal consumes issuance but writes no row.
     }

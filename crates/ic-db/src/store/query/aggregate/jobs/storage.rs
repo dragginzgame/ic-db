@@ -4,7 +4,7 @@ use crate::{
     Error, QueryCursor, Timestamp,
     codec::{Decoder, Encoder},
 };
-use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory, adapter::StableBTreeMap};
+use ic_storage::{Memory, RuntimeMemory, adapter::StableBTreeMap};
 
 pub(super) const SLOTS: u8 = 16;
 pub(super) const MAX_JOB_BYTES: usize = 16 * 1024;
@@ -17,7 +17,7 @@ const LEGACY_MAGIC: &[u8; 8] = b"ICDBAJ01";
 /// fresh nonzero incarnation. Handles identify jobs; they do not authorize access.
 /// All mutation must run synchronously within one IC message, without awaits.
 /// Supplier failures trap; a later message trap rolls these changes back too.
-pub struct AggregateJobs<M: Memory = DefaultMemoryImpl> {
+pub struct AggregateJobs<M: Memory> {
     map: StableBTreeMap<u8, Vec<u8>, M>,
     incarnation: [u8; 16],
     legacy: bool,

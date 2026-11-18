@@ -1,7 +1,7 @@
 //! Complete bounded sorting; no prefix answers, cursor state or generic sorter.
 use super::{
-    MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Plan, QueryPage, Request,
-    admit_output, copy_projection, projection_size,
+    MAX_COMPARISON_KEY, MAX_STATE_BYTES, Plan, QueryPage, Request, admit_output, copy_projection,
+    projection_size,
 };
 use crate::{EntitySchema, Error, IndexValue};
 
@@ -10,25 +10,25 @@ pub(super) struct Collection {
     state_bytes: usize,
     limit: usize,
     descending: bool,
-    distinct: bool,
+    prefix_len: Option<usize>,
 }
 
 struct Row {
     key: Vec<u8>,
     bytes: Vec<u8>,
-    // Key prefix before the unique primary tie-breaker. Sorted DISTINCT admits
-    // exactly the projected fields here, so equality needs no second key buffer.
-    projected_key_end: usize,
 }
 
 impl Collection {
-    pub(super) fn new(request: &Request<'_>, distinct: bool) -> Self {
+    pub(super) fn new(request: &Request<'_>, strategy: super::distinct::Strategy) -> Self {
         Self {
             rows: Vec::new(),
             state_bytes: 0,
             limit: request.rows,
             descending: request.descending,
-            distinct,
+            prefix_len: match strategy {
+                super::distinct::Strategy::Sorted { prefix_len } => Some(prefix_len),
+                _ => None,
+            },
         }
     }
 
@@ -41,11 +41,10 @@ impl Collection {
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
         let mut key = Vec::new();
-        let mut projected_key_end = 0;
-        for &(position, descending) in plan.sort.as_ref().ok_or(Error::InvalidQuery)? {
-            if entity.fields[position].name == entity.primary_key {
-                projected_key_end = key.len();
-            }
+        let order = plan.sort.as_ref().ok_or(Error::InvalidQuery)?;
+        // Trailing fields only order representatives of the same projected
+        // value. Its leading components suffice for both ranking and equality.
+        for &(position, descending) in order.iter().take(self.prefix_len.unwrap_or(order.len())) {
             let start = key.len();
             values[position].append_component(entity.fields[position].optional, &mut key);
             if key.len() > MAX_COMPARISON_KEY {
@@ -59,23 +58,14 @@ impl Collection {
                 }
             }
         }
-        if self.distinct {
-            // Admission makes this prefix exactly the projected tuple, regardless
-            // of field directions. Reuse retained keys; duplicate input consumes
-            // scan work, but no additional state or output buffer.
-            if self
-                .rows
-                .iter()
-                .any(|row| row.key[..row.projected_key_end] == key[..projected_key_end])
-            {
-                return Ok(());
-            }
-            if self.rows.len() == MAX_DISTINCT_VALUES {
-                return Err(Error::Limit);
-            }
-        } else if self.rows.len() == self.limit {
-            // At most 32 retained rows: find the worst cached key directly. The
-            // primary tie-breaker makes selection deterministic in either direction.
+        // The projected tuple decides the order between distinct results. Once
+        // evicted, a tuple ranks below every retained tuple, even if seen again
+        // with a different primary tie-breaker.
+        if self.prefix_len.is_some() && self.rows.iter().any(|row| row.key == key) {
+            return Ok(());
+        }
+        if self.rows.len() == self.limit {
+            // At most 32 retained rows: find the worst cached key directly.
             let (worst, row) = self
                 .rows
                 .iter()
@@ -117,16 +107,12 @@ impl Collection {
             return Err(Error::Limit);
         }
         self.state_bytes += charge;
-        self.rows.push(Row {
-            key,
-            bytes: row,
-            projected_key_end,
-        });
+        self.rows.push(Row { key, bytes: row });
         Ok(())
     }
 
-    // Only called after the scanner observes exhaustion. Keys include the unique
-    // primary tie-breaker; compare admitted bytes without decoding inside the sort.
+    // Only called after the scanner observes exhaustion. Retained keys are unique.
+    // Compare admitted bytes without decoding inside the sort.
     pub(super) fn finish(
         mut self,
         byte_limit: usize,
@@ -139,7 +125,7 @@ impl Collection {
                 left.key.cmp(&right.key)
             }
         });
-        for row in self.rows.into_iter().take(self.limit) {
+        for row in self.rows {
             admit_output(row.bytes.len(), byte_limit, &mut page.output_bytes)?;
             page.rows.push(row.bytes);
         }

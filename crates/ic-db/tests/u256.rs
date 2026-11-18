@@ -162,7 +162,7 @@ fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
         b.insert(row).unwrap();
     }
     db.commit(b).unwrap();
-    let ordered = |db: &Database<VectorMemory>| {
+    let ordered = |db: &Database| {
         db.index_prefix::<BigNumbers>("zone,value,id", &[IndexValue::Bool(true)], 32)
             .unwrap()
             .into_iter()

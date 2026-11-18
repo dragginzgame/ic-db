@@ -87,16 +87,39 @@ pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
 pub use primary::PrimaryKey;
 pub use time::{Duration, TimeParseError, Timestamp};
+#[cfg(target_arch = "wasm32")]
+pub use ulid::{SeededUlidGenerator, UlidEntropyError};
 pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use store::{
-    Aggregate, AggregateJobs, Batch, Comparison, CopyStep, Database, GroupCount, GroupCursor,
-    GroupOrder, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Maintenance, Page, Query,
-    QueryCursor, QueryOperand, QueryPage, RetiredSource, SchemaCopy, SchemaTransition,
-    SortDirection,
+    Aggregate, Batch, Comparison, CopyStep, GroupCount, GroupCursor, GroupOrder, GroupPage,
+    GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage,
+    SchemaTransition, SortDirection,
 };
+
+/// Admitted database owning an exclusive lease on a named IC Storage allocation.
+pub type Database = store::Database<ic_storage::DefaultMemoryImpl>;
+/// Fluent query over an entity in the admitted database.
+pub type Query<'a, E> = store::Query<'a, E, ic_storage::DefaultMemoryImpl>;
+/// Exclusive handle to a frozen source during maintenance.
+pub type Maintenance = store::Maintenance<ic_storage::DefaultMemoryImpl>;
+/// Bounded retained aggregates in their host-governed allocation.
+pub type AggregateJobs = store::AggregateJobs<ic_storage::DefaultMemoryImpl>;
+/// In-progress transformation into an identified target allocation.
+pub type SchemaCopy = store::SchemaCopy<ic_storage::DefaultMemoryImpl>;
+/// Retired source allocation held for bounded cleanup.
+pub type RetiredSource = store::RetiredSource<ic_storage::DefaultMemoryImpl>;
+
+/// Implementation methods for the concrete database handles. Installed Wasm
+/// fault probes enable `test-support` to specialize these handles for their backing.
+#[cfg(any(doc, all(target_arch = "wasm32", feature = "test-support")))]
+pub mod qualification {
+    pub use crate::store::{
+        AggregateJobs, Database, Maintenance, Query, RetiredSource, SchemaCopy,
+    };
+}
 pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.

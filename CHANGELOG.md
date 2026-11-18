@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.23.10] - Unreleased
+
+### 🗄️ Database handles
+
+- Application helpers take `&Database` or `&mut Database`. Remove the memory
+  parameter from database, query, aggregate-job and maintenance handles when
+  updating. IC Storage selects stable memory on Wasm and vector memory on native.
+
+### 🆔 ULIDs
+
+- `Ulid::generate_prand()` issues synchronous IDs in canister updates. Its private
+  stream is seeded once from the canister identity and version. Equal or
+  backward times increment the previous suffix. Explicit generators own
+  independent state. `Ulid::generator_prand()` creates an owned stream with
+  synchronous `next_id()`. Both pseudo-random paths use local system reads.
+  `Ulid::generator().await` requests fresh entropy once per owned stream.
+
+### 🔎 Queries
+
+- Ordered DISTINCT can select the best 1–32 projected values even when the input
+  contains more than 32 distinct values. The complete sorter retains only the
+  requested number and still requires enough work to finish the scan.
+  The order can include tie-breakers after the projected fields. In the local
+  fixture, the first two commands return the highest category. The third fixes
+  category by equality, so ordering by amount also yields the single category 1.
+
+```sh
+db query Entry --order-by category:desc --select category --distinct --limit 1
+db query Entry --order-by category:desc,amount:asc --select category --distinct --limit 1
+db query Entry --category 1 --order-by amount:desc --select category --distinct
+```
+
+### 🎯 Qualification
+
+- `make m4-lifecycle` now checks an indexed listing and a retained count across
+  an item move and an executable upgrade in a skewed 128-item application.
+  It compares total listing instructions and the most expensive page at
+  work budgets of 1, 8 and 32 candidates. This application listing defaults to
+  eight and can resume a cursor issued with a one-candidate budget.
+  [Workload and measurements](qualification/README.md#skewed-application-workload-02310)
+
+- Added a complete two-row listing comparison against frozen IcyDB. After upgrade
+  and startup, IC DB used 14.57M handler instructions and IcyDB used 30.18M
+  to return the same ten tuples across six calls. A second run changes category
+  membership on both sides of the last returned ID and checks the remaining
+  pages after upgrade against a fresh traversal. [Comparison](qualification/README.md#matched-complete-keyset-listing-02310)
+
 ## [0.23.9] - 2026-11-18
 
 ### 🔎 Queries

@@ -37,7 +37,7 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
     host
 }
 
-fn database() -> Database<DefaultMemoryImpl> {
+fn database() -> Database {
     let host = runtime();
     Database::open(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
@@ -183,6 +183,36 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
             .iter()
             .map(row)
             .collect()
+    })
+}
+
+/// Read two matches after the last emitted ID on fixed benchmark input.
+#[cfg(feature = "keyset-comparison")]
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "keyset_listing",
+    guard = crate::transport::admit::<11>,
+    decode = crate::transport::decode::<_, 11>,
+    encode = crate::transport::encode::<_, 11>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn keyset_listing(after: Option<u64>) -> (Vec<Row>, u64) {
+    measure(|| {
+        let db = database();
+        let mut query = db
+            .query::<Entry>()
+            .filter("category", ic_db::Comparison::Eq, 1_u64)
+            .filter("amount", ic_db::Comparison::Ge, 10_u64)
+            .order_by(&["id"])
+            .limit(2)
+            .work_limit(512);
+        if let Some(id) = after {
+            query = query.filter("id", ic_db::Comparison::Gt, id);
+        }
+        let page = query.fetch().unwrap();
+        assert!(page.rows.len() == 2 || page.next.is_none());
+        page.rows.iter().map(row).collect()
     })
 }
 

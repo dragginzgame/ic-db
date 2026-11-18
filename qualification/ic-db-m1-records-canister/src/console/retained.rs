@@ -5,15 +5,15 @@ use super::{
     blob::{self, Optional, Payload},
     decimal_query, document_query, entry_query, optional, parse_group_order, select_groups,
 };
+use crate::handles::{AggregateJobs, Query};
 use crate::{
-    Backing,
     aggregate_store::open_jobs,
     open, runtime,
     schema::{BinaryObject, DecimalRow, Document, Entry},
 };
 use ic_db::{
-    AggregateJobs, Entity, Error, GroupCount, GroupCursor, GroupPage, GroupValue, JobHandle,
-    JobOutcome, JobStep, Query, Timestamp,
+    Entity, Error, GroupCount, GroupCursor, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep,
+    Timestamp,
 };
 
 fn now() -> Timestamp {
@@ -31,9 +31,9 @@ type Selection = (
     super::RowFilters,
 );
 fn configured<'a, E: Entity>(
-    query: Query<'a, E, Backing>,
+    query: Query<'a, E>,
     selection: &'a Selection,
-) -> Result<Query<'a, E, Backing>, String> {
+) -> Result<Query<'a, E>, String> {
     let (_, select, _, limit, (group_min, group_max), group_order, filters) = selection;
     let query = super::filter_rows(query, filters)?;
     select_groups(
@@ -118,8 +118,8 @@ fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
 }
 
 fn start_entry(
-    query: Query<'_, Entry, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, Entry>,
+    jobs: &mut AggregateJobs,
     now: Timestamp,
     expires: Timestamp,
     select: &str,
@@ -302,8 +302,8 @@ fn aggregate_resume(
 }
 
 fn start_blob(
-    query: Query<'_, BinaryObject, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, BinaryObject>,
+    jobs: &mut AggregateJobs,
     now: Timestamp,
     expires: Timestamp,
     select: &str,
@@ -332,8 +332,8 @@ fn start_blob(
 }
 
 fn resume_blob(
-    query: Query<'_, BinaryObject, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, BinaryObject>,
+    jobs: &mut AggregateJobs,
     handle: &JobHandle,
     sequence: u64,
     now: Timestamp,
@@ -400,10 +400,10 @@ fn resume_blob(
 }
 
 fn resume_query<'a, E: Entity>(
-    mut query: Query<'a, E, Backing>,
+    mut query: Query<'a, E>,
     select: &str,
     (work, bytes, page_size, cursor): (u32, u32, u32, Option<&'a GroupCursor>),
-) -> Result<Query<'a, E, Backing>, String> {
+) -> Result<Query<'a, E>, String> {
     query = query.work_limit(work as usize).byte_limit(bytes as usize);
     if select.contains(',') {
         query = query.group_page(page_size as usize, cursor);
@@ -414,8 +414,8 @@ fn resume_query<'a, E: Entity>(
 }
 
 fn resume_entry(
-    query: Query<'_, Entry, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, Entry>,
+    jobs: &mut AggregateJobs,
     handle: &JobHandle,
     sequence: u64,
     now: Timestamp,
@@ -525,8 +525,8 @@ fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
 }
 
 fn start_document(
-    query: Query<'_, Document, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, Document>,
+    jobs: &mut AggregateJobs,
     now: Timestamp,
     expires: Timestamp,
     select: &str,
@@ -571,8 +571,8 @@ fn start_document(
 }
 
 fn resume_document(
-    query: Query<'_, Document, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, Document>,
+    jobs: &mut AggregateJobs,
     handle: &JobHandle,
     sequence: u64,
     now: Timestamp,
@@ -698,8 +698,8 @@ fn resume_document(
 }
 
 fn start_decimal(
-    query: Query<'_, DecimalRow, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, DecimalRow>,
+    jobs: &mut AggregateJobs,
     now: Timestamp,
     expires: Timestamp,
     select: &str,
@@ -744,8 +744,8 @@ fn start_decimal(
 }
 
 fn resume_decimal(
-    query: Query<'_, DecimalRow, Backing>,
-    jobs: &mut AggregateJobs<Backing>,
+    query: Query<'_, DecimalRow>,
+    jobs: &mut AggregateJobs,
     handle: &JobHandle,
     sequence: u64,
     now: Timestamp,

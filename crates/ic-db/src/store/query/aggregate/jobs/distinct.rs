@@ -20,7 +20,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_count_distinct<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -49,7 +49,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_count_distinct<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -84,7 +84,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_count_distinct<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -115,7 +115,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_count_distinct<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,

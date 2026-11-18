@@ -118,7 +118,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     host
 }
 
-fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance<VectorMemory> {
+fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance {
     let mut db = Database::create(
         host.open_memory(&key("copy.source.v1")).unwrap(),
         source(),
@@ -138,7 +138,7 @@ fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance<VectorMemory> {
     db.begin_maintenance(&transition(1)).unwrap()
 }
 
-fn begin(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+fn begin(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
     create(host)
         .begin_copy(
             host.open_memory(&key("copy.target.v1")).unwrap(),
@@ -149,7 +149,7 @@ fn begin(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
         .unwrap()
 }
 
-fn resume(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+fn resume(host: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
     SchemaCopy::resume(
         host.open_memory(&key("copy.source.v1")).unwrap(),
         host.open_memory(&key("copy.target.v1")).unwrap(),
@@ -609,7 +609,7 @@ fn malformed_and_future_copy_checkpoints_refuse_intact() {
     }
 }
 
-fn finish_copy(copy: &mut SchemaCopy<VectorMemory>) {
+fn finish_copy(copy: &mut SchemaCopy) {
     for _ in 0..8 {
         if copy
             .copy_next::<Source, Target>(2, 18, transform)
@@ -1138,7 +1138,7 @@ fn multi_schemas() -> (Schema, Schema, SchemaTransition) {
     (source, target, transition)
 }
 
-fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
     let (source, target, transition) = multi_schemas();
     let mut db = Database::create(
         runtime.open_memory(&key("copy.source.v1")).unwrap(),
@@ -1173,7 +1173,7 @@ fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory
         .unwrap()
 }
 
-fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy<VectorMemory> {
+fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
     let (source, target, transition) = multi_schemas();
     SchemaCopy::resume(
         runtime.open_memory(&key("copy.source.v1")).unwrap(),

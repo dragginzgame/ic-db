@@ -1,9 +1,9 @@
 # Toko Tooling snapshot v1
-# version	0.45.8
+# version	0.45.9
 # layout	vendor
 format	1
 source	https://crates.io/crates/toko-tooling
-revision	adbc76769b2231de6704851c363550ddc486bb6204a0f89c2ad365eb7cf740a3
+revision	b3da2b8748609667e23c7cfbd15d54be9e2224181a0b6865bfb28365bfb3a48e
 # entrypoint	TOKO-TOOLING.md
 # entrypoint	CONTRIBUTING.md
 # entrypoint	vendor/toko-tooling/make/consumer.mk
@@ -31,7 +31,7 @@ file	4835699ea2ad56ede6f1f89b6b070854a86891cec62ac13af8884252476ede51	-	vendor/t
 file	070fdb944a1c8e6d341b7a6943277c4fe9cf9642d925a6ba32ab9d04f969d2b1	x	vendor/toko-tooling/scripts/ci/cargo-release-metadata.sh
 file	a3af7084956384262842be33100f91a22fdd82b0f91b6091a00e90f8726f67fe	x	vendor/toko-tooling/scripts/ci/check-release-source.sh
 file	5a4f1abe764e1e46c472bcf1e2e38f7f998085c570f53976591c808eca884d65	-	vendor/toko-tooling/scripts/ci/check-release-changelog.sh
-file	f859d7851232f63849caeb198c4e536759df3f39741db90cfc8cef7fe065c53f	-	vendor/toko-tooling/scripts/ci/SetupDiagnostics.pm
+file	b2d9df47c02f3eaf27dce1f7b9a688b554780610bb7b71c077dc55440c344db1	-	vendor/toko-tooling/scripts/ci/SetupDiagnostics.pm
 file	3f2971bfefccf71cf4929cabd1fa000e0c7b3d4002b9a08ca58821ccb048c123	-	LICENSE.md
 file	f83e4bd3143a04e954f77eb23d38b1924658aa298b0c1d3486748197861d696d	-	vendor/toko-tooling/make/cargo-publication.mk
 file	578a5f7217e378280fe378328d39e4b7dcea653bd868159b57362461bd4e8555	x	vendor/toko-tooling/scripts/ci/verify-file-checksum.sh

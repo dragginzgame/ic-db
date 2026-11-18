@@ -172,7 +172,7 @@
 --- a/crates/ic-db/src/store/maintenance/mod.rs
 +++ b/crates/ic-db/src/store/maintenance/mod.rs
 @@ -9,7 +9,7 @@
- use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+ use ic_storage::{Memory, RuntimeMemory};
  use sha2::{Digest, Sha256};
  
 -pub(super) const MAGIC: &[u8; 8] = b"ICDBMT02";
@@ -183,7 +183,7 @@
 --- a/crates/ic-db/src/store/maintenance/copy.rs
 +++ b/crates/ic-db/src/store/maintenance/copy.rs
 @@ -13,7 +13,7 @@
- use ic_storage::{DefaultMemoryImpl, Memory, RuntimeMemory};
+ use ic_storage::{Memory, RuntimeMemory};
  use std::{collections::BTreeSet, ops::Bound};
  
 -pub(super) const MAGIC: &[u8; 8] = b"ICDBCP02";
@@ -241,10 +241,10 @@
 +    .unwrap();
 +    h
 +}
-+fn create(h: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
++fn create(h: &MemoryRuntime<VectorMemory>) -> Database {
 +    Database::create(h.open_memory(&key(false)).unwrap(), schema(), [1; 16]).unwrap()
 +}
-+fn count(db: &Database<VectorMemory>, category: u64) -> u64 {
++fn count(db: &Database, category: u64) -> u64 {
 +    db.prefix_cardinality::<Row>("category,id", &[category.into()])
 +        .unwrap()
 +}

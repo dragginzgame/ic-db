@@ -1,13 +1,23 @@
 //! Canonical ULID value, adapted from IcyDB's schema-owned atom.
-//! Generation, clocks and entropy are separate write-policy responsibilities.
+//! Issuers use host-supplied time; the value owns its byte and text formats.
 use std::{fmt, str::FromStr};
 
+#[cfg(target_arch = "wasm32")]
+mod canister;
+#[cfg(target_arch = "wasm32")]
+pub use canister::UlidEntropyError;
+#[cfg(target_arch = "wasm32")]
+pub use pseudo::SeededUlidGenerator;
 mod generator;
+#[cfg(any(target_arch = "wasm32", test))]
+mod pseudo;
+#[cfg(test)]
+mod tests;
 pub use generator::{UlidGenerationError, UlidGenerator};
 
 /// A 128-bit ULID with exact 16-byte storage and canonical uppercase text.
 ///
-/// This value has no automatic generator or randomness requirement. Construct
+/// Use `Ulid::generate_prand()` for synchronous canister-local issuance on Wasm. Construct
 /// supplied identifiers with [`Self::from_bytes`], [`Self::from_u128`] or parsing.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Ulid([u8; 16]);
@@ -17,6 +27,13 @@ impl Ulid {
     pub const MIN: Self = Self([0; 16]);
     /// Maximum identifier; all 128 bits are valid data.
     pub const MAX: Self = Self([255; 16]);
+    fn from_millis_and_suffix(millis: u64, suffix: [u8; 10]) -> Self {
+        let mut bytes = [0; 16];
+        bytes[..6].copy_from_slice(&millis.to_be_bytes()[2..]);
+        bytes[6..].copy_from_slice(&suffix);
+        Self(bytes)
+    }
+
     /// Construct from exactly 16 bytes, timestamp prefix first.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {

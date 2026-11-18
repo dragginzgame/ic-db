@@ -113,7 +113,7 @@ fn cases(n: u64) -> Vec<Read> {
     out
 }
 
-fn ic_read(db: &Database<VectorMemory>, case: Read) -> ResultSet {
+fn ic_read(db: &Database, case: Read) -> ResultSet {
     let rows = |items: Vec<Entry>| {
         ResultSet::Rows(
             items
@@ -369,7 +369,7 @@ impl Sql {
     }
 }
 
-fn create_ic() -> Database<VectorMemory> {
+fn create_ic() -> Database {
     let mut host = MemoryRuntime::new(VectorMemory::default()).unwrap();
     let key = "bench.native.v1";
     host.bootstrap(
@@ -386,7 +386,7 @@ fn create_ic() -> Database<VectorMemory> {
     .unwrap()
 }
 
-fn write_ic(db: &mut Database<VectorMemory>, r: Row, insert: bool) {
+fn write_ic(db: &mut Database, r: Row, insert: bool) {
     let mut batch = Batch::new();
     let row = Entry {
         id: r.0,

@@ -4,15 +4,16 @@ mod blob;
 pub(crate) mod migration;
 #[cfg(feature = "retained-console")]
 mod retained;
+use crate::handles::Query;
 use crate::{
-    Backing, open,
+    open,
     queries::{IdOnly, Summary},
     runtime,
     schema::{DecimalRow, Document, Entry},
     transport::RowFilters,
 };
 use ic_db::{
-    Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, Query, QueryCursor,
+    Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, QueryCursor,
     QueryPage, SortDirection, Value,
 };
 use std::fmt::Write;
@@ -55,9 +56,9 @@ struct OptionalDecimal {}
 struct ZoneOnly {}
 
 fn filter_rows<'a, E: Entity>(
-    query: Query<'a, E, Backing>,
+    query: Query<'a, E>,
     filters: &'a RowFilters,
-) -> Result<Query<'a, E, Backing>, String> {
+) -> Result<Query<'a, E>, String> {
     let RowFilters {
         payload,
         compare,
@@ -367,14 +368,14 @@ fn query(
 }
 
 fn configure<'a, E: Entity>(
-    mut query: Query<'a, E, Backing>,
+    mut query: Query<'a, E>,
     cursor: Option<&'a QueryCursor>,
     order: &[(&'a str, SortDirection)],
     descending: bool,
     limit: u32,
     work: u32,
     bytes: u32,
-) -> Query<'a, E, Backing> {
+) -> Query<'a, E> {
     query = query
         .limit(limit as usize)
         .work_limit(work as usize)
@@ -403,11 +404,11 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
 }
 
 fn entry_query(
-    db: &ic_db::Database<Backing>,
+    db: &crate::handles::Database,
     minimum: Option<u64>,
     category: Option<u64>,
     entry_id: Option<u64>,
-) -> Result<Query<'_, Entry, Backing>, String> {
+) -> Result<Query<'_, Entry>, String> {
     if entry_id.is_some() {
         return Err("--entry-id applies to Document".into());
     }
@@ -422,11 +423,11 @@ fn entry_query(
 }
 
 fn document_query(
-    db: &ic_db::Database<Backing>,
+    db: &crate::handles::Database,
     minimum: Option<u64>,
     category: Option<u64>,
     entry_id: Option<u64>,
-) -> Result<Query<'_, Document, Backing>, String> {
+) -> Result<Query<'_, Document>, String> {
     if minimum.is_some() || category.is_some() {
         return Err("--min and --category apply to Entry".into());
     }
@@ -438,11 +439,11 @@ fn document_query(
 }
 
 fn decimal_query(
-    db: &ic_db::Database<Backing>,
+    db: &crate::handles::Database,
     minimum: Option<u64>,
     category: Option<u64>,
     entry_id: Option<u64>,
-) -> Result<Query<'_, DecimalRow, Backing>, String> {
+) -> Result<Query<'_, DecimalRow>, String> {
     if minimum.is_some() || category.is_some() || entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
     }
@@ -450,11 +451,11 @@ fn decimal_query(
 }
 
 fn select_groups<'a, E: Entity>(
-    mut query: Query<'a, E, Backing>,
+    mut query: Query<'a, E>,
     select: &str,
     (group_min, group_max): (Option<&'a str>, Option<&'a str>),
     group_order: Option<GroupOrder>,
-) -> Result<Query<'a, E, Backing>, String> {
+) -> Result<Query<'a, E>, String> {
     for (comparison, value) in [(Comparison::Ge, group_min), (Comparison::Le, group_max)] {
         let Some(value) = value else {
             continue;
@@ -505,7 +506,7 @@ fn select_groups<'a, E: Entity>(
 }
 
 fn execute<'a, E: Entity>(
-    mut query: Query<'a, E, Backing>,
+    mut query: Query<'a, E>,
     select: &str,
     (distinct, bounds, group_order): (bool, (Option<&'a str>, Option<&'a str>), Option<GroupOrder>),
     columns: &[&str],
@@ -731,7 +732,7 @@ fn execute<'a, E: Entity>(
 }
 
 fn grouped_extremum<E: Entity, K: Value, R: Value>(
-    query: Query<'_, E, Backing>,
+    query: Query<'_, E>,
     maximum: bool,
     columns: &[&str; 2],
     key: fn(K) -> String,
@@ -765,7 +766,7 @@ fn display_group_values<K, R>(
 }
 
 fn extremum<E: Entity, R: Value>(
-    query: Query<'_, E, Backing>,
+    query: Query<'_, E>,
     maximum: bool,
     column: &str,
     render: fn(R) -> String,

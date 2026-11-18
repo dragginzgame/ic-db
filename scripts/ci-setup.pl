@@ -50,6 +50,7 @@ my $status = run_setup(sub {
     # Explicit job-local roots only. Hidden directories are included, symlinks
     # never followed. Limit traversal, file count and reads independently.
     my @queue = map { ["$root/$_", $_, 0] } qw(tools assets);
+    my $attempt_byte_limit = 1024 * 1024;
     my ($visited, $logs) = (0, 0);
     while (@queue && $visited < 256 && $logs < 10) {
         my ($path, $relative, $depth) = @{shift @queue};
@@ -67,9 +68,9 @@ my $status = run_setup(sub {
             push @queue, map { ["$path/$_", "$relative/$_", $depth + 1] } sort @entries;
         } elsif (-f $path && $relative =~ m{/(?:install|download|stderr)\.log\z}) {
             # Omit giant logs whole; tailing raw bytes could lose redaction context.
-            if (-s $path > 1024 * 1024) { $meta .= "oversized attempt log omitted\n"; next; }
+            if (-s $path > $attempt_byte_limit) { $meta .= "oversized attempt log omitted\n"; next; }
             open my $file, '<', $path or die "cannot read attempt log\n";
-            my $detail = excerpt($file);
+            my $detail = excerpt($file, $attempt_byte_limit);
             close $file or die "cannot close attempt log\n";
             $logs++;
             $write->("attempt-$logs", $detail);

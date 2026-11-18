@@ -156,7 +156,7 @@ fn exact_indexes_final_state_swaps_and_reopen() {
         b.insert(row).unwrap();
     }
     db.commit(b).unwrap();
-    let read = |db: &Database<VectorMemory>, index| {
+    let read = |db: &Database, index| {
         db.index_prefix::<TimeRow>(index, &[true.into()], 32)
             .unwrap()
             .into_iter()

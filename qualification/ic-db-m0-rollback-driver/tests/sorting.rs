@@ -386,9 +386,18 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             .is_err()
     );
     assert_eq!(pic.get_stable_memory(canister).await, backing);
-    let distinct = query("category:desc", false, None, 1, 128, 8, None, true)
-        .await
-        .unwrap();
+    let distinct = query(
+        "category:desc,amount:asc",
+        false,
+        None,
+        1,
+        128,
+        8,
+        None,
+        true,
+    )
+    .await
+    .unwrap();
     assert_eq!(distinct.1, [vec!["1"]]);
     assert!(distinct.2.is_none());
     assert_eq!((distinct.3, distinct.4, distinct.5), (6, 6, 8));
@@ -590,8 +599,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         }
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
-    // 0 and 1 still occur elsewhere. Adding categories 2..=31 fills the 32-key
-    // envelope; a later category 32 must refuse even when only one result is asked for.
+    // The 33rd category becomes the best result before and after upgrade.
     for id in 2_u64..=31 {
         write(id, id, id * 10, 0).await;
     }
@@ -614,11 +622,12 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 .unwrap();
         }
         let backing = pic.get_stable_memory(canister).await;
-        assert!(
-            query("category:desc", false, None, 1, 512, 8, None, true)
-                .await
-                .is_err()
-        );
+        let page = query("category:desc", false, None, 1, 512, 8, None, true)
+            .await
+            .unwrap();
+        assert_eq!(page.1, vec![vec![String::from("32")]]);
+        assert!(page.2.is_none());
+        assert_eq!((page.3, page.4), (511, 511));
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
     owned.drop().await;

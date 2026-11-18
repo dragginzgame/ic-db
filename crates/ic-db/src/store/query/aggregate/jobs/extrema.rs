@@ -1,6 +1,6 @@
 //! Retained extrema over the synchronous comparator and shared job lifecycle.
 use super::{AggregateJobs, JobHandle, JobStep, binding, start};
-use crate::{Entity, Error, GroupPage, GroupValue, Query, Timestamp, Value};
+use crate::{Entity, Error, GroupPage, GroupValue, Timestamp, Value, store::Query};
 use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
@@ -15,7 +15,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_min<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -31,7 +31,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_max<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -51,7 +51,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_min<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -68,7 +68,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_max<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -87,7 +87,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_min<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -102,7 +102,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_max<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -122,7 +122,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_min<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -138,7 +138,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_max<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -149,7 +149,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn start_extremum<R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         maximum: bool,

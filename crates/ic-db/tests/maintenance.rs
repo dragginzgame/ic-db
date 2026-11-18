@@ -59,7 +59,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     runtime
 }
 
-fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
+fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database {
     let mut db = Database::create(runtime.open_memory(&key()).unwrap(), source(), [7; 16]).unwrap();
     let mut batch = Batch::new();
     batch.insert(&Source { id: 1, value: 42 }).unwrap();

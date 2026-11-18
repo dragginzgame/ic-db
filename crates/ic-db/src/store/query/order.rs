@@ -339,19 +339,26 @@ fn satisfies(
 
 // Only singleton equality clauses are mandatory. An equality inside an OR
 // must not restrict an index prefix or prove that an ordering field is constant.
-fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
+pub(super) fn literal_equalities<'r, 'a>(
+    request: &'r Request<'a>,
+) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
     request
         .predicates
         .split_inclusive(|p| !p.or_next)
-        .find_map(|clause| {
+        .filter_map(|clause| {
             if let [predicate] = clause
-                && predicate.field == field
                 && predicate.comparison == Comparison::Eq
                 && let QueryOperand::Literal(value) = predicate.operand
             {
-                Some(value)
+                Some((predicate.field, value))
             } else {
                 None
             }
         })
+}
+
+fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
+    literal_equalities(request)
+        .find(|(name, _)| *name == field)
+        .map(|(_, value)| value)
 }

@@ -229,11 +229,12 @@ For individual directions, use `order_by_each` with `(field, SortDirection)` pai
 Its implicit primary key is ascending; `.descending()` reverses the complete
 order. Constant fields may have different directions without preventing index
 traversal. Otherwise mixed directions use the same bounded complete sorter.
-Sorted `distinct()` accepts inherently unique results or an explicit order covering
-exactly the projected fields. It removes duplicates before applying `limit` and
-output bytes. Retain at most 32 distinct tuples within 128 KiB, using the existing
-sort-key prefixes for equality. Duplicate input still consumes scan work; a 33rd
-distinct tuple refuses even with `limit(1)`. No additional set or cursor is stored.
+Sorted `distinct()` accepts inherently unique results or an explicit order starting with
+all varying projected fields, in any sequence. A mandatory literal equality
+fixes a field, so its position in the order is immaterial. It removes duplicates before applying `limit` and
+output bytes. The sorter keeps the best `limit` distinct tuples within 128 KiB and
+uses their projected keys for equality. Every candidate consumes scan work,
+including duplicates and candidates that fall outside the result window.
 
 Sparse indexes (`present_only`) can supply order when filters exclude absence
 for every optional indexed field. For example, `Ne` with `IndexValue::Absent`,
@@ -707,18 +708,43 @@ Inspect `AccountRow` with `db schema`; the Info column shows byte widths.
 `prim = "Ulid"` uses `ic_db::Ulid`, with exact 16-byte storage and ordered keys.
 Construct supplied values with `Ulid::from_bytes`, `Ulid::from_u128`, or parse
 canonical uppercase 26-character text. `db schema` shows `UlidRow`. Automatic
-generation remains separate work; this value does not read
-a clock or acquire entropy. The `ulid` dependency's default RNG feature is disabled.
+schema-field generation remains separate work. The `ulid` dependency's default RNG feature is disabled.
 Declare `pk(field = "id")` with `id` of `prim = "Ulid"` to use ULID primary keys.
 `get`, `delete` and `page` then accept ULIDs, including typed continuation keys.
 Inspect `KeyRow` and its mixed-key references with `db schema`.
-`UlidGenerator::generate(operation_timestamp, randomness)` now offers explicit
+In a canister update, issue an ID synchronously:
+
+```rust
+let id = Ulid::generate_prand();
+```
+
+For a private sequence, hold the returned generator and call `next_id()`:
+
+```rust
+let mut ids = Ulid::generator_prand();
+let first = ids.next_id();
+let second = ids.next_id();
+```
+
+To seed an owned sequence with fresh IC entropy, use `Ulid::generator().await?`.
+Construction makes one bounded management request and can return
+`UlidEntropyError`. Obtain the generator before starting a synchronous write batch.
+Both owned generators use local IC time for subsequent IDs.
+
+The first synchronous one-shot issuance in the heap hashes the principal and current version once.
+A new millisecond starts at that 80-bit suffix; further IDs at equal or earlier
+times increment it. An ordinary upgrade starts a new stream with a new version.
+The issuer needs no entropy or inter-canister calls. IDs are predictable;
+the 79-bit seed allows collisions between streams. Applications requiring
+ordering across upgrades can own and checkpoint a generator.
+
+`UlidGenerator::generate(operation_timestamp, randomness)` offers explicit
 issuance from a `Timestamp` and 10 host-provided random bytes. Equal/backward time
 increments the preceding suffix; invalid time and exhaustion refuse unchanged.
-The host owns the stream and any upgrade checkpoint via `last()` / `resume_after()`.
+Each generator instance advances its own stream independently of the canister helper.
+The host owns that stream and any upgrade checkpoint via `last()` / `resume_after()`.
 Resetting state can repeat IDs, and issuance before a normally refused batch can
-leave gaps. Schema-owned automatic identity generation
-remains separate work; no clock or RNG is introduced into the database.
+leave gaps. The application supplies the generated ID when constructing its row.
 
 Entity fields can now declare literal defaults, for example
 `field(name = "count", value(item(prim = "Nat16")), default = 7)`.

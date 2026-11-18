@@ -49,6 +49,7 @@ help:
 	  'make m2-count-comparison        Compare entity and indexed-prefix count costs' \
 	  'make m2-aggregate-comparison    Compare grouped IC DB/IcyDB aggregate costs' \
 	  'make m2-fluent-comparison       Compare fluent IC DB/IcyDB listings and sorting' \
+	  'make m2-keyset-comparison       Compare complete two-row listings with frozen IcyDB' \
 	  'make m2-query-matrix            Compare broad query/selectivity/population matrix' \
 	  'make m2-aggregate-paths         Compare primary and explicit-index aggregates' \
 	  'make m2-prefix-candidate        Measure isolated maintained-prefix experiment' \
@@ -119,6 +120,10 @@ m1-records-comparison:
 
 m2-fluent-comparison:
 	bash scripts/measure-records.sh fluent
+
+.PHONY: m2-keyset-comparison
+m2-keyset-comparison:
+	bash scripts/measure-records.sh keyset
 
 .PHONY: m2-query-matrix
 m2-query-matrix:

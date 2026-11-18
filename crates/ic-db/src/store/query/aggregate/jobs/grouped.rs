@@ -22,7 +22,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_count<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -39,7 +39,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     pub fn start_group_count_field<K: Value>(
         self,
         field: &str,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -48,7 +48,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn start_group_count_job<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         field: Option<&str>,
@@ -80,7 +80,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_count<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -98,7 +98,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     pub fn resume_group_count_field<K: Value>(
         self,
         field: &str,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -108,7 +108,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn resume_group_count_job<K: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -148,7 +148,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_sum<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -165,7 +165,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_sum<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -182,7 +182,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_group_avg<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
@@ -198,7 +198,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_group_avg<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -208,7 +208,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn start_group_numeric<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         operation: Operation,
@@ -219,7 +219,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     pub(super) fn start_group_value(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
         admitted: (Plan<'_>, Reducer),
@@ -241,7 +241,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn resume_group_numeric<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
@@ -253,7 +253,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     pub(super) fn resume_group_value<K: Value, R: Value>(
         self,
-        jobs: &mut AggregateJobs<impl Memory>,
+        jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,

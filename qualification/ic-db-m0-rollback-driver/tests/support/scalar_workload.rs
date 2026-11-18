@@ -12,13 +12,14 @@ pub async fn run(
     compare_reads: bool,
 ) {
     let fluent = compare_reads && std::env::var_os("IC_DB_FLUENT_COMPARISON").is_some();
+    let keyset = compare_reads && std::env::var_os("IC_DB_KEYSET_COMPARISON").is_some();
     let aggregate = compare_reads && std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
     let profile = compare_reads && std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
     let counts = compare_reads && std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
     let prefix_candidate = label == "ic-db" && std::env::var_os("IC_DB_PREFIX_CANDIDATE").is_some();
     assert!(!prefix_candidate || (counts && !profile));
     assert!(
-        [fluent, aggregate, counts]
+        [fluent, keyset, aggregate, counts]
             .into_iter()
             .filter(|selected| *selected)
             .count()
@@ -39,6 +40,9 @@ pub async fn run(
         "canister_update insert",
         "canister_update read_modify_write",
     ];
+    if keyset {
+        expected_methods.insert(0, "canister_query keyset_listing");
+    }
     if fluent {
         expected_methods.insert(0, "canister_query fluent_listing");
     }
@@ -174,6 +178,39 @@ pub async fn run(
         .unwrap();
         (accepted, instructions, cycles)
     };
+    let replace = async |replacement: Row| {
+        let before = pic.cycle_balance(canister).await;
+        let reply = pic
+            .update_call(
+                canister,
+                canister,
+                "read_modify_write",
+                ic_wire::encode(
+                    &replacement,
+                    Encoding::Frame {
+                        method: 4,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let cycles = before
+            .checked_sub(pic.cycle_balance(canister).await)
+            .unwrap();
+        let (value, instructions): (Option<Row>, u64) = ic_wire::decode(
+            &reply,
+            Encoding::Frame {
+                method: 4,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap();
+        (value, instructions, cycles)
+    };
     let lookup = async |id: u64| {
         let reply = pic
             .query_call(
@@ -235,6 +272,114 @@ pub async fn run(
         startup().await
     );
 
+    if keyset {
+        // Final item state of the skewed application after its move, seeded
+        // directly: the timed workload contains reads on immutable input.
+        let mut expected = Vec::new();
+        for id in 1..=128 {
+            let category = if id % 8 == 0 && id != 128 { 2 } else { 1 };
+            let amount = if id == 128 { 10 } else { id % 11 };
+            let value = (id, category, amount);
+            assert!(insert(value).await.0);
+            settle().await;
+            if category == 1 && amount >= 10 {
+                expected.push(value);
+            }
+        }
+        assert_eq!(expected.len(), 10);
+        let page = async |after: Option<u64>| {
+            let request = ic_wire::encode(
+                &after,
+                Encoding::Frame {
+                    method: 11,
+                    direction: Direction::Request,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            let reply = pic
+                .query_call(canister, canister, "keyset_listing", request)
+                .await
+                .unwrap();
+            let (rows, instructions): (Vec<Row>, u64) = ic_wire::decode(
+                &reply,
+                Encoding::Frame {
+                    method: 11,
+                    direction: Direction::Response,
+                },
+                LIMITS,
+            )
+            .unwrap();
+            (rows, instructions)
+        };
+        let traverse = async |mut after: Option<u64>, expected: &[Row]| {
+            let before = pic.get_stable_memory(canister).await;
+            let mut costs = Vec::new();
+            for offset in (0..=expected.len()).step_by(2) {
+                let (rows, instructions) = page(after).await;
+                assert_eq!(
+                    rows,
+                    expected[offset..(offset + 2).min(expected.len())],
+                    "{label} after {after:?}"
+                );
+                after = rows.last().map(|row| row.0);
+                costs.push(instructions);
+            }
+            assert_eq!(pic.get_stable_memory(canister).await, before);
+            costs
+        };
+        for phase in ["seeded", "after-upgrade-settled"] {
+            if phase == "after-upgrade-settled" {
+                ic_db_m0_rollback_driver::upgrade_stopped(
+                    pic,
+                    canister,
+                    wasm.clone(),
+                    vec![],
+                    None,
+                )
+                .await
+                .unwrap();
+                eprintln!(
+                    "{label} keyset reopen_steps_instructions_cycles={:?}",
+                    startup().await
+                );
+            }
+            let costs = traverse(None, &expected).await;
+            eprintln!(
+                "{label} keyset {phase} pages={costs:?} total={}",
+                costs.iter().sum::<u64>()
+            );
+        }
+        let (first, first_cost) = page(None).await;
+        assert_eq!(first, expected[..2]);
+        let boundary = first.last().unwrap().0;
+        assert_eq!(boundary, 21);
+        let mut write_cost = 0;
+        let mut settle_cost = 0;
+        for change in [(8, 1, 10), (32, 1, 10), (43, 2, 10)] {
+            let (actual, instructions, _) = replace(change).await;
+            assert_eq!(actual, Some(change));
+            write_cost += instructions;
+            settle_cost += settle().await.1;
+            expected.retain(|row| row.0 != change.0);
+            if change.1 == 1 && change.2 >= 10 {
+                expected.push(change);
+            }
+        }
+        expected.sort_by_key(|row| row.0);
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
+            .await
+            .unwrap();
+        let (_, reopen_cost, _) = startup().await;
+        let suffix = &expected[expected.partition_point(|row| row.0 <= boundary)..];
+        let resumed = traverse(Some(boundary), suffix).await;
+        let fresh = traverse(None, &expected).await;
+        eprintln!(
+            "{label} keyset edited first={first_cost} writes={write_cost} settling={settle_cost} readiness={reopen_cost} resumed={resumed:?} fresh={fresh:?}"
+        );
+        owned.drop().await;
+        return;
+    }
     let mut source = Vec::new();
     let mut insert_instructions = Vec::new();
     let mut insert_cycles = Vec::new();
@@ -277,36 +422,7 @@ pub async fn run(
     eprintln!("{label} indexed_listing_instructions={instructions}");
 
     let replacement: Row = (7, 0, 707);
-    let before = pic.cycle_balance(canister).await;
-    let reply = pic
-        .update_call(
-            canister,
-            canister,
-            "read_modify_write",
-            ic_wire::encode(
-                &replacement,
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    let cycles = before
-        .checked_sub(pic.cycle_balance(canister).await)
-        .unwrap();
-    let (value, instructions): (Option<Row>, u64) = ic_wire::decode(
-        &reply,
-        Encoding::Frame {
-            method: 4,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap();
+    let (value, instructions, cycles) = replace(replacement).await;
     assert_eq!(value, Some(replacement));
     eprintln!("{label} replacement_settling={:?}", settle().await);
     *source.iter_mut().find(|row| row.0 == 7).unwrap() = replacement;
@@ -329,34 +445,7 @@ pub async fn run(
             ("no_op", (7, 0, 708)),
         ] {
             let backing = pic.get_stable_memory(canister).await;
-            let before = pic.cycle_balance(canister).await;
-            let reply = pic
-                .update_call(
-                    canister,
-                    canister,
-                    "read_modify_write",
-                    ic_wire::encode(
-                        &value,
-                        Encoding::Frame {
-                            method: 4,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
-                )
-                .await
-                .unwrap();
-            let cycles = before - pic.cycle_balance(canister).await;
-            let (actual, instructions): (Option<Row>, u64) = ic_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (actual, instructions, cycles) = replace(value).await;
             assert_eq!(actual, Some(value));
             eprintln!(
                 "{label} {name}_replace_instructions={instructions} cycles={cycles} settling={:?}",

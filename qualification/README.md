@@ -320,6 +320,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
+| Complete sparse ID listing | 128 rows, ten matches and six calls in both scalar hosts | IC DB used 51.7% fewer handler instructions after upgrade and startup | Fixed input and last-ID pagination. The Canic listing with an eight-candidate budget is a separate workload. [Measurement](#matched-complete-keyset-listing-02310) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Automatic whole-entity metadata, covered equality-prefix key scans, or row execution. Explicit owner validation remains available. | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | [Automatic count measurements](#automatic-prefix-counts-0235) cover the default fluent call. [Prefix comparison](#prefix-count-paths-0234), [adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
@@ -393,6 +394,7 @@ The first M2 fluent-read probe is selected separately:
 make m2-queries
 make m2-jobs
 make m2-fluent-comparison
+make m2-keyset-comparison
 make m2-aggregate-comparison
 make m2-count-comparison
 make m2-count-profile
@@ -1695,7 +1697,7 @@ warm observations are:
 After upgrade, the first two-value DISTINCT call includes reopening and uses
 7,130,830 instructions / 14,237,848 cycles. Subsequent mixed-order 32-row selection
 uses 13,861,051 / 21,114,979. A later dataset retaining exactly 32 distinct categories
-uses 8,397,483 / 15,578,287; adding a 33rd distinct value refuses even for limit 1.
+uses 8,397,483 / 15,578,287. These measurements precede bounded top-k retention for sorted DISTINCT.
 Results, live cursor refusals, sparse/empty scans and unchanged backing all pass
 before and after upgrade. Build inputs and full observations are retained in
 `qualification/target/evidence/m2/sort-costs-build.jsonl`, `sort-costs.wasm` and
@@ -2740,6 +2742,105 @@ driver, lock, feature graphs, compiler/build receipts and both artifacts identif
 the run. The qualified lock SHA-256 is
 `0344fcaf2a4482df6935a9e70a146622095086f329ca594f6bb070ffcd078f1a`.
 
+### Skewed application workload (0.23.10)
+
+`make m4-lifecycle` runs the existing Canic-mounted application on two parents,
+128 items and 16 links. Initially 112 items share one parent. The listing scans
+that parent's index in ID order with a residual minimum score of 10 and a
+two-row output limit. In each phase, three independent listings start at the
+beginning with work budgets of 1, 8 and 32 candidates. The application defaults
+to eight when the caller omits the budget. The qualification checks that a
+sparse page actually examines eight candidates and compares every returned ID
+with the independent map. The table records the original explicit-budget run.
+Totals include the final page.
+
+| Listing phase | Work per call | Calls | Candidates | Matches | Empty continued pages | Total handler instructions | Peak per call |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Seeded | 1 | 113 | 112 | 9 | 103 | 62,001,039 | 637,262 |
+| Seeded | 8 | 15 | 112 | 9 | 5 | 18,423,660 | 1,380,052 |
+| Seeded | 32 | 5 | 112 | 9 | 0 | 13,989,303 | 3,482,578 |
+| After write | 1 | 114 | 113 | 10 | 103 | 62,679,266 | 644,716 |
+| After write | 8 | 15 | 113 | 10 | 5 | 18,550,901 | 1,380,052 |
+| After write | 32 | 6 | 113 | 10 | 0 | 14,632,942 | 3,482,578 |
+| After upgrade, before an update | 1 | 114 | 113 | 10 | 103 | 96,276,771 | 940,525 |
+| After upgrade, before an update | 8 | 15 | 113 | 10 | 5 | 22,983,435 | 1,674,329 |
+| After upgrade, before an update | 32 | 6 | 113 | 10 | 0 | 16,405,118 | 3,781,481 |
+| After first post-upgrade update | 1 | 114 | 113 | 10 | 103 | 62,322,808 | 643,285 |
+| After first post-upgrade update | 8 | 15 | 113 | 10 | 5 | 18,510,147 | 1,377,489 |
+| After first post-upgrade update | 32 | 6 | 113 | 10 | 0 | 14,607,176 | 3,483,066 |
+
+The move used 2,097,792 handler instructions and reduced the canister balance
+by 9,113,932 cycles. A count already in progress reported invalidation on its
+next advance (837,301 instructions). Its replacement processed two candidates
+per advance and survived the upgrade. It returned exactly 128 after 65 advances
+and 62,630,893 handler instructions summed across those advances, excluding
+start and cancellation. No further item edits occurred during the replacement.
+
+At budget 32, the post-write listing took six calls and each examined candidate
+was counted once across the listing. Before the first post-upgrade update,
+the six calls cost 16.41M instructions in total, versus 96.28M at budget 1.
+The peak per call rose from 0.94M to 3.78M instructions. Budget 8 reached
+22.98M total with a 1.67M peak. The absolute post-upgrade premium over the
+post-write listing fell from 33.60M instructions at budget 1 to 1.77M at
+budget 32, about 0.295M extra per query at either budget. After a successful
+count advance, listings returned to their earlier cost range. This PocketIC sample uses the qualification
+mount and measures instructions inside handlers. The retained run log is
+`qualification/target/evidence/mixed-lifecycle/run.log`.
+
+### Matched complete keyset listing (0.23.10)
+
+`make m2-keyset-comparison` seeds both scalar Wasm hosts with the 128 item
+tuples from the [skewed application](#skewed-application-workload-02310)
+after item 128 moved. Both use the public fluent interface to select category
+1 and amount at least 10 in ascending ID order. Each call asks for two full
+rows. Following a full page, the caller adds `id > last_id`. Five pages each
+return two tuples and a sixth returns empty. Every tuple and its position
+agrees with an independent oracle, and the driver checks stable memory before
+and after both traversals.
+
+| PocketIC handler instructions | IC DB | Frozen IcyDB `6d421e3` |
+| --- | ---: | ---: |
+| Complete listing after seeding | 14,574,185 | 30,355,082 |
+| Explicit readiness after upgrade | 438,073 (1 update) | 5,844,846 (2 updates) |
+| Complete listing after upgrade and readiness | 14,574,182 | 30,175,705 |
+| Most expensive page after readiness | 3,537,019 | 6,710,107 |
+
+Frozen IcyDB's typed scalar limit applies across a cursor traversal. Starting
+each request at the next ID gives both hosts the same output contract on fixed
+input. IC DB allows up to 512 candidates in each request. Legacy uses public
+read admission. The original Canic listing permits eight candidates, can return
+empty continued pages, and measures the full application handler. This scalar
+comparison measures query construction, execution and tuple conversion inside
+each host, excluding transport. Each page uses the last emitted ID as its
+boundary. Native cursor formats are outside this comparison. The isolated runner retains the feature graphs, Wasm
+artifacts, source digests and individual page costs in
+`qualification/target/evidence/keyset-comparison/`.
+
+#### Membership changes between pages
+
+The same runner takes a first page ending at ID 21, then moves IDs 8 and 32
+into the matching category and ID 43 out of it using three read-modify-write
+calls. After an unchanged executable upgrade and readiness, the caller
+continues from ID 21. Both engines return the new match at 32 and omit 43.
+ID 8 appears only when the caller starts again. The original traversal yields
+ten rows and the fresh traversal yields eleven. Both sequences are checked
+against independently maintained tuples on immutable primary-key ordering.
+
+| Stage, handler instructions | IC DB | Frozen IcyDB |
+| --- | ---: | ---: |
+| First page before edits | 2,366,289 | 6,710,107 |
+| Three read-modify-write calls | 4,511,383 | 8,955,810 |
+| Explicit post-write settling in this harness | 0 | 12,794,476 |
+| Readiness after upgrade | 435,851 | 5,844,846 |
+| Remaining pages through exhaustion | 11,972,507 | 23,446,337 |
+| Sum through exhaustion | 19,286,030 | 57,751,576 |
+| Separate fresh traversal after edits | 14,415,124 | 32,477,547 |
+
+The totals sum instrumented handler work. They exclude executable installation,
+upgrade execution, transport and the independent fresh read. The legacy harness
+drives startup after each write. The settling figure is the cost of that
+schedule, and does not establish the minimum cost for a different schedule.
+
 ### Opening costs through the Canic mount (0.23.7)
 
 Run `make m4-lifecycle` to reproduce these observations. The fixture uses
@@ -2841,8 +2942,9 @@ parent and minimum score across copy and validation. After upgrades in each
 phase, both schemas refuse the listing with the maintenance error. Publication
 opens the target, where presenting the source cursor returns a cursor error.
 A fresh target listing uses the widened score type and returns its first page
-before retired-source cleanup. Its continuation finishes after cleanup and
-upgrade, with all IDs checked against the independent model.
+before retired-source cleanup with a one-candidate budget. After cleanup and
+upgrade, the caller resumes the same cursor with the default eight-candidate
+budget. The complete sequence of IDs must match the independent model.
 
 The same run pauses an item count before maintenance. During copy and
 validation, resumes against either schema receive `Maintenance` and preserve
@@ -4133,7 +4235,7 @@ and `--after`. The Wasm sorting witness scans 511 candidates, selects the best
 one or 32 with mixed directions, and repeats across upgrade. Native full-sort
 oracles also exercise primary ties, identity DISTINCT and capacity recovery as
 losing rows are replaced. An exact 511-candidate work budget refuses; 512 permits
-the exhaustion check. Non-identity sorted DISTINCT retains at most 32 distinct tuples.
+the exhaustion check. Non-identity sorted DISTINCT retains the best requested distinct tuples.
 `make m2-queries` includes its Wasm console-boundary check for
 global selection, limits, unchanged backing and indexed cursors across upgrade;
 no fixture endpoint or client sorting engine is added.
@@ -4147,13 +4249,11 @@ and retain all work/row/state/output limits. These checks establish correctness,
 not performance parity for the added direction capability.
 Sorted DISTINCT can use `db query Entry --order-by category:desc --select category --distinct --limit 1`:
 the six matching rows become two sorted categories before selecting category 1.
-Non-identity projections require exactly their projected fields in the explicit
-order. Native tuple/text oracles and Wasm upgrade checks cover duplicate removal
+Non-identity projections require all varying projected fields to lead the explicit order. Fields fixed by a mandatory literal equality can be omitted or interleaved. Native tuple/text oracles and Wasm upgrade checks cover duplicate removal
 before limits, hidden-order refusal and complete-input work bounds. The Wasm
 witness reduces 511 rows to two categories across upgrade, accepts exactly
-32 distinct categories and refuses a 33rd even with a one-row output limit.
-Native mixed-direction tuple oracles fill all 32 retained slots and then revisit
-them with duplicates. This reuses the sorter, not the
+32 distinct categories and selects category 32 once a 33rd value is present.
+Native mixed-direction tuple oracles exercise 64 distinct values twice in both directions. This reuses the sorter, not the
 unordered DISTINCT set or a new replay mechanism.
 DecimalRow also supports `--select value` and `--select maybe`, including sorted
 DISTINCT; its default console population is empty. The sorting Wasm test seeds

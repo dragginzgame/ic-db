@@ -104,7 +104,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         u128::from_be_bytes(consumed) + 1
     );
     assert!(pic.get_stable_memory(canister).await == before);
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     assert_eq!(
@@ -204,5 +204,37 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
     )
     .unwrap();
     assert_eq!(lookup, (Some((resumed, None, 3)), vec![(resumed, None, 3)]));
+    // Unlike the explicit issuer above, the convenience stream is heap-local.
+    pic.set_time(ic_testkit::pocket_ic::Time::from_nanos_since_unix_epoch(
+        2_000_000_000_000_000_000,
+    ))
+    .await;
+    let before_ms = pic.get_time().await.as_nanos_since_unix_epoch() / 1_000_000;
+    let first = result(issue(0, 4, 3).await.unwrap()).unwrap();
+    let first_ms = (u128::from_be_bytes(first) >> 80) as u64;
+    let after_ms = pic.get_time().await.as_nanos_since_unix_epoch() / 1_000_000;
+    assert!((before_ms..=after_ms).contains(&first_ms));
+    // Interleave the owned issuer. Each stream advances only on its own calls.
+    assert_eq!(last().await, Some(resumed));
+    let explicit = result(issue(999, 7, 0).await.unwrap()).unwrap();
+    assert_eq!(
+        u128::from_be_bytes(explicit),
+        u128::from_be_bytes(resumed) + 1
+    );
+    let second = result(issue(0, 5, 3).await.unwrap()).unwrap();
+    assert_eq!(u128::from_be_bytes(second), u128::from_be_bytes(first) + 1);
+    assert_eq!(last().await, Some(explicit));
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    // Same principal and clock, new heap and system version. Existing rows remain.
+    let restarted = result(issue(0, 6, 3).await.unwrap()).unwrap();
+    assert_eq!(u128::from_be_bytes(restarted) >> 80, u128::from(first_ms));
+    assert_ne!(restarted, first);
+    assert_ne!(restarted, second);
+    for (value, mode) in [(8, 4), (9, 5), (10, 5)] {
+        result(issue(0, value, mode).await.unwrap())
+            .expect("generated ID inserts under its own key");
+    }
     owned.drop().await;
 }

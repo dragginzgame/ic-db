@@ -2,14 +2,12 @@
 mod values;
 
 use super::{
-    Backing,
     aggregate_store::open_jobs,
     faults, open, runtime,
     schema::{Document, Entry},
 };
-use ic_db::{
-    Batch, Comparison, Database, GroupOrder, JobHandle, JobOutcome, JobStep, Query, Timestamp,
-};
+use crate::handles::{Database, Query};
+use ic_db::{Batch, Comparison, GroupOrder, JobHandle, JobOutcome, JobStep, Timestamp};
 
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct Amount {}
@@ -25,7 +23,7 @@ struct Category {}
 #[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
 struct EntryId {}
 
-fn query(db: &Database<Backing>, operation: u8) -> Query<'_, Entry, Backing> {
+fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
     let query = db.query::<Entry>();
     if operation == 3 {
         query

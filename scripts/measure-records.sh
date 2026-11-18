@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 workload="${1:-scalar}"
-unset IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
+unset IC_DB_KEYSET_COMPARISON IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
 case "$workload" in
     scalar)
         evidence="$PWD/qualification/target/evidence/records-comparison"
@@ -15,6 +15,12 @@ case "$workload" in
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         export IC_DB_FLUENT_COMPARISON=1
+        ;;
+    keyset)
+        evidence="$PWD/qualification/target/evidence/keyset-comparison"
+        engines=(records-benchmark icydb-baseline)
+        test_name=records_comparison
+        export IC_DB_KEYSET_COMPARISON=1
         ;;
     aggregate)
         evidence="$PWD/qualification/target/evidence/aggregate-comparison"
@@ -73,7 +79,7 @@ case "$workload" in
         engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
-    *) printf 'Expected scalar, fluent, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
+    *) printf 'Expected scalar, fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
 if [[ "$test_name" == query_matrix ]]; then
@@ -108,6 +114,9 @@ for engine in "${engines[@]}"; do
     fi
     if [[ "$workload" == exists ]]; then
         build_features=exists-comparison
+    fi
+    if [[ "$workload" == keyset ]]; then
+        build_features=keyset-comparison
     fi
     if [[ "$workload" == fluent ]]; then
         build_features=fluent-comparison

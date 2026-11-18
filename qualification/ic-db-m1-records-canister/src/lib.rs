@@ -13,6 +13,10 @@ mod defaults;
 mod enum_collections;
 mod envelope;
 mod generation;
+#[cfg(feature = "fault-injection")]
+mod handles;
+#[cfg(not(feature = "fault-injection"))]
+use ic_db as handles;
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
 #[cfg(feature = "maintenance")]
@@ -27,7 +31,8 @@ mod mixed_lifecycle;
 mod principal_keys;
 mod queries;
 
-use ic_db::{Batch, Database, Entity, FieldType, Principal};
+use crate::handles::Database;
+use ic_db::{Batch, Entity, FieldType, Principal};
 
 // Treat framed unit as one reply value for the generic encoder hook.
 type EmptyReply = ();
@@ -106,7 +111,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
     host
 }
 
-fn open(host: &MemoryRuntime<Backing>) -> Database<Backing> {
+fn open(host: &MemoryRuntime<Backing>) -> Database {
     Database::open(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
         compiled(),
@@ -200,7 +205,7 @@ fn initialize((): ()) {
     mixed_lifecycle::initialize(&host);
 }
 
-fn status(db: &Database<Backing>) -> Status {
+fn status(db: &Database) -> Status {
     (
         db.schema().fingerprint(),
         db.incarnation(),

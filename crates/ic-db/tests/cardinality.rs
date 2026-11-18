@@ -50,7 +50,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
     h
 }
 
-fn create(h: &MemoryRuntime<VectorMemory>) -> Database<VectorMemory> {
+fn create(h: &MemoryRuntime<VectorMemory>) -> Database {
     Database::create(
         h.open_memory(&key("test.source.v1")).unwrap(),
         schema(),

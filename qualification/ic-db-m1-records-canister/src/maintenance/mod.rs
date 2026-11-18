@@ -1,9 +1,7 @@
 //! Private maintenance controls; production authorization/endpoints belong to Canic.
+use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
 use crate::{Entry, KEY, compiled, runtime, schema::ManagedRow};
-use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, QueryCursor, RetiredSource, Schema, SchemaCopy,
-    SchemaTransition, Timestamp,
-};
+use ic_db::{Batch, Entity, Error, QueryCursor, Schema, SchemaTransition, Timestamp};
 use ic_storage::StableKey;
 
 #[cfg(feature = "aggregate-jobs")]

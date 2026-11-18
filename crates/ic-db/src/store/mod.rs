@@ -6,7 +6,7 @@ use crate::{
     key, primary::RowKey, store_key::StoreKey,
 };
 use ic_storage::{
-    DefaultMemoryImpl, Memory, RuntimeMemory,
+    Memory, RuntimeMemory,
     adapter::{MapIter, StableBTreeMap},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -282,7 +282,7 @@ pub struct Page<E: Entity> {
 }
 
 /// Admitted database owning the supplier's exclusive collection lease.
-pub struct Database<M: Memory = DefaultMemoryImpl> {
+pub struct Database<M: Memory> {
     map: Map<M>,
     schema: Schema,
     incarnation: [u8; 16],

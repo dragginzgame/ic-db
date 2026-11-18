@@ -420,7 +420,7 @@ pub(super) fn source_page<M: Memory>(
 /// Fluent exact predicates over one entity. No callback executor is generated.
 /// Ordering uses primary order, an explicit index, a proven automatic path or
 /// bounded complete sorting. Work exhaustion never returns a sorted prefix.
-pub struct Query<'a, E, M: Memory = ic_storage::DefaultMemoryImpl> {
+pub struct Query<'a, E, M: Memory> {
     db: &'a Database<M>,
     request: Request<'a>,
     entity: PhantomData<E>,
@@ -444,9 +444,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// returns `Limit` if work, result count or combined bytes cannot fit; it
     /// never returns a partial result. An individually oversized row returns
     /// `RowTooLarge`. Comparison keys are bounded to 4096 bytes.
-    /// Non-identity sorted DISTINCT retains at most 32 distinct tuples. Its order
-    /// must cover exactly the projected fields (unless the result is inherently
-    /// unique); remove duplicates before applying `limit` and output bytes.
+    /// Non-identity sorted DISTINCT retains the best `limit` distinct tuples. Its order
+    /// must lead with all varying projected fields. A mandatory literal equality
+    /// fixes a field. Remove duplicates before applying `limit` and output bytes.
     #[must_use]
     pub fn distinct(mut self) -> Self {
         self.request.distinct = true;
@@ -644,9 +644,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// direction, reversed by `descending`. Prefer a complete ordered path.
     /// Otherwise scan to completion while retaining the best `limit` rows within
     /// 128 KiB of key/output buffers, then sort them. Non-identity DISTINCT retains
-    /// at most 32 distinct tuples before output selection. Work exhaustion refuses; no
+    /// the best `limit` distinct tuples. Work exhaustion refuses; no
     /// cursor is supported by this fallback. DISTINCT requires an identity result
-    /// or an order covering exactly the projected fields. Equality terms may fix
+    /// or an order led by all varying projected fields. Equality terms may fix
     /// leading index components. With `using_index`, require that path's order.
     #[must_use]
     pub fn order_by(mut self, fields: &[&'a str]) -> Self {
@@ -1298,7 +1298,7 @@ fn execute_inner<M: Memory>(
     let mut sorted = plan
         .sort
         .as_ref()
-        .map(|_| sort::Collection::new(request, plan.distinct == distinct::Strategy::Sorted));
+        .map(|_| sort::Collection::new(request, plan.distinct));
     let mut component = Vec::new();
     let mut right_component = Vec::new();
     // Each processed equivalence class is either wholly rejected or already
