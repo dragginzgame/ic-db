@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.7] - Unreleased
+## [0.23.7] - 2026-11-18
 
 ### Fluent queries
 
