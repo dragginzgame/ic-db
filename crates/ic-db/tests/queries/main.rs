@@ -2784,7 +2784,7 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
             .insert(&PresenceData {
                 id,
                 blob: (id == 1 || full).then(|| if full { vec![0] } else { vec![] }),
-                items: (id != 0).then(|| if full { vec![0] } else { vec![] }),
+                items: (id != 0).then(|| if full { vec![7, 0, 0] } else { vec![] }),
                 details: (id == 1 || full).then(|| Details {
                     labels: if full { vec!["x".into()] } else { vec![] },
                 }),
@@ -2795,8 +2795,13 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
                         Default::default()
                     })
                 }),
-                set: (id == 1 || full)
-                    .then(|| PresenceSet(if full { [0].into() } else { Default::default() })),
+                set: (id == 1 || full).then(|| {
+                    PresenceSet(if full {
+                        [0, 7].into()
+                    } else {
+                        Default::default()
+                    })
+                }),
                 variant: (id != 0).then_some(if full {
                     PresenceEnum::Data(0)
                 } else {
@@ -2807,6 +2812,36 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
     }
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
+    for field in ["items", "set"] {
+        let page = db
+            .query::<PresenceData>()
+            .filter(field, C::Contains, if field == "set" { 7_u8 } else { 0 })
+            .fetch_as::<PresenceId>()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [2]);
+        assert_eq!(
+            db.query::<PresenceData>()
+                .filter(field, C::Contains, 1_u8)
+                .count()
+                .unwrap()
+                .value,
+            0
+        );
+        for invalid in [IndexValue::Absent, 0_u64.into()] {
+            assert!(matches!(
+                db.query::<PresenceData>()
+                    .filter(field, C::Contains, invalid)
+                    .fetch(),
+                Err(Error::InvalidOperand)
+            ));
+        }
+    }
+    assert!(matches!(
+        db.query::<PresenceData>()
+            .filter("map", C::Contains, 0_u8)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
     for field in ["blob", "items", "set", "map"] {
         let empty = if matches!(field, "items" | "map") {
             vec![1, 3]
@@ -2816,7 +2851,15 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
         for (comparison, len, expected) in [
             (C::Eq, 0, empty),
             (C::Gt, 0, vec![2]),
-            (C::Ne, 1, vec![0, 1, 3]),
+            (
+                C::Ne,
+                match field {
+                    "items" => 3,
+                    "set" => 2,
+                    _ => 1,
+                },
+                vec![0, 1, 3],
+            ),
         ] {
             let page = db
                 .query::<PresenceData>()
@@ -2993,7 +3036,7 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
     let row = PresenceData {
         id: 0,
         blob: None,
-        items: None,
+        items: Some(vec![0]),
         details: None,
         map: None,
         set: None,
@@ -3031,6 +3074,12 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
         assert!(matches!(
             db.query::<PresenceData>()
                 .filter_length("blob", C::Eq, 0)
+                .count(),
+            Err(Error::Corrupt)
+        ));
+        assert!(matches!(
+            db.query::<PresenceData>()
+                .filter("items", C::Contains, 0_u8)
                 .count(),
             Err(Error::Corrupt)
         ));

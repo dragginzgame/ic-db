@@ -474,7 +474,13 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
         )
         .unwrap()
     };
-    for (mode, shape, size) in [(1_u8, 0_u8, 0_u8), (2, 2, 0), (2, 2, 2)] {
+    for (mode, shape, size) in [
+        (1_u8, 0_u8, 0_u8),
+        (2, 0, 2),
+        (2, 2, 0),
+        (2, 2, 1),
+        (2, 2, 2),
+    ] {
         let reply = pic
             .update_call(
                 canister,
@@ -505,13 +511,22 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
             .is_ok()
         );
         let before = pic.get_stable_memory(canister).await;
-        for (filter, matches) in [(0, shape != 2), (1, shape == 2), (2, shape == 2), (3, true)] {
+        for (filter, matches) in [
+            (0, shape != 2),
+            (1, shape == 2),
+            (2, shape == 2),
+            (3, shape != 0 || size == 0),
+            (4, shape == 2 && size == 0),
+            (5, shape == 2 && size == 1),
+            (6, shape == 0 && size > 0),
+            (7, false),
+        ] {
             let first = call(filter, None).await.unwrap();
             assert_eq!(first.0, if matches { vec![1] } else { vec![] });
             assert_eq!(first.2, 1);
             let cursor = first.1.unwrap();
             assert_eq!(call(filter ^ 1, Some(cursor.clone())).await.unwrap_err(), 1);
-            if filter == 1 || filter == 2 {
+            if matches!(filter, 1 | 2 | 5) {
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
                 ic_db_m0_rollback_driver::upgrade_stopped(

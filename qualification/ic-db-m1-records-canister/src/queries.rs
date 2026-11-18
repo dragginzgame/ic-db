@@ -316,6 +316,10 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
         1 => query.filter_present("labels"),
         2 => query.filter_length("labels", Comparison::Eq, 1),
         3 => query.filter_length("numbers", Comparison::Eq, 0),
+        4 => query.filter("labels", Comparison::Contains, ""),
+        5 => query.filter("labels", Comparison::Contains, "x"),
+        6 => query.filter("numbers", Comparison::Contains, 258_u16),
+        7 => query.filter("numbers", Comparison::Contains, 1_u16),
         _ => return Err(1),
     };
     if let Some(cursor) = &cursor {

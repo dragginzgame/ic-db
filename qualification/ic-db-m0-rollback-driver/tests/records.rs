@@ -730,12 +730,20 @@ fn console_inspects_and_queries() {
     }
     let compared = run_console(
         &binary,
-        "query Entry --compare id eq category --select id\nquery Document --length title eq 14 --absent note --select id\nquery Entry --compare id gt category --select count\nquery Document --present priority --absent note --select id\nquery Document --present note --select count\nquery DecimalRow --compare value gt maybe --order-by maybe --work 1 --select id\nquit\n",
+        "query Document --compare title contains title --select count\nquery Document --compare title ends-with note --select count\nquery Entry --compare id eq category --select id\nquery Document --length title eq 14 --absent note --select id\nquery Entry --compare id gt category --select count\nquery Document --present priority --absent note --select id\nquery Document --present note --select count\nquery DecimalRow --compare value gt maybe --order-by maybe --work 1 --select id\nquit\n",
     );
     assert!(compared.contains("0 rows; 0 examined; 0 fetched; 0 encoded bytes."));
     assert_eq!(
         result_table_rows(&compared),
-        [vec!["1"], vec!["1"], vec!["5"], vec!["1"], vec!["0"]]
+        [
+            vec!["1"],
+            vec!["0"],
+            vec!["1"],
+            vec!["1"],
+            vec!["5"],
+            vec!["1"],
+            vec!["0"]
+        ]
     );
     if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
         // One console session exercises every retained selector. More than 16 jobs

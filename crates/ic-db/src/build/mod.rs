@@ -143,20 +143,33 @@ pub fn generate(source_module: &str, target_module: &str) -> Result<String, Erro
         .generate(source_module, target_module)
 }
 
-/// Define a Cargo build script for a schema module beside the script.
-/// Set `[package] build = "src/build.rs"` and enable IC DB's `build` feature
-/// in build-dependencies. `ic_db::build_schema!(schema);` in that file reads
-/// the ordinary `schema` module and emits `OUT_DIR/schema.rs` for the target.
-/// Declare the same module at the target crate root. Nested Rust modules and
-/// imports resolve normally in both compilations.
+/// Generate the target schema from a Cargo build script.
+/// In the package-root `build.rs`, use `ic_db::build_schema!(src::schema);`.
+/// To call generation alongside other build steps, use
+/// `ic_db::build_schema!(src::schema => build_db_schema);` and call `build_db_schema()?`.
+/// Both forms use ordinary module discovery and expose the schema as `crate::schema`
+/// for imports shared with the target. A script beside the declarations can use
+/// `ic_db::build_schema!(schema);`. Enable IC DB's `build` feature in build-dependencies.
 #[macro_export]
 macro_rules! build_schema {
+    (src::$schema:ident) => {
+        $crate::build_schema!(src::$schema => main);
+    };
+    (src::$schema:ident => $function:ident) => {
+        mod src {
+            pub mod $schema;
+        }
+        pub use self::src::$schema;
+        $crate::build_schema!(@function $function, "::src::", $schema);
+    };
     ($schema:ident) => {
         mod $schema;
-
-        fn main() -> ::std::result::Result<(), ::std::boxed::Box<dyn ::std::error::Error>> {
+        $crate::build_schema!(@function main, "::", $schema);
+    };
+    (@function $function:ident, $prefix:literal, $schema:ident) => {
+        fn $function() -> ::std::result::Result<(), ::std::boxed::Box<dyn ::std::error::Error>> {
             $crate::build::write_schema(
-                ::std::concat!(::std::module_path!(), "::", ::std::stringify!($schema)),
+                ::std::concat!(::std::module_path!(), $prefix, ::std::stringify!($schema)),
                 ::std::concat!("crate::", ::std::stringify!($schema)),
             )
         }

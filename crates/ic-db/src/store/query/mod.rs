@@ -55,8 +55,9 @@ pub enum Comparison {
     /// Present Text or Blob ends with an exact operand of the same type.
     /// Empty suffixes match all present values; text is not normalized.
     EndsWith = 7,
-    /// Present Text or Blob contains the exact byte sequence of the same type.
-    /// Empty needles match every present value. Text uses UTF-8 without normalization.
+    /// A present list or set contains an equal scalar member, or a present Text
+    /// or Blob contains the exact byte sequence of the same type.
+    /// Empty substring needles match every present Text/Blob. Text uses UTF-8 without normalization.
     Contains = 8,
 }
 
@@ -68,12 +69,17 @@ impl Comparison {
         )
     }
 
+    fn supports_scalar(self, field: FieldType) -> bool {
+        self.is_relational()
+            || matches!(
+                key::operand_type(field),
+                FieldType::Text { .. } | FieldType::Blob { .. }
+            )
+    }
+
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
-        let field = key::operand_type(field);
-        if matches!(self, Self::StartsWith | Self::EndsWith | Self::Contains)
-            && !matches!(field, FieldType::Text { .. } | FieldType::Blob { .. })
-        {
+        if !self.supports_scalar(field) {
             return Err(Error::InvalidQuery);
         }
         if value == IndexValue::Absent && !matches!(self, Self::Eq | Self::Ne) {
@@ -443,7 +449,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request.distinct = true;
         self
     }
-    /// Add an AND term over an exact top-level ordered scalar/unit-enum field.
+    /// Add an AND term over a top-level field. Lists and sets support exact scalar membership with `Contains`.
     /// Eq/Ne with `IndexValue::Absent` also accept any optional stored field,
     /// including blobs and containers. Empty values are present, not absent.
     /// All operands are admitted before storage reads, including contradictory terms.
@@ -463,7 +469,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .filter(field, comparison, QueryOperand::Literal(value.into()));
         self
     }
-    /// Compare two top-level ordered fields on the same row using Eq, Ne, Lt, Le, Gt or Ge.
+    /// Compare two top-level ordered fields on the same row. Text and Blob also
+    /// support StartsWith, EndsWith and Contains with a present right-hand field.
     /// Types must match; Text and Blob bounds may differ within their respective families.
     /// Two absent values are equal. An ordered comparison requires two present values.
     #[must_use]
@@ -726,8 +733,42 @@ struct Term {
 
 enum TermOperand {
     Literal { bytes: Vec<u8>, absent: bool },
+    Member { item: FieldType, bytes: Vec<u8> },
     Field(usize),
     Length(u32),
+}
+
+fn member_type(field: FieldType) -> Option<FieldType> {
+    match key::operand_type(field) {
+        FieldType::List { item, .. } => Some(*item),
+        FieldType::Named(link) => match (link.definition)().body {
+            TypeBody::Set { item, .. } => Some(item),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+// inspect_fields has already validated every item, including the tail after a match.
+fn contains_member(
+    span: &[u8],
+    optional: bool,
+    item: FieldType,
+    needle: &[u8],
+    scratch: &mut Vec<u8>,
+) -> Result<bool, Error> {
+    let mut reader = Decoder::new(span)?;
+    if optional && !reader.boolean()? {
+        return Ok(false);
+    }
+    for _ in 0..reader.nat32()? {
+        scratch.clear();
+        IndexValue::read(&mut reader, item)?.append_component(false, scratch);
+        if scratch.as_slice() == needle {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
@@ -898,7 +939,7 @@ impl<'a> Plan<'a> {
                         );
                     if !compatible
                         || !key::supports(field.value)
-                        || !predicate.comparison.is_relational()
+                        || !predicate.comparison.supports_scalar(field.value)
                     {
                         return Err(Error::InvalidQuery);
                     }
@@ -906,22 +947,35 @@ impl<'a> Plan<'a> {
                     TermOperand::Field(right)
                 }
                 QueryOperand::Literal(value) => {
-                    let absent = value == IndexValue::Absent;
-                    if key::supports(field.value) {
-                        plan.selected |= 1 << position;
-                    } else if absent
-                        && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne)
+                    if predicate.comparison == Comparison::Contains
+                        && let Some(item) = member_type(field.value)
                     {
+                        if !key::supports(item) {
+                            return Err(Error::InvalidQuery);
+                        }
+                        value.admit(item, false)?;
+                        let mut bytes = Vec::new();
+                        value.append_component(false, &mut bytes);
                         plan.span_fields |= 1 << position;
+                        TermOperand::Member { item, bytes }
                     } else {
-                        return Err(Error::InvalidQuery);
+                        let absent = value == IndexValue::Absent;
+                        if key::supports(field.value) {
+                            plan.selected |= 1 << position;
+                        } else if absent
+                            && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne)
+                        {
+                            plan.span_fields |= 1 << position;
+                        } else {
+                            return Err(Error::InvalidQuery);
+                        }
+                        predicate
+                            .comparison
+                            .admit(field.value, field.optional, value)?;
+                        let mut bytes = Vec::new();
+                        value.append_component(field.optional, &mut bytes);
+                        TermOperand::Literal { bytes, absent }
                     }
-                    predicate
-                        .comparison
-                        .admit(field.value, field.optional, value)?;
-                    let mut bytes = Vec::new();
-                    value.append_component(field.optional, &mut bytes);
-                    TermOperand::Literal { bytes, absent }
                 }
             };
             plan.terms.push(Term {
@@ -971,7 +1025,7 @@ impl<'a> Plan<'a> {
         for term in &plan.terms {
             hash.update([term.position as u8, term.comparison as u8]);
             match &term.operand {
-                TermOperand::Literal { bytes, .. } => {
+                TermOperand::Literal { bytes, .. } | TermOperand::Member { bytes, .. } => {
                     hash.update((bytes.len() as u32).to_le_bytes());
                     hash.update(bytes);
                 }
@@ -1223,56 +1277,73 @@ fn execute_inner<M: Memory>(
         if plan.index.is_some() {
             validate_index_entry(entity, &entity.row_info(&values)?, owner, stored_key)?;
         }
-        let matches = plan
-            .terms
-            .split_inclusive(|term| !term.or_next)
-            .all(|clause| {
-                clause.iter().any(|term| {
-                    let value = values[term.position];
-                    component.clear();
-                    let (operand, optional) = match &term.operand {
-                        TermOperand::Literal { absent: true, .. }
-                            if plan.span_fields & (1 << term.position) != 0 =>
-                        {
-                            let absent = bytes[usize::from(spans[term.position].0)] == 0;
-                            return term.comparison.accepts_absent(absent);
-                        }
-                        TermOperand::Length(length) => {
-                            let (start, end) = spans[term.position];
-                            let span = &bytes[usize::from(start)..usize::from(end)];
-                            let actual = crate::codec::validated_length(
-                                span,
-                                entity.fields[term.position].optional,
-                            )
+        let mut accepts = |term: &Term| -> Result<bool, Error> {
+            let value = values[term.position];
+            component.clear();
+            let (operand, optional) = match &term.operand {
+                TermOperand::Literal { absent: true, .. }
+                    if plan.span_fields & (1 << term.position) != 0 =>
+                {
+                    let absent = bytes[usize::from(spans[term.position].0)] == 0;
+                    return Ok(term.comparison.accepts_absent(absent));
+                }
+                TermOperand::Member {
+                    item,
+                    bytes: needle,
+                } => {
+                    let (start, end) = spans[term.position];
+                    return contains_member(
+                        &bytes[usize::from(start)..usize::from(end)],
+                        entity.fields[term.position].optional,
+                        *item,
+                        needle,
+                        &mut component,
+                    );
+                }
+                TermOperand::Length(length) => {
+                    let (start, end) = spans[term.position];
+                    let span = &bytes[usize::from(start)..usize::from(end)];
+                    let actual =
+                        crate::codec::validated_length(span, entity.fields[term.position].optional)
                             .map(u32::to_be_bytes);
-                            return term.comparison.accepts(
-                                actual.as_ref().map(|v| v.as_slice()),
-                                Some(&length.to_be_bytes()),
-                                false,
-                            );
-                        }
-                        TermOperand::Literal { bytes, absent } => (
-                            (!absent).then_some(bytes.as_slice()),
-                            entity.fields[term.position].optional,
-                        ),
-                        TermOperand::Field(right) => {
-                            let rhs = values[*right];
-                            right_component.clear();
-                            rhs.append_component(false, &mut right_component);
-                            (
-                                (rhs != IndexValue::Absent).then_some(right_component.as_slice()),
-                                false,
-                            )
-                        }
-                    };
-                    value.append_component(optional, &mut component);
-                    term.comparison.accepts(
-                        (value != IndexValue::Absent).then_some(component.as_slice()),
-                        operand,
-                        optional,
+                    return Ok(term.comparison.accepts(
+                        actual.as_ref().map(|v| v.as_slice()),
+                        Some(&length.to_be_bytes()),
+                        false,
+                    ));
+                }
+                TermOperand::Literal { bytes, absent } => (
+                    (!absent).then_some(bytes.as_slice()),
+                    entity.fields[term.position].optional,
+                ),
+                TermOperand::Field(right) => {
+                    let rhs = values[*right];
+                    right_component.clear();
+                    rhs.append_component(false, &mut right_component);
+                    (
+                        (rhs != IndexValue::Absent).then_some(right_component.as_slice()),
+                        false,
                     )
-                })
-            });
+                }
+            };
+            value.append_component(optional, &mut component);
+            Ok(term.comparison.accepts(
+                (value != IndexValue::Absent).then_some(component.as_slice()),
+                operand,
+                optional,
+            ))
+        };
+        let matches = 'matches: {
+            'clause: for clause in plan.terms.split_inclusive(|term| !term.or_next) {
+                for term in clause {
+                    if accepts(term)? {
+                        continue 'clause;
+                    }
+                }
+                break 'matches false;
+            }
+            true
+        };
         let boundary = distinct::boundary(entity, plan.index, plan.distinct, stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {

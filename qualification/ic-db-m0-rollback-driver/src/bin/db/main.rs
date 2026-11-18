@@ -297,7 +297,7 @@ struct FilterArgs {
     /// Match rows whose optional field has no value.
     #[arg(long, value_name = "FIELD")]
     absent: Option<String>,
-    /// Compare two fields of this entity using eq, ne, lt, le, gt or ge.
+    /// Compare two fields using eq, ne, lt, le, gt or ge. Text and Blob also accept starts-with, ends-with and contains.
     #[arg(long, num_args=3, value_names=["LEFT", "OP", "RIGHT"], action=clap::ArgAction::Set)]
     compare: Vec<String>,
     /// Compare UTF-8 bytes, Blob bytes or collection items using eq, ne, lt, le, gt or ge.

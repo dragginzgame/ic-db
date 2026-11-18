@@ -3,13 +3,13 @@
 use ic_db::{Entity, Schema};
 use schema::{cycle, destination, source};
 
-ic_db::build_schema!(schema);
+ic_db::build_schema!(src::schema);
 
 #[test]
 fn constructors_collect_full_paths_and_compiler_resolved_references() {
     assert_eq!(
         source::Link::PATH,
-        concat!(module_path!(), "::schema::source::Link")
+        concat!(module_path!(), "::src::schema::source::Link")
     );
     assert_eq!(
         source::Link::SCHEMA.fields[1].reference.unwrap().entity,
@@ -20,7 +20,7 @@ fn constructors_collect_full_paths_and_compiler_resolved_references() {
         cycle::Link::ID
     );
     let output =
-        ic_db::build::generate(concat!(module_path!(), "::schema"), "crate::schema").unwrap();
+        ic_db::build::generate(concat!(module_path!(), "::src::schema"), "crate::schema").unwrap();
     // Same short names in distinct modules remain separate declarations.
     for path in ["destination::Target", "source::Link", "cycle::Link"] {
         assert!(output.contains(&format!(
@@ -36,7 +36,7 @@ fn constructors_collect_full_paths_and_compiler_resolved_references() {
     .fingerprint();
     assert!(output.contains(&format!("schema.fingerprint(), {fingerprint:?}")));
     assert_eq!(
-        ic_db::build::generate(concat!(module_path!(), "::schema"), "crate::schema").unwrap(),
+        ic_db::build::generate(concat!(module_path!(), "::src::schema"), "crate::schema").unwrap(),
         output
     );
 }

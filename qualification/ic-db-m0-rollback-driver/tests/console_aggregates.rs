@@ -1,4 +1,4 @@
-//! Retained Decimal rounding and Blob results through the console, across retained upgrades.
+//! Retained filters, Decimal rounding and Blob results through the console across upgrades.
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_db_qualification_transport::RowFilters;
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
@@ -52,6 +52,127 @@ async fn call<T: DeserializeOwned>(
         LIMITS,
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+
+    // text_index_batch copies the current note from document 1 onto its rows.
+    let insert = async |rows: &[(u64, &str, bool)]| {
+        call::<Result<(), u8>>(pic, canister, "text_index_batch", 23, &(rows, false))
+            .await
+            .unwrap();
+    };
+    let set_note = async |note: &str| {
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "replace_document",
+            8,
+            &(
+                "Document",
+                Some(note),
+                false,
+                None::<u64>,
+                0_i64,
+                None::<i64>,
+            ),
+        )
+        .await
+        .unwrap();
+    };
+    insert(&[(2, "absent needle", false)]).await;
+    set_note("é").await;
+    insert(&[
+        (3, "café", false),
+        (4, "cafe\u{301}", false),
+        (5, "été", false),
+        (6, "plain", false),
+    ])
+    .await;
+    set_note("").await;
+
+    let selection = |right: &str| -> Selection {
+        (
+            "Document".into(),
+            "count".into(),
+            (None, None, None),
+            32,
+            (None, None),
+            None,
+            RowFilters {
+                compare: Some(["title".into(), "contains".into(), right.into()]),
+                ..Default::default()
+            },
+        )
+    };
+    let original = selection("note");
+    let start = async || {
+        call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &original)
+            .await
+            .unwrap()
+    };
+    let resume = async |query: &Selection, handle: &[u8], sequence: u64| {
+        call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                query,
+                handle,
+                sequence,
+                2_u32,
+                4096_u32,
+                1_u32,
+                None::<Vec<u8>>,
+            ),
+        )
+        .await
+    };
+    let handle = start().await;
+    let first = resume(&original, &handle, 0).await.unwrap();
+    assert_eq!((first.0, first.1.as_str(), first.2), (1, "Running", 2));
+    assert!(first.5.1.is_empty());
+    let before = pic.get_stable_memory(canister).await;
+    upgrade_stopped(pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(
+        resume(&selection("title"), &handle, first.0)
+            .await
+            .unwrap_err(),
+        "InvalidJob"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    assert_eq!(resume(&original, &handle, 0).await.unwrap(), first);
+    let mut sequence = first.0;
+    for examined in [4, 6] {
+        let next = resume(&original, &handle, sequence).await.unwrap();
+        assert_eq!((next.1.as_str(), next.2), ("Running", examined));
+        assert!(next.5.1.is_empty());
+        sequence = next.0;
+    }
+    let complete = resume(&original, &handle, sequence).await.unwrap();
+    assert_eq!((complete.1.as_str(), complete.2), ("Complete", 6));
+    // Empty needle in row 1, a suffix in 3, and two occurrences in 5 count once each.
+    assert_eq!(complete.5.1, [vec!["3"]]);
+
+    let handle = start().await;
+    let first = resume(&original, &handle, 0).await.unwrap();
+    set_note("missing").await;
+    let invalidated = resume(&original, &handle, first.0).await.unwrap();
+    assert_eq!(invalidated.1, "Invalidated");
+    assert!(invalidated.5.1.is_empty());
+    owned.drop().await;
 }
 
 #[tokio::test]

@@ -88,7 +88,10 @@ fn comparison(op: &str) -> Result<Comparison, String> {
         "le" => Comparison::Le,
         "gt" => Comparison::Gt,
         "ge" => Comparison::Ge,
-        _ => return Err("comparison must be eq, ne, lt, le, gt or ge".into()),
+        "starts-with" => Comparison::StartsWith,
+        "ends-with" => Comparison::EndsWith,
+        "contains" => Comparison::Contains,
+        _ => return Err(format!("unknown comparison '{op}'")),
     })
 }
 

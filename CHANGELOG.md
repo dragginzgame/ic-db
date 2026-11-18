@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.23.3] - Unreleased
+
+### ➕ Added
+
+- `filter_fields("title", Comparison::Contains, "note")` uses the note on each
+  row as the search text. Text and Blob field pairs also support prefix and
+  suffix matches. Try both a present and an absent needle in the local fixture.
+
+  ```sh
+  db query Document --compare title starts-with title --select count
+  db query Document --compare title contains note --select count
+  ```
+
+- `.filter("labels", Comparison::Contains, "art")` matches a list or set
+  that has an element equal to `"art"`. Repeated list elements return the row
+  once. Text and Blob fields retain their substring behavior.
+
+- Use `ic_db::build_schema!(src::schema);` in a standard package-root `build.rs`.
+  An existing build script can generate a named helper and call it from its own
+  `main`. [Canister setup](README.md#build-a-canister-local-schema)
+
 ## [0.23.2] - 2026-11-18
 
 ### ➕ Added

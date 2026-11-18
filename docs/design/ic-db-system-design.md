@@ -352,8 +352,9 @@ using `ctor`; `build::generate(source_module, target_module)` selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler
 resolves the generated paths; target admission refuses host/target contract drift.
-For a canister-local schema, `ic_db::build_schema!(schema)` in `src/build.rs`
-maps the host module beside the script to `crate::schema`. A shared schema crate
+For a canister-local schema, `ic_db::build_schema!(src::schema)` in the package-root
+`build.rs` maps the host declaration subtree to `crate::schema`. The colocated
+0.23.2 form also resolves declarations beside the script. A shared schema crate
 can supply its own module root to `build::write_schema`. Both call the same
 generator; Rust owns source discovery and import resolution. Declaration visibility must permit the emitted
 Rust references. No second persisted schema representation is introduced.
@@ -2489,7 +2490,10 @@ observations, not comparative IC instruction or Wasm-size measurements.
 `filter_fields(left, comparison, right)` admits top-level, key-comparable fields
 of the same declared type for Eq, Ne, Lt, Le, Gt and Ge. Text or Blob fields
 can have different size limits within their respective families. Optionality
-may differ. Two absent values compare equal; ordering requires both values.
+may differ. For same-family Text or Blob fields, StartsWith, EndsWith and
+Contains take their exact needle from the right-hand field. Both fields must
+be present. An empty needle matches any present value. These checks are
+residual because the needle varies by row. Two absent values compare equal; ordering requires both values.
 The scanner compares the two row components under the usual candidate budget.
 Both fields participate in DISTINCT class admission and continuation identity.
 The fixture CLI passes `--compare LEFT OP RIGHT` to this builder for both
@@ -2498,12 +2502,29 @@ The installed-Wasm retained-count witness scans two candidates per call.
 Changing only the right field refuses with `InvalidJob`; that refusal and a
 trapped advance each preserve stable memory byte for byte. After a same-code
 upgrade, the original job finishes with five matches across six candidates.
+The retained console count also checks `title Contains note` over six documents
+with a two-candidate work limit. After a same-code Wasm upgrade, changing the
+needle field refuses without altering stable memory. Replaying the previous
+sequence returns the saved progress. The original job counts three rows,
+including an empty needle and a repeated substring. Changing a source note
+during a separate run invalidates it before it can return a count.
 Ordered field comparisons prove presence for both operands. Equality with a
 required field proves presence for its optional counterpart. Equality between
 optional fields and field inequality supply no such proof. These comparisons
 remain row filters and do not establish a constant index bound.
 This keeps the two-field admission check from frozen IcyDB `6d421e3`
 (`db/query/predicate/validate.rs`) and omits its cross-type coercion rules.
+
+`Contains` on a stored list or set tests exact member equality for elements
+supported by the scalar key codec, including scalar newtypes and unit enums.
+An absent or empty container has no matching member. Text and Blob members are
+compared whole; scalar Text and Blob fields retain byte-substring semantics.
+The row decoder validates the complete container first. The residual predicate
+then reads the bounded item sequence from its field span and compares canonical
+scalar keys using one reusable buffer. The first match suffices. Maps and
+structured elements refuse admission. This retains the list membership semantics
+from frozen IcyDB `6d421e3`, `db/predicate/runtime/compare/value.rs`, using
+the declared element type and the same comparator as scalar equality.
 
 `filter_length(field, comparison, n)` compares UTF-8 bytes for Text, raw bytes for
 Blob, and item counts for lists, maps and sets, including named lists and scalar

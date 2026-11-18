@@ -814,9 +814,6 @@ Keep the declarations in `src/schema.rs` or `src/schema/mod.rs`. In a workspace
 that already declares its `ic-db` dependency, configure the canister package with:
 
 ```toml
-[package]
-build = "src/build.rs"
-
 [dependencies]
 ic-db.workspace = true
 
@@ -824,11 +821,14 @@ ic-db.workspace = true
 ic-db = { workspace = true, features = ["build"] }
 ```
 
-The complete `src/build.rs` is one line:
+In the package-root `build.rs`:
 
 ```rust
-ic_db::build_schema!(schema);
+ic_db::build_schema!(src::schema);
 ```
+
+If the script already has a `main`, use `ic_db::build_schema!(src::schema => build_db_schema);`
+at module scope and call `build_db_schema()?` from that function.
 
 In `src/lib.rs`, declare the same module and include its validated assembly:
 

@@ -1,7 +1,7 @@
 //! Shared declarations used by the host build and target.
 use ic_db::entity;
 
-pub(super) mod destination {
+pub(crate) mod destination {
     use super::*;
     #[entity(
         pk(field = "id"),
@@ -9,9 +9,9 @@ pub(super) mod destination {
     )]
     pub struct Target {}
 }
-pub(super) mod source {
+pub(crate) mod source {
     use super::*;
-    use super::destination::Target as ImportedTarget;
+    use crate::schema::destination::Target as ImportedTarget;
     #[entity(
         name = "SourceLink",
         pk(field = "id"),
@@ -27,7 +27,7 @@ pub(super) mod source {
     )]
     pub struct Link {}
 }
-pub(super) mod cycle {
+pub(crate) mod cycle {
     use super::*;
     #[entity(
         name = "CycleLink",

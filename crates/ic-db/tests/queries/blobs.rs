@@ -20,6 +20,62 @@ struct Payload {}
 struct Optional {}
 
 #[test]
+fn field_patterns_use_each_rows_present_raw_needle() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Binary::SCHEMA]).unwrap(),
+        [48; 16],
+    )
+    .unwrap();
+    let pairs: &[(&[u8], Option<&[u8]>)] = &[
+        (&[0], Some(&[255])),
+        (&[0, 255], Some(&[255])),
+        (&[255, 0], Some(&[255])),
+        (&[0, 255, 0], Some(&[255])),
+        (&[1], Some(&[])),
+        (&[], Some(&[])),
+        (&[], None),
+    ];
+    let mut batch = Batch::new();
+    for (id, &(payload, needle)) in pairs.iter().enumerate() {
+        batch
+            .insert(&Binary {
+                id: id as u64,
+                payload: payload.to_vec(),
+                optional: needle.map(<[u8]>::to_vec),
+                unique: None,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    for (op, expected) in [
+        (C::StartsWith, vec![2, 4, 5]),
+        (C::EndsWith, vec![1, 4, 5]),
+        (C::Contains, vec![1, 2, 3, 4, 5]),
+    ] {
+        let rows = db
+            .query::<Binary>()
+            .filter_fields("payload", op, "optional")
+            .fetch()
+            .unwrap()
+            .rows;
+        assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
+        // The right-hand payload is required. An absent left-hand field still cannot match.
+        assert_eq!(
+            db.query::<Binary>()
+                .filter_fields("optional", op, "payload")
+                .count()
+                .unwrap()
+                .value,
+            1
+        );
+    }
+}
+
+#[test]
 fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
     let runtime = host(VectorMemory::default());
     let slot = StableKey::parse("test.db.v1").unwrap();
