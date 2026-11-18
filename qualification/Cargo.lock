@@ -1473,6 +1473,7 @@ dependencies = [
  "canic",
  "clap",
  "ic-agent",
+ "ic-db-qualification-transport",
  "ic-host-artifacts",
  "ic-host-text",
  "ic-testkit",

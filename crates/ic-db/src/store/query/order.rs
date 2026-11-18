@@ -1,5 +1,5 @@
 //! Select a proven ordered path or a bounded complete-sort fallback.
-use super::{Comparison, Request};
+use super::{Comparison, Predicate, QueryOperand, Request};
 use crate::{EntitySchema, Error, IndexSchema, IndexValue, key, store::admit_index_prefix};
 
 // Carry the admitted prefix and its component count together; downstream proofs
@@ -128,6 +128,37 @@ pub(super) fn select<'a>(
     }))
 }
 
+// Both operands have already passed admission. For a field operand, a row
+// omitted by this sparse index can have a present or an absent counterpart.
+fn requires_presence(predicate: &Predicate<'_>, name: &str, entity: &EntitySchema) -> bool {
+    match predicate.operand {
+        QueryOperand::Length(_) => {
+            predicate.field == name && !predicate.comparison.accepts_absent(false)
+        }
+        QueryOperand::Literal(value) => {
+            predicate.field == name
+                && !predicate
+                    .comparison
+                    .accepts_absent(value == IndexValue::Absent)
+        }
+        QueryOperand::Field(right) => {
+            let other = if predicate.field == name {
+                right
+            } else if right == name {
+                predicate.field
+            } else {
+                return false;
+            };
+            !predicate.comparison.accepts_absent(false)
+                && (!predicate.comparison.accepts_absent(true)
+                    || entity
+                        .fields
+                        .iter()
+                        .any(|field| field.name == other && !field.optional))
+        }
+    }
+}
+
 // Sparse traversal must cover every possible match. Each optional component needs
 // a present prefix operand or a mandatory clause whose alternatives all reject
 // absence on that same field. Presence alone never makes an ordering field fixed.
@@ -150,10 +181,9 @@ fn complete_membership(
                             .predicates
                             .split_inclusive(|p| !p.or_next)
                             .any(|clause| {
-                                clause.iter().all(|predicate| {
-                                    predicate.field == *name
-                                        && matches!(predicate.operand, super::Operand::Literal(value) if !predicate.comparison.accepts_absent(value == IndexValue::Absent))
-                                })
+                                clause
+                                    .iter()
+                                    .all(|predicate| requires_presence(predicate, name, entity))
                             })
                 })
         })
@@ -214,7 +244,7 @@ fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
             if let [predicate] = clause
                 && predicate.field == field
                 && predicate.comparison == Comparison::Eq
-                && let super::Operand::Literal(value) = predicate.operand
+                && let QueryOperand::Literal(value) = predicate.operand
             {
                 Some(value)
             } else {

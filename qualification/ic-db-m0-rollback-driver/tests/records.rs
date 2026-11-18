@@ -696,6 +696,13 @@ fn console_inspects_and_queries() {
         "query Missing",
         "query Document --min 0",
         "query Entry --order-by amount --work 1",
+        "query Document --length title eq 4294967296",
+        "query Document --length title contains 1",
+        "query Entry --length id eq 1",
+        "query Entry --present id",
+        "query Document --absent missing",
+        "query Entry --compare amount contains category",
+        "query Document --compare id eq title",
         "query Entry --select id --bytes 7",
         "query Entry --select category --distinct --limit 1",
         "query Entry --select count --work 6",
@@ -721,6 +728,15 @@ fn console_inspects_and_queries() {
             .unwrap();
         assert!(!output.status.success(), "{command}");
     }
+    let compared = run_console(
+        &binary,
+        "query Entry --compare id eq category --select id\nquery Document --length title eq 14 --absent note --select id\nquery Entry --compare id gt category --select count\nquery Document --present priority --absent note --select id\nquery Document --present note --select count\nquery DecimalRow --compare value gt maybe --order-by maybe --work 1 --select id\nquit\n",
+    );
+    assert!(compared.contains("0 rows; 0 examined; 0 fetched; 0 encoded bytes."));
+    assert_eq!(
+        result_table_rows(&compared),
+        [vec!["1"], vec!["1"], vec!["5"], vec!["1"], vec!["0"]]
+    );
     if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
         // One console session exercises every retained selector. More than 16 jobs
         // proves successful commands release slots instead of leaking capacity.
@@ -750,7 +766,8 @@ fn console_inspects_and_queries() {
             })
             .collect::<String>();
         commands.push_str("aggregate Entry\naggregate Entry\naggregate Entry\n");
-        let controls: [ConsoleCase<'_>; 12] = [
+        let controls: [ConsoleCase<'_>; 13] = [
+            ("count --compare id gt category", &[&["5"]]),
             ("count --min 40", &[&["3"]]),
             ("sum:amount --min 40 --limit 1", &[&["151"]]),
             ("distinct-count:amount --category 1 --min 30", &[&["2"]]),
@@ -859,7 +876,9 @@ fn console_inspects_and_queries() {
                 "{command}"
             );
         }
-        let documents: [ConsoleCase<'_>; 26] = [
+        let documents: [ConsoleCase<'_>; 28] = [
+            ("count --absent note --present priority", &[&["1"]]),
+            ("count --present note", &[&["0"]]),
             ("count", &[&["1"]]),
             ("count:note", &[&["0"]]),
             ("count:priority", &[&["1"]]),
@@ -955,6 +974,11 @@ fn console_inspects_and_queries() {
             assert!(!section[..complete].contains(['│', '|']));
         }
         let blobs: &[ConsoleCase<'_>] = &[
+            (
+                "count --length payload eq 3 --payload-prefix 0x00",
+                &[&["1"]],
+            ),
+            ("count --length optional eq 0", &[&["0"]]),
             ("count", &[&["1"]]),
             ("count:payload", &[&["1"]]),
             ("count:optional", &[&["0"]]),

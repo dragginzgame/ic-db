@@ -424,6 +424,6 @@ pub struct EnvelopeRow {}
 /// # Errors
 /// Refuses an invalid schema graph or target path.
 #[cfg(feature = "build")]
-pub fn generate(target: &str) -> Result<String, ic_db::build::Error> {
-    ic_db::build::generate(module_path!(), target)
+pub fn write_schema(target: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ic_db::build::write_schema(module_path!(), target)
 }

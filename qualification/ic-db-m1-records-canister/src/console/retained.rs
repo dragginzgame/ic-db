@@ -28,15 +28,14 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
-    blob::Filters,
+    super::RowFilters,
 );
 fn configured<'a, E: Entity>(
     query: Query<'a, E, Backing>,
     selection: &'a Selection,
 ) -> Result<Query<'a, E, Backing>, String> {
-    let (entity, select, _, limit, (group_min, group_max), group_order, filters) = selection;
-    blob::validate(entity, filters)?;
-    let query = blob::filter(query, filters);
+    let (_, select, _, limit, (group_min, group_max), group_order, filters) = selection;
+    let query = super::filter_rows(query, filters)?;
     select_groups(
         query.limit(*limit as usize),
         select,

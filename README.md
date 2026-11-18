@@ -808,6 +808,40 @@ later. For a real executable declaration and write/reopen journey, see
 [the CLI fixture](qualification/ic-db-m1-records-canister/src/lib.rs).
 Run `make m1-records` for their focused native and Wasm checks.
 
+## Build a canister-local schema
+
+Keep the declarations in `src/schema.rs` or `src/schema/mod.rs`. In a workspace
+that already declares its `ic-db` dependency, configure the canister package with:
+
+```toml
+[package]
+build = "src/build.rs"
+
+[dependencies]
+ic-db.workspace = true
+
+[build-dependencies]
+ic-db = { workspace = true, features = ["build"] }
+```
+
+The complete `src/build.rs` is one line:
+
+```rust
+ic_db::build_schema!(schema);
+```
+
+In `src/lib.rs`, declare the same module and include its validated assembly:
+
+```rust
+mod schema;
+include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+```
+
+Use `compiled()` to obtain the executable schema. Both compilations resolve
+nested declarations through ordinary Rust modules. Canisters sharing a separate
+schema crate can call the host helper from that crate with its own `module_path!()`.
+See the [shared-schema build script](qualification/ic-db-m1-records-canister/build.rs).
+
 ## Database console
 
 ```sh

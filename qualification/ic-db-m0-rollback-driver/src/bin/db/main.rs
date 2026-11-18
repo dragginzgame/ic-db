@@ -3,6 +3,7 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_qualification_transport::RowFilters;
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
@@ -176,7 +177,7 @@ enum Command {
         #[arg(long, default_value = "count")]
         select: String,
         #[command(flatten)]
-        payload: PayloadArgs,
+        filters: FilterArgs,
         /// Entry.amount >= VALUE.
         #[arg(long = "min")]
         minimum: Option<u64>,
@@ -217,7 +218,7 @@ enum Command {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
         #[command(flatten)]
-        payload: PayloadArgs,
+        filters: FilterArgs,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
         after: Option<CursorArg>,
@@ -289,7 +290,19 @@ enum Command {
 #[derive(Clone, Debug)]
 struct CursorArg(Vec<u8>);
 #[derive(clap::Args, Debug)]
-struct PayloadArgs {
+struct FilterArgs {
+    /// Match rows with a value in this optional field, including an empty value.
+    #[arg(long, value_name = "FIELD")]
+    present: Option<String>,
+    /// Match rows whose optional field has no value.
+    #[arg(long, value_name = "FIELD")]
+    absent: Option<String>,
+    /// Compare two fields of this entity using eq, ne, lt, le, gt or ge.
+    #[arg(long, num_args=3, value_names=["LEFT", "OP", "RIGHT"], action=clap::ArgAction::Set)]
+    compare: Vec<String>,
+    /// Compare UTF-8 bytes, Blob bytes or collection items using eq, ne, lt, le, gt or ge.
+    #[arg(long, num_args=3, value_names=["FIELD", "OP", "N"], action=clap::ArgAction::Set)]
+    length: Vec<String>,
     /// BinaryObject.payload >= HEX; use 0x00ff80, or 0x for empty bytes.
     /// Exactly two hex digits per byte, at most 1024 bytes; no text conversion.
     #[arg(long, value_name="HEX", value_parser=parse_blob)]
@@ -307,16 +320,39 @@ struct PayloadArgs {
     #[arg(long, value_name="HEX", value_parser=parse_blob)]
     payload_contains: Option<BlobArg>,
 }
-impl PayloadArgs {
-    fn into_filters(self) -> [Option<Vec<u8>>; 5] {
-        [
-            self.payload_min,
-            self.payload_max,
-            self.payload_prefix,
-            self.payload_suffix,
-            self.payload_contains,
-        ]
-        .map(|arg| arg.map(|v| v.0))
+impl FilterArgs {
+    fn into_filters(self) -> Result<RowFilters, String> {
+        fn triple(args: Vec<String>) -> Result<Option<[String; 3]>, String> {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            args.try_into()
+                .map(Some)
+                .map_err(|_| "expected three filter arguments".into())
+        }
+        let length = match triple(self.length)? {
+            Some([field, op, n]) => Some((
+                field,
+                op,
+                n.parse::<u32>()
+                    .map_err(|_| "--length requires an unsigned 32-bit length")?,
+            )),
+            None => None,
+        };
+        Ok(RowFilters {
+            payload: [
+                self.payload_min,
+                self.payload_max,
+                self.payload_prefix,
+                self.payload_suffix,
+                self.payload_contains,
+            ]
+            .map(|arg| arg.map(|v| v.0)),
+            compare: triple(self.compare)?,
+            length,
+            present: self.present,
+            absent: self.absent,
+        })
     }
 }
 #[derive(Clone, Debug)]
@@ -764,7 +800,7 @@ async fn session(
             Command::Aggregate {
                 entity,
                 select,
-                payload,
+                filters,
                 minimum,
                 category,
                 entry_id,
@@ -783,7 +819,7 @@ async fn session(
                     limit,
                     (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
-                    payload.into_filters(),
+                    filters.into_filters()?,
                 );
                 let reply = invoke(
                     CallKind::Update,
@@ -990,7 +1026,7 @@ async fn session(
             }
             Command::Query {
                 entity,
-                payload,
+                filters,
                 after,
                 limit,
                 minimum,
@@ -1023,7 +1059,7 @@ async fn session(
                             bytes,
                             select,
                             (distinct, (group_min, group_max), group_order,
-                             payload.into_filters()),
+                             filters.into_filters()?),
                         ),
                         Encoding::Frame {
                             method: 3,

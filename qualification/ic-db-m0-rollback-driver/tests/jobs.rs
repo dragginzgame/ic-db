@@ -15,6 +15,12 @@ async fn retained_field_comparison_binds_the_right_field_across_upgrade() {
     check_job_binding_across_upgrade(18, 19, "5").await;
 }
 
+#[tokio::test]
+async fn retained_mixed_or_rejects_conjunction_and_resumes_across_upgrade() {
+    // id == category selects 1; category == 0 selects 2, 4 and 6.
+    check_job_binding_across_upgrade(20, 21, "4").await;
+}
+
 async fn check_job_binding_across_upgrade(operation: u8, changed: u8, expected: &str) {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();

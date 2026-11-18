@@ -1,5 +1,6 @@
 //! Console group selection uses the same typed semantics in both execution modes.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
 
 type Page = (
@@ -98,12 +99,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 128_u32,
                 4096_u32,
                 select,
-                (
-                    false,
-                    (lower, upper),
-                    Some("key"),
-                    [None::<Vec<u8>>, None, None, None, None],
-                ),
+                (false, (lower, upper), Some("key"), RowFilters::default()),
             );
             let before = pic.get_stable_memory(canister).await;
             let reply = pic
@@ -145,7 +141,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 3_u32,
                 (lower, upper),
                 Some("key"),
-                [None::<Vec<u8>>, None, None, None, None],
+                RowFilters::default(),
             );
             let reply = pic
                 .update_call(
@@ -352,7 +348,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                 false,
                 (None::<String>, None::<String>),
                 Some("key-desc"),
-                [None::<Vec<u8>>, None, None, None, None],
+                RowFilters::default(),
             ),
         );
         let before = pic.get_stable_memory(canister).await;
@@ -399,7 +395,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         2_u32,
         (None::<String>, None::<String>),
         Some("key-desc"),
-        [None::<Vec<u8>>, None, None, None, None],
+        RowFilters::default(),
     );
     let reply = pic
         .update_call(
@@ -533,58 +529,73 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let query_with_pattern =
-        async |entity: &str, select: &str, filters: [Option<Vec<u8>>; 5], bytes: u32| {
-            let request = (
-                entity,
-                None::<Vec<u8>>,
-                32_u32,
-                None::<u64>,
-                None::<u64>,
-                None::<u64>,
-                Vec::<String>::new(),
+    let query_with_filters = async |entity: &str,
+                                    select: &str,
+                                    filters: [Option<Vec<u8>>; 5],
+                                    presence: [Option<&str>; 2],
+                                    bytes: u32| {
+        let request = (
+            entity,
+            None::<Vec<u8>>,
+            32_u32,
+            None::<u64>,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            128_u32,
+            bytes,
+            select,
+            (
                 false,
-                128_u32,
-                bytes,
-                select,
-                (
-                    false,
-                    (None::<String>, None::<String>),
-                    None::<String>,
-                    filters,
-                ),
-            );
-            let before = pic.get_stable_memory(canister).await;
-            let reply = pic
-                .query_call(
-                    canister,
-                    canister,
-                    "query",
-                    ic_wire::encode(
-                        &request,
-                        Encoding::Frame {
-                            method: 3,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(pic.get_stable_memory(canister).await, before);
-            ic_wire::decode::<Result<Page, String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 3,
-                    direction: Direction::Response,
+                (None::<String>, None::<String>),
+                None::<String>,
+                RowFilters {
+                    payload: filters,
+                    present: presence[0].map(str::to_owned),
+                    absent: presence[1].map(str::to_owned),
+                    ..Default::default()
                 },
-                LIMITS,
+            ),
+        );
+        let before = pic.get_stable_memory(canister).await;
+        let reply = pic
+            .query_call(
+                canister,
+                canister,
+                "query",
+                ic_wire::encode(
+                    &request,
+                    Encoding::Frame {
+                        method: 3,
+                        direction: Direction::Request,
+                    },
+                    LIMITS,
+                )
+                .unwrap(),
             )
-            .unwrap()
-        };
+            .await
+            .unwrap();
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        ic_wire::decode::<Result<Page, String>>(
+            &reply,
+            Encoding::Frame {
+                method: 3,
+                direction: Direction::Response,
+            },
+            LIMITS,
+        )
+        .unwrap()
+    };
     let query_with_prefix = async |entity: &str, select: &str, lower, upper, prefix, bytes| {
-        query_with_pattern(entity, select, [lower, upper, prefix, None, None], bytes).await
+        query_with_filters(
+            entity,
+            select,
+            [lower, upper, prefix, None, None],
+            [None, None],
+            bytes,
+        )
+        .await
     };
     let query = async |entity: &str, select: &str, lower, upper, bytes| {
         query_with_prefix(entity, select, lower, upper, None, bytes).await
@@ -594,6 +605,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
         (vec![0], Some(vec![]), "0x00"),
         (vec![0, 255, 128], Some(vec![255]), "0x00ff80"),
     ] {
+        let present = optional.is_some();
         let expected_optional = match &optional {
             None => "—",
             Some(v) if v.is_empty() => "0x",
@@ -638,12 +650,33 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
         ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
+        for (presence, matched) in [
+            ([Some("optional"), None], present),
+            ([None, Some("optional")], !present),
+        ] {
+            let page = query_with_filters(
+                "BinaryObject",
+                "optional",
+                Default::default(),
+                presence,
+                4096,
+            )
+            .await
+            .unwrap();
+            let expected = if matched {
+                vec![vec![expected_optional]]
+            } else {
+                vec![]
+            };
+            assert_eq!(page.1, expected);
+        }
         for needle in [vec![], vec![255], vec![255, 255], vec![0, 255], vec![128]] {
             let matched = needle.is_empty() || payload.windows(needle.len()).any(|w| w == needle);
-            let page = query_with_pattern(
+            let page = query_with_filters(
                 "BinaryObject",
                 "payload",
                 [None, None, None, None, Some(needle)],
+                [None, None],
                 4096,
             )
             .await
@@ -658,10 +691,11 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             );
         }
         for suffix in [vec![], vec![255], vec![128], vec![0], vec![255, 128]] {
-            let page = query_with_pattern(
+            let page = query_with_filters(
                 "BinaryObject",
                 "payload",
                 [None, None, None, Some(suffix.clone()), None],
+                [None, None],
                 4096,
             )
             .await
@@ -751,9 +785,15 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
     }
     for (entity, suffix) in [("BinaryObject", vec![0; 1025]), ("Entry", vec![])] {
         assert!(
-            query_with_pattern(entity, "id", [None, None, None, Some(suffix), None], 4096)
-                .await
-                .is_err()
+            query_with_filters(
+                entity,
+                "id",
+                [None, None, None, Some(suffix), None],
+                [None, None],
+                4096
+            )
+            .await
+            .is_err()
         );
     }
     assert!(

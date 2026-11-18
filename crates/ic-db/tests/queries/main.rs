@@ -125,6 +125,124 @@ fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
 }
 
 #[test]
+fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
+    use ic_db::QueryOperand::{Field, Literal};
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    // Both alternatives match ids 1 and 2; only the literal matches id 3.
+    let alternatives = [
+        ("id", C::Eq, Field("maybe")),
+        ("id", C::Le, Literal(3_u64.into())),
+    ];
+    let query = || db.query::<Entry>().filter_any_operands(&alternatives);
+    assert_eq!(ids(&query().fetch().unwrap().rows), [1, 2, 3, 4, 5, 7, 8]);
+    assert_eq!(
+        query()
+            .filter("category", C::Eq, 1_u8)
+            .count()
+            .unwrap()
+            .value,
+        4
+    );
+    assert!(matches!(
+        query().using_index("maybe", &[]).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    let proven = [alternatives[0], ("maybe", C::Le, Literal(3_u64.into()))];
+    let page = db
+        .query::<Entry>()
+        .filter_any_operands(&proven)
+        .using_index("maybe", &[])
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [1, 2, 4, 5, 7, 8]);
+    assert_eq!(page.examined, 6);
+    let cursor = query().work_limit(2).fetch().unwrap().next.unwrap();
+    let changed = [("id", C::Eq, Field("amount")), alternatives[1]];
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter_any_operands(&changed)
+            .after(&cursor)
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    let literals = [("id", C::Ge, 1_u64.into()), ("id", C::Eq, 2_u64.into())];
+    let cursor = db
+        .query::<Entry>()
+        .filter_any(&literals)
+        .work_limit(1)
+        .fetch()
+        .unwrap()
+        .next
+        .unwrap();
+    let explicit = literals.map(|(field, op, value)| (field, op, Literal(value)));
+    assert_eq!(
+        ids(&db
+            .query::<Entry>()
+            .filter_any_operands(&explicit)
+            .after(&cursor)
+            .fetch()
+            .unwrap()
+            .rows),
+        [2, 3, 4, 5, 6, 7, 8]
+    );
+    let invalid = [("id", C::Eq, Field("id")), ("id", C::Eq, Field("missing"))];
+    assert!(matches!(
+        db.query::<Entry>().filter_any_operands(&invalid).count(),
+        Err(Error::InvalidQuery)
+    ));
+    for terms in [&[][..], &[alternatives[0]; 9][..]] {
+        assert!(matches!(
+            db.query::<Entry>().filter_any_operands(terms).fetch(),
+            Err(Error::Limit)
+        ));
+    }
+}
+
+#[test]
+fn field_comparisons_prove_sparse_membership_on_either_side() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let expected = [1, 2, 4, 5, 7, 8];
+    for (left, comparison, right) in [
+        ("maybe", C::Eq, "id"),
+        ("id", C::Eq, "maybe"),
+        ("amount", C::Gt, "maybe"),
+        ("maybe", C::Lt, "amount"),
+        ("maybe", C::Ge, "maybe"),
+    ] {
+        let query = || db.query::<Entry>().filter_fields(left, comparison, right);
+        let page = query().using_index("maybe", &[]).fetch().unwrap();
+        assert_eq!(ids(&page.rows), expected);
+        assert_eq!(page.examined, expected.len());
+
+        // Work smaller than the data set forces a real ordered continuation.
+        let first = query().order_by(&["maybe"]).work_limit(2).fetch().unwrap();
+        assert_eq!(ids(&first.rows), expected[..2]);
+        let rest = query()
+            .order_by(&["maybe"])
+            .after(first.next.as_ref().unwrap())
+            .fetch()
+            .unwrap();
+        assert_eq!(ids(&rest.rows), expected[2..]);
+    }
+    for (left, comparison, right) in [
+        ("maybe", C::Eq, "maybe"),
+        ("id", C::Ne, "maybe"),
+        ("maybe", C::Ne, "amount"),
+        ("amount", C::Gt, "id"),
+    ] {
+        let query = || db.query::<Entry>().filter_fields(left, comparison, right);
+        assert!(matches!(
+            query().using_index("maybe", &[]).fetch(),
+            Err(Error::InvalidQuery)
+        ));
+        let rows = query().order_by(&["maybe"]).fetch().unwrap().rows;
+        assert!(rows.iter().any(|row| row.maybe.is_none()));
+    }
+}
+
+#[test]
 fn distinct_checks_a_field_operand_that_varies_within_an_index_class() {
     let runtime = host(VectorMemory::default());
     let mut db = create(&runtime, 1);
@@ -972,6 +1090,45 @@ fn required_text_and_groups_match_rust_oracle() {
             );
         }
     }
+}
+
+#[test]
+fn length_compares_text_in_utf8_bytes_and_binds_pages() {
+    let runtime = host(VectorMemory::default());
+    let (db, rows) = text_rows(&runtime);
+    for n in [0, 1, 2, 3, u32::MAX] {
+        let expected: Vec<_> = rows
+            .iter()
+            .filter(|row| row.text.as_ref().is_some_and(|v| v.len() == n as usize))
+            .map(|row| row.id)
+            .collect();
+        let query = || db.query::<TextRow>().filter_length("text", C::Eq, n);
+        assert_eq!(
+            query()
+                .fetch()
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    let cursor = db
+        .query::<TextRow>()
+        .filter_length("text", C::Ge, 2)
+        .work_limit(1)
+        .fetch()
+        .unwrap()
+        .next
+        .unwrap();
+    assert!(matches!(
+        db.query::<TextRow>()
+            .filter_length("text", C::Ge, 3)
+            .after(&cursor)
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
 }
 
 #[test]
@@ -2650,6 +2807,51 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
     }
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
+    for field in ["blob", "items", "set", "map"] {
+        let empty = if matches!(field, "items" | "map") {
+            vec![1, 3]
+        } else {
+            vec![1]
+        };
+        for (comparison, len, expected) in [
+            (C::Eq, 0, empty),
+            (C::Gt, 0, vec![2]),
+            (C::Ne, 1, vec![0, 1, 3]),
+        ] {
+            let page = db
+                .query::<PresenceData>()
+                .filter_length(field, comparison, len)
+                .fetch_as::<PresenceId>()
+                .unwrap();
+            assert_eq!(
+                page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                expected,
+                "{field}"
+            );
+        }
+        assert_eq!(
+            db.query::<PresenceData>()
+                .filter_present(field)
+                .filter_length(field, C::Gt, 0)
+                .count()
+                .unwrap()
+                .value,
+            1
+        );
+    }
+    for (field, op) in [
+        ("id", C::Eq),
+        ("details", C::Gt),
+        ("variant", C::Eq),
+        ("items", C::Contains),
+    ] {
+        assert!(matches!(
+            db.query::<PresenceData>()
+                .filter_length(field, op, 0)
+                .count(),
+            Err(Error::InvalidQuery)
+        ));
+    }
     for field in ["blob", "items", "details", "map", "set", "variant"] {
         let present = if ["items", "map", "variant"].contains(&field) {
             vec![1, 2, 3]
@@ -2826,6 +3028,12 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
                 Err(Error::Corrupt)
             ));
         }
+        assert!(matches!(
+            db.query::<PresenceData>()
+                .filter_length("blob", C::Eq, 0)
+                .count(),
+            Err(Error::Corrupt)
+        ));
         assert_eq!(*backing.borrow(), before);
     }
 }

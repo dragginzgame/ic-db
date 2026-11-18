@@ -61,6 +61,13 @@ pub enum Comparison {
 }
 
 impl Comparison {
+    fn is_relational(self) -> bool {
+        matches!(
+            self,
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge
+        )
+    }
+
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
         let field = key::operand_type(field);
@@ -237,16 +244,21 @@ impl QueryPage<Vec<u8>> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Operand<'a> {
+/// A literal, row field or length threshold in a fluent predicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryOperand<'a> {
+    /// Compare with this exact typed value.
     Literal(IndexValue<'a>),
+    /// Compare the field's byte length (Text/Blob) or item count (list/set/map).
+    Length(u32),
+    /// Compare with another top-level field on the same row.
     Field(&'a str),
 }
 
 struct Predicate<'a> {
     field: &'a str,
     comparison: Comparison,
-    operand: Operand<'a>,
+    operand: QueryOperand<'a>,
     // Consecutive alternatives form one clause; clauses are ANDed.
     or_next: bool,
 }
@@ -288,7 +300,7 @@ impl Default for Request<'_> {
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
     #[inline(never)]
-    fn filter(&mut self, field: &'a str, comparison: Comparison, operand: Operand<'a>) {
+    fn filter(&mut self, field: &'a str, comparison: Comparison, operand: QueryOperand<'a>) {
         if self.predicates.len() == MAX_TERMS {
             self.over_limit = true;
         } else {
@@ -304,17 +316,17 @@ impl<'a> Request<'a> {
     #[inline(never)]
     fn or_clause(
         &mut self,
-        alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, IndexValue<'a>)>,
+        alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, QueryOperand<'a>)>,
     ) {
         let count = alternatives.len();
         if count == 0 || count > MAX_TERMS - self.predicates.len() {
             self.over_limit = true;
         } else {
             self.predicates.extend(alternatives.enumerate().map(
-                |(i, (field, comparison, value))| Predicate {
+                |(i, (field, comparison, operand))| Predicate {
                     field,
                     comparison,
-                    operand: Operand::Literal(value),
+                    operand,
                     or_next: i + 1 < count,
                 },
             ));
@@ -328,7 +340,7 @@ impl<'a> Request<'a> {
             return;
         }
         for &value in values {
-            self.filter(field, Comparison::Ne, Operand::Literal(value));
+            self.filter(field, Comparison::Ne, QueryOperand::Literal(value));
         }
     }
 
@@ -448,7 +460,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         value: impl Into<IndexValue<'a>>,
     ) -> Self {
         self.request
-            .filter(field, comparison, Operand::Literal(value.into()));
+            .filter(field, comparison, QueryOperand::Literal(value.into()));
         self
     }
     /// Compare two top-level ordered fields on the same row using Eq, Ne, Lt, Le, Gt or Ge.
@@ -456,7 +468,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Two absent values are equal. An ordered comparison requires two present values.
     #[must_use]
     pub fn filter_fields(mut self, left: &'a str, comparison: Comparison, right: &'a str) -> Self {
-        self.request.filter(left, comparison, Operand::Field(right));
+        self.request
+            .filter(left, comparison, QueryOperand::Field(right));
+        self
+    }
+    /// Compare UTF-8 bytes for Text, raw bytes for Blob, or the item count for a
+    /// list, set or map. Accepts Eq, Ne, Lt, Le, Gt and Ge. An absent field
+    /// matches Ne only; use Gt(0) for a present, nonempty value.
+    #[must_use]
+    pub fn filter_length(mut self, field: &'a str, comparison: Comparison, length: u32) -> Self {
+        self.request
+            .filter(field, comparison, QueryOperand::Length(length));
         self
     }
     /// Match rows whose optional field has a value, including an empty value.
@@ -514,9 +536,26 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// do not establish fixed index prefixes; a one-term clause behaves like `filter`.
     #[must_use]
     pub fn filter_any(mut self, alternatives: &[(&'a str, Comparison, IndexValue<'a>)]) -> Self {
+        self.request.or_clause(
+            alternatives
+                .iter()
+                .map(|&(field, op, value)| (field, op, QueryOperand::Literal(value))),
+        );
+        self
+    }
+    /// Add one OR clause of literal, field-to-field or length comparisons.
+    /// Each alternative follows its corresponding single-filter admission rules.
+    /// All alternatives share the eight-comparison budget with the other filters.
+    /// Literal-only clauses have the same cursor and job identity as `filter_any`.
+    #[must_use]
+    pub fn filter_any_operands(
+        mut self,
+        alternatives: &[(&'a str, Comparison, QueryOperand<'a>)],
+    ) -> Self {
         self.request.or_clause(alternatives.iter().copied());
         self
     }
+
     /// Match a field against any supplied exact value, ANDed with other filters.
     /// Equivalent to `filter_any` with equality comparisons in the supplied order.
     /// Absence matches only an explicit `IndexValue::Absent` member on an optional field.
@@ -530,7 +569,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             values
                 .iter()
                 .copied()
-                .map(|value| (field, Comparison::Eq, value)),
+                .map(|value| (field, Comparison::Eq, QueryOperand::Literal(value))),
         );
         self
     }
@@ -688,6 +727,7 @@ struct Term {
 enum TermOperand {
     Literal { bytes: Vec<u8>, absent: bool },
     Field(usize),
+    Length(u32),
 }
 
 fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
@@ -754,7 +794,7 @@ struct Plan<'a> {
     terms: Vec<Term>,
     selected: u16,
     // Non-orderable fields need only their validated optional tags, never key slots.
-    presence: u16,
+    span_fields: u16,
     binding: [u8; 32],
     projection: Option<u16>,
     distinct: distinct::Strategy,
@@ -785,8 +825,8 @@ impl<'a> Plan<'a> {
             .predicates
             .iter()
             .filter_map(|p| match &p.operand {
-                Operand::Literal(value) => Some(value),
-                Operand::Field(_) => None,
+                QueryOperand::Literal(value) => Some(value),
+                QueryOperand::Field(_) | QueryOperand::Length(_) => None,
             })
             .chain(request.index.iter().flat_map(|(_, values)| values.iter()))
         {
@@ -809,7 +849,7 @@ impl<'a> Plan<'a> {
             fixed_components: 0,
             terms: Vec::new(),
             selected: 1 << primary,
-            presence: 0,
+            span_fields: 0,
             binding: [0; 32],
             projection: projection
                 .map(|output| admit_projection(entity, output))
@@ -826,7 +866,24 @@ impl<'a> Plan<'a> {
                 .ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
             let operand = match predicate.operand {
-                Operand::Field(name) => {
+                QueryOperand::Length(length) => {
+                    let supported = match key::operand_type(field.value) {
+                        FieldType::Text { .. }
+                        | FieldType::Blob { .. }
+                        | FieldType::List { .. } => true,
+                        FieldType::Named(link) => matches!(
+                            (link.definition)().body,
+                            TypeBody::Map { .. } | TypeBody::Set { .. }
+                        ),
+                        _ => false,
+                    };
+                    if !supported || !predicate.comparison.is_relational() {
+                        return Err(Error::InvalidQuery);
+                    }
+                    plan.span_fields |= 1 << position;
+                    TermOperand::Length(length)
+                }
+                QueryOperand::Field(name) => {
                     let right = entity
                         .fields
                         .iter()
@@ -841,29 +898,21 @@ impl<'a> Plan<'a> {
                         );
                     if !compatible
                         || !key::supports(field.value)
-                        || !matches!(
-                            predicate.comparison,
-                            Comparison::Eq
-                                | Comparison::Ne
-                                | Comparison::Lt
-                                | Comparison::Le
-                                | Comparison::Gt
-                                | Comparison::Ge
-                        )
+                        || !predicate.comparison.is_relational()
                     {
                         return Err(Error::InvalidQuery);
                     }
                     plan.selected |= (1 << position) | (1 << right);
                     TermOperand::Field(right)
                 }
-                Operand::Literal(value) => {
+                QueryOperand::Literal(value) => {
                     let absent = value == IndexValue::Absent;
                     if key::supports(field.value) {
                         plan.selected |= 1 << position;
                     } else if absent
                         && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne)
                     {
-                        plan.presence |= 1 << position;
+                        plan.span_fields |= 1 << position;
                     } else {
                         return Err(Error::InvalidQuery);
                     }
@@ -925,6 +974,10 @@ impl<'a> Plan<'a> {
                 TermOperand::Literal { bytes, .. } => {
                     hash.update((bytes.len() as u32).to_le_bytes());
                     hash.update(bytes);
+                }
+                TermOperand::Length(length) => {
+                    hash.update((u32::MAX - 1).to_le_bytes());
+                    hash.update(length.to_le_bytes());
                 }
                 TermOperand::Field(right) => {
                     // Outside the bounded literal length domain.
@@ -1154,7 +1207,7 @@ fn execute_inner<M: Memory>(
             &bytes,
             plan.selected,
             &mut values,
-            (plan.presence != 0
+            (plan.span_fields != 0
                 || plan.projection.is_some()
                 || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
             .then_some(&mut spans),
@@ -1175,15 +1228,29 @@ fn execute_inner<M: Memory>(
             .split_inclusive(|term| !term.or_next)
             .all(|clause| {
                 clause.iter().any(|term| {
-                    if plan.presence & (1 << term.position) != 0 {
-                        // Admission permits only Eq/Ne(Absent) here. Full decoding
-                        // validated this optional tag and the entire present value.
-                        let absent = bytes[usize::from(spans[term.position].0)] == 0;
-                        return term.comparison.accepts_absent(absent);
-                    }
                     let value = values[term.position];
                     component.clear();
                     let (operand, optional) = match &term.operand {
+                        TermOperand::Literal { absent: true, .. }
+                            if plan.span_fields & (1 << term.position) != 0 =>
+                        {
+                            let absent = bytes[usize::from(spans[term.position].0)] == 0;
+                            return term.comparison.accepts_absent(absent);
+                        }
+                        TermOperand::Length(length) => {
+                            let (start, end) = spans[term.position];
+                            let span = &bytes[usize::from(start)..usize::from(end)];
+                            let actual = crate::codec::validated_length(
+                                span,
+                                entity.fields[term.position].optional,
+                            )
+                            .map(u32::to_be_bytes);
+                            return term.comparison.accepts(
+                                actual.as_ref().map(|v| v.as_slice()),
+                                Some(&length.to_be_bytes()),
+                                false,
+                            );
+                        }
                         TermOperand::Literal { bytes, absent } => (
                             (!absent).then_some(bytes.as_slice()),
                             entity.fields[term.position].optional,

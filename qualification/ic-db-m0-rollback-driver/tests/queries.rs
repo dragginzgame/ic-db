@@ -1,5 +1,6 @@
 //! Fluent query pages remain bounded and resume across upgrades in real Wasm.
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
 
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
@@ -377,7 +378,7 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
                 false,
                 (None::<String>, None::<String>),
                 None::<String>,
-                [None::<Vec<u8>>, None, None, None, None],
+                RowFilters::default(),
             ),
         );
         let reply = pic
@@ -445,14 +446,14 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    let call = async |present: bool, cursor: Option<Vec<u8>>| {
+    let call = async |mode: u8, cursor: Option<Vec<u8>>| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "fluent_list_presence",
                 ic_wire::encode(
-                    &(present, cursor),
+                    &(mode, cursor),
                     Encoding::Frame {
                         method: 129,
                         direction: Direction::Request,
@@ -504,20 +505,13 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
             .is_ok()
         );
         let before = pic.get_stable_memory(canister).await;
-        for present in [false, true] {
-            let first = call(present, None).await.unwrap();
-            assert_eq!(
-                first.0,
-                if present == (shape == 2) {
-                    vec![1]
-                } else {
-                    vec![]
-                }
-            );
+        for (filter, matches) in [(0, shape != 2), (1, shape == 2), (2, shape == 2), (3, true)] {
+            let first = call(filter, None).await.unwrap();
+            assert_eq!(first.0, if matches { vec![1] } else { vec![] });
             assert_eq!(first.2, 1);
             let cursor = first.1.unwrap();
-            assert_eq!(call(!present, Some(cursor.clone())).await.unwrap_err(), 1);
-            if present {
+            assert_eq!(call(filter ^ 1, Some(cursor.clone())).await.unwrap_err(), 1);
+            if filter == 1 || filter == 2 {
                 pic.advance_time(std::time::Duration::from_secs(600)).await;
                 pic.tick().await;
                 ic_db_m0_rollback_driver::upgrade_stopped(
@@ -530,7 +524,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
                 .await
                 .unwrap();
             }
-            let done = call(present, Some(cursor)).await.unwrap();
+            let done = call(filter, Some(cursor)).await.unwrap();
             assert!(done.0.is_empty());
             assert!(done.1.is_none());
         }
@@ -1088,7 +1082,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                     distinct,
                     (group_min, None::<&str>),
                     group_order,
-                    [None::<Vec<u8>>, None, None, None, None],
+                    RowFilters::default(),
                 ),
             );
             let reply = pic
@@ -1844,7 +1838,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
                 false,
                 (minimum, None::<&str>),
                 select.starts_with("zone,").then_some("desc"),
-                [None::<Vec<u8>>, None, None, None, None],
+                RowFilters::default(),
             ),
         );
         let reply = pic

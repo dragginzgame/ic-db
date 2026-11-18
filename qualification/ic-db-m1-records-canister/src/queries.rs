@@ -302,7 +302,7 @@ fn fluent_sparse_presence(
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_list_presence((present, after): (bool, Option<Vec<u8>>)) -> Result<IdPage, u8> {
+fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, u8> {
     let host = runtime();
     let db = open(&host);
     let cursor = after
@@ -310,18 +310,14 @@ fn fluent_list_presence((present, after): (bool, Option<Vec<u8>>)) -> Result<IdP
         .map(QueryCursor::from_bytes)
         .transpose()
         .map_err(|error| query_error(&error))?;
-    let mut query = db
-        .query::<crate::schema::ListRow>()
-        .filter(
-            "labels",
-            if present {
-                Comparison::Ne
-            } else {
-                Comparison::Eq
-            },
-            ic_db::IndexValue::Absent,
-        )
-        .work_limit(1);
+    let query = db.query::<crate::schema::ListRow>().work_limit(1);
+    let mut query = match mode {
+        0 => query.filter_absent("labels"),
+        1 => query.filter_present("labels"),
+        2 => query.filter_length("labels", Comparison::Eq, 1),
+        3 => query.filter_length("numbers", Comparison::Eq, 0),
+        _ => return Err(1),
+    };
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }

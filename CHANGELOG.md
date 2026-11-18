@@ -4,12 +4,61 @@
 
 ### ➕ Added
 
+- A canister can put `ic_db::build_schema!(schema);` in `src/build.rs` to
+  generate its local schema. The macro uses ordinary Rust module discovery and
+  writes the validated assembly to Cargo’s output directory.
+  [Canister setup](README.md#build-a-canister-local-schema)
+
+- Filter by length in fluent Rust. `.filter_length("labels", Comparison::Gt, 0)`
+  selects a present list with at least one item. Text counts UTF-8 bytes, Blob
+  counts raw bytes, and lists, sets and maps count items. Use `QueryOperand::Length`
+  in a mixed OR clause. The local fixture commands accept `--length FIELD OP N`.
+
+  ```sh
+  make db
+  db query Document --length title eq 14 --select id
+  db aggregate BinaryObject --length payload eq 3 --select count
+  ```
+
+- Fluent Rust queries can combine field-to-field and literal comparisons in one
+  bounded OR clause using `filter_any_operands`. For example, this counts an
+  event once if its observed value exceeds its target or it is marked urgent.
+
+  ```rust
+  use ic_db::{Comparison, QueryOperand::{Field, Literal}};
+  let urgent_or_over_target = db.query::<Event>().filter_any_operands(&[
+      ("observed", Comparison::Gt, Field("target")),
+      ("urgent", Comparison::Eq, Literal(true.into())),
+  ]).count()?;
+  ```
+
 - Compare two fields on each row with `.filter_fields("actual", Comparison::Gt, "expected")`.
   Equality and ordering use the declared scalar types, including optional values.
+  A present-only index can serve the query when the comparison guarantees its
+  optional fields are present, including when the indexed field is on the right.
+  If automatic selection switches indexes, restart a cursor or retained job
+  issued for the previous path.
+  Both fixture commands accept `--compare LEFT OP RIGHT`. The Entry examples
+  return ID 1 and a retained count of five. Every DecimalRow lacks `maybe`,
+  so its present-only index returns an empty page with zero candidates examined.
+
+  ```sh
+  make db
+  db query Entry --compare id eq category --select id
+  db aggregate Entry --compare id gt category --select count --work 2
+  db query DecimalRow --compare value gt maybe --order-by maybe --work 1 --select id
+  ```
 
 - Fluent queries accept `.filter_present("field")` and `.filter_absent("field")`
   for optional fields. Present empty strings, blobs and collections match
-  `filter_present`.
+  `filter_present`. The fixture CLI exposes both filters on queries and aggregates.
+  Its Document has a present priority of zero and an absent note.
+
+  ```sh
+  make db
+  db query Document --present priority --absent note --select id
+  db aggregate Document --present note --select count
+  ```
 
 - Use `Comparison::Contains` to find an exact byte sequence in a Blob field
   or a completed Blob group extremum. An empty sequence matches every present

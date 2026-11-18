@@ -352,8 +352,10 @@ using `ctor`; `build::generate(source_module, target_module)` selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler
 resolves the generated paths; target admission refuses host/target contract drift.
-The build script explicitly maps its module root to the target module root; this
-is not a source-file/import resolver. Declaration visibility must permit the emitted
+For a canister-local schema, `ic_db::build_schema!(schema)` in `src/build.rs`
+maps the host module beside the script to `crate::schema`. A shared schema crate
+can supply its own module root to `build::write_schema`. Both call the same
+generator; Rust owns source discovery and import resolution. Declaration visibility must permit the emitted
 Rust references. No second persisted schema representation is introduced.
 An admitted `Schema` can be cloned for host-owned reuse: it contains immutable
 executable metadata only. Generated assembly validates the host/target fingerprint
@@ -2426,7 +2428,14 @@ instructions live in the [qualification receipt](../../qualification/README.md#c
 The M2 slice delivers `Database::query::<E>()` with up to eight comparisons over
 top-level ordered scalar/unit-enum fields, plus absence checks on every optional
 stored type. `filter` adds an AND term; `filter_any`
-adds a nonempty OR clause, ANDed with other terms/clauses. All alternatives count
+adds a nonempty OR clause, ANDed with other terms/clauses. With
+`filter_any_operands`, each alternative can use an exact literal or another
+field on the row. Literal-only clauses lower to the same terms as `filter_any`,
+including cursor and job identity. Both spellings use one traversal and emit a
+matching row once even if several alternatives match. Frozen IcyDB
+`6d421e3` composed `CompareFields` under `FilterExpr::or` in
+`db/query/expr/filter/mod.rs`. Here the existing flat clause stores the two
+operand kinds directly. All alternatives count
 toward the same eight-term budget; empty or oversized clauses refuse with `Limit`.
 Runtime field names
 resolve against the admitted entity, and operand widths/types must match exactly.
@@ -2483,16 +2492,34 @@ can have different size limits within their respective families. Optionality
 may differ. Two absent values compare equal; ordering requires both values.
 The scanner compares the two row components under the usual candidate budget.
 Both fields participate in DISTINCT class admission and continuation identity.
+The fixture CLI passes `--compare LEFT OP RIGHT` to this builder for both
+`db query` and `db aggregate`, including each retained resume.
 The installed-Wasm retained-count witness scans two candidates per call.
 Changing only the right field refuses with `InvalidJob`; that refusal and a
 trapped advance each preserve stable memory byte for byte. After a same-code
 upgrade, the original job finishes with five matches across six candidates.
-Field comparisons provide no constant index bound or sparse-index membership proof.
+Ordered field comparisons prove presence for both operands. Equality with a
+required field proves presence for its optional counterpart. Equality between
+optional fields and field inequality supply no such proof. These comparisons
+remain row filters and do not establish a constant index bound.
 This keeps the two-field admission check from frozen IcyDB `6d421e3`
 (`db/query/predicate/validate.rs`) and omits its cross-type coercion rules.
 
+`filter_length(field, comparison, n)` compares UTF-8 bytes for Text, raw bytes for
+Blob, and item counts for lists, maps and sets, including named lists and scalar
+wrappers. Absent values match only Ne. Eq(0) therefore selects present empty
+values and Gt(0) selects present nonempty values. A length term is residual:
+the u32 prefix comes from the fully validated field span, and the threshold is
+bound to cursor and job identity. `QueryOperand::Length(n)` uses the same term
+inside an OR clause. The local `db query` and `db aggregate` commands pass
+`--length FIELD OP N` to the same builder. Frozen IcyDB `6d421e3` tested Text and list emptiness in
+`db/predicate/runtime/compare/value.rs`; the current row format supplies an
+explicit length without materializing the container.
+
 The fluent methods `filter_absent(field)` and `filter_present(field)` lower directly
 to `Eq(Absent)` and `Ne(Absent)`, preserving cursor and job identity.
+The local query and aggregate commands expose these as `--absent FIELD` and
+`--present FIELD`. When supplied together both conditions must hold.
 Both comparisons also accept optional blobs, lists, named records,
 payload enums, sets and maps. Empty values and unit variants are present. Required
 fields reject absent operands; unknown fields refuse rather than implying absence.
@@ -2634,7 +2661,7 @@ component constraints and uses the complete physical index order, including the
 primary-key suffix on nonunique indexes. `descending()` reverses that whole order.
 Sparse indexes require presence proof for every optional indexed field: either
 a present prefix operand or a mandatory filter clause whose every alternative
-targets that field and rejects absence. An incomplete sparse path refuses rather
+requires that field to be present. An incomplete sparse path refuses rather
 than silently losing matching rows. Prefix admission and complete-key bounds
 share the direct-read implementation.
 `order_by(&[...])` accepts 1–4 distinct ordered top-level fields and appends the

@@ -1,5 +1,6 @@
 //! Retained Decimal rounding and Blob results through the console, across retained upgrades.
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
+use ic_db_qualification_transport::RowFilters;
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
@@ -11,7 +12,7 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
-    [Option<Vec<u8>>; 5],
+    RowFilters,
 );
 type Step = (
     u64,
@@ -157,7 +158,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 32,
                 (None, None),
                 None,
-                [None, None, None, None, None],
+                RowFilters::default(),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -391,7 +392,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 32,
                 (None, None),
                 None,
-                [None, None, None, None, None],
+                RowFilters::default(),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -501,7 +502,10 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             32,
             (None, None),
             None,
-            [lower, upper, prefix, suffix, None],
+            RowFilters {
+                payload: [lower, upper, prefix, suffix, None],
+                ..Default::default()
+            },
         );
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -515,21 +519,21 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .unwrap();
         let before = pic.get_stable_memory(canister).await;
         let mut changed = selection.clone();
-        changed.6[4] = Some(vec![255]);
+        changed.6.payload[4] = Some(vec![255]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         changed = selection.clone();
-        changed.6[3] = Some(vec![42]);
+        changed.6.payload[3] = Some(vec![42]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6[3] = Some(vec![0; 1025]);
+        changed.6.payload[3] = Some(vec![0; 1025]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         changed = selection.clone();
-        changed.6[2] = Some(vec![42]);
+        changed.6.payload[2] = Some(vec![42]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6[2] = Some(vec![0; 1025]);
+        changed.6.payload[2] = Some(vec![0; 1025]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6 = [Some(vec![1, 2, 3]), None, None, None, None];
+        changed.6.payload = [Some(vec![1, 2, 3]), None, None, None, None];
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6 = [Some(vec![0; 1025]), None, None, None, None];
+        changed.6.payload = [Some(vec![0; 1025]), None, None, None, None];
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
@@ -537,7 +541,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 .is_err()
         );
         changed.0 = "Document".into();
-        changed.6 = [Some(vec![]), None, None, None, None];
+        changed.6.payload = [Some(vec![]), None, None, None, None];
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
                 .await
@@ -558,7 +562,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         32,
         (None, None),
         None,
-        [None, None, None, None, None],
+        RowFilters::default(),
     );
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await

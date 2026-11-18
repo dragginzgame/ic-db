@@ -143,5 +143,41 @@ pub fn generate(source_module: &str, target_module: &str) -> Result<String, Erro
         .generate(source_module, target_module)
 }
 
+/// Define a Cargo build script for a schema module beside the script.
+/// Set `[package] build = "src/build.rs"` and enable IC DB's `build` feature
+/// in build-dependencies. `ic_db::build_schema!(schema);` in that file reads
+/// the ordinary `schema` module and emits `OUT_DIR/schema.rs` for the target.
+/// Declare the same module at the target crate root. Nested Rust modules and
+/// imports resolve normally in both compilations.
+#[macro_export]
+macro_rules! build_schema {
+    ($schema:ident) => {
+        mod $schema;
+
+        fn main() -> ::std::result::Result<(), ::std::boxed::Box<dyn ::std::error::Error>> {
+            $crate::build::write_schema(
+                ::std::concat!(::std::module_path!(), "::", ::std::stringify!($schema)),
+                ::std::concat!("crate::", ::std::stringify!($schema)),
+            )
+        }
+    };
+}
+
+/// Generate the selected module and write the target assembly to Cargo's `OUT_DIR/schema.rs`.
+/// Cargo's default package change tracking also covers nested schema source files.
+/// # Errors
+/// Returns schema generation errors, a missing output directory, or a file write error.
+pub fn write_schema(
+    source_module: &str,
+    target_module: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let assembly = generate(source_module, target_module)?;
+    let out = std::env::var_os("OUT_DIR").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "Cargo did not set OUT_DIR")
+    })?;
+    std::fs::write(std::path::PathBuf::from(out).join("schema.rs"), assembly)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

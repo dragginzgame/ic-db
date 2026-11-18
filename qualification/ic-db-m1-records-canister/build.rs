@@ -1,9 +1,4 @@
-//! Compile declarations with Rust, then validate and emit the target schema assembly.
+//! Generate the target assembly from the shared schema crate.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let source = ic_db_m1_records_schema::generate("crate::schema")?;
-    std::fs::write(
-        std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("schema.rs"),
-        source,
-    )?;
-    Ok(())
+    ic_db_m1_records_schema::write_schema("crate::schema")
 }

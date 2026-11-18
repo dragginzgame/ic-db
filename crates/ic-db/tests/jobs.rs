@@ -1034,6 +1034,33 @@ fn create(
     (db, jobs)
 }
 #[test]
+fn retained_length_filter_binds_threshold_and_resumes_the_same_clause() {
+    use ic_db::QueryOperand::{Length, Literal};
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create(&runtime, &[None, None, None], 4);
+    let query = |length| {
+        db.query::<Row>().filter_any_operands(&[
+            ("payload", Comparison::Lt, Length(length)),
+            ("id", Comparison::Eq, Literal(2_u64.into())),
+        ])
+    };
+    let handle = query(4).start_count(&mut jobs, time(0), time(100)).unwrap();
+    let first = query(4)
+        .work_limit(1)
+        .resume_count(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert!(matches!(
+        query(5).resume_count(&mut jobs, &handle, first.sequence, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    let finished = query(4)
+        .resume_count(&mut jobs, &handle, first.sequence, time(1))
+        .unwrap();
+    assert!(matches!(finished.outcome, JobOutcome::Complete(1)));
+}
+
+#[test]
 fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
     let host = host(VectorMemory::default());
     let (db, mut jobs) = create(&host, &vec![Some(7); 520], 0);

@@ -63,8 +63,8 @@ pub(super) fn admit(
     // continuation can advance into it. Other filters use the complete collection.
     for predicate in &request.predicates {
         let right = match predicate.operand {
-            super::Operand::Field(name) => Some(name),
-            super::Operand::Literal(_) => None,
+            super::QueryOperand::Field(name) => Some(name),
+            super::QueryOperand::Literal(_) | super::QueryOperand::Length(_) => None,
         };
         for name in std::iter::once(predicate.field).chain(right) {
             if remaining & (1 << position(name)?) == 0 && !index.fields[..fixed].contains(&name) {

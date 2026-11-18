@@ -4,6 +4,7 @@ mod blob;
 pub(crate) mod migration;
 #[cfg(feature = "retained-console")]
 mod retained;
+use crate::transport::RowFilters;
 use crate::{
     Backing, open,
     queries::{IdOnly, Summary},
@@ -51,6 +52,46 @@ struct OptionalDecimal {}
 #[ic_db::record(fields(field(name = "zone", value(item(prim = "Bool")))))]
 struct ZoneOnly {}
 
+fn filter_rows<'a, E: Entity>(
+    query: Query<'a, E, Backing>,
+    filters: &'a RowFilters,
+) -> Result<Query<'a, E, Backing>, String> {
+    let RowFilters {
+        payload,
+        compare,
+        present,
+        absent,
+        length,
+    } = filters;
+    blob::validate(E::SCHEMA.name, payload)?;
+    let mut query = blob::filter(query, payload);
+    if let Some(field) = present {
+        query = query.filter_present(field);
+    }
+    if let Some(field) = absent {
+        query = query.filter_absent(field);
+    }
+    if let Some([left, op, right]) = compare {
+        query = query.filter_fields(left, comparison(op)?, right);
+    }
+    if let Some((field, op, n)) = length {
+        query = query.filter_length(field, comparison(op)?, *n);
+    }
+    Ok(query)
+}
+
+fn comparison(op: &str) -> Result<Comparison, String> {
+    Ok(match op {
+        "eq" => Comparison::Eq,
+        "ne" => Comparison::Ne,
+        "lt" => Comparison::Lt,
+        "le" => Comparison::Le,
+        "gt" => Comparison::Gt,
+        "ge" => Comparison::Ge,
+        _ => return Err("comparison must be eq, ne, lt, le, gt or ge".into()),
+    })
+}
+
 type Request = (
     String,
     Option<Vec<u8>>,
@@ -67,7 +108,7 @@ type Request = (
         bool,
         (Option<String>, Option<String>),
         Option<String>,
-        blob::Filters,
+        RowFilters,
     ),
 );
 type Page = (
@@ -149,7 +190,6 @@ fn query(
         (distinct, (group_min, group_max), group_order, filters),
     ): Request,
 ) -> Result<Page, String> {
-    blob::validate(&entity, &filters)?;
     let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = cursor
         .as_deref()
@@ -172,7 +212,7 @@ fn query(
     let db = open(&host);
     match entity.as_str() {
         "Entry" => {
-            let query = entry_query(&db, minimum, category, entry_id)?;
+            let query = filter_rows(entry_query(&db, minimum, category, entry_id)?, &filters)?;
             execute(
                 configure(
                     query,
@@ -200,7 +240,7 @@ fn query(
             )
         }
         "Document" => {
-            let query = document_query(&db, minimum, category, entry_id)?;
+            let query = filter_rows(document_query(&db, minimum, category, entry_id)?, &filters)?;
             execute(
                 configure(
                     query,
@@ -243,7 +283,7 @@ fn query(
         }
         "DecimalRow" => execute(
             configure(
-                decimal_query(&db, minimum, category, entry_id)?,
+                filter_rows(decimal_query(&db, minimum, category, entry_id)?, &filters)?,
                 cursor.as_ref(),
                 &order,
                 descending,
@@ -268,7 +308,7 @@ fn query(
             },
         ),
         "BinaryObject" => {
-            let query = blob::filter(blob::query(&db, minimum, category, entry_id)?, &filters);
+            let query = filter_rows(blob::query(&db, minimum, category, entry_id)?, &filters)?;
             execute(
                 configure(
                     query,

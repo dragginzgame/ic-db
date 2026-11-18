@@ -44,6 +44,16 @@ fn query(db: &Database<Backing>, operation: u8) -> Query<'_, Entry, Backing> {
         query.filter_fields("id", Comparison::Gt, "category")
     } else if operation == 19 {
         query.filter_fields("id", Comparison::Gt, "amount")
+    } else if operation == 20 {
+        use ic_db::QueryOperand::{Field, Literal};
+        query.filter_any_operands(&[
+            ("id", Comparison::Eq, Field("category")),
+            ("category", Comparison::Eq, Literal(0_u64.into())),
+        ])
+    } else if operation == 21 {
+        query
+            .filter_fields("id", Comparison::Eq, "category")
+            .filter("category", Comparison::Eq, 0_u64)
     } else if matches!(operation, 12 | 13) {
         query.order_groups(GroupOrder::AggregateDescending)
     } else {
@@ -96,7 +106,7 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
         ),
-        0 | 18 | 19 => query.start_count(
+        0 | 18..=21 => query.start_count(
             &mut jobs,
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
@@ -206,7 +216,7 @@ fn job_advance(
         11 => query
             .resume_max::<Amount>(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
             .map(|s| progress(s, |value| value.map(|r| r.amount.to_string()))),
-        0 | 18 | 19 => query
+        0 | 18..=21 => query
             .resume_count(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
             .map(|s| progress(s, |n| Some(n.to_string()))),
         3 | 14 | 15 => query

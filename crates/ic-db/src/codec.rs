@@ -18,6 +18,17 @@ pub const MAX_ROW_BYTES: usize = 4096;
 // A durable contract bound, independent of any future supplier API expansion.
 pub(crate) const MAX_PRINCIPAL_BYTES: usize = 29;
 
+/// Read the length prefix of a Text, Blob or collection span already validated by inspect_fields.
+pub(crate) fn validated_length(span: &[u8], optional: bool) -> Option<u32> {
+    if optional && span[0] == 0 {
+        return None;
+    }
+    let value = &span[usize::from(optional)..];
+    Some(u32::from_le_bytes(
+        *value.first_chunk::<4>().expect("validated length prefix"),
+    ))
+}
+
 pub struct Encoder {
     bytes: Vec<u8>,
     budget: Budget,
