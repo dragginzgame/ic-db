@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.10] - Unreleased
+## [0.23.10] - 2026-11-18
 
 ### 🗄️ Database handles
 
