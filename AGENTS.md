@@ -10,9 +10,10 @@ This overlay owns local authority, product boundaries and qualification choices.
   preserve committed and uncommitted work, releases and data. Research is read-only;
   edits, commits, pushes, merges, releases or deployments require an explicit exception or lift.
   Canic is also a read-only research input unless separately authorized.
-- Requested releases include delivery to `dragginzgame/ic-db` on `main` and
+- A request to deploy, ship or release IC DB authorizes delivery to
+  `dragginzgame/ic-db` on `main` and
   publication of `ic-db-macros` and `ic-db` to crates.io at the tagged version.
-  Complete registry delivery with `make publish` after tag verification and
+  Proceed directly to `make publish` after tag verification and
   verify both registry versions before reporting completion. Keep the CLI and
   qualification workspace unpublished. Live-canister deployment, IcyDB feature
   retirement and runtime migration remain excluded. A hard cut never authorizes deleting retained data.
