@@ -1340,6 +1340,24 @@ is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
 
+An ordinary indexed read validates the complete owner row and its membership
+in the visited index before residual filtering. Frozen IcyDB’s integrity
+verifier derives the expected physical key for one index from the owner;
+mutation preparation separately checks old membership across affected indexes.
+Its regression cases distinguish a missing owner from a decodable owner with
+a divergent key. [Verifier](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/integrity/derived/mod.rs#L441)
+· [Regression cases](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/session/tests/derived_integrity.rs#L274).
+
+IC DB compares the visited entry’s namespace, encoded components and owner suffix
+directly. Writes and reads share component framing checks. Reads still derive
+the component bytes of other indexes on the row and enforce the 512-byte
+complete-key limit, including the suffix on non-unique indexes. Only writes
+and maintenance operations that need physical keys assemble the full keys.
+An ordinary query checks membership for the visited entry; verifying the
+existence of every expected entry belongs to complete collection validation.
+The [three/eight-index listing measurement](../../qualification/README.md#ordered-document-prefix-listing-0234-worktree)
+records both the cost of additional indexes and the effect of this change.
+
 Bounded Blob fields support exact equality/range comparisons, indexes, ordering,
 DISTINCT, grouping, and synchronous/retained min/max. Operands are borrowed
 `IndexValue::Blob(&[u8])` (or slices through `Into`), never coerced from Text.
@@ -1372,8 +1390,12 @@ validate stored rows/indexes or detect an arbitrary well-formed counter corrupti
 name in the admitted schema. The CLI uses it for every listed entity; unknown
 names refuse. Typed calls retain full type-contract admission. This adds no
 dynamic query frontend, per-entity dispatch registry or persisted representation.
-Fluent `count()` retains its bounded, row-validating query semantics, including
-filters. Prefix metadata counts remain unimplemented. A work limit is never
+Fluent `count()` admits the request before reading maintained cardinality for an
+unfiltered entity, counting physical index entries for a fully covered literal
+equality prefix with complete membership, or executing the remaining predicates
+against rows. Index scans retain the work budget. Metadata and index-only counts
+trust the corresponding stored state. Explicit `count_validated()` checks the
+visited rows and their selected index entries. Prefix metadata counts remain unimplemented. A work limit is never
 silently reinterpreted as a partial exact result.
 
 Fluent Rust builders construct one admitted operation representation. There is
@@ -1921,6 +1943,14 @@ Insert, replace/update and delete lower into one concrete prepared batch of row
 and derived-index changes. Read required current rows once, validate types and
 constraints, calculate changes, then commit. Distinct user commands retain their
 semantics; they do not each get a staging/validation engine.
+
+A changed row retains each index entry whose complete key and owner stay identical.
+Preparation still admits all new keys and checks the stored owner of every old
+entry. A retained unique value stays occupied throughout final-state validation.
+Field-only edits still advance the entity revision. This adopts frozen IcyDB’s
+unchanged-membership rule while retaining IC DB’s existing-owner check.
+[Legacy mutation planner](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/index/plan/mod.rs#L270) ·
+[Matched Document edits](../../qualification/README.md#document-replacement-costs).
 
 Each entity's existing metadata record holds revision and row count together.
 Preparation checks the final net insert/delete delta once per changed entity;
@@ -2496,8 +2526,15 @@ be present. An empty needle matches any present value. These checks are
 residual because the needle varies by row. Two absent values compare equal; ordering requires both values.
 The scanner compares the two row components under the usual candidate budget.
 Both fields participate in DISTINCT class admission and continuation identity.
-The fixture CLI passes `--compare LEFT OP RIGHT` to this builder for both
-`db query` and `db aggregate`, including each retained resume.
+The fixture CLI accepts `--text FIELD OP VALUE` for a text literal (including
+an empty string), `--bool FIELD true|false` for Boolean equality, and
+`--compare LEFT OP RIGHT` for a field comparison. Fixing `published` lets an
+ordered Document title listing seek a literal prefix on `(published, title)`.
+The [two-page PocketIC comparison](../../qualification/README.md#ordered-document-prefix-listing-0234-worktree) checks candidate counts, tied titles and continuation cost.
+Both `db query` and `db aggregate` pass these filters to the fluent builder,
+including on each retained resume. Document queries project `title` and
+optional `note` through typed `fetch_as` records. The output-byte limit
+applies to the encoded projection.
 The installed-Wasm retained-count witness scans two candidates per call.
 Changing only the right field refuses with `InvalidJob`; that refusal and a
 trapped advance each preserve stable memory byte for byte. After a same-code
@@ -2517,6 +2554,20 @@ This keeps the two-field admission check from frozen IcyDB `6d421e3`
 
 `Contains` on a stored list or set tests exact member equality for elements
 supported by the scalar key codec, including scalar newtypes and unit enums.
+The needle may also come from another top-level field on the row. This uses
+the same field type compatibility rules as scalar field comparisons, applied
+to the element type. An absent needle is a nonmatch. The right-hand field
+participates in cursor and job identity just as it does for scalar comparisons.
+For example, a list of `StartedAt` timestamps accepts a `StartedAt` field as
+its needle. An `ExpiresAt` field is refused even with the same underlying
+encoding. A unit-enum literal must match the complete enum contract; changing
+only Rust declaration order preserves that contract. The installed Wasm
+fixture checks each enum variant against a stored set after a trapped
+replacement and a same-code upgrade. A variant present only in a neighboring
+map is a nonmatch. Replacing the set with an empty set removes all matches.
+A native grouped-count test reopens after 512 of 520 candidates, rejects a
+literal substituted for the field with the checkpoint intact, and counts three
+matching rows across two groups. Each matching list contains the needle twice.
 An absent or empty container has no matching member. Text and Blob members are
 compared whole; scalar Text and Blob fields retain byte-substring semantics.
 The row decoder validates the complete container first. The residual predicate
@@ -2667,6 +2718,19 @@ continuation byte, so searching the unframed comparison keys preserves literal
 substring semantics. Native tests compare with Rust strings, including long
 repetitive inputs and escaped NULs. Existing row/operand limits bound each search;
 no search cache, compiled pattern or persisted search state is introduced.
+
+The maintainer has deferred a restriction on which queries may search inside
+Text values. The current fluent and fixture APIs still admit substring scans.
+The eligibility rule remains open. Exact list and set membership follows the
+separate contract above.
+
+The `literal_text_scan_cost` PocketIC probe counted matches across 256 documents
+with 32-byte titles. Every case fetched all 256 rows. The unfiltered fluent
+count used 3,880,082 instructions. Exact equality used 4,692,494, and substring
+matching used 4,860,382 with a one-byte needle or 5,021,192 with a 32-byte
+needle. All three filtered counts matched only the last row. These figures cover
+database open through result formatting inside the measurement endpoint. Larger
+text fields, multiple predicates and other access paths need separate evidence.
 
 This retains frozen IcyDB `6d421e3`'s full-child admission from
 `db/query/predicate/validate.rs` and OR short-circuit semantics from
@@ -2898,7 +2962,7 @@ The first counting terminals are synchronous `count()` and
 `Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
 include every matching row; an absent group key is a group, not a discarded
 operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
-`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. Reaching the work limit refuses the whole count. The operation adds no stored metadata or write work.
+`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. Reaching the work limit refuses the whole count. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
 
 `count_field("field")` counts present values of any top-level stored type,
 including present empty blobs/collections. It reads validated presence tags from
@@ -4151,8 +4215,7 @@ read/modify/replace adds about 0.20% instructions. Native and Wasm probes cover
 selected refusal, rollback, same-format copy and executable-reopen boundaries.
 The maintainer subsequently authorized adoption as a format hard cut for 0.19.
 It inherits legacy's fail-closed metadata lesson, not its online builder,
-generation/folding or general statistics machinery. Current row-validating
-`count` semantics remain unchanged. No old-format converter is required for this
+generation/folding or general statistics machinery. That release retained row validation for fluent counts. No old-format converter is required for this
 cut; earlier formats refuse intact. The adopted physical format versions all
 live/frozen/copy records instead of changing the schema fingerprint. Prefix
 counts require their own bounded storage/write-fan-out decision;

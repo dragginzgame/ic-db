@@ -405,6 +405,33 @@ fn named_list_reuses_its_bound_and_scalar_wrappers_keep_identity_after_reopen() 
         db.query::<Event>().fetch_as::<WrongClock>(),
         Err(Error::InvalidQuery)
     ));
+    // Both fields store timestamps. Only the StartedAt field is a valid
+    // same-row needle for Starts, even when the collection is empty.
+    for field in ["history", "previous"] {
+        let query = || db.query::<Event>();
+        assert!(matches!(
+            query()
+                .filter_fields(field, Comparison::Contains, "expires")
+                .count(),
+            Err(Error::InvalidQuery)
+        ));
+        assert_eq!(
+            query()
+                .filter_fields(field, Comparison::Contains, "started")
+                .count()
+                .unwrap()
+                .value,
+            0
+        );
+    }
+    assert_eq!(
+        db.query::<Event>()
+            .filter("history", Comparison::Contains, &at(5))
+            .count()
+            .unwrap()
+            .value,
+        1
+    );
     row.previous = Some(Starts(vec![at(0), at(1), at(2)]));
     assert!(matches!(row.encode(), Err(Error::Limit)));
     row.previous = None;

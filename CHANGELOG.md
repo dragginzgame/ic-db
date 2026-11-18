@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.23.4] - Unreleased
+
+### ➕ Added
+
+- `.filter_fields("allowed_roles", Comparison::Contains, "requested_role")`
+  checks a row’s requested role against its own list or set. Duplicate members
+  select the row once. An absent role or collection yields no match.
+
+- In the local fixture, `--text FIELD OP VALUE` passes a text literal to
+  fluent filtering. Both query pages and retained aggregates accept it.
+
+  ```sh
+  db query Document --text title eq 'First document' --select id
+  db aggregate Document --text title ends-with document --select count --work 1
+  ```
+
+- `db query Document` accepts `--select title` and `--select note`. The
+  output budget counts the encoded field. An absent note displays as `—`.
+
+  ```sh
+  db query Document --text title contains doc --select title --bytes 18
+  db query Document --select note --distinct --bytes 1
+  ```
+
+- `--bool FIELD true|false` adds an exact Boolean filter to fixture queries
+  and aggregates. For an ordered Document listing, specifying `published` lets
+  the engine seek a title prefix in the existing compound index.
+
+  ```sh
+  db query Document --bool published false --text title starts-with First --order-by title --select title
+  ```
+
+### 🔧 Changed
+
+- Fluent `.count()` automatically uses maintained entity cardinality, a fully
+  covered equality index prefix, or row execution. Use `.count_validated()`
+  when checking the integrity of visited rows and selected index entries.
+
+  ```sh
+  db query Entry --select count --work 1
+  db query Entry --category 1 --select count
+  ```
+
+- Updated Toko Tooling to 0.45.5 in both workspaces and grouped the root
+  dependency catalog by its production and tooling uses.
+
 ## [0.23.3] - 2026-11-18
 
 ### ➕ Added

@@ -314,7 +314,7 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
                 category,
             );
         }
-        match query.count() {
+        match query.count_validated() {
             Ok(result) => Some(result.value),
             // Explicit work refusal, never a successful partial count.
             Err(Error::Limit) => None,

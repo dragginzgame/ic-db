@@ -196,7 +196,10 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     drop(raw);
     let db = Database::open(h.open_memory(&key("test.source.v1")).unwrap(), schema()).unwrap();
     assert_eq!(db.cardinality::<Row>().unwrap(), 1);
-    assert!(matches!(db.query::<Row>().count(), Err(Error::Corrupt)));
+    assert!(matches!(
+        db.query::<Row>().count_validated(),
+        Err(Error::Corrupt)
+    ));
 }
 #[test]
 fn copied_counts_resume_and_validate_before_publication() {

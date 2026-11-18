@@ -247,6 +247,7 @@ enum Command {
         /// category,count or category,count:FIELD. Field counts exclude absence.
         /// category,distinct-count:amount or category,distinct-count:category for Entry;
         /// entry_id,distinct-count:note for Document. Distinct tuples include absence.
+        /// title or note projects a single Document text field.
         /// exists for any entity: one boolean, stopping at the first match.
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
@@ -300,6 +301,12 @@ struct FilterArgs {
     /// Compare two fields using eq, ne, lt, le, gt or ge. Text and Blob also accept starts-with, ends-with and contains.
     #[arg(long, num_args=3, value_names=["LEFT", "OP", "RIGHT"], action=clap::ArgAction::Set)]
     compare: Vec<String>,
+    /// Compare a field with literal text using eq, ne, lt, le, gt, ge, starts-with, ends-with or contains.
+    #[arg(long, num_args=3, value_names=["FIELD", "OP", "VALUE"], action=clap::ArgAction::Set, allow_hyphen_values=true)]
+    text: Vec<String>,
+    /// Match a Boolean field against true or false.
+    #[arg(long = "bool", num_args=2, value_names=["FIELD", "VALUE"], action=clap::ArgAction::Set)]
+    boolean: Vec<String>,
     /// Compare UTF-8 bytes, Blob bytes or collection items using eq, ne, lt, le, gt or ge.
     #[arg(long, num_args=3, value_names=["FIELD", "OP", "N"], action=clap::ArgAction::Set)]
     length: Vec<String>,
@@ -322,15 +329,15 @@ struct FilterArgs {
 }
 impl FilterArgs {
     fn into_filters(self) -> Result<RowFilters, String> {
-        fn triple(args: Vec<String>) -> Result<Option<[String; 3]>, String> {
+        fn operands<const N: usize>(args: Vec<String>) -> Result<Option<[String; N]>, String> {
             if args.is_empty() {
                 return Ok(None);
             }
             args.try_into()
                 .map(Some)
-                .map_err(|_| "expected three filter arguments".into())
+                .map_err(|_| format!("expected {N} filter arguments"))
         }
-        let length = match triple(self.length)? {
+        let length = match operands(self.length)? {
             Some([field, op, n]) => Some((
                 field,
                 op,
@@ -338,6 +345,15 @@ impl FilterArgs {
                     .map_err(|_| "--length requires an unsigned 32-bit length")?,
             )),
             None => None,
+        };
+        let boolean = match operands(self.boolean)? {
+            None => None,
+            Some([field, value]) => Some((
+                field,
+                value
+                    .parse::<bool>()
+                    .map_err(|_| "--bool requires true or false")?,
+            )),
         };
         Ok(RowFilters {
             payload: [
@@ -348,7 +364,9 @@ impl FilterArgs {
                 self.payload_contains,
             ]
             .map(|arg| arg.map(|v| v.0)),
-            compare: triple(self.compare)?,
+            compare: operands(self.compare)?,
+            text: operands(self.text)?,
+            boolean,
             length,
             present: self.present,
             absent: self.absent,

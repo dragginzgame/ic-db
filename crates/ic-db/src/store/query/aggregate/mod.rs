@@ -363,6 +363,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
+    /// Uses maintained cardinality for unfiltered input and physical index keys for
+    /// covered equality prefixes. Other predicates use row execution. Use
+    /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be observed before `work_limit` is reached; an exact-boundary
     /// scan can conservatively refuse. Use `start_count`/`resume_count` for retained work.
@@ -373,12 +376,36 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn count(self) -> Result<Aggregate<u64>, Error> {
+        if self.request.bytes < 8 {
+            return Err(Error::RowTooLarge);
+        }
+        let mut plan = self.aggregate_plan(None, false)?;
+        if self.request.predicates.is_empty() && self.request.index.is_none() {
+            return Ok(Aggregate {
+                value: self.db.cardinality::<E>()?,
+                examined: 0,
+                fetched: 0,
+                output_bytes: 8,
+            });
+        }
+        if super::order::count_prefix(E::SCHEMA, &self.request, &mut plan)? {
+            return self.count_keys(&plan);
+        }
+        let reducer = self.count_reducer(None)?;
+        self.scalar_count_value(&plan, reducer)
+    }
+
+    /// Count by validating each visited row, including its selected index entry.
+    /// # Errors
+    /// Returns the same admission and resource errors as [`Self::count`], and
+    /// reports corruption encountered during traversal.
+    pub fn count_validated(self) -> Result<Aggregate<u64>, Error> {
         self.scalar_count(None)
     }
 
     /// Count physical entries in the range selected by `using_index` and its
     /// leading operands. This reads neither index values nor owner rows. A
-    /// dangling index entry counts as one. Use [`Self::count`] to validate rows.
+    /// dangling index entry counts as one. Use [`Self::count_validated`] to validate rows.
     /// Like other scalar counts, the row limit does not truncate the input.
     /// # Errors
     /// Requires an explicit index. Row predicates, ordering, cursors, grouping
@@ -394,7 +421,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Err(Error::RowTooLarge);
         }
         let plan = self.aggregate_plan(None, false)?;
-        let bounds = super::range::bounds(E::SCHEMA, &self.request, &plan)?;
+        self.count_keys(&plan)
+    }
+
+    fn count_keys(&self, plan: &Plan<'_>) -> Result<Aggregate<u64>, Error> {
+        let bounds = super::range::bounds(E::SCHEMA, &self.request, plan)?;
         let examined = bounds.map_or(0, |range| {
             self.db.map.range(range).take(self.request.work).count()
         });

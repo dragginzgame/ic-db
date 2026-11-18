@@ -244,6 +244,9 @@ The frozen IcyDB source/revision and sibling Canic integration are unchanged.
 
 ## Comparison with frozen IcyDB
 
+The [November 18 three-engine performance matrix](#three-engine-performance-matrix-0234)
+adds a current PocketIC rerun and matched native timings for SQLite.
+
 Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
 IcyDB `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (package 0.310.2).
 Keep measured comparisons, historical reference points and unmeasured gaps
@@ -316,7 +319,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
-| Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
+| Exact entity/prefix counts | Automatic whole-entity metadata, covered equality-prefix key scans, or row execution. Explicit owner validation remains available. | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | The measured paths predate automatic selection. Its dispatch cost is unmeasured. [Prefix comparison](#prefix-count-paths-0234), [adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Storage 0.78.0 rerun checks 153 attempted batches, sparse listing, jobs, six upgrades and interrupted maintenance on the same records. [Receipt](#application-workload-and-wasm-growth-on-storage-078) | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
@@ -2131,7 +2134,7 @@ The count workload ran on IC DB 0.22.2 (`97e49f2`) with Storage 0.78.0 and froze
 
 IC DB reads maintained metadata for the whole-entity count. For a category it traverses an index and checks the matching rows. IcyDB maintains category counts during writes. A separate IC DB profile on category 0 measured 531,547 instructions to open the database and 15,466,901 to execute the count. Traversing the raw index cost 1,546,322 instructions. Adding owner-row fetches to that control raised it to 13,356,926. Fetching matching rows accounts for the largest measured increment.
 
-The explicit fluent `count_index_entries()` terminal subsequently ran in the same count-profile canister as the validated count. With 129 matches at 512 rows, execution took 1,226,592 instructions versus 15,467,227. Opening added 531,555 to each, giving 1,758,147 versus 15,998,782 overall. Both returned 129 before and after upgrade. The native corruption witness counts a deliberately dangling entry and verifies ordinary `count()` refuses it. Reproduce using `IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/index-entry-count-078" make m2-count-profile` (modes 5 and 1).
+The explicit fluent `count_index_entries()` terminal subsequently ran in the same count-profile canister as the validated count. With 129 matches at 512 rows, execution took 1,226,592 instructions versus 15,467,227. Opening added 531,555 to each, giving 1,758,147 versus 15,998,782 overall. Both returned 129 before and after upgrade. The native corruption witness counts a deliberately dangling entry and verifies `count_validated()` refuses it. Reproduce using `IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/index-entry-count-078" make m2-count-profile` (modes 5 and 1).
 
 The matched Wasm artifacts were 310,716 bytes (285,487 code) for IC DB and 3,115,697 bytes (3,006,452 code) for IcyDB. The two evidence directories contain the source revision and diff, lockfile, Wasm, hashes and `results.log`. To reproduce from the repository root:
 
@@ -4428,3 +4431,274 @@ checked against the actual committed producer rather than copying its executor.
 Producer revision/artifact hashes remain those in `target/evidence/canic-inspection/`;
 `http-client-listing.log` records the extended run. No engine, format or performance
 claim changes, and no write-capable client or automatic retry is introduced.
+
+### Ordered Document prefix listing (0.23.4 worktree)
+
+The PocketIC probe lists published documents whose titles start with
+`special-`, projecting IDs two at a time. Among 260 documents, three match.
+Two matching titles tie across the page boundary. The data also includes an
+unpublished prefix match and published titles on both sides of the range.
+
+| Traversal | Page 1 fetched / instructions | Page 2 fetched / instructions | Total instructions |
+| --- | ---: | ---: | ---: |
+| Default primary order | 258 / 4,264,296 | 2 / 582,045 | 4,846,341 |
+| Title order via `(published, title)` | 2 / 999,428 | 1 / 833,248 | 1,832,676 |
+
+Both requests used the same filters, 512-candidate budget and output shape.
+Primary order coincides with title/ID order for these three matches. Both
+returned IDs 257 and 258, then 259. The second indexed page cost more than the
+primary continuation on this fixture. The overall saving came from avoiding
+the long first scan. Instructions cover open, admission, traversal and result
+formatting inside the measurement endpoint. Wasm SHA-256
+`9500efde1f2f027b144ff282be2d0fbdae001e8e05c7e771c3339baaa0db536e`.
+
+Reusing the primary-key position resolved during admission and resolving each
+index component field once during row validation gave the following matched rerun.
+The same page assertions passed, including both owner fetches on the first
+indexed page and one on the continuation.
+
+| Traversal | Page 1 instructions | Page 2 instructions | Two-page change |
+| --- | ---: | ---: | ---: |
+| Default primary order | 4,166,815 | 581,340 | −2.03% |
+| Title order via `(published, title)` | 989,279 | 828,203 | −0.83% |
+
+Rerun Wasm SHA-256
+`95f441339f33db636a7ba66df4c42ade54a450991764194414ef0b548b45d963`.
+
+A second fixture build added five single-field, non-unique Document indexes
+(`score`, `note`, `previous_score`, `priority`, `entry_id`) after the three
+existing declarations. The same probe against fresh backing returned identical
+IDs, cursor boundaries and candidate/fetch counts.
+
+| Traversal, both pages | Three indexes | Eight indexes |
+| --- | ---: | ---: |
+| Default primary order | 4,748,155 | 5,186,135 |
+| Title order via `(published, title)` | 1,817,482 | 2,113,443 |
+
+These are whole-call instruction counts. Additional declarations and stored
+entries also affect open/admission and physical map layout. The difference
+does not isolate key reconstruction. To repeat, add the five declarations to
+the qualification schema in a disposable checkout, then run the same commands
+below. Eight-index Wasm SHA-256
+`326417746c59d9a0f3007806d855f037ed01d6d2f795b377f7b36054e80c2584`.
+
+Comparing the visited key in place retained every page assertion. Both
+fixtures used the same component framing checks and 512-byte key bound.
+
+| Two-page traversal | Three indexes, before → after | Eight indexes, before → after |
+| --- | ---: | ---: |
+| Default primary order | 4,748,155 → 4,751,337 | 5,186,135 → 5,189,317 |
+| Title order via `(published, title)` | 1,817,482 → 1,797,750 | 2,113,443 → 2,053,352 |
+
+The indexed reads saved 1.09% and 2.84% respectively. The primary control
+increased by 3,182 instructions in each build (under 0.07%). These totals
+cover two query calls; write costs were not measured in this comparison.
+Wasm SHA-256 was `4c02ba76ef91fd6cfe13651653d449f5a6970640636bf44d8672916af476c234`
+for three indexes and `efd4826849f3d448788c0c5f6a2fe13dd4b1a92e96a87af4d0897d8fbed9f365`
+for eight.
+
+```sh
+make m2-sort-costs-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/sort-costs.wasm" \
+  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml \
+  --locked -p ic-db-m0-rollback-driver --test console_aggregates \
+  literal_text_scan_cost -- --ignored --nocapture
+```
+
+#### Write cost of visited-index validation
+
+The existing `write_envelope` probe ran on fresh PocketIC instances against the
+same pre-change and post-change eight-index fixture binaries identified above
+(SHA-256 prefixes `32641774` and `efd48268`). This workload uses `EnvelopeRow`,
+which has eight indexes in both binaries. Each successful call operates on 32
+rows. Instructions include database open, batch construction and commit.
+Cycles are the canister balance change across the whole update call.
+
+| Operation | Instructions before | Instructions after | Cycles before | Cycles after |
+| --- | ---: | ---: | ---: | ---: |
+| Insert | 144,470,624 | 144,470,031 | 151,483,083 | 151,482,490 |
+| Identical replacement | 25,150,445 | 25,149,712 | 32,162,762 | 32,162,029 |
+| Changed replacement | 329,113,557 | 329,112,056 | 336,125,991 | 336,124,490 |
+| Delete after upgrade | 190,807,052 | 190,806,389 | 197,820,137 | 197,819,474 |
+
+Successful write instruction costs differed by less than 0.003%. The 33-row
+and oversized-row refusals each used 35 additional instructions and 35 additional
+cycles. Each of the eight typed index-prefix reads returned the same 32 IDs and
+revision, with instruction reductions ranging from 4.26% to 4.87%. Both runs
+passed the independent raw row/index checks and verified byte-for-byte backing
+preservation after refusal, identical replacement, a post-commit trap and upgrade.
+
+Run the following against each retained Wasm binary with
+`IC_DB_M1_RECORDS_WASM` set to its path:
+
+```sh
+bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml \
+  --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture
+```
+
+### SQLite reference checks
+
+Run `make m2-sqlite-reference` for native differential checks. The same suite
+runs through `make m2-queries`. The qualification-only crate seeds an in-memory
+SQLite database and IC DB with the same rows. SQLite is bundled with the test
+crate and introduces no product or CLI dependency.
+
+- Compare both directions of a compound-index listing against SQLite's ordered
+  IDs. Replay every observed cursor against the expected suffix, including ties,
+  sparse empty pages and a matching row deferred by the output-byte limit.
+- Compare grouped sums and non-null counts with SQLite using exact integer
+  cents. Hand-calculated IC DB averages at scale two are 1.24, 1.26 and absent.
+  Check synchronous results and reopen both stores between retained steps with
+  work limits of one, three and five candidates.
+
+The frozen predecessor also checked cursor suffixes and used a native SQLite
+reference for shared semantics. [IcyDB continuation regression](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/session/tests/cardinality_tiebreak/seek_intersection.rs#L195) ·
+[IcyDB reference tests](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/session/tests/tier_c_reference.rs#L257).
+
+### Document replacement costs
+
+Matched PocketIC runs edited the seeded Document through the ordinary
+`replace_document` update on the three-index fixture. Each run checked the
+stored fields and one revision advance after every edit. The balance delta
+covers the update call, with verification reads outside the interval.
+
+| Changed fields | Index entries changed | Cycles before | Cycles after |
+| --- | ---: | ---: | ---: |
+| Note | 0 | 8,648,870 | 7,894,293 |
+| Title | 1 | 8,656,281 | 8,174,417 |
+| Title, score and priority | 3 | 8,651,964 | 8,649,828 |
+
+Before Wasm SHA-256 `4c02ba76ef91fd6cfe13651653d449f5a6970640636bf44d8672916af476c234`;
+after `72079ba445366c2e698d328001b4a8a72389385ce83eb32c8711e4554cf3f7c4`.
+The 32-row write-envelope probe on both artifacts verified raw index and row
+bytes, refusal, trap rollback, upgrade and deletion. Inserts and identical
+replacements used the same instructions in both runs.
+
+```sh
+make m2-sort-costs-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/sort-costs.wasm" \
+  bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test console_aggregates document_replacement_costs -- --ignored --nocapture
+```
+
+### Three-engine performance matrix (0.23.4)
+
+[Full 1,188-row CSV](measurements/0.23.4-three-engine.csv), measured November 18, 2026.
+The benchmark compares the IC DB worktree, frozen IcyDB 0.310.2 at `6d421e3`
+and bundled SQLite 3.54.1. All use the same three integer fields, ID primary key
+and secondary index on (category, ID). Balanced and skewed data each run at 32,
+128 and 511 rows, with the distribution and filter parameters specified in the
+[broad query matrix](#broad-query-matrix-019).
+
+**Balanced 511-row fixture.** Native columns are median microseconds. IC columns are settled instructions in millions. Inserts were sampled while growing from 128 to 511 rows.
+
+| Operation | IC DB µs | IcyDB µs | SQLite µs | IC DB M instr. | IcyDB M instr. |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Insert one row | 22.52 | 170.25 | 10.12 | — | — |
+| Replace amount only | 22.05 | 154.04 | 13.65 | — | — |
+| Replace category and amount | 30.00 | 208.63 | 13.50 | — | — |
+| Primary hit (ID 255) | 3.19 | 23.23 | 2.25 | 0.64 | 1.28 |
+| Primary miss | 3.67 | 22.04 | 1.98 | 0.74 | 1.25 |
+| First ten in category 3 | 31.46 | 121.23 | 10.61 | 1.89 | 5.00 |
+| Missing category listing | 3.06 | 46.69 | 5.65 | 0.80 | 2.16 |
+| Whole-entity count | 2.66 | 28.31 | 1.41 | 0.63 | 1.42 |
+| Category 0 count (IC DB validates owners) | 369.62 | 32.88 | 5.64 | 15.29 | 1.50 |
+| Missing category count | 3.65 | 32.19 | 2.88 | 0.83 | 1.51 |
+| Ascending category 3, minimum 950, first eight | 376.06 | 402.62 | 28.39 | 15.43 | 15.11 |
+| Descending category 3, same filter | 389.79 | 404.26 | 29.21 | 16.00 | 15.35 |
+| Compound order, minimum 500, first eight | 50.81 | 168.33 | 17.76 | 2.38 | 5.85 |
+| Sort category 0 by amount, minimum 500, first eight | 162.53 | Refused | 32.12 | 7.67 | Refused |
+| Group count | 191.52 | 1,104.04 | 81.69 | 8.72 | 40.68 |
+| Group sum | 195.75 | 1,252.09 | 88.51 | 8.83 | 44.30 |
+| Group minimum | 208.94 | 1,190.20 | 93.47 | 9.34 | 41.94 |
+| Group maximum | 206.34 | 1,189.85 | 90.94 | 9.33 | 41.94 |
+
+For prefix cardinality with no row predicate, the [matched count paths](#prefix-count-paths-0234)
+also measure IC DB’s `count_index_entries()` on these populations.
+
+**Reading the CSV.** Each population/distribution has 195 read cases and three
+writes. Native columns are median nanoseconds per call. The last four columns
+are PocketIC instructions before and after upgrade. Blank cells have no sample.
+Legacy refusal 174 means its fluent page API refused a sort requiring
+materialization. The result from each successful native query was compared with
+SQLite; the independent PocketIC suite checked results against source tuples.
+
+- `lookup-ID`, `prefix-C` and `count-C` are primary lookup, first ten indexed
+  rows and exact count respectively. `all` counts the full entity. The IC DB
+  populated-category count verifies owner rows; legacy maintains prefix counts.
+- `listing-M-cC-minV-limitN` filters by minimum amount. Modes 0 and 1 list the
+  category by ID ascending and descending. Mode 2 lists all categories in
+  category/ID order. Mode 3 sorts the category by descending amount, then ID.
+- `group-M-cC-minV` groups by category after filtering. Modes 0 through 3 are
+  count, sum, minimum and maximum. The `all` category includes every row.
+- Writes measure single-row insert, amount-only replacement and replacement of
+  both category and amount. Each replacement was read back before restoring
+  the original row outside the timing interval.
+
+**Native method.** Release profile, Rust 1.100.0, Linux x86-64, AMD Threadripper
+7970X. The engines used in-process memory backing and an existing database or
+connection. Legacy entered its request/session boundary on each call and
+explicitly settled startup/recovery after writes. SQLite executed an autocommit
+write or prepared, ran and collected a query per call. SQL text construction
+was outside the interval. IC DB and legacy used their typed APIs. Reads had one
+correctness warm-up and nine timed samples per case, rotating engine order.
+Replacements used nine timed samples. Insert medians cover the rows added
+between successive population sizes. Native timings include result collection
+and exclude transport, result comparison and simulated IC execution. The write
+times cover memory-backed operations; disk sync and power-loss durability were
+outside the workload.
+
+**PocketIC method.** Both IC engines ran 4,680 reads in total. Among 1,908
+successful pairs, IC DB used fewer instructions in 1,668 and legacy in 240.
+There were 432 legacy sort refusals. At 511 skewed rows, counting category
+zero (415 matching owners) took 48,723,250 IC DB instructions and 1,555,756
+legacy instructions before upgrade. SQLite ran natively only. The IC DB query
+host measured 357,338 uncompressed Wasm bytes versus 3,297,394 for legacy.
+Initial startup took one call and 7,382,507 cycles for IC DB versus three
+calls and 32,850,054 cycles for legacy on this host. These figures cover the
+selected query endpoints and startup policy. Retained aggregates, migration,
+filesystem-backed SQLite and canister-scale concurrency were outside this run.
+The [matched write measurements](#recorded-matched-measurements) retain their
+own workload and revision.
+
+Reproduce from the repository root:
+
+```sh
+export IC_DB_QUERY_MATRIX_DIR="$PWD/qualification/target/evidence/query-matrix-0234"
+make m2-query-matrix
+IC_DB_NATIVE_MATRIX_CSV="$IC_DB_QUERY_MATRIX_DIR/native.csv" \
+  cargo test --release --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-icydb-baseline-canister --test native_matrix -- --ignored --nocapture
+```
+
+The native CSV and the PocketIC `queries.csv` share the profile, population
+and case keys. The Wasm SHA-256 values for this run are
+`834ab2926dfb5172239b6c5b45a274f3f2fdb2329bc9858f8ba611718019a5fc` (IC DB)
+and `72e52c1c4834e8e522168f00b047965150ade37cd2970aae3862f225739d4fac` (legacy).
+
+### Prefix count paths (0.23.4)
+
+`make m2-count-paths` runs the settled and post-upgrade count probes against
+the same 32-, 128- and 511-row distributions as the three-engine matrix.
+The IC DB profile measures both terminals in one Wasm, including database open.
+Legacy uses `execute_exact_count()` on its maintained prefix metadata. The
+driver checks exact answers against the fixture tuples and stable memory
+before and after each set of queries. [All 36 comparisons](measurements/0.23.4-prefix-counts.csv)
+
+| 511-row fixture | Matches | IC DB validated count, instructions | IC DB index-entry count, instructions | Legacy maintained count, instructions |
+| --- | ---: | ---: | ---: | ---: |
+| Balanced, category 0 | 127 | 15,313,662 | 1,742,488 | 1,501,147 |
+| Skewed, category 0 | 415 | 48,821,714 | 3,801,711 | 1,555,246 |
+| Skewed, category 3 | 32 | 4,677,749 | 1,032,490 | 1,562,617 |
+| Skewed, missing category | 0 | 829,540 | 823,634 | 1,560,949 |
+
+For 415 matches the index-entry path saves 92.2% of the validated count's
+instructions, with 2.44 times the instructions of legacy’s maintained count.
+The former visits one index entry per match; the latter pays counter maintenance
+on writes. Both IC DB paths use a 512-candidate cap here. The native
+`index_entry_counts_are_bounded_and_independent_of_owner_rows` regression also
+checks exact-boundary refusal and a dangling entry. The different benchmark
+Wasm and timing boundary account for slightly different absolute readings
+from the broad matrix. IC DB Wasm SHA-256
+`7a2e25d1f090aa59b8e5261c0b33d4b13c0fa86a79cbb2e27985d68e1de6dadc`;
+legacy `88fc1aa3a228ecde1458842a461c6a19612c5b9cf630e7899b8debfe599c491c`.

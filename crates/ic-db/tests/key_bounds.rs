@@ -15,7 +15,7 @@ use ic_storage::{
     )
 )]
 struct TextKey {}
-#[entity(pk(field="id"),index(fields=["a","b"]),fields(
+#[entity(pk(field="id"),index(field="a"),index(fields=["a","b"]),fields(
     field(name="id",value(item(prim="Nat64"))),
     field(name="a",value(item(prim="Text",max_bytes=4096))),
     field(name="b",value(item(prim="Text",max_bytes=4096)))
@@ -210,5 +210,52 @@ fn no_op_cannot_admit_an_overlong_stored_after_image() {
     let mut batch = Batch::new();
     batch.replace(&row).unwrap();
     assert!(matches!(db.commit(batch), Err(Error::Limit)));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn selected_index_read_checks_unrelated_complete_key_bound() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let slot = StableKey::parse("test.keys.v1").unwrap();
+    let schema = || Schema::new(&[Compound::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [1; 16]).unwrap();
+    let mut row = Compound {
+        id: 1,
+        a: "x".into(),
+        b: "y".repeat(490),
+    };
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<Compound>()
+            .using_index("a", &["x".into()])
+            .count()
+            .unwrap()
+            .value,
+        1
+    );
+    drop(db);
+
+    // Keep the selected "a" entry valid. Only the unrelated "a,b" key now
+    // exceeds 512 bytes (namespace 9 + a 3 + b 493 + owner 8).
+    row.b.push('y');
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let key = [&[2][..], &Compound::ID.to_be_bytes(), &row.id.to_be_bytes()].concat();
+    assert!(raw.insert(key, row.encode().unwrap()).is_some());
+    drop(raw);
+    let before = backing.borrow().clone();
+    let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+    assert!(matches!(
+        db.query::<Compound>()
+            .using_index("a", &["x".into()])
+            .count_validated(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.index_prefix::<Compound>("a", &["x".into()], 1),
+        Err(Error::Limit)
+    ));
     assert_eq!(*backing.borrow(), before);
 }

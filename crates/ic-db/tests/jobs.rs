@@ -1065,7 +1065,7 @@ fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
     let host = host(VectorMemory::default());
     let (db, mut jobs) = create(&host, &vec![Some(7); 520], 0);
     assert!(matches!(
-        db.query::<Row>().work_limit(512).count(),
+        db.query::<Row>().work_limit(512).count_validated(),
         Err(Error::Limit)
     ));
     let count = db
@@ -3042,6 +3042,90 @@ struct PresenceRow {}
 
 #[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 12)))))]
 struct PresenceNote {}
+
+#[test]
+fn retained_collection_membership_groups_matches_across_the_synchronous_scan_limit() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let schema = Schema::new(&[PresenceRow::SCHEMA]).unwrap();
+    let (mut db, mut jobs) = create_stores(&runtime, schema.clone());
+    for start in (0..520).step_by(32) {
+        let mut batch = Batch::new();
+        for id in start..(start + 32).min(520) {
+            let flag = (id % 2) as u8;
+            let items = match id {
+                511 | 514 | 519 => Some(vec![2, flag, flag]),
+                _ if flag == 0 => None,
+                _ => Some(vec![2]),
+            };
+            batch
+                .insert(&PresenceRow {
+                    id,
+                    flag,
+                    note: None,
+                    items,
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    let query = || {
+        db.query::<PresenceRow>()
+            .filter_fields("items", Comparison::Contains, "flag")
+            .work_limit(512)
+    };
+    assert!(matches!(query().group_count::<Flag>(), Err(Error::Limit)));
+    let handle = query()
+        .start_group_count::<Flag>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query()
+        .resume_group_count::<Flag>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert_eq!(first.examined, 512);
+    drop((db, jobs, runtime));
+
+    let runtime = host(backing.clone());
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema,
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let saved = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<PresenceRow>()
+            .filter("items", Comparison::Contains, 1_u8)
+            .resume_group_count::<Flag>(&mut jobs, &handle, first.sequence, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), saved);
+    let complete = db
+        .query::<PresenceRow>()
+        .filter_fields("items", Comparison::Contains, "flag")
+        .work_limit(9)
+        .resume_group_count::<Flag>(&mut jobs, &handle, first.sequence, time(2))
+        .unwrap();
+    assert_eq!(complete.examined, 520);
+    let JobOutcome::Complete(page) = complete.outcome else {
+        panic!("eight remaining candidates should fit")
+    };
+    assert_eq!(
+        page.rows
+            .iter()
+            .map(|r| (r.key.flag, r.count))
+            .collect::<Vec<_>>(),
+        [(0, 1), (1, 2)]
+    );
+    assert!(page.next.is_none());
+}
 
 #[test]
 fn text_jobs_bind_input_and_completed_group_selection_across_reopen() {

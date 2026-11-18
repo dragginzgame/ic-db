@@ -568,7 +568,7 @@ impl<M: Memory> Database<M> {
             }
             // Admit complete after-image keys even when the row is a no-op.
             // Retain these buffers for publication instead of encoding twice.
-            let after_indexes = match &mutation.kind {
+            let mut after_indexes = match &mutation.kind {
                 Kind::Insert(_, info) | Kind::CopyInsert(_, info, _) | Kind::Replace(_, info) => {
                     index_entries(mutation.entity, info)?
                 }
@@ -592,11 +592,20 @@ impl<M: Memory> Database<M> {
                 if info.key != mutation.key {
                     return Err(Error::Corrupt);
                 }
+                let owner = info.key.encode();
                 for (key, _) in index_entries(mutation.entity, &info)? {
-                    if self.map.get(&key) != Some(info.key.encode()) {
+                    if self.map.get(&key).as_deref() != Some(owner.as_slice()) {
                         return Err(Error::Corrupt);
                     }
-                    removes.insert(key);
+                    // Same physical key and owner: leave the verified entry in place.
+                    // Its unique value remains occupied during final-state admission.
+                    if let Some(position) =
+                        after_indexes.iter().position(|(after, _)| *after == key)
+                    {
+                        after_indexes.remove(position);
+                    } else {
+                        removes.insert(key);
+                    }
                 }
             }
             *changed = true;
@@ -761,6 +770,7 @@ fn row_key(entity: u32, id: RowKey) -> StoreKey {
     id.append_to(&mut key);
     StoreKey::new(key).expect("bounded primary key fits")
 }
+const INDEX_PREFIX_BYTES: usize = 9; // namespace tag, entity handle and index handle
 fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
     let mut key = prefix(3, entity);
     key.extend(index.to_be_bytes());
@@ -813,11 +823,15 @@ fn admit_index_prefix(
     }
     Ok(prefix)
 }
-fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey, bool)>, Error> {
+// RowInfo may come from a generated entity or the shared stored-row decoder.
+fn visit_index_components(
+    entity: &EntitySchema,
+    info: &RowInfo,
+    mut visit: impl FnMut(&crate::IndexSchema, &[u8]) -> Result<(), Error>,
+) -> Result<(), Error> {
     if info.indexes.len() != entity.indexes.len() {
         return Err(Error::Corrupt);
     }
-    let mut entries = Vec::new();
     for (index, values) in entity.indexes.iter().zip(&info.indexes) {
         let Some(values) = values else {
             if index.present_only {
@@ -846,29 +860,59 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey,
         if !remaining.is_empty() {
             return Err(Error::Corrupt);
         }
+        visit(index, values)?;
+    }
+    Ok(())
+}
+
+fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey, bool)>, Error> {
+    let mut entries = Vec::new();
+    visit_index_components(entity, info, |index, values| {
         let mut key = index_prefix(entity.id, index.id);
-        key.extend(values);
+        key.extend_from_slice(values);
         if !index.unique {
             info.key.append_to(&mut key);
         }
         entries.push((StoreKey::new(key)?, index.unique));
-    }
+        Ok(())
+    })?;
     Ok(entries)
 }
 
-// Both indexed reads and reverse-reference checks must prove the physical entry
-// belongs to the decoded row, rather than trusting a valid-looking owner alone.
+// A visited entry must agree with its owner in namespace, components and suffix.
+// Unrelated entries retain their framing and size checks without building physical keys.
 fn validate_index_entry(
     entity: &EntitySchema,
     info: &RowInfo,
     owner: RowKey,
     key: &[u8],
 ) -> Result<(), Error> {
-    if info.key != owner
-        || !index_entries(entity, info)?
-            .iter()
-            .any(|(entry, _)| &entry[..] == key)
-    {
+    if info.key != owner {
+        return Err(Error::Corrupt);
+    }
+    let (header, payload) = key
+        .split_at_checked(INDEX_PREFIX_BYTES)
+        .ok_or(Error::Corrupt)?;
+    if header[0] != 3 || header[1..5] != entity.id.to_be_bytes() {
+        return Err(Error::Corrupt);
+    }
+    let mut matches = false;
+    let owner = owner.encode();
+    visit_index_components(entity, info, |index, values| {
+        let suffix = if index.unique {
+            &[][..]
+        } else {
+            owner.as_slice()
+        };
+        if INDEX_PREFIX_BYTES + values.len() + suffix.len() > crate::MAX_INDEX_KEY_BYTES {
+            return Err(Error::Limit);
+        }
+        if header[5..] == index.id.to_be_bytes() {
+            matches = payload.strip_prefix(values) == Some(suffix);
+        }
+        Ok(())
+    })?;
+    if !matches {
         return Err(Error::Corrupt);
     }
     Ok(())

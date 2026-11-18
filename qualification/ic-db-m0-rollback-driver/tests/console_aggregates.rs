@@ -707,3 +707,180 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     owned.drop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the measured-query Wasm built by make m2-sort-costs-artifact"]
+async fn literal_text_scan_cost() {
+    type Page = (
+        Vec<String>,
+        Vec<Vec<String>>,
+        Option<Vec<u8>>,
+        u32,
+        u32,
+        u32,
+    );
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    let common = "a".repeat(32);
+    let rare = format!("{}!", "a".repeat(31));
+    for start in (1..=256).step_by(8) {
+        let rows = (start..start + 8)
+            .map(|id: u64| (id, if id == 256 { &rare } else { &common }, false))
+            .collect::<Vec<_>>();
+        call::<Result<(), u8>>(pic, canister, "text_index_batch", 23, &(rows, false))
+            .await
+            .unwrap();
+    }
+    let before = pic.get_stable_memory(canister).await;
+    for (op, needle, expected) in [
+        ("", "", "256"),
+        ("eq", rare.as_str(), "1"),
+        ("contains", "!", "1"),
+        ("contains", rare.as_str(), "1"),
+    ] {
+        let filters = RowFilters {
+            text: (!op.is_empty()).then(|| ["title".into(), op.into(), needle.into()]),
+            ..Default::default()
+        };
+        let request = (
+            "Document",
+            None::<Vec<u8>>,
+            32_u32,
+            None::<u64>,
+            None::<u64>,
+            None::<u64>,
+            Vec::<String>::new(),
+            false,
+            512_u32,
+            4096_u32,
+            "count",
+            (
+                false,
+                (None::<String>, None::<String>),
+                None::<String>,
+                filters,
+            ),
+        );
+        let (page, instructions): (Result<Page, String>, u64) =
+            call(pic, canister, "measured_query", 147, &request).await;
+        let page = page.unwrap();
+        assert_eq!(page.1, [vec![expected]]);
+        assert_eq!((page.3, page.4), (256, 256));
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        eprintln!(
+            "text-scan op={op:?} needle_bytes={} instructions={instructions}",
+            needle.len()
+        );
+    }
+    // Measure identical filters and output across both pages. The fixture's
+    // primary order happens to agree with title/ID order for the three matches.
+    let rows = [
+        (255_u64, "aardvark", true),
+        (256, "zulu", true),
+        (257, "special-a", true),
+        (258, "special-b", true),
+        (259, "special-b", true),
+        (260, "special-a", false),
+    ];
+    call::<Result<(), u8>>(
+        pic,
+        canister,
+        "text_index_batch",
+        23,
+        &(rows.as_slice(), false),
+    )
+    .await
+    .unwrap();
+    let before = pic.get_stable_memory(canister).await;
+    for indexed in [false, true] {
+        let mut cursor: Option<Vec<u8>> = None;
+        for (page_number, expected) in [vec!["257", "258"], vec!["259"]].into_iter().enumerate() {
+            let filters = RowFilters {
+                boolean: Some(("published".into(), true)),
+                text: Some(["title".into(), "starts-with".into(), "special-".into()]),
+                ..Default::default()
+            };
+            let request = (
+                "Document",
+                cursor.take(),
+                2_u32,
+                None::<u64>,
+                None::<u64>,
+                None::<u64>,
+                if indexed { vec!["title"] } else { vec![] },
+                false,
+                512_u32,
+                4096_u32,
+                "id",
+                (
+                    false,
+                    (None::<String>, None::<String>),
+                    None::<String>,
+                    filters,
+                ),
+            );
+            let (page, instructions): (Result<Page, String>, u64) =
+                call(pic, canister, "measured_query", 147, &request).await;
+            let page = page.unwrap();
+            assert_eq!(
+                page.1,
+                expected.iter().map(|id| vec![*id]).collect::<Vec<_>>()
+            );
+            let examined = if indexed {
+                expected.len() as u32
+            } else {
+                [258, 2][page_number]
+            };
+            assert_eq!(
+                (page.3, page.4, page.5),
+                (examined, examined, 8 * expected.len() as u32)
+            );
+            cursor = page.2;
+            assert_eq!(cursor.is_some(), page_number == 0);
+            eprintln!(
+                "prefix-page indexed={indexed} page={} examined={examined} instructions={instructions}",
+                page_number + 1
+            );
+        }
+    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    owned.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "matched Document update-call cycle measurement"]
+async fn document_replacement_costs() {
+    type Document = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    let (mut row, mut revision): (Document, u64) = call(&pic, canister, "document", 7, &()).await;
+    for shape in ["note", "one_index", "all_three_indexes"] {
+        match shape {
+            "note" => row.1 = Some("updated".into()),
+            "one_index" => row.0.push('!'),
+            _ => {
+                row.0.push('!');
+                row.4 += 1;
+                row.3 = None;
+            }
+        }
+        let before = pic.cycle_balance(canister).await;
+        call::<Result<(), u8>>(&pic, canister, "replace_document", 8, &row)
+            .await
+            .unwrap();
+        let charged = before - pic.cycle_balance(canister).await;
+        let (stored, updated): (Document, u64) = call(&pic, canister, "document", 7, &()).await;
+        assert_eq!(stored, row);
+        assert_eq!(updated, revision + 1);
+        revision = updated;
+        eprintln!("document-replace shape={shape} cycles={charged}");
+    }
+    pic.drop().await;
+}

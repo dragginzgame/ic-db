@@ -128,6 +128,54 @@ pub(super) fn select<'a>(
     }))
 }
 
+// A key-only count can discard predicates only when the fixed prefix implies
+// every clause. Conflicting equalities, ORs and residuals use row execution.
+fn covers(request: &Request<'_>, index: &IndexSchema, values: &[IndexValue<'_>]) -> bool {
+    request.predicates.iter().all(|p| {
+        !p.or_next
+            && p.comparison == Comparison::Eq
+            && index.fields.iter().zip(values).any(|(name, value)| {
+                *name == p.field && matches!(p.operand, QueryOperand::Literal(v) if v == *value)
+            })
+    })
+}
+
+pub(super) fn count_prefix<'a>(
+    entity: &'a EntitySchema,
+    request: &Request<'_>,
+    plan: &mut super::Plan<'a>,
+) -> Result<bool, Error> {
+    if let Some((_, values)) = &request.index {
+        return Ok(plan
+            .index
+            .is_some_and(|index| covers(request, index, values)));
+    }
+    for index in entity.indexes {
+        let values: Vec<_> = index
+            .fields
+            .iter()
+            .map_while(|field| equality(request, field))
+            .collect();
+        if !covers(request, index, &values)
+            || !complete_membership(entity, index, &values, request)
+            || (index.present_only && values.contains(&IndexValue::Absent))
+        {
+            continue;
+        }
+        match admit_index_prefix(entity, index, &values) {
+            Ok(prefix) => {
+                plan.prefix = prefix;
+                plan.index = Some(index);
+                plan.fixed_components = values.len();
+                return Ok(true);
+            }
+            Err(Error::Limit) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
 // Both operands have already passed admission. For a field operand, a row
 // omitted by this sparse index can have a present or an absent counterpart.
 fn requires_presence(predicate: &Predicate<'_>, name: &str, entity: &EntitySchema) -> bool {

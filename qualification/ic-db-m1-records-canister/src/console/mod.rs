@@ -30,6 +30,8 @@ pub(super) fn hex(bytes: &[u8]) -> String {
 struct CategoryOnly {}
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct AmountOnly {}
+#[ic_db::record(fields(field(name = "title", value(item(prim = "Text", max_bytes = 32)))))]
+struct TitleOnly {}
 #[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
 pub(super) struct NoteOnly {}
 #[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
@@ -59,6 +61,8 @@ fn filter_rows<'a, E: Entity>(
     let RowFilters {
         payload,
         compare,
+        text,
+        boolean,
         present,
         absent,
         length,
@@ -73,6 +77,12 @@ fn filter_rows<'a, E: Entity>(
     }
     if let Some([left, op, right]) = compare {
         query = query.filter_fields(left, comparison(op)?, right);
+    }
+    if let Some((field, value)) = boolean {
+        query = query.filter(field, Comparison::Eq, *value);
+    }
+    if let Some([field, op, value]) = text {
+        query = query.filter(field, comparison(op)?, value.as_str());
     }
     if let Some((field, op, n)) = length {
         query = query.filter_length(field, comparison(op)?, *n);
@@ -683,6 +693,12 @@ fn execute<'a, E: Entity>(
         "id" => query
             .fetch_as::<IdOnly>()
             .map(|p| display(p, &["id"], |r| vec![r.id.to_string()])),
+        "title" => query
+            .fetch_as::<TitleOnly>()
+            .map(|p| display(p, &["title"], |r| vec![r.title])),
+        "note" => query
+            .fetch_as::<NoteOnly>()
+            .map(|p| display(p, &["note"], |r| vec![r.note.unwrap_or_else(|| "—".into())])),
         "id,amount" => query.fetch_as::<Summary>().map(|p| {
             display(p, &["id", "amount"], |r| {
                 vec![r.id.to_string(), r.amount.to_string()]

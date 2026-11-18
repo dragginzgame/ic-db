@@ -703,9 +703,15 @@ fn console_inspects_and_queries() {
         "query Document --absent missing",
         "query Entry --compare amount contains category",
         "query Document --compare id eq title",
+        "query Entry --text id eq 1",
+        "query Document --bool published yes",
+        "query Document --bool title true",
+        "query Document --text title unknown needle",
+        "query Document --select title --bytes 17",
+        "query Entry --select note",
         "query Entry --select id --bytes 7",
         "query Entry --select category --distinct --limit 1",
-        "query Entry --select count --work 6",
+        "query Entry --min 0 --select count --work 6",
         "query Entry --select exists --min 999 --work 6",
         "query Entry --select exists --group-min 0",
         "query Entry --select exists --distinct",
@@ -745,7 +751,64 @@ fn console_inspects_and_queries() {
             vec!["0"]
         ]
     );
+    let prefix_output = run_console(
+        &binary,
+        concat!(
+            "query Document --bool published false --text title starts-with First --order-by title --select id\n",
+            "query Document --bool published false --text title starts-with Missing --order-by title --select id\n",
+            "query Document --bool published true --text title starts-with First --order-by title --select id\nquit\n",
+        ),
+    );
+    assert_eq!(result_table_rows(&prefix_output), [vec!["1"]]);
+    assert_eq!(
+        prefix_output
+            .matches("1 row; 1 examined; 1 fetched;")
+            .count(),
+        1
+    );
+    assert_eq!(
+        prefix_output
+            .matches("0 rows; 0 examined; 0 fetched;")
+            .count(),
+        2
+    );
+    let projected = run_console(
+        &binary,
+        "query Document --text title contains doc --select title --bytes 18\nquery Document --select note --distinct --bytes 1\nquit\n",
+    );
+    assert!(projected.contains("First document"), "{projected}");
+    assert!(
+        projected.contains("1 fetched; 18 encoded bytes."),
+        "{projected}"
+    );
+    assert_eq!(result_table_rows(&projected), [vec!["—"]]);
+    assert!(
+        projected.contains("1 fetched; 1 encoded bytes."),
+        "{projected}"
+    );
+    let literal = run_console(
+        &binary,
+        concat!(
+            "query Document --text title eq 'First document' --select id\n",
+            "query Document --text title contains Document --select count\n",
+            "query Document --text title starts-with '' --select count\n",
+            "query Document --text note contains '' --select count\n",
+            "query Document --text title eq --limit --select count\nquit\n",
+        ),
+    );
+    assert_eq!(
+        result_table_rows(&literal),
+        [vec!["1"], vec!["0"], vec!["1"], vec!["0"], vec!["0"]]
+    );
     if std::env::var_os("IC_DB_CLI_RETAINED").is_some() {
+        let literal = run_console(
+            &binary,
+            "aggregate Document --bool published false --text title ends-with document --select count --work 1\naggregate Document --text title ends-with Document --select count --work 1\naggregate Document --bool published true --select count --work 1\nquit\n",
+        );
+        assert_eq!(
+            result_table_rows(&literal),
+            [vec!["1"], vec!["0"], vec!["0"]]
+        );
         // One console session exercises every retained selector. More than 16 jobs
         // proves successful commands release slots instead of leaking capacity.
         let cases: [ConsoleCase<'_>; 14] = [

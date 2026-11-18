@@ -469,7 +469,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .filter(field, comparison, QueryOperand::Literal(value.into()));
         self
     }
-    /// Compare two top-level ordered fields on the same row. Text and Blob also
+    /// Compare two top-level fields on the same row. Lists and sets support Contains
+    /// with a present scalar field of the element type. Text and Blob also
     /// support StartsWith, EndsWith and Contains with a present right-hand field.
     /// Types must match; Text and Blob bounds may differ within their respective families.
     /// Two absent values are equal. An ordered comparison requires two present values.
@@ -732,10 +733,21 @@ struct Term {
 }
 
 enum TermOperand {
-    Literal { bytes: Vec<u8>, absent: bool },
-    Member { item: FieldType, bytes: Vec<u8> },
+    Literal {
+        bytes: Vec<u8>,
+        absent: bool,
+    },
+    Member {
+        item: FieldType,
+        needle: MemberNeedle,
+    },
     Field(usize),
     Length(u32),
+}
+
+enum MemberNeedle {
+    Literal(Vec<u8>),
+    Field(usize),
 }
 
 fn member_type(field: FieldType) -> Option<FieldType> {
@@ -829,6 +841,7 @@ fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -
     output
 }
 struct Plan<'a> {
+    primary: usize,
     index: Option<&'a IndexSchema>,
     prefix: Vec<u8>,
     fixed_components: usize,
@@ -882,9 +895,10 @@ impl<'a> Plan<'a> {
         let primary = entity
             .fields
             .iter()
-            .position(|f| f.name == entity.primary_key)
+            .position(|f| f.name == entity.primary_key && !f.optional)
             .ok_or(Error::InvalidQuery)?;
         let mut plan = Self {
+            primary,
             index: None,
             prefix: prefix(2, entity.id),
             fixed_components: 0,
@@ -906,6 +920,11 @@ impl<'a> Plan<'a> {
                 .position(|f| f.name == predicate.field)
                 .ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
+            let member = if predicate.comparison == Comparison::Contains {
+                member_type(field.value)
+            } else {
+                None
+            };
             let operand = match predicate.operand {
                 QueryOperand::Length(length) => {
                     let supported = match key::operand_type(field.value) {
@@ -931,25 +950,33 @@ impl<'a> Plan<'a> {
                         .position(|f| f.name == name)
                         .ok_or(Error::InvalidQuery)?;
                     let right_type = entity.fields[right].value;
-                    let compatible = field.value == right_type
+                    let left_type = member.unwrap_or(field.value);
+                    let compatible = left_type == right_type
                         || matches!(
-                            (field.value, right_type),
+                            (left_type, right_type),
                             (FieldType::Text { .. }, FieldType::Text { .. })
                                 | (FieldType::Blob { .. }, FieldType::Blob { .. })
                         );
                     if !compatible
-                        || !key::supports(field.value)
-                        || !predicate.comparison.supports_scalar(field.value)
+                        || !key::supports(left_type)
+                        || (member.is_none() && !predicate.comparison.supports_scalar(left_type))
                     {
                         return Err(Error::InvalidQuery);
                     }
-                    plan.selected |= (1 << position) | (1 << right);
-                    TermOperand::Field(right)
+                    plan.selected |= 1 << right;
+                    if let Some(item) = member {
+                        plan.span_fields |= 1 << position;
+                        TermOperand::Member {
+                            item,
+                            needle: MemberNeedle::Field(right),
+                        }
+                    } else {
+                        plan.selected |= 1 << position;
+                        TermOperand::Field(right)
+                    }
                 }
                 QueryOperand::Literal(value) => {
-                    if predicate.comparison == Comparison::Contains
-                        && let Some(item) = member_type(field.value)
-                    {
+                    if let Some(item) = member {
                         if !key::supports(item) {
                             return Err(Error::InvalidQuery);
                         }
@@ -957,7 +984,10 @@ impl<'a> Plan<'a> {
                         let mut bytes = Vec::new();
                         value.append_component(false, &mut bytes);
                         plan.span_fields |= 1 << position;
-                        TermOperand::Member { item, bytes }
+                        TermOperand::Member {
+                            item,
+                            needle: MemberNeedle::Literal(bytes),
+                        }
                     } else {
                         let absent = value == IndexValue::Absent;
                         if key::supports(field.value) {
@@ -1025,7 +1055,11 @@ impl<'a> Plan<'a> {
         for term in &plan.terms {
             hash.update([term.position as u8, term.comparison as u8]);
             match &term.operand {
-                TermOperand::Literal { bytes, .. } | TermOperand::Member { bytes, .. } => {
+                TermOperand::Literal { bytes, .. }
+                | TermOperand::Member {
+                    needle: MemberNeedle::Literal(bytes),
+                    ..
+                } => {
                     hash.update((bytes.len() as u32).to_le_bytes());
                     hash.update(bytes);
                 }
@@ -1033,7 +1067,11 @@ impl<'a> Plan<'a> {
                     hash.update((u32::MAX - 1).to_le_bytes());
                     hash.update(length.to_le_bytes());
                 }
-                TermOperand::Field(right) => {
+                TermOperand::Field(right)
+                | TermOperand::Member {
+                    needle: MemberNeedle::Field(right),
+                    ..
+                } => {
                     // Outside the bounded literal length domain.
                     hash.update(u32::MAX.to_le_bytes());
                     hash.update([*right as u8]);
@@ -1221,6 +1259,7 @@ fn execute_inner<M: Memory>(
     } else {
         None
     };
+    let primary_type = entity.fields[plan.primary].value;
     while let Some(entry) = if plan.descending {
         entries.next_back()
     } else {
@@ -1238,12 +1277,12 @@ fn execute_inner<M: Memory>(
         let (owner, bytes) = if plan.index.is_some() {
             let owner_bytes = entry.value();
             read_bytes += owner_bytes.len();
-            let owner = RowKey::decode(&owner_bytes, entity.key_type()?)?;
+            let owner = RowKey::decode(&owner_bytes, primary_type)?;
             let bytes = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
             (owner, bytes)
         } else {
             (
-                RowKey::decode(&stored_key[5..], entity.key_type()?)?,
+                RowKey::decode(&stored_key[5..], primary_type)?,
                 entry.value(),
             )
         };
@@ -1266,12 +1305,7 @@ fn execute_inner<M: Memory>(
                 || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
             .then_some(&mut spans),
         )?;
-        let primary = entity
-            .fields
-            .iter()
-            .position(|f| f.name == entity.primary_key)
-            .ok_or(Error::Corrupt)?;
-        if RowKey::from_index(values[primary])? != owner {
+        if RowKey::from_index(values[plan.primary])? != owner {
             return Err(Error::Corrupt);
         }
         if plan.index.is_some() {
@@ -1287,10 +1321,19 @@ fn execute_inner<M: Memory>(
                     let absent = bytes[usize::from(spans[term.position].0)] == 0;
                     return Ok(term.comparison.accepts_absent(absent));
                 }
-                TermOperand::Member {
-                    item,
-                    bytes: needle,
-                } => {
+                TermOperand::Member { item, needle } => {
+                    let needle = match needle {
+                        MemberNeedle::Literal(bytes) => bytes.as_slice(),
+                        MemberNeedle::Field(right) => {
+                            let value = values[*right];
+                            if value == IndexValue::Absent {
+                                return Ok(false);
+                            }
+                            right_component.clear();
+                            value.append_component(false, &mut right_component);
+                            &right_component
+                        }
+                    };
                     let (start, end) = spans[term.position];
                     return contains_member(
                         &bytes[usize::from(start)..usize::from(end)],

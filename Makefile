@@ -30,6 +30,7 @@ help:
 	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
+	  'make m2-sqlite-reference        Check native fluent results against SQLite' \
 	  'make m2-jobs                    Check retained aggregates and rollback' \
 	  'make m2-contention              Check retained aggregates and shared job capacity' \
 	  'make m2-cli                     Check the fluent CLI and migrated query caller' \
@@ -43,6 +44,7 @@ help:
 	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make m2-query-growth            Measure fluent shapes, maps and entity growth' \
+	  'make m2-count-paths            Compare validated, index-entry and maintained prefix counts' \
 	  'make m2-count-profile           Separate count opening, scan and row-fetch costs' \
 	  'make m2-count-comparison        Compare entity and indexed-prefix count costs' \
 	  'make m2-aggregate-comparison    Compare grouped IC DB/IcyDB aggregate costs' \
@@ -93,6 +95,10 @@ m0-setup:
 	  attempt="$$(mktemp -d "$(CURDIR)/qualification/target/evidence/testkit/setup.XXXXXX")" && \
 	  "$$launcher" setup "$(CURDIR)/.tools/testkit-server" "$$attempt/evidence" "$$(command -v curl)" "$$(command -v gzip)"
 
+.PHONY: m2-sqlite-reference
+m2-sqlite-reference:
+	cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-sqlite-reference
+
 m0-contracts:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test nested_row_codec --test query_composition -- --nocapture
 
@@ -117,6 +123,10 @@ m2-fluent-comparison:
 .PHONY: m2-query-matrix
 m2-query-matrix:
 	bash scripts/measure-records.sh query-matrix
+
+.PHONY: m2-count-paths
+m2-count-paths:
+	bash scripts/measure-records.sh count-paths
 
 .PHONY: m2-aggregate-paths
 m2-aggregate-paths:
@@ -207,7 +217,7 @@ m1-records-wasm: m1-records-artifact
 
 .PHONY: m1-commit-failures
 .PHONY: m2-queries m2-sort-costs m2-sort-costs-artifact
-m2-queries: m1-records-artifact
+m2-queries: m1-records-artifact m2-sqlite-reference
 	cargo test --locked -p ic-db --test queries
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test queries --test sorting --test live_pages -- --nocapture
 
@@ -351,7 +361,7 @@ release-tools:
 release-lint:
 	$(MAKE) clippy
 	# Native callers/schema builds and IC-only fixtures have different target APIs.
-	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema --all-targets -- -D warnings
+	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema -p ic-db-sqlite-reference --all-targets -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked --workspace --exclude ic-db-m0-rollback-driver --exclude ic-db-icydb-baseline-schema --exclude ic-db-icydb-baseline-canister --lib --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings

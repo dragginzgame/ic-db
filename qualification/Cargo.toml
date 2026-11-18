@@ -11,6 +11,7 @@ members = [
     "ic-db-m1-records-schema",
     "ic-db-qualification-transport",
     "ic-db-records-benchmark-canister",
+    "ic-db-sqlite-reference",
 ]
 resolver = "3"
 
@@ -35,13 +36,14 @@ ic-storage = "0.78.0"
 ic-testkit = { version = "0.110.0", default-features = false }
 ic-wire = "0.24.0"
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
+rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled"] }
 rustyline = { version = "19.0.0", default-features = false }
 serde = "1.0.229"
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 shlex = "2.0.1"
 tokio = "1.54.1"
-toko-tooling = "=0.45.3"
+toko-tooling = "=0.45.5"
 wasmparser = { version = "0.263.0", default-features = false, features = ["std", "features", "validate"] }
 
 [workspace.lints.cargo]

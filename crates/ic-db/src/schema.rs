@@ -233,11 +233,10 @@ impl EntitySchema {
         Ok(())
     }
     pub(crate) fn row_info(&self, keys: &[IndexValue<'_>; MAX_FIELDS]) -> Result<RowInfo, Error> {
-        let key = |name: &str| {
+        let position = |name: &str| {
             self.fields
                 .iter()
                 .position(|field| field.name == name)
-                .and_then(|position| keys.get(position).copied())
                 .ok_or(Error::Corrupt)
         };
         let indexes = self
@@ -246,12 +245,8 @@ impl EntitySchema {
             .map(|index| {
                 let mut components = [(IndexValue::Absent, false); 4];
                 for (slot, name) in components.iter_mut().zip(index.fields) {
-                    let field = self
-                        .fields
-                        .iter()
-                        .find(|field| field.name == *name)
-                        .ok_or(Error::Corrupt)?;
-                    *slot = (key(name)?, field.optional);
+                    let position = position(name)?;
+                    *slot = (keys[position], self.fields[position].optional);
                     if slot.0 == IndexValue::Absent && !slot.1 {
                         return Err(Error::Corrupt);
                     }
@@ -262,7 +257,7 @@ impl EntitySchema {
                 ))
             })
             .collect::<Result<_, Error>>()?;
-        let key = RowKey::from_index(key(self.primary_key)?)?;
+        let key = RowKey::from_index(keys[position(self.primary_key)?])?;
         Ok(RowInfo { key, indexes })
     }
 }

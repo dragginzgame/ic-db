@@ -1,6 +1,9 @@
 //! Private persistence/rollback witness for enum-keyed collections.
-use crate::{open, runtime, schema::EnumCollectionsRow};
-use ic_db::{Batch, Entity};
+use crate::{
+    open, runtime,
+    schema::{EnumCollectionsRow, Lifecycle},
+};
+use ic_db::{Batch, Comparison, Entity};
 
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
@@ -45,4 +48,25 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
             .unwrap_or_default(),
         db.revision::<EnumCollectionsRow>().unwrap(),
     ))
+}
+
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "enum_set_membership",
+    guard = crate::transport::admit::<150>,
+    decode = crate::transport::decode::<_, 150>,
+    encode = crate::transport::encode::<_, 150>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn enum_set_membership((): ()) -> [bool; 3] {
+    let host = runtime();
+    let db = open(&host);
+    [Lifecycle::Archived, Lifecycle::Draft, Lifecycle::Ready].map(|state| {
+        db.query::<EnumCollectionsRow>()
+            .filter("states", Comparison::Contains, &state)
+            .exists()
+            .unwrap()
+            .value
+    })
 }

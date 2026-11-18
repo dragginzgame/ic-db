@@ -873,11 +873,32 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     assert_eq!(raw.get(&index), Some(1_u64.to_be_bytes().to_vec()));
     raw.insert(index.clone(), 2_u64.to_be_bytes().to_vec());
     drop(raw);
-    let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
+    let mut db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
     assert!(matches!(
         db.index_prefix::<Entry>("category,id", &[9_u64.into()], 3),
         Err(Error::Corrupt)
     ));
+    // The fluent scan must reject the divergent owner before a residual filter
+    // can discard it. Both the index entry and its owner row decode successfully.
+    assert!(matches!(
+        db.query::<Entry>()
+            .using_index("category,id", &[9_u64.into()])
+            .filter("amount", ic_db::Comparison::Eq, 0_u64)
+            .fetch(),
+        Err(Error::Corrupt)
+    ));
+    // Editing an unrelated field still verifies the owner before retaining its entry.
+    let corrupt = backing.borrow().clone();
+    let mut batch = Batch::new();
+    batch
+        .replace(&Entry {
+            id: 1,
+            category: 9,
+            amount: 12,
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+    assert_eq!(*backing.borrow(), corrupt);
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(index, 1_u64.to_be_bytes().to_vec());
@@ -2394,6 +2415,25 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
     assert_eq!(*backing.borrow(), before);
     let mut left = db.get::<OptionalIndex>(5).unwrap().unwrap();
     let mut right = db.get::<OptionalIndex>(6).unwrap().unwrap();
+    // A changed owner retaining its unique key still blocks a second claimant
+    // in either command order. Its unrelated index change must roll back too.
+    left.active = Some(true);
+    let claimant = OptionalIndex {
+        id: 8,
+        ..left.clone()
+    };
+    for replace_first in [false, true] {
+        let mut batch = Batch::new();
+        if replace_first {
+            batch.replace(&left).unwrap();
+            batch.insert(&claimant).unwrap();
+        } else {
+            batch.insert(&claimant).unwrap();
+            batch.replace(&left).unwrap();
+        }
+        assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+        assert_eq!(*backing.borrow(), before);
+    }
     std::mem::swap(&mut left.alias, &mut right.alias);
     std::mem::swap(&mut left.code, &mut right.code);
     let mut batch = Batch::new();

@@ -19,4 +19,8 @@ pub struct RowFilters {
     pub present: Option<String>,
     /// Require absence in this optional field.
     pub absent: Option<String>,
+    /// Field, comparison and exact UTF-8 literal.
+    pub text: Option<[String; 3]>,
+    /// Field and Boolean equality operand.
+    pub boolean: Option<(String, bool)>,
 }

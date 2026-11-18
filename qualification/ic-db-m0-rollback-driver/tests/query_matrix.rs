@@ -73,9 +73,40 @@ fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
             let (v, n) = decode(id, bytes);
             (Answer::Count(v), n)
         }
+        9 => {
+            let (value, open, execution): (Option<u64>, u64, u64) = decode(id, bytes);
+            (Answer::Count(value), open + execution)
+        }
         _ => unreachable!(),
     }
 }
+
+// The profile endpoint times open and execution separately on the same artifact.
+// Legacy supplies its maintained result as the control for each IC DB path.
+fn prefix_counts(source: &[Row], legacy: bool) -> Vec<Case> {
+    let mut cases = Vec::new();
+    for category in [0_u64, 3, 99] {
+        let count = source.iter().filter(|row| row.1 == category).count() as u64;
+        for (mode, family) in [(1_u8, "validated"), (5, "entries")] {
+            let (method, id, request) = if legacy {
+                ("count_rows", 8, encode(8, &Some(category)))
+            } else {
+                ("count_profile", 9, encode(9, &(mode, Some(category))))
+            };
+            cases.push(Case {
+                name: format!("{family}-{category}"),
+                family,
+                method,
+                id,
+                request,
+                expected: Answer::Count(Some(count)),
+                legacy_refuses: false,
+            });
+        }
+    }
+    cases
+}
+
 fn cases(source: &[Row], paths: bool) -> Vec<Case> {
     let mut cases = Vec::new();
     let population = source.len() as u64;
@@ -242,6 +273,7 @@ async fn matched_query_matrix() {
     let directory = std::path::PathBuf::from(
         std::env::var_os("IC_DB_QUERY_MATRIX_DIR").expect("run make m2-query-matrix"),
     );
+    let count_paths = std::env::var_os("IC_DB_COUNT_PATHS").is_some();
     let mut samples = Vec::new();
     for (engine, variable, legacy) in [
         ("ic-db", "IC_DB_RECORDS_BENCHMARK_WASM", false),
@@ -258,19 +290,24 @@ async fn matched_query_matrix() {
             })
             .map(String::as_str)
             .collect();
-        assert_eq!(
-            methods,
-            vec![
-                "canister_query count_rows",
+        let mut expected = vec![
+            "canister_query count_rows",
+            "canister_query listing",
+            "canister_query lookup",
+            "canister_update advance_startup",
+            "canister_update insert",
+            "canister_update read_modify_write",
+        ];
+        if !count_paths {
+            expected.extend([
                 "canister_query fluent_listing",
                 "canister_query grouped_aggregate",
-                "canister_query listing",
-                "canister_query lookup",
-                "canister_update advance_startup",
-                "canister_update insert",
-                "canister_update read_modify_write"
-            ]
-        );
+            ]);
+        } else if !legacy {
+            expected.push("canister_query count_profile");
+        }
+        expected.sort_unstable();
+        assert_eq!(methods, expected);
         eprintln!(
             "{engine} wasm_bytes={} code_section_bytes={} sha256={}",
             facts.identity.bytes,
@@ -332,7 +369,11 @@ async fn matched_query_matrix() {
                     }
                     source.push(row);
                 }
-                let cases = cases(&source, std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some());
+                let cases = if count_paths {
+                    prefix_counts(&source, legacy)
+                } else {
+                    cases(&source, std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some())
+                };
                 for phase in ["settled", "after-upgrade-settled"] {
                     if phase == "after-upgrade-settled" {
                         let backing = pic.get_stable_memory(canister).await;

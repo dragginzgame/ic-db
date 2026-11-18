@@ -2532,7 +2532,10 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
         db.query::<Entry>().group_sum::<CategoryOnly, WideAmount>(),
         Err(Error::Corrupt)
     ));
-    assert!(matches!(db.query::<Entry>().count(), Err(Error::Corrupt)));
+    assert!(matches!(
+        db.query::<Entry>().count_validated(),
+        Err(Error::Corrupt)
+    ));
     assert!(matches!(db.query::<Entry>().exists(), Err(Error::Corrupt)));
     assert!(matches!(
         db.query::<Entry>().filter("amount", C::Eq, 0_u64).exists(),
@@ -2742,6 +2745,88 @@ struct IncompatibleOutput {}
 
 #[ic_db::set(item(prim = "Nat8"), max_items = 3)]
 struct PresenceSet {}
+#[entity(pk(field="id"), index(fields=["needle","id"],unique,present_only), fields(
+    field(name="id",value(item(prim="Nat64"))),
+    field(name="needle",value(opt,item(prim="Nat8"))),
+    field(name="other",value(opt,item(prim="Nat8"))),
+    field(name="items",value(opt,many,max_items=3,item(prim="Nat8"))),
+    field(name="members",value(opt,item(is="PresenceSet")))
+))]
+struct MemberRow {}
+
+#[test]
+fn field_membership_checks_each_rows_needle_and_binds_the_continuation() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[MemberRow::SCHEMA]).unwrap(),
+        [9; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, (needle, items)) in [
+        (Some(2), Some(vec![1, 2, 2])),
+        (None, Some(vec![0])),
+        (Some(1), None),
+        (Some(3), Some(vec![])),
+        (Some(4), Some(vec![1, 3])),
+        (Some(1), Some(vec![1])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let members = items
+            .as_ref()
+            .map(|xs| PresenceSet(xs.iter().copied().collect()));
+        batch
+            .insert(&MemberRow {
+                id: id as u64,
+                needle,
+                other: needle,
+                items,
+                members,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    for field in ["items", "members"] {
+        let query = |needle| {
+            db.query::<MemberRow>()
+                .filter_fields(field, C::Contains, needle)
+        };
+        assert_eq!(query("needle").count().unwrap().value, 2);
+        let indexed = query("needle")
+            .using_index("needle,id", &[])
+            .fetch()
+            .unwrap();
+        assert_eq!(
+            indexed.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [5, 0]
+        );
+        let first = query("needle").limit(1).fetch().unwrap();
+        assert_eq!(first.rows[0].id, 0);
+        let cursor = first.next.unwrap();
+        assert!(matches!(
+            query("other").after(&cursor).fetch(),
+            Err(Error::InvalidCursor)
+        ));
+        assert!(matches!(
+            db.query::<MemberRow>()
+                .filter(field, C::Contains, 2_u8)
+                .after(&cursor)
+                .fetch(),
+            Err(Error::InvalidCursor)
+        ));
+        assert_eq!(
+            query("needle").after(&cursor).fetch().unwrap().rows[0].id,
+            5
+        );
+        assert!(matches!(query("id").count(), Err(Error::InvalidQuery)));
+        assert!(matches!(query("items").count(), Err(Error::InvalidQuery)));
+    }
+}
 #[ic_db::map(key(prim = "Nat8"), value(item(prim = "Nat8")), max_items = 3)]
 struct PresenceMap {}
 #[ic_db::enum_(
@@ -3405,6 +3490,15 @@ fn sparse_compound_membership_requires_every_optional_component() {
             .unwrap();
     }
     db.commit(batch).unwrap();
+    // The matching row with an absent right field is missing from this index.
+    let left = || db.query::<SparsePair>().filter("left", C::Eq, 1_u64);
+    let incomplete_index = left().count().unwrap();
+    assert_eq!((incomplete_index.value, incomplete_index.fetched), (3, 6));
+    let covered = left().filter("right", C::Eq, "a").count().unwrap();
+    assert_eq!(
+        (covered.value, covered.examined, covered.fetched),
+        (1, 1, 0)
+    );
     for comparison in [C::StartsWith, C::EndsWith, C::Contains] {
         let page = db
             .query::<SparsePair>()
@@ -4160,7 +4254,7 @@ fn exact_counts_and_groups_complete_before_output_limits() {
             count.fetched,
             count.output_bytes
         ),
-        (8, 8, 8, 8)
+        (8, 0, 0, 8)
     );
     let groups = db
         .query::<Entry>()
@@ -4442,7 +4536,7 @@ fn counts_refuse_incomplete_or_ambiguous_results() {
     let db = create(&runtime, 17);
     for work in [1, 7, 8] {
         assert!(matches!(
-            db.query::<Entry>().work_limit(work).count(),
+            db.query::<Entry>().work_limit(work).count_validated(),
             Err(Error::Limit)
         ));
         assert!(matches!(
@@ -7080,5 +7174,19 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
     .unwrap();
     let query = || db.query::<Entry>().using_index("category", &[0_u8.into()]);
     assert_eq!(query().count_index_entries().unwrap().value, 4);
-    assert!(matches!(query().count(), Err(Error::Corrupt)));
+    assert_eq!(query().count().unwrap().value, 4);
+    assert!(matches!(query().count_validated(), Err(Error::Corrupt)));
+    let implicit = db
+        .query::<Entry>()
+        .filter("category", C::Eq, 0_u8)
+        .count()
+        .unwrap();
+    assert_eq!((implicit.value, implicit.fetched), (4, 0));
+    let conflicting = db
+        .query::<Entry>()
+        .filter("category", C::Eq, 0_u8)
+        .filter("category", C::Eq, 1_u8)
+        .count()
+        .unwrap();
+    assert_eq!(conflicting.value, 0);
 }

@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
 workload="${1:-scalar}"
-unset IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
+unset IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
 case "$workload" in
     scalar)
         evidence="$PWD/qualification/target/evidence/records-comparison"
@@ -24,10 +24,16 @@ case "$workload" in
         export IC_DB_AGGREGATE_COMPARISON=1
         ;;
     query-matrix)
-        evidence="$PWD/qualification/target/evidence/query-matrix"
+        evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/query-matrix}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
         export IC_DB_QUERY_MATRIX_DIR="$evidence"
+        ;;
+    count-paths)
+        evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-paths}"
+        engines=(records-benchmark icydb-baseline)
+        test_name=query_matrix
+        export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_COUNT_PATHS=1
         ;;
     aggregate-paths)
         evidence="$PWD/qualification/target/evidence/aggregate-paths"
@@ -62,10 +68,10 @@ case "$workload" in
         engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
-    *) printf 'Expected scalar, fluent, aggregate, aggregate-paths, query-matrix, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
+    *) printf 'Expected scalar, fluent, aggregate, aggregate-paths, query-matrix, count-paths, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
-if [[ "$workload" == query-matrix || "$workload" == aggregate-paths ]]; then
+if [[ "$test_name" == query_matrix ]]; then
     # Preserve the driver even while this new benchmark is still untracked.
     cp qualification/ic-db-m0-rollback-driver/tests/query_matrix.rs "$evidence/query-matrix.rs"
     cp qualification/Cargo.lock "$evidence/Cargo.lock"
@@ -101,10 +107,10 @@ for engine in "${engines[@]}"; do
     if [[ "$workload" == aggregate ]]; then
         build_features=aggregate-comparison
     fi
-    if [[ "$workload" == count ]]; then
+    if [[ "$workload" == count || "$workload" == count-paths ]]; then
         build_features=count-comparison
     fi
-    if [[ "$workload" == count-profile ]]; then
+    if [[ "$workload" == count-profile || ( "$workload" == count-paths && "$engine" == records-benchmark ) ]]; then
         build_features=count-profile
     fi
     if [[ "$workload" == growth ]]; then

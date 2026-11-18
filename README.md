@@ -315,7 +315,23 @@ refuses cursors, DISTINCT, input ordering and group modifiers. It validates ever
 examined row, but stops before inspecting rows beyond the first match.
 Try `db query Entry --select exists --work 1 --bytes 1` in the local fixture.
 
-Exact bounded counts use the same scanner:
+Use `.count()` for whole-entity and filtered row counts. For example:
+
+```rust
+let count = db.query::<Entry>()
+    .filter("category", ic_db::Comparison::Eq, category)
+    .work_limit(512)
+    .count()?
+    .value;
+```
+
+An unfiltered count reads maintained entity metadata. When literal equalities cover
+a complete index prefix, the engine counts its entries within the work budget.
+Other filters use row execution. Metadata and index-only counts trust stored
+counts and keys. Use `.count_validated()` for diagnostics that check each visited
+row and its selected index entry. [Measured count paths](qualification/README.md#prefix-count-paths-0234)
+
+Other bounded count examples:
 
 ```rust
 let count = db.query::<Entry>().filter("amount", ic_db::Comparison::Ge, 40_u64).count()?;
@@ -939,7 +955,7 @@ uses this checkout's explicitly prepared `.tools/testkit-server` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.45.3 are pinned. Read [AGENTS.md](AGENTS.md)
+Rust 1.100.0 and published Toko Tooling 0.45.5 are pinned. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 

@@ -30,7 +30,7 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
         let result = match if mode == 5 {
             query.count_index_entries()
         } else {
-            query.count()
+            query.count_validated()
         } {
             Ok(value) => Some(value.value),
             Err(Error::Limit) => None,

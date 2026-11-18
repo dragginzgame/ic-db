@@ -45,6 +45,73 @@ struct Payload {}
 ))]
 struct Row {}
 
+#[ic_db::set(item(is = "State"), max_items = 3)]
+struct States {}
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "allowed", value(item(is = "States"))),
+        field(name = "wanted", value(item(is = "State"))),
+        field(name = "unrelated", value(item(is = "Other")))
+    )
+)]
+struct Permissions {}
+
+#[test]
+fn enum_membership_checks_schema_identity_before_comparing_ordinals() {
+    use ic_db::Comparison::Contains;
+    let runtime = host(VectorMemory::default());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let schema = Schema::new(&[Permissions::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema, [8; 16]).unwrap();
+    let mut batch = Batch::new();
+    for (id, wanted) in [(1, State::Ready), (2, State::Draft)] {
+        batch
+            .insert(&Permissions {
+                id,
+                allowed: States([State::Ready].into()),
+                wanted,
+                unrelated: Other::Ready,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+
+    let query = || db.query::<Permissions>();
+    let page = query()
+        .filter_fields("allowed", Contains, "wanted")
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [1]);
+    assert!(matches!(
+        query()
+            .filter_fields("allowed", Contains, "unrelated")
+            .count(),
+        Err(Error::InvalidQuery)
+    ));
+    // Same logical enum under a reordered Rust declaration.
+    assert_eq!(
+        query()
+            .filter("allowed", Contains, &Reordered::Ready)
+            .count()
+            .unwrap()
+            .value,
+        2
+    );
+    // Archived has ordinal zero in all three definitions. Its identity still matters.
+    for invalid in [
+        IndexValue::from(&Other::Archived),
+        (&Changed::Archived).into(),
+        0_u8.into(),
+    ] {
+        assert!(matches!(
+            query().filter("allowed", Contains, invalid).count(),
+            Err(Error::InvalidOperand)
+        ));
+    }
+}
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let requests =

@@ -35,5 +35,10 @@ icydb.workspace = true
 ic-db-icydb-baseline-schema = { workspace = true, features = ["build"] }
 icydb = { workspace = true, features = ["build"] }
 
+[dev-dependencies]
+ic-db.workspace = true
+ic-storage.workspace = true
+rusqlite.workspace = true
+
 [lints]
 workspace = true
