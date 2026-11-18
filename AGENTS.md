@@ -10,16 +10,15 @@ This overlay owns local authority, product boundaries and qualification choices.
   preserve committed and uncommitted work, releases and data. Research is read-only;
   edits, commits, pushes, merges, releases or deployments require an explicit exception or lift.
   Canic is also a read-only research input unless separately authorized.
-- A request to deploy, ship or release IC DB authorizes both GitHub delivery on
-  `dragginzgame/ic-db` `main` and crates.io publication of every crate in the
-  Makefile’s `CARGO_PUBLISH_PACKAGES` selection (currently `ic-db-macros` and
-  `ic-db`). The maintainer’s standing deploy authorization supersedes the old
-  source-only policy. A deploy request is sufficient confirmation for both steps.
-  From the verified tag, run `make publish`. Delivery is complete when the tag is
-  on GitHub and each selected crate is visible at that version on crates.io.
-  Honor an explicitly source-only request. Keep the CLI and
-  qualification workspace unpublished. Live-canister deployment, IcyDB feature
-  retirement and runtime migration remain excluded. A hard cut never authorizes deleting retained data.
+- **Deploy, ship, or release** means deliver the verified source and tag to
+  `dragginzgame/ic-db` on `main`, then publish every crate selected for that
+  release to crates.io. The deploy request authorizes both steps. Use the
+  Makefile’s `CARGO_PUBLISH_PACKAGES` as the package list so future changes to
+  the release group apply automatically. Run `make publish` from the verified
+  tag and confirm each selected crate is visible at the release version.
+  A source-only delivery requires an explicit source-only request. The CLI and
+  qualification packages stay private. Live-canister deployment, IcyDB feature
+  retirement and runtime migration require separate authorization.
 - Read the opening status and affected sections of the
   [system design](docs/design/ic-db-system-design.md), not its entire historical
   evidence inventory on every task. Its delivery section owns implemented scope,
