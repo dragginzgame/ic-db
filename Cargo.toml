@@ -4,7 +4,7 @@ members = ["crates/ic-db", "crates/ic-db-macros"]
 resolver = "3"
 
 [workspace.package]
-version = "0.23.0"
+version = "0.23.1"
 edition = "2024"
 rust-version = "1.100.0"
 license-file = "LICENSE.md"
@@ -14,7 +14,7 @@ publish = ["crates-io"]
 [workspace.dependencies]
 ctor = { version = "1.0.14", default-features = false, features = ["proc_macro", "std"] }
 ethnum = { version = "1.5.3", default-features = false }
-ic-db-macros = { version = "=0.23.0", path = "crates/ic-db-macros" }
+ic-db-macros = { version = "=0.23.1", path = "crates/ic-db-macros" }
 ic-platform-types = { version = "0.21.2", default-features = false }
 ic-storage = "0.78.0"
 memchr = { version = "2.8.3", default-features = false }
