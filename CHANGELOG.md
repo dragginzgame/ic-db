@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.23.12] - Unreleased
+
+### 🔎 Queries
+
+- Use `.eq(field, value)` for literal equality and `.first()?` for one optional
+  entity. Fresh entity reads and field projections use a complete unique key when the
+  filters bind all its fields, including compound keys in either filter order. An explicit result order
+  also uses the unique lookup because at most one row can match.
+  A partial scan that finds no match returns `Limit` from `first()`; use
+  `fetch()` when the caller wants a continuation.
+
+### Qualification
+
+- The `test-support` feature exposes the same qualification backing types on
+  native and Wasm. Native qualification now runs the records fixture’s
+  initialization and indexed category query directly. IC instruction counts
+  still require the installed canister.
+
 ## [0.23.11] - 2026-11-18
 
 ### 🔎 Queries

@@ -1,9 +1,19 @@
 #![deny(unsafe_code)]
+#![cfg_attr(
+    not(target_arch = "wasm32"),
+    expect(
+        dead_code,
+        reason = "Platform emits the roots for this private cdylib only on Wasm; native builds type-check the same handlers"
+    )
+)]
 // Platform narrowly permits the generated IC export attribute; handlers remain safe.
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
 use ic_db_qualification_transport as transport;
+
+#[cfg(test)]
+mod tests;
 
 mod account_keys;
 #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
@@ -26,10 +36,11 @@ mod managed;
 mod migration_capacity;
 #[cfg(feature = "maintenance-faults")]
 mod migration_references;
-#[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
+#[cfg(feature = "mixed-lifecycle")]
 mod mixed_lifecycle;
 mod principal_keys;
 mod queries;
+mod system;
 
 use crate::handles::Database;
 use ic_db::{Batch, Entity, FieldType, Principal};
@@ -98,7 +109,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
         );
         requests
     };
-    #[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
+    #[cfg(feature = "mixed-lifecycle")]
     let requests = {
         let mut requests = requests;
         requests.extend(mixed_lifecycle::KEYS.map(|key| MemoryRequest::new("m1", key).unwrap()));
@@ -201,7 +212,7 @@ fn initialize((): ()) {
     db.commit(batch).unwrap();
     #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
     aggregate_store::initialize(&host);
-    #[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
+    #[cfg(feature = "mixed-lifecycle")]
     mixed_lifecycle::initialize(&host);
 }
 
@@ -473,7 +484,7 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 3)?;
     if mode == 2 {
-        ic_platform_runtime::system::trap("M1 application trap after successful database commit");
+        crate::system::trap("M1 application trap after successful database commit");
     }
     if mode == 3 {
         return Err(4);
@@ -700,7 +711,7 @@ fn replace_wide_numbers(
         .unwrap();
     db.commit(batch).unwrap();
     if trap {
-        ic_platform_runtime::system::trap("M1 wide-number application trap");
+        crate::system::trap("M1 wide-number application trap");
     }
 }
 
@@ -797,7 +808,7 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
         .unwrap();
     db.commit(batch).unwrap();
     if trap {
-        ic_platform_runtime::system::trap("M1 narrow-number application trap");
+        crate::system::trap("M1 narrow-number application trap");
     }
 }
 
@@ -864,7 +875,7 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
         .map_err(|_| 1)?;
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        ic_platform_runtime::system::trap("M1 binary application trap");
+        crate::system::trap("M1 binary application trap");
     }
     Ok(())
 }
@@ -922,7 +933,7 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
     if trap {
-        ic_platform_runtime::system::trap("M1 principal application trap");
+        crate::system::trap("M1 principal application trap");
     }
     Ok(())
 }
@@ -987,7 +998,7 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
-        ic_platform_runtime::system::trap("M1 indexed batch application trap");
+        crate::system::trap("M1 indexed batch application trap");
     }
     Ok(())
 }
@@ -1056,7 +1067,7 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        ic_platform_runtime::system::trap("M1 text index application trap");
+        crate::system::trap("M1 text index application trap");
     }
     Ok(())
 }
@@ -1132,7 +1143,7 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
-        ic_platform_runtime::system::trap("M1 optional index application trap");
+        crate::system::trap("M1 optional index application trap");
     }
     Ok(())
 }
@@ -1205,7 +1216,7 @@ fn optional_reference_batch(
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
-        ic_platform_runtime::system::trap("M1 optional reference application trap");
+        crate::system::trap("M1 optional reference application trap");
     }
     Ok(())
 }
@@ -1282,7 +1293,7 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
         .map_err(|_| 2_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after enum replacement");
+            crate::system::trap("after enum replacement");
         }
     }
     Ok((
@@ -1443,7 +1454,7 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after nested replacement");
+            crate::system::trap("after nested replacement");
         }
     }
     Ok((
@@ -1529,7 +1540,7 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after list replacement");
+            crate::system::trap("after list replacement");
         }
     }
     Ok((
@@ -1591,7 +1602,7 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after set replacement");
+            crate::system::trap("after set replacement");
         }
     }
     Ok((
@@ -1662,7 +1673,7 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         .map_err(|_| 1_u8)?;
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after map replacement");
+            crate::system::trap("after map replacement");
         }
     }
     Ok((
@@ -1766,7 +1777,7 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after U256 batch");
+        crate::system::trap("after U256 batch");
     }
     Ok(())
 }
@@ -1875,7 +1886,7 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after float batch");
+        crate::system::trap("after float batch");
     }
     Ok(())
 }
@@ -1989,7 +2000,7 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after account batch");
+        crate::system::trap("after account batch");
     }
     Ok(())
 }
@@ -2091,7 +2102,7 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after Ulid batch");
+        crate::system::trap("after Ulid batch");
     }
     Ok(())
 }
@@ -2217,7 +2228,7 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after Date batch");
+        crate::system::trap("after Date batch");
     }
     Ok(())
 }
@@ -2328,7 +2339,7 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after time batch");
+        crate::system::trap("after time batch");
     }
     Ok(())
 }
@@ -2455,7 +2466,7 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after decimal batch");
+        crate::system::trap("after decimal batch");
     }
     Ok(())
 }
@@ -2562,7 +2573,7 @@ fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> R
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after ULID primary-key batch");
+        crate::system::trap("after ULID primary-key batch");
     }
     Ok(())
 }
@@ -2613,7 +2624,10 @@ fn key_lookup((id, value): ([u8; 16], u64)) -> (Option<KeyInput>, Vec<KeyInput>)
         db.get::<KeyRow>(ic_db::Ulid::from_bytes(id))
             .unwrap()
             .map(view),
-        db.index_prefix::<KeyRow>("value", &[value.into()], 32)
+        db.query::<KeyRow>()
+            .eq("value", value)
+            .work_limit(1)
+            .first()
             .unwrap()
             .into_iter()
             .map(view)
@@ -2684,7 +2698,7 @@ fn integer_key_batch(
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after integer-key batch");
+        crate::system::trap("after integer-key batch");
     }
     Ok(())
 }

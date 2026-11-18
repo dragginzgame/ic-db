@@ -182,12 +182,9 @@ fn cardinality(entity: String) -> Result<u64, String> {
     on_error = crate::transport::endpoint_error
 )]
 fn measured_query(request: Request) -> (Result<Page, String>, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = query(request);
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 
 /// Read the requested bounded result from the local fixture.

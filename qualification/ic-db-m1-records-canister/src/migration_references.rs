@@ -161,7 +161,7 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
 fn migration_references(
     (operation, first, limit, bad, stop): (u8, u16, u8, bool, u64),
 ) -> (Result<(u32, bool), u8>, u64, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     faults::arm(if stop == u64::MAX { 0 } else { stop }, false, false);
     let result = control(operation, first, limit, bad).map_err(|error| match error {
         Error::ReferenceViolation => 1,
@@ -171,14 +171,10 @@ fn migration_references(
         other => panic!("unexpected reference migration refusal: {other:?}"),
     });
     if stop == u64::MAX {
-        ic_platform_runtime::system::trap("reference migration trap after operation");
+        crate::system::trap("reference migration trap after operation");
     }
     let (writes, _) = faults::finish();
-    (
-        result,
-        writes,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, writes, crate::system::instruction_counter() - start)
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);

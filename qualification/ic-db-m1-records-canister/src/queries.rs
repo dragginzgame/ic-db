@@ -393,7 +393,7 @@ fn read(
     (cursor, descending, category, minimum, limit, work, bytes): Request,
     shape: Shape,
 ) -> Result<Page, u8> {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let host = runtime();
     let db = open(&host);
     let cursor = cursor
@@ -461,7 +461,7 @@ fn read(
         page.examined as u32,
         page.fetched as u32,
         page.output_bytes as u32,
-        ic_platform_runtime::raw::instruction_counter() - start,
+        crate::system::instruction_counter() - start,
     ))
 }
 
@@ -488,7 +488,7 @@ fn query_error(error: &ic_db::Error) -> u8 {
 fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     let host = runtime();
     let db = open(&host);
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let query = db
         .query::<crate::schema::BinaryObject>()
         .filter("id", Comparison::Eq, 1_u64);
@@ -508,7 +508,7 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     (
         rows,
         bytes as u32,
-        ic_platform_runtime::raw::instruction_counter() - start,
+        crate::system::instruction_counter() - start,
     )
 }
 
@@ -528,7 +528,7 @@ type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
 fn measured_listing(
     (hinted, after, work, bytes): (bool, Option<Vec<u8>>, u32, u32),
 ) -> ListingSample {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let host = runtime();
     let db = open(&host);
     let cursor = after
@@ -557,6 +557,6 @@ fn measured_listing(
         page.next.map(|c| c.to_bytes()),
         page.examined as u32,
         page.fetched as u32,
-        ic_platform_runtime::raw::instruction_counter() - start,
+        crate::system::instruction_counter() - start,
     )
 }

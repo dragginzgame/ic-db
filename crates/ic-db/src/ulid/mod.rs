@@ -4,16 +4,39 @@ use std::{fmt, str::FromStr};
 
 #[cfg(target_arch = "wasm32")]
 mod canister;
-#[cfg(target_arch = "wasm32")]
-pub use canister::UlidEntropyError;
-#[cfg(target_arch = "wasm32")]
-pub use pseudo::SeededUlidGenerator;
 mod generator;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the IC issuance API and native stream tests own a process-local generator"
+    )
+)]
 mod pseudo;
 #[cfg(test)]
 mod tests;
 pub use generator::{UlidGenerationError, UlidGenerator};
+pub use pseudo::SeededUlidGenerator;
+
+/// Failure to obtain fresh entropy for a ULID.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum UlidEntropyError {
+    /// The management call failed or produced no successful reply.
+    Unavailable,
+    /// The management protocol frame was invalid.
+    InvalidFrame,
+}
+
+impl fmt::Display for UlidEntropyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "ULID entropy unavailable",
+            Self::InvalidFrame => "invalid ULID entropy frame",
+        })
+    }
+}
+
+impl std::error::Error for UlidEntropyError {}
 
 /// A 128-bit ULID with exact 16-byte storage and canonical uppercase text.
 ///

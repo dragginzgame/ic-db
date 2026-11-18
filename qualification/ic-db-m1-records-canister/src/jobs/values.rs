@@ -129,12 +129,9 @@ type Response = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
     on_error = crate::transport::endpoint_error
 )]
 fn job_values_advance(request: AdvanceRequest) -> (Result<Response, String>, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = advance(request).map_err(|e| e.to_string());
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 
 fn advance(

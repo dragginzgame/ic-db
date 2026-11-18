@@ -16,6 +16,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [features]
+unique-lookup = []
 build = ["icydb/build"]
 envelope = []
 

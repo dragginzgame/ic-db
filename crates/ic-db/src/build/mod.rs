@@ -13,6 +13,13 @@ use std::{fmt::Write, sync::Mutex};
 #[doc(hidden)]
 pub use ctor as __ctor;
 
+/// Emit constructor registration only in explicitly selected host schema builds.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __register_schema {
+    ($($item:item)*) => { $($item)* };
+}
+
 /// Refusal to generate a schema from host declarations.
 #[derive(Debug)]
 pub enum Error {

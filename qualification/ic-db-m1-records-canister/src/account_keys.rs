@@ -80,7 +80,7 @@ fn account_keys_write(
         Err(error) => panic!("unexpected Account key refusal: {error:?}"),
     }
     if trap {
-        ic_platform_runtime::system::trap("after Account key commit");
+        crate::system::trap("after Account key commit");
     }
     Ok(())
 }

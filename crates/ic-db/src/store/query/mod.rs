@@ -413,7 +413,14 @@ pub(super) fn source_page<M: Memory>(
         cursor,
         ..Request::default()
     };
-    let plan = Plan::admit(entity, &request, binding, incarnation, None, false)?;
+    let plan = Plan::admit(
+        entity,
+        &request,
+        binding,
+        incarnation,
+        None,
+        PlanOutput::Rows,
+    )?;
     execute(map, entity, &request, &plan, None)
 }
 
@@ -472,6 +479,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.request
             .filter(field, comparison, QueryOperand::Literal(value.into()));
         self
+    }
+
+    /// Require an exact field value. Equivalent to `filter(field, Comparison::Eq, value)`.
+    #[must_use]
+    pub fn eq(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Eq, value)
     }
 
     /// Compare two top-level fields on the same row. Lists and sets support Contains
@@ -716,6 +729,22 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         fetch_rows(self.db, E::SCHEMA, self.request, None)?.decode_entities()
     }
 
+    /// Return the first matching entity in query order, or `None` on a proven miss.
+    /// Uses a one-row page. For partial pages with resumable progress use `fetch`.
+    /// # Errors
+    /// Returns the same admission and storage errors as `fetch`. Returns `Limit`
+    /// if the work budget ends before a match or exhaustion is established.
+    pub fn first(self) -> Result<Option<E>, Error> {
+        if !(1..=32).contains(&self.request.rows) {
+            return Err(Error::Limit);
+        }
+        let mut page = self.limit(1).fetch()?;
+        match page.rows.pop() {
+            None if page.next.is_some() => Err(Error::Limit),
+            result => Ok(result),
+        }
+    }
+
     /// Project matching top-level fields into an existing `#[record]` type.
     /// Names, optionality and complete value definitions must match exactly.
     /// The record is an output shape, not a new stored entity or schema entry.
@@ -886,6 +915,12 @@ fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -
     }
     output
 }
+#[derive(Clone, Copy)]
+enum PlanOutput {
+    Rows,
+    Aggregate { grouped: bool },
+}
+
 struct Plan<'a> {
     primary: usize,
     index: Option<&'a IndexSchema>,
@@ -915,7 +950,7 @@ impl<'a> Plan<'a> {
         schema: [u8; 32],
         incarnation: [u8; 16],
         projection: Option<&TypeSchema>,
-        group_output: bool,
+        output: PlanOutput,
     ) -> Result<Self, Error> {
         if request.over_limit
             || !(1..=32).contains(&request.rows)
@@ -924,7 +959,8 @@ impl<'a> Plan<'a> {
         {
             return Err(Error::Limit);
         }
-        if !group_output && !request.groups.is_empty() {
+        if !matches!(output, PlanOutput::Aggregate { grouped: true }) && !request.groups.is_empty()
+        {
             return Err(Error::InvalidQuery);
         }
         // Bound literal encoding even when a declaration's maximum exceeds one row.
@@ -1070,7 +1106,7 @@ impl<'a> Plan<'a> {
         }
         // Admit every operand before selecting a path, even for empty or
         // contradictory queries. The scanner consumes this one proven choice.
-        match order::select(entity, request)? {
+        match order::select(entity, request, output)? {
             order::Path::Primary => {}
             order::Path::Index(path) => plan.use_index(entity, path),
             order::Path::Sort(fields) => {
@@ -1250,7 +1286,7 @@ fn fetch_rows<M: Memory>(
         db.schema.fingerprint(),
         db.incarnation,
         projection,
-        false,
+        PlanOutput::Rows,
     )?;
     execute(&db.map, entity, &request, &plan, None)
 }

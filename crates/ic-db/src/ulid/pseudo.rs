@@ -33,15 +33,6 @@ impl SeededUlidGenerator {
             )
             .expect("ULID suffix exhausted at the current logical timestamp")
     }
-
-    /// Issue synchronously at IC time, advancing only this stream.
-    ///
-    /// # Panics
-    /// Traps on exhaustion after at least 2^79 same-millisecond increments.
-    #[cfg(target_arch = "wasm32")]
-    pub fn next_id(&mut self) -> Ulid {
-        self.at(ic_platform_runtime::system::time())
-    }
 }
 
 fn stream((principal, version): (Principal, u64), number: Option<u64>) -> SeededUlidGenerator {

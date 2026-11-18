@@ -40,6 +40,7 @@ pub(super) enum Path<'a> {
 pub(super) fn select<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
+    output: super::PlanOutput,
 ) -> Result<Path<'a>, Error> {
     // Plan admission bounds the order to four fields. Indexed paths allocate no
     // additional sort metadata; materialize it only for the complete fallback.
@@ -76,8 +77,12 @@ pub(super) fn select<'a>(
             return Err(Error::InvalidQuery);
         }
         let prefix = admit_index_prefix(entity, index, values)?;
+        let exact_owner = matches!(output, super::PlanOutput::Rows)
+            && !request.distinct
+            && index.unique
+            && values.len() == index.fields.len();
         if !complete_membership(entity, index, values, request)
-            || !fits_order(Some(index), values.len())
+            || !(exact_owner || fits_order(Some(index), values.len()))
         {
             return Err(Error::InvalidQuery);
         }
@@ -87,7 +92,15 @@ pub(super) fn select<'a>(
             fixed: values.len(),
         }));
     }
-    // Keep the existing no-order contract and its cursors unchanged.
+    // Any valid order holds for zero or one owner. A resumed query keeps the
+    // physical path bound to its cursor; DISTINCT and aggregates own their paths.
+    if matches!(output, super::PlanOutput::Rows)
+        && !request.distinct
+        && request.cursor.is_none()
+        && let Some(path) = unique_lookup(entity, request)?
+    {
+        return Ok(Path::Index(path));
+    }
     // A mandatory primary equality admits at most one row under any valid order.
     // Projected DISTINCT retains its path-dependent continuation strategy.
     if request.order.is_none() || (single_row && !request.distinct) {
@@ -136,6 +149,29 @@ pub(super) fn select<'a>(
         positions.push((primary, false));
     }
     Ok(Path::Sort(positions))
+}
+
+/// A full unique key has at most one owner, so using it preserves primary order.
+fn unique_lookup<'a>(
+    entity: &'a EntitySchema,
+    request: &Request<'_>,
+) -> Result<Option<IndexPath<'a>>, Error> {
+    if request.predicates.is_empty() || equality(request, entity.primary_key).is_some() {
+        return Ok(None);
+    }
+    for index in entity
+        .indexes
+        .iter()
+        .filter(|i| i.unique && i.fields.len() <= request.predicates.len())
+    {
+        let values = leading_equalities(request, index);
+        if values.len() == index.fields.len()
+            && let Some(path) = automatic_prefix(entity, index, &values)?
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 // A fixed component implies an equality only when its selected value agrees.

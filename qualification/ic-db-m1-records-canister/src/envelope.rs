@@ -72,7 +72,7 @@ fn envelope_write(
 ) -> (Result<(), u8>, u64) {
     // Includes reopen, row construction, batch preparation and commit. Transport
     // decode/encode is outside this interval; the driver measures whole-call cycles.
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = match write(mode, count, generation, oversized, 60) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
@@ -80,12 +80,9 @@ fn envelope_write(
         Err(error) => panic!("unexpected envelope refusal: {error:?}"),
     };
     if trap {
-        ic_platform_runtime::system::trap("after envelope commit");
+        crate::system::trap("after envelope commit");
     }
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 
 /// Inspect the selected index and generation after an envelope write.
@@ -100,7 +97,7 @@ fn envelope_write(
 )]
 fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
     assert!(index < 8 && generation <= 1);
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let host = runtime();
     let db = open(&host);
     let index = &EnvelopeRow::SCHEMA.indexes[usize::from(index)];
@@ -116,11 +113,7 @@ fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
         .unwrap();
     let ids = rows.into_iter().map(|row| row.id).collect();
     let revision = db.revision::<EnvelopeRow>().unwrap();
-    (
-        ids,
-        revision,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (ids, revision, crate::system::instruction_counter() - start)
 }
 
 /// Read the fixture’s four text fields by row ID.
@@ -155,16 +148,13 @@ fn envelope_comparison_write(
     (mode, generation, text_len): (u8, u8, u16),
 ) -> (Result<(), u16>, u64) {
     assert!(mode <= 1 && matches!(text_len, 48 | 61 | 1018));
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = match write(mode, 32, generation, false, usize::from(text_len)) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
         Err(error) => panic!("unexpected comparison refusal: {error:?}"),
     };
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 
 /// List matching fixture IDs for the requested generation.

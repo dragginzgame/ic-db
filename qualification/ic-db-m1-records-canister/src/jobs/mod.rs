@@ -356,7 +356,7 @@ fn job_advance(
     };
     let writes = faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::system::trap("after successful aggregate advance");
+        crate::system::trap("after successful aggregate advance");
     }
     result
         .map(|(sequence, revision, examined, bytes, phase, value)| {
@@ -380,12 +380,9 @@ fn job_advance(
     on_error = crate::transport::endpoint_error
 )]
 fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = job_advance(request);
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 
 /// Measure a page read from completed group output.
@@ -399,12 +396,9 @@ fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) 
     on_error = crate::transport::endpoint_error
 )]
 fn job_page_cost(request: PageRequest) -> (Result<PageResponse, String>, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     let result = job_page(request);
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    (result, crate::system::instruction_counter() - start)
 }
 // operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
 // 4 unrelated entity mutation; 5 mutate source then trap.
@@ -446,7 +440,7 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
             }
             let result = db.commit(batch).map(|()| db.revision::<Entry>().unwrap());
             if operation == 5 {
-                ic_platform_runtime::system::trap("after source mutation");
+                crate::system::trap("after source mutation");
             }
             result
         }
@@ -471,18 +465,14 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
 fn job_control_cost(
     (request, fault, trap_after): (ControlRequest, u64, bool),
 ) -> (Result<u64, String>, u64, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     faults::arm_job_write(fault);
     let result = job_control(request);
     let writes = faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::system::trap("after aggregate lifecycle operation");
+        crate::system::trap("after aggregate lifecycle operation");
     }
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-        writes,
-    )
+    (result, crate::system::instruction_counter() - start, writes)
 }
 
 // Private qualification endpoint; product endpoints remain adapter-owned.
@@ -518,7 +508,7 @@ fn job_page(
         .resume_group_count::<Category>(&mut jobs, &handle, sequence, Timestamp::from_millis(now));
     faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::system::trap("after successful group page");
+        crate::system::trap("after successful group page");
     }
     let step = result.map_err(|e| e.to_string())?;
     let (phase, rows, next) = match step.outcome {
@@ -584,7 +574,7 @@ fn job_group_extremum(
     };
     faults::finish_job_write();
     if trap_after {
-        ic_platform_runtime::system::trap("after grouped extremum advance");
+        crate::system::trap("after grouped extremum advance");
     }
     let step = result.map_err(|e| e.to_string())?;
     let (phase, rows, next) = match step.outcome {

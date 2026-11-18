@@ -673,7 +673,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.db.schema.fingerprint(),
             self.db.incarnation,
             output,
-            group_output,
+            super::PlanOutput::Aggregate {
+                grouped: group_output,
+            },
         )?;
         if let Some(mask) = plan.projection {
             admit_ordered_fields(E::SCHEMA, mask)?;

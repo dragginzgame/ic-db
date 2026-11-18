@@ -2839,12 +2839,16 @@ unchanged selected paths retain their identities and cleanup remains available.
 Larger sorting and general DISTINCT remain work; this is not
 a general cost-based planner.
 
-**Next query increment (planned).** For an ordinary entity fetch, recognize
-mandatory literal equality filters that bind every component of a declared
-unique index, in any filter order. Use the schema to select the lookup without
-an index hint. Check residual predicates on the verified owner row. Qualify hits,
-misses, sparse-index membership, and continuation compatibility against the
-existing traversal. Partial keys and disjunctions alone do not prove uniqueness.
+**Automatic unique lookup (0.23.12).** For fresh entity reads and ordinary field projections, mandatory literal equalities on every component of a unique index admit
+an exact index range in either filter order. At most one owner qualifies, so
+any admitted output order holds. Frozen IcyDB `6d421e3` uses the same reasoning
+for exact primary-key reads in `db/query/plan/covering/mod.rs`. The scanner validates the owner and
+checks residual predicates. Sparse indexes require present values in every
+optional component. A primary-key equality keeps its primary seek. Existing
+cursors continue on their admitted traversal. Partial keys and OR alternatives
+alone do not prove uniqueness. The `eq` method constructs the ordinary equality
+predicate. The `first` terminal returns an entity, a proven miss, or a work-limit
+refusal when traversal stops before either outcome.
 
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply
 the requested order, the same scanner traverses the primary range and retains

@@ -2787,6 +2787,22 @@ count advance, listings returned to their earlier cost range. This PocketIC samp
 mount and measures instructions inside handlers. The retained run log is
 `qualification/target/evidence/mixed-lifecycle/run.log`.
 
+### Compound equality lookup (0.23.12)
+
+The opt-in native test compares IC DB with frozen IcyDB at `6d421e3`.
+A route has a unique key on two principals. Each principal also occurs in
+another route. Both engines receive equality filters in both orders and must
+return the expected ID or a miss under default and descending ID order,
+including when a further ID filter accepts
+or rejects the owner. IcyDB uses its typed query builder in
+`crates/icydb/src/db/query/typed.rs` with `.limit(1).execute_live_page(None)`.
+IC DB checks both `.first()` and an ID-only projection with a one-candidate
+work limit. This measures result agreement. IC instruction costs remain unmeasured.
+
+```sh
+cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-icydb-baseline-canister --features unique-lookup --test native_matrix compound_equality_lookup -- --ignored
+```
+
 ### Matched complete keyset listing (0.23.10)
 
 `make m2-keyset-comparison` seeds both scalar Wasm hosts with the 128 item

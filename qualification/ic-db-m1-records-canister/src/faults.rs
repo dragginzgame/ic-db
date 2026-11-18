@@ -87,11 +87,11 @@ impl Memory for FaultMemory {
                         // do not simulate exhaustion with an application trap.
                         let mut work = [0_u8; 4096];
                         loop {
-                            work.fill(ic_platform_runtime::raw::instruction_counter() as u8);
+                            work.fill(crate::system::instruction_counter() as u8);
                             std::hint::black_box(&work);
                         }
                     }
-                    ic_platform_runtime::system::trap("M1 injected trap after backing write");
+                    crate::system::trap("M1 injected trap after backing write");
                 }
             }
         });

@@ -19,6 +19,7 @@ category = "tests"
 crate-type = ["cdylib"]
 
 [features]
+unique-lookup = ["ic-db-icydb-baseline-schema/unique-lookup"]
 envelope = ["ic-db-icydb-baseline-schema/envelope"]
 aggregate-comparison = []
 count-comparison = []

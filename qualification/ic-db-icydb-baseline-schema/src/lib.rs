@@ -49,3 +49,14 @@ pub struct Entry {}
     )
 )]
 pub struct EnvelopeRow {}
+
+/// Isolated equality-lookup witness, excluded from the measured scalar schema.
+#[cfg(feature = "unique-lookup")]
+#[entity(
+    store = "BaselineStore", version = 1, pk(field = "id"),
+    index(fields = ["issuer", "subject"], unique),
+    fields(field(name = "id", value(item(prim = "Nat64"))),
+           field(name = "issuer", value(item(prim = "Principal"))),
+           field(name = "subject", value(item(prim = "Principal"))))
+)]
+pub struct Route {}

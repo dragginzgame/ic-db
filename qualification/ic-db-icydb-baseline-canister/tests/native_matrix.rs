@@ -369,7 +369,7 @@ impl Sql {
     }
 }
 
-fn create_ic() -> Database {
+fn create_ic(schema: Schema) -> Database {
     let mut host = MemoryRuntime::new(VectorMemory::default()).unwrap();
     let key = "bench.native.v1";
     host.bootstrap(
@@ -380,7 +380,7 @@ fn create_ic() -> Database {
     .unwrap();
     Database::create(
         host.open_memory(&StableKey::parse(key).unwrap()).unwrap(),
-        Schema::new(&[Entry::SCHEMA]).unwrap(),
+        schema,
         [41; 16],
     )
     .unwrap()
@@ -453,7 +453,7 @@ fn profile(skew: bool) -> String {
     let label = if skew { "skewed" } else { "balanced" };
     icydb::db::provide_boot_entropy([41; 32]).unwrap();
     settle();
-    let mut ic = create_ic();
+    let mut ic = create_ic(Schema::new(&[Entry::SCHEMA]).unwrap());
     let sql = Connection::open_in_memory().unwrap();
     sql.execute_batch("CREATE TABLE entry(id INTEGER PRIMARY KEY,category INTEGER NOT NULL,amount INTEGER NOT NULL); CREATE INDEX category_id ON entry(category,id)").unwrap();
     let mut output = String::new();
@@ -571,4 +571,106 @@ fn profile(skew: bool) -> String {
         }
     }
     output
+}
+
+#[cfg(feature = "unique-lookup")]
+#[test]
+#[ignore = "explicit comparison with frozen IcyDB"]
+fn compound_equality_lookup() {
+    use ic_db_icydb_baseline_schema::{Route as LegacyRoute, RouteInsert as LegacyRouteInsert};
+    use icydb::{db::query::FieldRef, types::Principal as LegacyPrincipal};
+
+    #[entity(pk(field="id"),index(fields=["issuer","subject"],unique),fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="issuer",value(item(prim="Principal"))),
+        field(name="subject",value(item(prim="Principal")))))]
+    struct Route {}
+    #[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+    struct RouteId {}
+
+    icydb::db::provide_boot_entropy([41; 32]).unwrap();
+    settle();
+    let mut ic = create_ic(Schema::new(&[Route::SCHEMA]).unwrap());
+    let mut batch = Batch::new();
+    icydb::db::with_request_execution(|| {
+        let session = db().unwrap();
+        let mut writes = session.trusted_typed_write_batch();
+        for (id, issuer, subject) in [(9, 1, 2), (3, 1, 3), (6, 2, 2)] {
+            batch
+                .insert(&Route {
+                    id,
+                    issuer: ic_db::Principal::from_slice(&[issuer]),
+                    subject: ic_db::Principal::from_slice(&[subject]),
+                })
+                .unwrap();
+            writes
+                .push(LegacyRouteInsert {
+                    id: WriteCell::Value(Id::from_key(id)),
+                    issuer: WriteCell::Value(LegacyPrincipal::from_slice(&[issuer])),
+                    subject: WriteCell::Value(LegacyPrincipal::from_slice(&[subject])),
+                })
+                .unwrap();
+        }
+        writes.execute().unwrap();
+    });
+    ic.commit(batch).unwrap();
+    settle();
+
+    for (issuer, subject, minimum, expected) in [
+        (1_u8, 2_u8, None::<u64>, Some(9)),
+        (1, 3, None, Some(3)),
+        (2, 2, None, Some(6)),
+        (2, 3, None, None),
+        (1, 2, Some(8), Some(9)),
+        (1, 2, Some(10), None),
+    ] {
+        for (reverse, ordered) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut terms = [("issuer", issuer), ("subject", subject)];
+            if reverse {
+                terms.reverse();
+            }
+            let legacy_id = icydb::db::with_request_execution(|| {
+                let session = db().unwrap();
+                let mut query = session.query::<LegacyRoute>().unwrap();
+                for (field, value) in terms {
+                    query = query
+                        .filter(FieldRef::new(field).eq(LegacyPrincipal::from_slice(&[value])));
+                }
+                if let Some(minimum) = minimum {
+                    query = query.filter(FieldRef::new("id").gte(minimum));
+                }
+                if ordered {
+                    query = query.order_by(icydb::db::query::desc("id"));
+                }
+                query
+                    .limit(1)
+                    .execute_live_page(None)
+                    .unwrap()
+                    .rows
+                    .first()
+                    .map(|row| row.id)
+            });
+            assert_eq!(legacy_id, expected);
+            let query = || {
+                let mut q = ic.query::<Route>();
+                for (field, value) in terms {
+                    q = q.eq(field, ic_db::Principal::from_slice(&[value]));
+                }
+                if let Some(minimum) = minimum {
+                    q = q.filter("id", Comparison::Ge, minimum);
+                }
+                if ordered {
+                    q = q.order_by(&["id"]).descending();
+                }
+                q.work_limit(1)
+            };
+            assert_eq!(query().first().unwrap().map(|row| row.id), legacy_id);
+            let projected = query().fetch_as::<RouteId>().unwrap();
+            assert_eq!(
+                projected.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                legacy_id.into_iter().collect::<Vec<_>>()
+            );
+            assert!(projected.examined <= 1 && projected.next.is_none());
+        }
+    }
 }

@@ -39,7 +39,7 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
         }
         db.commit(batch).map_err(|_| 2_u8)?;
         if mode == 3 {
-            ic_platform_runtime::system::trap("after enum collection replacement");
+            crate::system::trap("after enum collection replacement");
         }
     }
     Ok((

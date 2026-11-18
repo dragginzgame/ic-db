@@ -111,9 +111,19 @@ pub(super) fn bounds(
         key: StoreKey::new(plan.prefix.clone())?,
         inclusive: true,
     };
-    let mut upper = Endpoint {
-        key: StoreKey::new(successor(plan.prefix.clone())?)?,
-        inclusive: false,
+    let full_unique = plan
+        .index
+        .is_some_and(|index| index.unique && plan.fixed_components == index.fields.len());
+    let mut upper = if full_unique {
+        Endpoint {
+            key: lower.key.clone(),
+            inclusive: true,
+        }
+    } else {
+        Endpoint {
+            key: StoreKey::new(successor(plan.prefix.clone())?)?,
+            inclusive: false,
+        }
     };
     let secondary = plan.index.is_some();
     let field = match plan.index {

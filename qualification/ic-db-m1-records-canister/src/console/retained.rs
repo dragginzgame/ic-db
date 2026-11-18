@@ -17,7 +17,14 @@ use ic_db::{
 };
 
 fn now() -> Timestamp {
-    Timestamp::from_millis((ic_platform_runtime::system::time() / 1_000_000) as i64)
+    #[cfg(target_arch = "wasm32")]
+    let now = ic_platform_runtime::system::time() / 1_000_000;
+    #[cfg(not(target_arch = "wasm32"))]
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    Timestamp::from_millis(i64::try_from(now).expect("representable fixture timestamp"))
 }
 
 // Reconstructed on every call; product admission binds these semantics to the job.

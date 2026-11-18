@@ -73,7 +73,7 @@ fn maintenance_control((operation, inputs, trap): (u8, Vec<u8>, bool)) -> Result
         _ => return Err("unsupported maintenance control".into()),
     }
     if trap {
-        ic_platform_runtime::system::trap("maintenance fixture trap after operation");
+        crate::system::trap("maintenance fixture trap after operation");
     }
     Ok(())
 }
@@ -210,7 +210,7 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
 fn maintenance_copy((operation, limit, trap): (u8, u8, bool)) -> Result<(u64, bool), String> {
     let result = copy_control(operation, limit).map_err(|error| format!("{error:?}"))?;
     if trap {
-        ic_platform_runtime::system::trap("copy fixture trap after operation");
+        crate::system::trap("copy fixture trap after operation");
     }
     Ok(result)
 }
@@ -379,7 +379,7 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
 fn maintenance_managed_copy((operation, trap): (u8, bool)) -> Result<ManagedCopyReply, String> {
     let result = managed_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        ic_platform_runtime::system::trap("managed copy fixture trap");
+        crate::system::trap("managed copy fixture trap");
     }
     Ok(result)
 }
@@ -532,7 +532,7 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
 fn maintenance_whole_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
     let result = whole_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        ic_platform_runtime::system::trap("whole database copy fixture trap");
+        crate::system::trap("whole database copy fixture trap");
     }
     Ok(result)
 }
@@ -670,7 +670,7 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
 fn maintenance_next_copy((operation, trap): (u8, bool)) -> Result<WholeCopyReply, String> {
     let result = next_copy_control(operation).map_err(|error| format!("{error:?}"))?;
     if trap {
-        ic_platform_runtime::system::trap("successive database copy fixture trap");
+        crate::system::trap("successive database copy fixture trap");
     }
     Ok(result)
 }

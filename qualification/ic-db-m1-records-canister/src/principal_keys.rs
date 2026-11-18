@@ -49,7 +49,7 @@ fn principal_keys_write((mode, rows, trap): (u8, Vec<Row>, bool)) -> Result<(), 
         Err(error) => panic!("unexpected Principal write refusal: {error:?}"),
     }
     if trap {
-        ic_platform_runtime::system::trap("after Principal key commit");
+        crate::system::trap("after Principal key commit");
     }
     Ok(())
 }

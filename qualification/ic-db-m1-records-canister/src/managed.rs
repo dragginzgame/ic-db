@@ -60,7 +60,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
     prepare.map_err(error)?;
     db.commit(batch).map_err(error)?;
     if trap {
-        ic_platform_runtime::system::trap("after managed commit");
+        crate::system::trap("after managed commit");
     }
     Ok(())
 }

@@ -1,30 +1,11 @@
 //! Update-call convenience API. Entropy is requested only by the async generator constructor.
-use super::{SeededUlidGenerator, Ulid, pseudo};
+use super::{SeededUlidGenerator, Ulid, UlidEntropyError, pseudo};
 use crate::Principal;
 use ic_platform_protocol::raw_rand;
 use ic_platform_runtime::{
     call::{Call, Outcome, Wait},
     system,
 };
-use std::fmt;
-
-/// Failure to obtain fresh entropy for a ULID.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UlidEntropyError {
-    /// The management call failed or produced no successful reply.
-    Unavailable,
-    /// The management protocol frame was invalid.
-    InvalidFrame,
-}
-impl fmt::Display for UlidEntropyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Unavailable => "ULID entropy unavailable",
-            Self::InvalidFrame => "invalid ULID entropy frame",
-        })
-    }
-}
-impl std::error::Error for UlidEntropyError {}
 
 async fn fresh_suffix() -> Result<[u8; 10], UlidEntropyError> {
     let call = Call::new(
@@ -45,6 +26,16 @@ async fn fresh_suffix() -> Result<[u8; 10], UlidEntropyError> {
 
 fn identity() -> (Principal, u64) {
     (system::canister_self(), system::canister_version())
+}
+
+impl SeededUlidGenerator {
+    /// Issue synchronously at IC time, advancing only this stream.
+    ///
+    /// # Panics
+    /// Traps on exhaustion after at least 2^79 same-millisecond increments.
+    pub fn next_id(&mut self) -> Ulid {
+        self.at(system::time())
+    }
 }
 
 impl Ulid {

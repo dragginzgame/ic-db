@@ -70,7 +70,7 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
     })?;
     db.commit(batch).map_err(|_| 3_u8)?;
     if trap {
-        ic_platform_runtime::system::trap("after default commit");
+        crate::system::trap("after default commit");
     }
     Ok(view(row))
 }

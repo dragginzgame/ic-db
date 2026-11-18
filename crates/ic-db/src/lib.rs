@@ -60,14 +60,6 @@ pub mod build;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 pub mod testing;
 
-/// Emit constructor registration only in explicitly selected host schema builds.
-#[doc(hidden)]
-#[cfg(all(feature = "build", not(target_arch = "wasm32")))]
-#[macro_export]
-macro_rules! __register_schema {
-    ($($item:item)*) => { $($item)* };
-}
-
 #[doc(hidden)]
 #[cfg(not(all(feature = "build", not(target_arch = "wasm32"))))]
 #[macro_export]
@@ -87,9 +79,9 @@ pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
 pub use primary::PrimaryKey;
 pub use time::{Duration, TimeParseError, Timestamp};
-#[cfg(target_arch = "wasm32")]
-pub use ulid::{SeededUlidGenerator, UlidEntropyError};
-pub use ulid::{Ulid, UlidGenerationError, UlidGenerator, UlidParseError};
+pub use ulid::{
+    SeededUlidGenerator, Ulid, UlidEntropyError, UlidGenerationError, UlidGenerator, UlidParseError,
+};
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
@@ -114,7 +106,7 @@ pub type RetiredSource = store::RetiredSource<ic_storage::DefaultMemoryImpl>;
 
 /// Implementation methods for the concrete database handles. Installed Wasm
 /// fault probes enable `test-support` to specialize these handles for their backing.
-#[cfg(any(doc, all(target_arch = "wasm32", feature = "test-support")))]
+#[cfg(any(doc, feature = "test-support"))]
 pub mod qualification {
     pub use crate::store::{
         AggregateJobs, Database, Maintenance, Query, RetiredSource, SchemaCopy,

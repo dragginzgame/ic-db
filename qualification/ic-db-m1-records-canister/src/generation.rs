@@ -22,7 +22,9 @@ async fn issue_key(
     (millis, randomness, value, mode): (i64, [u8; 10], u64, u8),
 ) -> Result<[u8; 16], u8> {
     let id = match mode {
+        #[cfg(target_arch = "wasm32")]
         3 => Ulid::generate_prand(),
+        #[cfg(target_arch = "wasm32")]
         4 | 5 => {
             let mut stream = if mode == 4 {
                 Ulid::generator().await.map_err(|_| 6_u8)?
@@ -37,6 +39,8 @@ async fn issue_key(
             );
             second
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        3..=5 => panic!("IC-issued ULIDs require an installed canister"),
         _ => ISSUER
             .with(|issuer| {
                 issuer
@@ -63,7 +67,7 @@ async fn issue_key(
         .map_err(|_| 4_u8)?;
     db.commit(batch).map_err(|_| 5_u8)?;
     if mode == 1 {
-        ic_platform_runtime::system::trap("after generated-key commit");
+        crate::system::trap("after generated-key commit");
     }
     Ok(id.to_bytes())
 }

@@ -2138,6 +2138,78 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
         ),
         Err(Error::InvalidQuery)
     ));
+    // The candidate is outside a one-row primary scan. Reverse predicate order
+    // relative to the declaration to exercise lookup by field identity.
+    let lookup = || {
+        db.query::<TextIndex>()
+            .eq("second", "")
+            .eq("first", "😀")
+            .work_limit(1)
+    };
+    // Emitted by the v0.23.11 primary traversal after examining id 1.
+    let old_cursor = ic_db::QueryCursor::from_bytes(&[
+        1, 0, 172, 95, 112, 201, 43, 229, 236, 254, 194, 250, 11, 21, 116, 140, 213, 24, 7, 72,
+        221, 43, 145, 87, 213, 51, 87, 252, 163, 112, 75, 148, 170, 240, 2, 197, 121, 161, 226, 0,
+        0, 0, 0, 0, 0, 0, 1,
+    ])
+    .unwrap();
+    let resumed = lookup().after(&old_cursor).work_limit(32).fetch().unwrap();
+    assert_eq!(resumed.rows.len(), 1);
+    assert_eq!(resumed.rows[0].first, "😀");
+    assert!(resumed.next.is_none());
+    let page = lookup().limit(1).fetch().unwrap();
+    assert_eq!((page.examined, page.fetched), (1, 1));
+    assert_eq!(page.rows[0].first, "😀");
+    assert!(page.next.is_none());
+    assert_eq!(lookup().first().unwrap().unwrap().first, "😀");
+    let ordered = lookup().order_by(&["bucket"]).descending().fetch().unwrap();
+    assert_eq!((ordered.examined, ordered.fetched), (1, 1));
+    assert_eq!(ordered.rows, page.rows);
+    let explicit = db
+        .query::<TextIndex>()
+        .using_index("first,second", &["😀".into(), "".into()])
+        .order_by(&["bucket"])
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(explicit.rows, page.rows);
+    assert!(explicit.next.is_none());
+    assert!(ordered.next.is_none());
+    assert!(matches!(
+        lookup().order_by(&["missing"]).first(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(lookup().eq("bucket", true).first().unwrap().is_none());
+    assert!(matches!(
+        db.query::<TextIndex>()
+            .eq("first", "😀")
+            .work_limit(1)
+            .first(),
+        Err(Error::Limit)
+    ));
+    let alternatives = db
+        .query::<TextIndex>()
+        .eq("second", "")
+        .filter_any(&[
+            ("first", ic_db::Comparison::Eq, "😀".into()),
+            ("first", ic_db::Comparison::Eq, "aa".into()),
+        ])
+        .fetch()
+        .unwrap();
+    assert_eq!(alternatives.rows.len(), 2);
+    let residual = lookup().eq("bucket", true).fetch().unwrap();
+    assert!(residual.rows.is_empty() && residual.next.is_none());
+    assert_eq!(residual.examined, 1);
+    let miss = db
+        .query::<TextIndex>()
+        .eq("first", "missing")
+        .eq("second", "")
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert!(miss.rows.is_empty() && miss.next.is_none());
+    assert_eq!(miss.examined, 0);
+
     let starts_with_a: Vec<_> = expected
         .iter()
         .filter(|row| row.first == "a")
@@ -2367,6 +2439,16 @@ fn optional_indexes_preserve_absence_and_complete_unique_membership() {
         expected.push(row);
     }
     db.commit(batch).unwrap();
+    let absent = db
+        .query::<OptionalIndex>()
+        .eq("alias", IndexValue::Absent)
+        .eq("code", 0_i64)
+        .fetch()
+        .unwrap();
+    assert_eq!(
+        absent.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [4, 7]
+    );
     expected.sort_by(|a, b| (&a.alias, a.code, a.id).cmp(&(&b.alias, b.code, b.id)));
     assert_eq!(
         db.index_prefix::<OptionalIndex>("parent,alias,code", &[1_u64.into()], 32)

@@ -101,7 +101,22 @@ let page = db.query::<Entry>()
     .fetch()?;
 ```
 
-Omit `using_index` for primary-key order. Filter operands must match the exact
+For an entity with a unique compound index on `issuer` and `subject`, use
+ordinary equality filters. The result is an `Option<UserRoute>`:
+
+```rust
+let route = db.query::<UserRoute>()
+    .eq("issuer", identity.issuer())
+    .eq("subject", identity.subject())
+    .first()?;
+```
+
+A complete unique-key lookup examines at most one candidate, including when
+`fetch_as::<R>()` selects only the fields in a result record. For a general
+scan, `first()` returns `Error::Limit` if work runs out before finding a match
+or proving the range empty. Use `fetch()` to resume such scans.
+
+Omit `using_index` for default primary-key result order. Filter operands must match the exact
 declared type. `page.next` resumes the same query through `.after(&cursor)`;
 an empty page can still carry a continuation. IC DB automatically caps each
 query response at 128 KiB of encoded rows. Transport framing remains host-owned. This first slice supports AND

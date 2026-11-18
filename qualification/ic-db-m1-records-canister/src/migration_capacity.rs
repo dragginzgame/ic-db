@@ -128,7 +128,7 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
 fn migration_capacity(
     (operation, first, limit, bytes, deny_growth, stop_after): (u8, u16, u8, u32, bool, u64),
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
+    let start = crate::system::instruction_counter();
     faults::arm(stop_after, deny_growth, false);
     let result = control(operation, first, limit, bytes).map_err(|error| match error {
         Failure::Database(Error::Limit) => 1,
@@ -142,7 +142,7 @@ fn migration_capacity(
         result,
         writes,
         grows,
-        ic_platform_runtime::raw::instruction_counter() - start,
+        crate::system::instruction_counter() - start,
     )
 }
 
