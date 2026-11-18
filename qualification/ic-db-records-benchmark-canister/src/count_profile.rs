@@ -15,17 +15,23 @@ use std::ops::Bound;
 )]
 fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
     let start = ic_platform_runtime::raw::instruction_counter();
-    if mode <= 1 {
+    if mode <= 1 || mode == 5 {
         let db = database();
         let opened = ic_platform_runtime::raw::instruction_counter();
         let mut query = db.query::<Entry>().work_limit(512);
         if let Some(category) = category {
-            query = query.filter("category", Comparison::Eq, category);
-            if mode == 1 {
+            if mode != 5 {
+                query = query.filter("category", Comparison::Eq, category);
+            }
+            if mode == 1 || mode == 5 {
                 query = query.using_index("category,id", &[category.into()]);
             }
         }
-        let result = match query.count() {
+        let result = match if mode == 5 {
+            query.count_index_entries()
+        } else {
+            query.count()
+        } {
             Ok(value) => Some(value.value),
             Err(Error::Limit) => None,
             Err(error) => panic!("unexpected profile refusal: {error:?}"),
@@ -43,9 +49,8 @@ fn count_profile((mode, category): (u8, Option<u64>)) -> (Option<u64>, u64, u64)
     assert!((2..=4).contains(&mode));
     let host = runtime();
     let map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(KEY).unwrap()),
-    )
-    .unwrap();
+        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+    );
     let opened = ic_platform_runtime::raw::instruction_counter();
     let mut prefix = vec![if mode == 2 { 2 } else { 3 }];
     prefix.extend(Entry::ID.to_be_bytes());

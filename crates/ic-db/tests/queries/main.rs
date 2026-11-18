@@ -6687,3 +6687,65 @@ fn distinct_count_keys_share_the_query_byte_budget_and_key_bound() {
         Err(Error::Limit)
     ));
 }
+
+#[test]
+fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || {
+        db.query::<Entry>()
+            .using_index("category,amount,id", &[0_u8.into()])
+    };
+    let count = query()
+        .work_limit(5)
+        .limit(1)
+        .count_index_entries()
+        .unwrap();
+    assert_eq!(
+        (
+            count.value,
+            count.examined,
+            count.fetched,
+            count.output_bytes
+        ),
+        (4, 4, 0, 8)
+    );
+    assert!(matches!(
+        query().work_limit(4).count_index_entries(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        query().byte_limit(7).count_index_entries(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        query().filter("id", C::Eq, 7_u64).count_index_entries(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().count_index_entries(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(
+        db.query::<Entry>()
+            .using_index("category", &[3_u8.into()])
+            .count_index_entries()
+            .unwrap()
+            .value,
+        0
+    );
+    drop(db);
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let row_key = [&[2][..], &Entry::ID.to_be_bytes(), &2_u64.to_be_bytes()].concat();
+    assert!(raw.remove(&row_key).is_some());
+    drop(raw);
+    let db = Database::open(
+        runtime.open_memory(&key).unwrap(),
+        Schema::new(&[Entry::SCHEMA, Other::SCHEMA]).unwrap(),
+    )
+    .unwrap();
+    let query = || db.query::<Entry>().using_index("category", &[0_u8.into()]);
+    assert_eq!(query().count_index_entries().unwrap().value, 4);
+    assert!(matches!(query().count(), Err(Error::Corrupt)));
+}

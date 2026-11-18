@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 export CARGO_NET_OFFLINE=true
 unset IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_PROFILE IC_DB_PREFIX_CANDIDATE
-out="$root/qualification/target/evidence/prefix-count-candidate"
+out="${IC_DB_PREFIX_EVIDENCE_DIR:-$root/qualification/target/evidence/prefix-count-candidate}"
 mkdir -p "$out"
 source_copy="$(mktemp -d "$out/source.XXXXXX")"
 git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf "$out/source.tar"

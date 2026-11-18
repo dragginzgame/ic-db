@@ -2795,6 +2795,8 @@ The first counting terminals are synchronous `count()` and
 `Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
 include every matching row; an absent group key is a group, not a discarded
 operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
+`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. Reaching the work limit refuses the whole count. The operation adds no stored metadata or write work.
+
 `count_field("field")` counts present values of any top-level stored type,
 including present empty blobs/collections. It reads validated presence tags from
 the existing row spans, without requiring ordered-value support or typed decoding.

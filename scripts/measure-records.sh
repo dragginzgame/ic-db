@@ -36,13 +36,13 @@ case "$workload" in
         export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_AGGREGATE_PATHS=1
         ;;
     count)
-        evidence="$PWD/qualification/target/evidence/count-comparison"
+        evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-comparison}"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         export IC_DB_COUNT_COMPARISON=1
         ;;
     count-profile)
-        evidence="$PWD/qualification/target/evidence/count-profile"
+        evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-profile}"
         engines=(records-benchmark)
         test_name=records_comparison
         export IC_DB_COUNT_COMPARISON=1 IC_DB_COUNT_PROFILE=1

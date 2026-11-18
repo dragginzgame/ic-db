@@ -376,6 +376,39 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.scalar_count(None)
     }
 
+    /// Count physical entries in the range selected by `using_index` and its
+    /// leading operands. This reads neither index values nor owner rows. A
+    /// dangling index entry counts as one. Use [`Self::count`] to validate rows.
+    /// Like other scalar counts, the row limit does not truncate the input.
+    /// # Errors
+    /// Requires an explicit index. Row predicates, ordering, cursors, grouping
+    /// and DISTINCT refuse. Reaching the work limit before observing completion
+    /// returns `Limit`; fewer than eight output bytes returns `RowTooLarge`.
+    /// # Panics
+    /// Malformed supplier storage can trap during traversal.
+    pub fn count_index_entries(self) -> Result<Aggregate<u64>, Error> {
+        if self.request.index.is_none() || !self.request.predicates.is_empty() {
+            return Err(Error::InvalidQuery);
+        }
+        if self.request.bytes < 8 {
+            return Err(Error::RowTooLarge);
+        }
+        let plan = self.aggregate_plan(None, false)?;
+        let bounds = super::range::bounds(E::SCHEMA, &self.request, &plan)?;
+        let examined = bounds.map_or(0, |range| {
+            self.db.map.range(range).take(self.request.work).count()
+        });
+        if examined == self.request.work {
+            return Err(Error::Limit);
+        }
+        Ok(Aggregate {
+            value: examined as u64,
+            examined,
+            fetched: 0,
+            output_bytes: 8,
+        })
+    }
+
     /// Count present values of a top-level field, including non-scalar fields.
     /// Empty input and all-absent input yield zero; present empty values count.
     /// Limits, refusals and corruption traps are the same as [`Self::count`].

@@ -265,7 +265,7 @@
 +}
 +fn counters(h: &MemoryRuntime<VectorMemory>, target: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
 +    let map =
-+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key(target)).unwrap()).unwrap();
++        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key(target)).unwrap());
 +    map.range(vec![4]..vec![5])
 +        .map(|entry| (entry.key().clone(), entry.value()))
 +        .collect()
@@ -396,8 +396,8 @@
 +        db.commit(b).unwrap();
 +        drop(db);
 +        let mut map =
-+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key(false)).unwrap())
-+                .unwrap();
++            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key(false)).unwrap());
++
 +        match case {
 +            0 => {
 +                map.insert(raw_key(1), u64::MAX.to_le_bytes().to_vec());

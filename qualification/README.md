@@ -309,7 +309,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
-| Stable Storage adoption | Storage 0.78.0 uses the DB codec to reject oversized keys. The installed count upgrade witness passes. | Current-supplier performance comparison remains open. |
+| Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
@@ -1978,6 +1978,28 @@ Earlier attempts remain in `aggregate-comparison-initial/` and
 workspace package or dependency is added. Broader grouped and retained-job
 comparisons remain open.
 
+### Storage 0.78 count comparison
+
+The count workload ran on IC DB 0.22.2 (`97e49f2`) with Storage 0.78.0 and frozen IcyDB `6d421e3` on PocketIC. Both returned the expected counts at 32, 128, 256 and 512 rows and across upgrades. The table shows query instructions after writes settled at 512 rows.
+
+| Count | Result | IC DB | Frozen IcyDB |
+| --- | ---: | ---: | ---: |
+| Whole entity | 512 | 625,558 | 1,417,729 |
+| Category 0 | 129 | 15,930,527 | 1,507,177 |
+| Category 3 | 127 | 16,639,262 | 1,499,808 |
+| Missing category | 0 | 826,300 | 1,515,365 |
+
+IC DB reads maintained metadata for the whole-entity count. For a category it traverses an index and checks the matching rows. IcyDB maintains category counts during writes. A separate IC DB profile on category 0 measured 531,547 instructions to open the database and 15,466,901 to execute the count. Traversing the raw index cost 1,546,322 instructions. Adding owner-row fetches to that control raised it to 13,356,926. Fetching matching rows accounts for the largest measured increment.
+
+The explicit fluent `count_index_entries()` terminal subsequently ran in the same count-profile canister as the validated count. With 129 matches at 512 rows, execution took 1,226,592 instructions versus 15,467,227. Opening added 531,555 to each, giving 1,758,147 versus 15,998,782 overall. Both returned 129 before and after upgrade. The native corruption witness counts a deliberately dangling entry and verifies ordinary `count()` refuses it. Reproduce using `IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/index-entry-count-078" make m2-count-profile` (modes 5 and 1).
+
+The matched Wasm artifacts were 310,716 bytes (285,487 code) for IC DB and 3,115,697 bytes (3,006,452 code) for IcyDB. The two evidence directories contain the source revision and diff, lockfile, Wasm, hashes and `results.log`. To reproduce from the repository root:
+
+```sh
+IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-storage-078" make m2-count-comparison
+IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-profile-storage-078" make m2-count-profile
+```
+
 ### Exact count scaling (0.19)
 
 The original `make m2-count-comparison` selected a separate `count-comparison` feature in the
@@ -2330,6 +2352,10 @@ generic remote CLI contract; common inspection and explicit application-query
 selection must be settled before connecting `db` to deployed databases.
 
 ### Maintained prefix-count candidate (0.19)
+
+Rerun on Storage 0.78.0 with the 0.22.2 engine: at 512 rows the control's validated count of category 0 (129 matches) took 15,930,527 instructions. The candidate's explicit metadata lookup took 803,157. Mean insert cost across the first 32 inserts rose from 934,343 to 1,118,875 instructions. The read-modify-write that moved one row between categories rose from 1,219,344 to 1,695,795. Replacing a row within its category took 1,214,436 and 1,216,687 respectively. Reachable Wasm grew by 6,928 bytes, including 5,777 code bytes. The control and candidate use separate Wasm builds. Ordinary fluent counts in both builds still check each owner's row.
+
+Reproduce with `IC_DB_PREFIX_EVIDENCE_DIR="$PWD/qualification/target/evidence/prefix-count-078" make m2-prefix-candidate`. The candidate passed its native and count journeys. Its fault sweep hit the probe’s maximum write count before one replacement completed, so this run does not qualify candidate rollback at every write. Product index-entry counting uses no maintained prefix records. The receipt contains `native.log`, `control.log`, `candidate.log`, the exact applied patch, and source and artifact identities.
 
 Parked by maintainer sequencing: application integration and engine maturity take
 priority over further optimization. Retain this evidence without adopting the

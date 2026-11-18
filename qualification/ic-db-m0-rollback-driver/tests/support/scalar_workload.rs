@@ -598,7 +598,7 @@ pub async fn run(
                 let modes: &[u8] = if category.is_none() {
                     &[0, 2]
                 } else {
-                    &[0, 1, 3, 4]
+                    &[0, 1, 3, 4, 5]
                 };
                 for &mode in modes {
                     let reply = pic
