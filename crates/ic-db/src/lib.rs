@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 //! Experimental IC database: compiled schemas and synchronous bounded records.
+//! Schema modules can import the declaration attributes and value types from
+//! [`design::prelude`].
 //!
 //! This M1 slice supports 8/16/32/64/128-bit integers, U256, Ulid, Date, Timestamp, Duration, Decimal,
 //! finite Float32/Float64, Bool, Principal, Account/Subaccount and bounded Text/Blob, with optional
@@ -76,7 +78,7 @@ pub use defaults::{InsertInput, LiteralDefault};
 /// Exact unsigned 256-bit integer. IC DB owns its durable and index encodings.
 pub use ethnum::U256;
 pub use float::{Float32, Float64};
-pub use ic_db_macros::{entity, enum_, map, record, set};
+pub use ic_db_macros::{entity, enum_, list, map, newtype, record, set};
 pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
@@ -152,6 +154,40 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
+
+/// Schema authoring for application design modules.
+pub mod design {
+    /// Declaration attributes, database scalar types and schema assembly.
+    ///
+    /// ```
+    /// use ic_db::design::prelude::*;
+    ///
+    /// #[newtype(item(prim = "Timestamp"))]
+    /// struct StartedAt {}
+    ///
+    /// #[list(item(is = "StartedAt"), max_items = 3)]
+    /// struct StartHistory {}
+    ///
+    /// #[entity(pk(field = "id"), fields(
+    ///     field(name = "id", value(item(prim = "Nat64"))),
+    ///     field(name = "history", value(item(is = "StartHistory")))
+    /// ))]
+    /// struct Event {}
+    ///
+    /// let event = Event { id: 1, history: StartHistory(vec![StartedAt(Timestamp::from_millis(0))]) };
+    /// let schema = Schema::new(&[Event::SCHEMA]).unwrap();
+    /// assert_eq!(schema.entities()[0].name, "Event");
+    /// assert_eq!(event.history.0.len(), 1);
+    /// ```
+    pub mod prelude {
+        pub use crate::{
+            Account, Blob, Date, Decimal, Duration, Float32, Float64, Principal, Subaccount,
+            Timestamp, U256, Ulid,
+        };
+        pub use crate::{Entity, Schema, Value};
+        pub use crate::{entity, enum_, list, map, newtype, record, set};
+    }
+}
 
 /// Codec boundary emitted by `#[entity]`; hand-written implementations are unsupported.
 /// Typed references use Rust resolution; an unresolved name fails compilation:

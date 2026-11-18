@@ -1,5 +1,5 @@
 //! Parse and project stored field types at the macro boundary.
-use super::{list, literal, once, text};
+use super::{literal, meta_items, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Lit, Meta};
@@ -63,7 +63,7 @@ impl Field {
         let mut reference = None;
         let mut default = None;
         let mut managed = None;
-        for part in list(meta)? {
+        for part in meta_items(meta)? {
             if part.path().is_ident("name") {
                 once(&mut name, text(&part)?, &part)?;
             } else if part.path().is_ident("value") {
@@ -85,7 +85,7 @@ impl Field {
             } else if part.path().is_ident("references") {
                 let mut entity = None;
                 let mut index = None;
-                for option in list(&part)? {
+                for option in meta_items(&part)? {
                     if option.path().is_ident("entity") {
                         let target = syn::parse_str(&text(&option)?)?;
                         once(&mut entity, target, &option)?;
@@ -458,7 +458,7 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
     let mut optional = false;
     let mut many = false;
     let mut max_items = None;
-    for part in list(meta)? {
+    for part in meta_items(meta)? {
         if matches!(&part, Meta::Path(path) if path.is_ident("opt")) && !optional {
             optional = true;
         } else if matches!(&part, Meta::Path(path) if path.is_ident("many")) && !many {
@@ -502,7 +502,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     let mut indirect = false;
     let mut max = None;
     let mut scale = None;
-    for part in list(meta)? {
+    for part in meta_items(meta)? {
         if matches!(&part, Meta::Path(path) if path.is_ident("indirect")) && !indirect {
             indirect = true;
         } else if part.path().is_ident("is") {

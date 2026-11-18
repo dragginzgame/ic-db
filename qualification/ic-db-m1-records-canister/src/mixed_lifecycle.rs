@@ -270,6 +270,45 @@ fn mixed_read((target, parent, minimum): (bool, u64, u64)) -> (Result<Snapshot, 
         ic_platform_runtime::raw::instruction_counter() - start,
     )
 }
+// One query message per page. A work budget of one forces progress through
+// residual nonmatches before the qualifying item on the same parent index.
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "mixed_page",
+    guard = crate::transport::admit::<245>,
+    decode = crate::transport::decode::<_,245>,
+    encode = crate::transport::encode::<_,245>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn mixed_page(cursor: Option<Vec<u8>>) -> (Vec<u64>, Option<Vec<u8>>, u64, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    let host = runtime();
+    let db = open(&host, false).unwrap();
+    let cursor = cursor
+        .as_deref()
+        .map(ic_db::QueryCursor::from_bytes)
+        .transpose()
+        .unwrap();
+    let prefix = [1_u64.into()];
+    let mut query = db
+        .query::<Item>()
+        .using_index("parent,id", &prefix)
+        .filter("score", Comparison::Ge, 100_u64)
+        .order_by(&["parent", "id"])
+        .work_limit(1)
+        .limit(2);
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+    let page = query.fetch().unwrap();
+    (
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u64,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
+}
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "mixed_job",

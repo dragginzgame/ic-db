@@ -55,6 +55,7 @@ async fn fluent_shapes_and_mapping_growth() {
     );
     for (variant, count, last_mode) in [
         ("direct", 1, 0),
+        ("two-indexes", 1, 0),
         ("direct-entities", 8, 0),
         ("one", 1, 10),
         ("shapes", 1, 17),

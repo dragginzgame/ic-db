@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.1 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -625,6 +625,24 @@ publication, persisted variant assignments, per-slot framing or Wire conversion.
 Independent bytes/hashes and native/Wasm boundary, rollback and reopen witnesses
 qualify this implementation. Nested references/indexes, payload-enum/record/collection
 keys and set elements, tuples and other retained types remain later increments.
+
+Named value wrappers use the existing field codecs. `#[list(item(...), max_items = N)]`
+defines a reusable ordered list, and `#[newtype(item(prim = "..."))]` defines a
+distinct primitive-backed Rust tuple struct. Fields refer to either by
+`value(item(is = "Type"))`. The compiled graph fingerprints the logical name
+and complete inner definition, including bounds. Switching an existing field to
+a wrapper requires an admitted transition even when its row bytes agree.
+Wrappers add no row header or traversal charge of their own. The wrapped list
+still consumes the ordinary collection, depth and node budgets.
+
+Scalar newtypes use the primitive comparator and secondary-key encoding.
+Borrowing a wrapper produces the inner scalar operand for fluent predicates and
+index prefixes. Rust fields and record projections retain the nominal type.
+Primary/reference keys, managed timestamps, numeric sum/average and collection
+keys retain their existing admission rules. This adopts frozen IcyDB's named
+list and distinct Rust wrapper ergonomics without its generated arithmetic or
+normalization/validation visitors. Canic owns support for the added kind in
+its remote inspection protocol.
 
 Ordered lists are now implemented for entity/record fields and enum payloads:
 `value(many, max_items = 3, item(prim = "Nat16"))` produces `Vec<u16>`;
@@ -3953,6 +3971,13 @@ M0 contract acceptance and implementation authority remain separate from these
 later delivery gates.
 
 ## 10. Measurement and qualification
+
+The [0.22.3 application and growth measurements](../../qualification/README.md#application-workload-and-wasm-growth-on-storage-078)
+qualify one three-entity lifecycle on Storage 0.78.0. In the controlled fluent
+fixture, seven additional typed entities add 4,015 uncompressed Wasm bytes each
+on average. Seven additional shapes on one entity add 1,309 bytes in total.
+The 2 KB entity objective remains open. The same receipt separates index write
+cost, repeated Canic endpoint wiring and newly reachable application operations.
 
 The [IcyDB comparison matrix](../../qualification/README.md#comparison-with-frozen-icydb)
 is the cross-product summary of recorded matched costs, structural differences

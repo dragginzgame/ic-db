@@ -2,7 +2,7 @@
 use super::{
     declaration,
     field::{Field, Kind},
-    list, metas, once, text,
+    meta_items, metas, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -18,7 +18,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         } else if meta.path().is_ident("fields") {
             once(
                 &mut fields,
-                list(&meta)?
+                meta_items(&meta)?
                     .iter()
                     .map(Field::parse)
                     .collect::<syn::Result<Vec<_>>>()?,

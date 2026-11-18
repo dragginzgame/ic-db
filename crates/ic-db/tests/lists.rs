@@ -327,3 +327,113 @@ fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+#[ic_db::newtype(item(prim = "Timestamp"))]
+struct StartedAt {}
+#[ic_db::newtype(item(prim = "Timestamp"))]
+struct ExpiresAt {}
+#[ic_db::list(item(is = "StartedAt"), max_items = 2)]
+struct Starts {}
+#[ic_db::entity(
+    pk(field = "id"),
+    index(field = "started", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "started", value(item(is = "StartedAt"))),
+        field(name = "expires", value(item(is = "ExpiresAt"))),
+        field(name = "history", value(item(is = "Starts"))),
+        field(name = "previous", value(opt, item(is = "Starts")))
+    )
+)]
+struct Event {}
+
+#[record(fields(field(name = "started", value(item(is = "ExpiresAt")))))]
+struct WrongClock {}
+
+#[record(fields(field(name = "started", value(item(is = "StartedAt")))))]
+struct StartOnly {}
+
+#[test]
+fn named_list_reuses_its_bound_and_scalar_wrappers_keep_identity_after_reopen() {
+    use ic_db::{Comparison, Timestamp, Value};
+    let at = |v| StartedAt(Timestamp::from_millis(v));
+    let mut row = Event {
+        id: 1,
+        started: at(-3),
+        expires: ExpiresAt(Timestamp::from_millis(7)),
+        history: Starts(vec![at(5), at(5)]),
+        previous: Some(Starts(vec![])),
+    };
+    let schema = || Schema::new(&[Event::SCHEMA]).unwrap();
+    let definitions: Vec<_> = schema().types().map(|def| def.name).collect();
+    assert_eq!(
+        definitions,
+        [ExpiresAt::NAME, StartedAt::NAME, Starts::NAME]
+    );
+    // Alphabetical fields: expires, history, id, previous, started.
+    let mut bytes = 7_i64.to_le_bytes().to_vec();
+    bytes.extend(2_u32.to_le_bytes());
+    bytes.extend(5_i64.to_le_bytes().repeat(2));
+    bytes.extend(1_u64.to_le_bytes());
+    bytes.extend([1, 0, 0, 0, 0]);
+    bytes.extend((-3_i64).to_le_bytes());
+    assert_eq!(row.encode().unwrap(), bytes);
+    bytes[8..12].copy_from_slice(&3_u32.to_le_bytes());
+    assert!(matches!(Event::decode(&bytes), Err(Error::Corrupt)));
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), schema(), [7; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
+    let matches = db
+        .query::<Event>()
+        .using_index("started", &[(&at(-3)).into()])
+        .filter("started", Comparison::Lt, &at(0))
+        .fetch()
+        .unwrap();
+    assert_eq!(matches.rows, [row.clone()]);
+    assert_eq!(
+        db.query::<Event>().fetch_as::<StartOnly>().unwrap().rows,
+        [StartOnly { started: at(-3) }]
+    );
+    assert!(matches!(
+        db.query::<Event>().fetch_as::<WrongClock>(),
+        Err(Error::InvalidQuery)
+    ));
+    row.previous = Some(Starts(vec![at(0), at(1), at(2)]));
+    assert!(matches!(row.encode(), Err(Error::Limit)));
+    row.previous = None;
+    row.history.0.push(at(9));
+    assert!(matches!(row.encode(), Err(Error::Limit)));
+    drop(db);
+    let before = backing.borrow().clone();
+    let changed = Schema::new(&[changed_bound::Event::SCHEMA]).unwrap();
+    assert!(matches!(
+        Database::open(runtime.open_memory(&key).unwrap(), changed),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), before);
+}
+
+mod changed_bound {
+    use super::{ExpiresAt, StartedAt};
+    #[ic_db::list(item(is = "StartedAt"), max_items = 3)]
+    struct Starts {}
+    #[ic_db::entity(
+        pk(field = "id"),
+        index(field = "started", unique),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "started", value(item(is = "StartedAt"))),
+            field(name = "expires", value(item(is = "ExpiresAt"))),
+            field(name = "history", value(item(is = "Starts"))),
+            field(name = "previous", value(opt, item(is = "Starts")))
+        )
+    )]
+    pub(super) struct Event {}
+}

@@ -16,6 +16,7 @@ mod insert;
 mod map;
 mod record;
 mod set;
+mod wrapped;
 use field::Field;
 
 /// Author a typed record with named fields, a supplied scalar key and indexes.
@@ -62,6 +63,22 @@ pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Declare a reusable ordered list with an item type and a shared maximum length.
+#[proc_macro_attribute]
+pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
+    wrapped::expand(args.into(), item.into(), true)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a distinct Rust and schema type around one primitive, including its bounds.
+#[proc_macro_attribute]
+pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
+    wrapped::expand(args.into(), item.into(), false)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Declare a scalar/unit-enum set with `item(...)` and `max_items = N` (0..256).
 /// The empty struct becomes a tuple wrapper over `BTreeSet<T>`. Stored elements
 /// use strict logical order; malformed duplicates/order refuse on decoding.
@@ -103,7 +120,7 @@ fn metas(tokens: Tokens) -> syn::Result<Vec<Meta>> {
         .into_iter()
         .collect())
 }
-fn list(meta: &Meta) -> syn::Result<Vec<Meta>> {
+fn meta_items(meta: &Meta) -> syn::Result<Vec<Meta>> {
     match meta {
         Meta::List(value) => metas(value.tokens.clone()),
         _ => Err(syn::Error::new_spanned(meta, "expected attribute list")),
@@ -178,7 +195,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         } else if meta.path().is_ident("pk") {
             let mut key = None;
             let mut source = None;
-            for part in list(&meta)? {
+            for part in meta_items(&meta)? {
                 if part.path().is_ident("field") {
                     once(&mut key, text(&part)?, &part)?;
                 } else if part.path().is_ident("source") {
@@ -199,7 +216,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             let key = key.ok_or_else(|| syn::Error::new_spanned(&meta, "pk requires field"))?;
             once(&mut primary, key, &meta)?;
         } else if meta.path().is_ident("fields") {
-            let values = list(&meta)?
+            let values = meta_items(&meta)?
                 .iter()
                 .map(Field::parse)
                 .collect::<syn::Result<Vec<_>>>()?;
@@ -209,7 +226,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             let mut names = None;
             let mut unique = false;
             let mut present_only = false;
-            for part in list(&meta)? {
+            for part in meta_items(&meta)? {
                 if part.path().is_ident("name") {
                     once(&mut index_name, text(&part)?, &part)?;
                 } else if part.path().is_ident("fields") {

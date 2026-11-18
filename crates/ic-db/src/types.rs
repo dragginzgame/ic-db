@@ -30,12 +30,14 @@ impl Eq for TypeLink {}
 pub struct TypeSchema {
     /// Logical type identity.
     pub name: &'static str,
-    /// Record fields, enum alternatives or a bounded set/map.
+    /// The complete named value shape, including any wrapped type and its bounds.
     pub body: TypeBody,
 }
 /// A compiled named type; record/enum members use canonical name order.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeBody {
+    /// Named wrapper around a primitive or a bounded ordered list.
+    Wrapped(FieldType),
     /// Canonical map with scalar/unit-enum keys and arbitrary admitted value shapes.
     Map {
         /// Required ordered scalar or unit-enum key.
@@ -152,6 +154,8 @@ impl TypeGraph {
             return Err(Error::InvalidSchema);
         }
         match &definition.body {
+            TypeBody::Wrapped(FieldType::Named(_)) => return Err(Error::InvalidSchema),
+            TypeBody::Wrapped(value) => self.include(*value)?,
             TypeBody::Map {
                 key,
                 value,
@@ -223,11 +227,13 @@ impl TypeGraph {
                 TypeBody::Record(f) => (2, f.len()),
                 TypeBody::Set { .. } => (3, 1),
                 TypeBody::Map { .. } => (4, 2),
+                TypeBody::Wrapped(_) => (5, 1),
             };
             bytes.push(kind);
             name(bytes, definition.name)?;
             bytes.extend((count as u32).to_le_bytes());
             match &definition.body {
+                TypeBody::Wrapped(value) => encode_type(bytes, *value, false, false)?,
                 TypeBody::Map {
                     key,
                     value,
@@ -290,7 +296,7 @@ impl TypeGraph {
                         }
                 };
                 let has_value = match &definition.body {
-                    TypeBody::Set { .. } | TypeBody::Map { .. } => true,
+                    TypeBody::Wrapped(_) | TypeBody::Set { .. } | TypeBody::Map { .. } => true,
                     TypeBody::Record(fields) => fields.iter().all(|f| viable(f.value, f.optional)),
                     TypeBody::Enum(variants) => variants
                         .iter()

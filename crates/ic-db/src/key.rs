@@ -70,6 +70,16 @@ pub enum IndexValue<'a> {
     },
 }
 
+// Scalar wrappers preserve their schema name during admission and projection.
+// Key encoding and fluent operands use the existing primitive semantics.
+pub(crate) fn operand_type(field: FieldType) -> FieldType {
+    if let FieldType::Named(link) = field
+        && let crate::TypeBody::Wrapped(inner) = (link.definition)().body
+    {
+        return inner;
+    }
+    field
+}
 impl<'a> IndexValue<'a> {
     pub(crate) fn admit(self, field: FieldType, optional: bool) -> Result<(), Error> {
         if self == Self::Absent {
@@ -79,7 +89,7 @@ impl<'a> IndexValue<'a> {
                 Err(Error::InvalidOperand)
             };
         }
-        match (self, field) {
+        match (self, operand_type(field)) {
             (
                 Self::UnitEnum {
                     definition,
@@ -216,7 +226,7 @@ impl<'a> IndexValue<'a> {
     }
 
     pub(crate) fn read(reader: &mut Decoder<'a>, field: FieldType) -> Result<Self, Error> {
-        Ok(match field {
+        Ok(match operand_type(field) {
             FieldType::Named(link) => {
                 let definition = (link.definition)();
                 let len = unit_enum_len(definition).ok_or(Error::Corrupt)?;
@@ -258,7 +268,7 @@ impl<'a> IndexValue<'a> {
 // Minimum completion of a query prefix, including unknown trailing components.
 // Variable-width identities reserve their shortest valid frame, not their maximum.
 pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
-    Ok(match field {
+    Ok(match operand_type(field) {
         FieldType::Named(link) if unit_enum_len((link.definition)()).is_some() => 1,
         FieldType::Bool
         | FieldType::Nat8
@@ -428,6 +438,7 @@ fn fixed_width(field: FieldType) -> Option<usize> {
 }
 
 pub(crate) fn supports(field: FieldType) -> bool {
+    let field = operand_type(field);
     fixed_width(field).is_some()
         || matches!(
             field,
@@ -441,6 +452,7 @@ pub(crate) fn supports(field: FieldType) -> bool {
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
 pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> {
+    let field = operand_type(field);
     if let FieldType::Named(link) = field {
         let len = unit_enum_len((link.definition)()).ok_or(Error::Corrupt)?;
         let (&ordinal, rest) = bytes.split_first().ok_or(Error::Corrupt)?;

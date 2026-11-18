@@ -54,6 +54,9 @@ impl Encoder {
     }
 
     pub fn named<T: Value>(&mut self, value: &T) -> Result<(), Error> {
+        if matches!(T::definition().body, TypeBody::Wrapped(_)) {
+            return value.encode_into(self);
+        }
         self.budget.enter().map_err(|_| Error::Limit)?;
         let result = value.encode_into(self);
         self.budget.depth -= 1;
@@ -244,8 +247,18 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn named<T: Value>(&mut self) -> Result<T, Error> {
+        self.with_named(T::definition(), T::decode_from)
+    }
+    fn with_named<T>(
+        &mut self,
+        definition: &crate::TypeSchema,
+        read: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        if matches!(definition.body, TypeBody::Wrapped(_)) {
+            return read(self);
+        }
         self.budget.enter()?;
-        let result = T::decode_from(self);
+        let result = read(self);
         self.budget.depth -= 1;
         result
     }
@@ -289,37 +302,38 @@ impl<'a> Decoder<'a> {
         result
     }
     fn skip_named(&mut self, link: TypeLink) -> Result<(), Error> {
-        self.budget.enter()?;
-        let result = (|| {
-            match &(link.definition)().body {
-                TypeBody::Set { item, max_items } => self.skip_ordered(*item, *max_items, None)?,
+        let definition = (link.definition)();
+        self.with_named(definition, |reader| {
+            match &definition.body {
+                TypeBody::Wrapped(value) => reader.skip(*value)?,
+                TypeBody::Set { item, max_items } => {
+                    reader.skip_ordered(*item, *max_items, None)?
+                }
                 TypeBody::Map {
                     key,
                     value,
                     max_items,
-                } => self.skip_ordered(*key, *max_items, Some(*value))?,
+                } => reader.skip_ordered(*key, *max_items, Some(*value))?,
                 TypeBody::Record(fields) => {
                     for field in *fields {
-                        if !field.optional || self.boolean()? {
-                            self.skip(field.value)?;
+                        if !field.optional || reader.boolean()? {
+                            reader.skip(field.value)?;
                         }
                     }
                 }
                 TypeBody::Enum(variants) => {
                     let variant = variants
-                        .get(usize::from(self.nat8()?))
+                        .get(usize::from(reader.nat8()?))
                         .ok_or(Error::Corrupt)?;
                     if let Some(payload) = variant.payload
-                        && (!payload.optional || self.boolean()?)
+                        && (!payload.optional || reader.boolean()?)
                     {
-                        self.skip(payload.value)?;
+                        reader.skip(payload.value)?;
                     }
                 }
             }
             Ok(())
-        })();
-        self.budget.depth -= 1;
-        result
+        })
     }
     fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
         let end = self.position.checked_add(len).ok_or(Error::Corrupt)?;

@@ -59,7 +59,7 @@ case "$workload" in
         ;;
     queries)
         evidence="$PWD/qualification/target/evidence/query-growth"
-        engines=(direct direct-entities one shapes maps entities)
+        engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
     *) printf 'Expected scalar, fluent, aggregate, aggregate-paths, query-matrix, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
@@ -124,6 +124,7 @@ for engine in "${engines[@]}"; do
         package=ic-db-entity-growth-canister
         build_features=retained-host
         case "$engine" in
+            two-indexes) build_features+=,second-index ;;
             direct-entities) build_features+=,entities-8 ;;
             one) build_features+=,fluent ;;
             shapes) build_features+=,fluent-shapes ;;

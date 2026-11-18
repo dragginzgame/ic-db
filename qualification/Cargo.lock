@@ -396,7 +396,7 @@ version = "0.219.0"
 source = "git+https://github.com/dragginzgame/canic?rev=3d2ef2719450e57484638b4f1db6cb6bcc41d64c#3d2ef2719450e57484638b4f1db6cb6bcc41d64c"
 dependencies = [
  "ic-platform-runtime 0.23.17",
- "ic-wire 0.24.4",
+ "ic-wire 0.24.5",
  "serde",
 ]
 
@@ -1399,7 +1399,7 @@ dependencies = [
  "ethnum",
  "ic-db-macros",
  "ic-platform-types 0.21.2",
- "ic-storage 0.78.0",
+ "ic-storage 0.78.1",
  "memchr",
  "sha2 0.11.1",
  "ulid",
@@ -1412,7 +1412,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
+ "ic-storage 0.78.1",
  "toko-tooling",
 ]
 
@@ -1441,7 +1441,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
+ "ic-storage 0.78.1",
  "toko-tooling",
 ]
 
@@ -1451,7 +1451,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
+ "ic-storage 0.78.1",
  "toko-tooling",
 ]
 
@@ -1461,8 +1461,8 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
- "ic-wire 0.24.4",
+ "ic-storage 0.78.1",
+ "ic-wire 0.24.5",
  "toko-tooling",
 ]
 
@@ -1476,7 +1476,7 @@ dependencies = [
  "ic-host-artifacts",
  "ic-host-text",
  "ic-testkit",
- "ic-wire 0.24.4",
+ "ic-wire 0.24.5",
  "rustyline",
  "serde",
  "serde_json",
@@ -1495,8 +1495,8 @@ dependencies = [
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
- "ic-wire 0.24.4",
+ "ic-storage 0.78.1",
+ "ic-wire 0.24.5",
  "toko-tooling",
 ]
 
@@ -1522,7 +1522,7 @@ name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
  "ic-platform-runtime 0.23.17",
- "ic-wire 0.24.4",
+ "ic-wire 0.24.5",
  "serde",
  "toko-tooling",
 ]
@@ -1534,7 +1534,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.17",
- "ic-storage 0.78.0",
+ "ic-storage 0.78.1",
  "toko-tooling",
 ]
 
@@ -1592,6 +1592,15 @@ dependencies = [
  "candid",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "ic-platform"
+version = "0.34.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "370a236d0cc0e5a7328b344d8493cf367dd83178257ee809a48716fdb7301c4c"
+dependencies = [
+ "ic-stable-structures",
 ]
 
 [[package]]
@@ -1679,12 +1688,12 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.0"
+version = "0.78.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b588819cc6cbcca64656d97863d4cd86285285e08ed58d7353013a435d4fda0a"
+checksum = "9a1c0763bc875711db48da5a4a046bd1e21f2faf93c5c4025239a97d199a1102"
 dependencies = [
+ "ic-platform",
  "ic-platform-runtime 0.23.17",
- "ic-stable-structures",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -1744,9 +1753,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.24.4"
+version = "0.24.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19fe83abbcb187c5bdc1f534728c3403b67ba02effda1ddb1e09e0284c833b2b"
+checksum = "202bc10b9379d427eade6bd0bf857819b46ca5579271b607d4dd780a5b1d4908"
 dependencies = [
  "bytemuck",
  "postcard",

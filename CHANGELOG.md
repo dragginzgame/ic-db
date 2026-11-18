@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.23.0] - Unreleased
+
+### ➕ Added
+
+- Import `ic_db::design::prelude::*` in schema modules to use all seven declaration
+  attributes, their database scalar types, and `Entity`, `Value` and `Schema`.
+- Add `#[list]` for reusable bounded lists and `#[newtype]` for distinct
+  primitive-backed types. Scalar newtypes support fluent comparisons and
+  secondary indexes. Wrapping an existing field changes its schema identity.
+  Inspect the Sample and Samples definitions in the local fixture.
+
+  ```sh
+  make db
+  db schema ListRow
+  ```
+
 ## [0.22.3] - 2026-11-18
 
 - Add the fluent Rust terminal `count_index_entries()` for a bounded, explicitly selected secondary index range. It counts physical entries, including dangling entries, and reports zero owner rows fetched.

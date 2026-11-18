@@ -2,7 +2,7 @@
 use super::{
     declaration,
     field::{Field, parse_value},
-    list, metas, once,
+    meta_items, metas, once,
     record::resolve_self,
     text,
 };
@@ -17,7 +17,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("key") {
-            once(&mut key, list(&meta)?, &meta)?;
+            once(&mut key, meta_items(&meta)?, &meta)?;
         } else if meta.path().is_ident("value") {
             once(&mut value, parse_value(&meta)?, &meta)?;
         } else if meta.path().is_ident("max_items") {

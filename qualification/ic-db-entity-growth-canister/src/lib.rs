@@ -48,16 +48,27 @@ fn schema_for_open() -> Schema {
 
 // The same declaration list owns schema membership and runtime-selected typed
 // reachability. Numeric selectors belong only to this private fixture transport.
+macro_rules! declare_entity {
+    ($name:ident) => {
+        #[cfg(feature = "second-index")]
+        declare_entity!(@fields $name, index(fields = ["amount", "id"]),);
+        #[cfg(not(feature = "second-index"))]
+        declare_entity!(@fields $name,);
+    };
+    (@fields $name:ident, $($extra:tt)*) => {
+        #[entity(pk(field = "id", source = "external"),
+            index(fields = ["category", "id"]), $($extra)*
+            fields(field(name = "id", value(item(prim = "Nat64"))),
+                field(name = "category", value(item(prim = "Nat64"))),
+                field(name = "amount", value(item(prim = "Nat64")))))]
+        struct $name {}
+    };
+}
 macro_rules! entities {
     ($( $(#[$configuration:meta])* $name:ident = $selector:literal ),* $(,)?) => {
         $(
             $(#[$configuration])*
-            #[entity(pk(field = "id", source = "external"),
-                index(fields = ["category", "id"]),
-                fields(field(name = "id", value(item(prim = "Nat64"))),
-                    field(name = "category", value(item(prim = "Nat64"))),
-                    field(name = "amount", value(item(prim = "Nat64")))))]
-            struct $name {}
+            declare_entity!($name);
         )*
         fn compiled() -> Schema {
             Schema::new(&[$($(#[$configuration])* $name::SCHEMA),*]).unwrap()

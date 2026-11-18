@@ -63,6 +63,7 @@ pub enum Comparison {
 impl Comparison {
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
+        let field = key::operand_type(field);
         if (matches!(self, Self::StartsWith | Self::EndsWith)
             && !matches!(field, FieldType::Text { .. } | FieldType::Blob { .. }))
             || (self == Self::Contains && !matches!(field, FieldType::Text { .. }))

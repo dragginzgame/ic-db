@@ -324,6 +324,15 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
         .filter(|definition| selected.is_none() || included_types.contains(definition.name))
         .map(|definition| {
             let (kind, members) = match &definition.body {
+                ic_db::TypeBody::Wrapped(value) => {
+                    let label = if matches!(value, FieldType::List { .. }) {
+                        "List"
+                    } else {
+                        "Newtype"
+                    };
+                    let (kind, info) = type_view(*value);
+                    (label, vec![("value".into(), kind, false, info)])
+                }
                 ic_db::TypeBody::Map {
                     key,
                     value,
@@ -397,6 +406,7 @@ fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&
     match value {
         FieldType::List { item, .. } => include_type_names(*item, names),
         FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
+            ic_db::TypeBody::Wrapped(inner) => include_type_names(*inner, names),
             ic_db::TypeBody::Record(fields) => {
                 for field in *fields {
                     include_type_names(field.value, names);
@@ -1411,7 +1421,7 @@ fn nested_decodes(bytes: Vec<u8>) -> bool {
     on_error = crate::transport::endpoint_error
 )]
 fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
-    use schema::{ListNode, ListRow};
+    use schema::{ListNode, ListRow, Sample, Samples};
     fn tree(depth: u8) -> ListNode {
         ListNode {
             children: if depth == 0 {
@@ -1430,11 +1440,11 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
         let mut row = ListRow {
             id: 1,
             labels: None,
-            numbers: vec![],
+            numbers: Samples(vec![]),
             trees: vec![],
         };
         match shape {
-            0 => row.numbers = vec![258; usize::from(size)],
+            0 => row.numbers = Samples(vec![Sample(258); usize::from(size)]),
             1 => {
                 row.trees =
                     vec![

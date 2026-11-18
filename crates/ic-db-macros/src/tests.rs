@@ -949,3 +949,19 @@ fn primary_keys_require_nonoptional_scalar_fields() {
         }
     }
 }
+
+#[test]
+fn wrapper_declarations_require_one_primitive_or_one_bounded_list() {
+    let item = quote!(
+        struct Wrapper {}
+    );
+    for (many, args) in [
+        (false, quote!(item(is = "Other"))),
+        (false, quote!(item(prim = "Timestamp"), max_items = 2)),
+        (false, quote!(item(prim = "Decimal"))),
+        (true, quote!(item(prim = "Nat16"))),
+        (true, quote!(max_items = 257, item(prim = "Nat16"))),
+    ] {
+        assert!(super::wrapped::expand(args, item.clone(), many).is_err());
+    }
+}

@@ -2,7 +2,7 @@
 use super::{
     declaration,
     field::{Field, parse_value},
-    list, metas, once,
+    meta_items, metas, once,
     record::resolve_self,
     text,
 };
@@ -20,7 +20,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         } else if meta.path().is_ident("variant") {
             let mut variant = None;
             let mut payload = None;
-            for part in list(&meta)? {
+            for part in meta_items(&meta)? {
                 if part.path().is_ident("name") {
                     once(&mut variant, text(&part)?, &part)?;
                 } else if part.path().is_ident("value") {

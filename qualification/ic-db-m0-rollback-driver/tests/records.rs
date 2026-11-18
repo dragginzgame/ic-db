@@ -369,7 +369,8 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("Enum: Lifecycle"));
     assert!(stdout.contains("state,id"));
     assert!(stdout.contains("Record: Details"));
-    assert!(stdout.contains("List<Nat16>"));
+    assert!(stdout.contains("List: Samples"));
+    assert!(stdout.contains("Newtype: Sample"));
     assert!(stdout.contains("Info"));
     assert!(stdout.contains("Record: ListNode"));
     assert!(stdout.contains("Set: Scores"));
@@ -1397,7 +1398,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(
         original.0.map(|b| format!("{b:02x}")).concat(),
         // Independently assembled with Node byte framing and SHA-256.
-        "9c92ffec435708d6fb707aaf8da48e69223f956ffff02e50b9b2ee155b766d5c"
+        "da15ffd297277d7a3638138da408d1cd89f70d9175b1bb6efd33d188b67c5e0e"
     );
     assert_eq!(original.1, [1; 16]);
     assert_eq!(original.2, 1);
@@ -1434,7 +1435,7 @@ async fn product_records_and_message_boundary() {
     assert_eq!(admitted, original);
     let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
     assert_eq!(entities.len(), 31);
-    assert_eq!(types.len(), 10);
+    assert_eq!(types.len(), 12);
     assert!(entity("ManagedRow").3.contains(&(
         "updated".into(),
         "Timestamp".into(),

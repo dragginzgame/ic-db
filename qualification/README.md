@@ -6,7 +6,7 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
-IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.1 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
@@ -311,7 +311,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | About 4,300 raw / 4,241 code bytes per entity in the 0.18 fluent fixture | Historical 4,451 raw bytes after shrinking, different build/workload | No matched win established; 2 KB objective and roughly 4 KB working ceiling remain unmet. [Receipt](#expanded-sorting-costs-and-direction-admission-018) |
+| Added reachable entity size | 4,015 raw / 3,955 code bytes per additional entity in the 0.22.3 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Near the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#application-workload-and-wasm-growth-on-storage-078) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
@@ -319,8 +319,8 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Exact entity/prefix counts | Maintained whole-entity cardinality plus bounded row-validating counts; independent results and upgrade checks | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | Prefix counters, broader write envelopes and retained-count costs remain open. [Adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
-| Mixed write/query histories | Independent map oracle checks 153 attempted batches, jobs, six upgrades and maintenance; selected full read/write costs | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
-| Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Committed Canic 0.219.0; native inspection now checked through HTTP. The fixed application listing also preserves sparse pages and cursor refusal after upgrade; broader application support is not claimed. [Receipt](#canic-typed-application-integration-019) |
+| Mixed write/query histories | Storage 0.78.0 rerun checks 153 attempted batches, sparse listing, jobs, six upgrades and interrupted maintenance on the same records. [Receipt](#application-workload-and-wasm-growth-on-storage-078) | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
+| Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Canic 0.220.0 witness has a separate [endpoint size comparison](#application-workload-and-wasm-growth-on-storage-078). Native inspection checked through HTTP on the committed inspection contract. The fixed application listing also preserves sparse pages and cursor refusal after upgrade; broader application support is not claimed. [Receipt](#canic-typed-application-integration-019) |
 
 ### Product structure and functionality
 
@@ -346,6 +346,39 @@ owns implemented scope. Fewer crates alone do not prove lower complexity;
 endpoints move to Canic, while SQL removal and maintenance-only evolution reduce
 scope. Shared execution and removal of ordinary-write journaling simplify retained
 behavior under the selected contracts. Full replacement readiness remains unproven.
+
+#### Stored type authoring audit (0.22.3)
+
+After the tagged audit, IC DB added `#[list]` and primitive-backed `#[newtype]`.
+The remaining declaration gaps are `#[tuple]` and standalone `Unit`. The local
+`db schema ListRow` fixture shows Samples (a bounded list) and Sample (a Nat16
+newtype). The table below describes the original tag.
+
+Of the 25 primitive spellings in frozen IcyDB, IC DB accepts 24. The difference
+is `prim = "Unit"`. Payload-free enum variants are supported. Both engines
+have Timestamp, Date, Duration, Decimal, Float32/64, Int and Nat at widths
+8/16/32/64/128, U256, Ulid, Principal, Subaccount, Account, Bool, Text and
+Blob. This compares stored declarations only. Operation support, bounds and
+stored bytes have separate contracts. [Legacy primitive registry](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-schema/src/scalar_macros.rs)
+and [IC DB field parser](../crates/ic-db-macros/src/field.rs).
+
+| Missing legacy declaration | Current capability and consequence |
+| --- | --- |
+| `#[list]` | A field can use bounded `many` with scalar or named items. The bound and item type belong to that use site. There is no reusable named list definition for `item(is = "...")`. |
+| `#[newtype]` | The underlying value can be stored. A Rust type alias provides another spelling and a one-field record creates a record contract. Neither supplies a distinct schema type that forwards its inner scalar's operations. |
+| `#[tuple]` | Named records use canonical field-name order. The design retains positional tuples as later work. A multi-field projection or compound index does not declare a reusable positional stored type. |
+| `prim = "Unit"` | No standalone unit field in the parser or stored field descriptor. No permanent exclusion or specific rejection rationale was found. |
+
+The five delivered declaration attributes are entity, enum_, map, record and
+set. The implemented named-value graph has record, enum, map and set bodies.
+The design documents the initial field-list choice and tuple deferral. It gives
+no permanent exclusion for named lists or newtypes. Legacy canister/store and
+normalizer/validator declarations concern host integration or policy. The
+legacy base domain library also bundled reusable definitions such as Seconds,
+Percent, Sha256 and Url. These are a separate convenience-library surface.
+[Legacy model exports](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/lib.rs)
+· [Legacy domain library](https://github.com/dragginzgame/icydb-legacy/tree/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/base/types)
+· [Current named types](../crates/ic-db/src/types.rs).
 
 ## Standalone endpoint hooks
 
@@ -1977,6 +2010,113 @@ Earlier attempts remain in `aggregate-comparison-initial/` and
 `aggregate-comparison-zero-key-refusal/`. No product code, durable state, new
 workspace package or dependency is added. Broader grouped and retained-job
 comparisons remain open.
+
+### Application workload and Wasm growth on Storage 0.78
+
+The application run uses the 0.22.3 product (`4dccadc`) and its locked Storage
+0.78.0 on PocketIC. One database contains parents with unique codes, items
+indexed by parent and score, and links to items. An independent map model checks
+153 attempted batches and 612 snapshots across six upgrades. The sparse
+listing runs while an exact aggregate is in progress. With a one-candidate
+budget, its four calls return zero, zero, one and zero rows. The first two
+empty pages carry continuations. The fourth establishes exhaustion. The calls
+take 468,992, 452,268, 480,160 and 381,621 instructions including opening.
+
+An unrelated write, a refused write, a no-op and an upgrade preserve aggregate
+progress. A committed input change invalidates it. A fresh run completes with
+12 and retains that answer across another insert. Later upgrades interrupt copy
+and validation of these same records. Reads through the published target agree
+with the transformed model, including during retired-source cleanup.
+Three-entity inserts cost 2.01–2.30M instructions and 9.05–9.34M cycles.
+The 13 source read-modify-write samples cost 1.49–1.97M instructions and
+8.51–15.38M cycles. This is a small deterministic application history.
+A matched legacy lifecycle run and production contention remain open.
+
+**Controlled growth.** Each installed variant checks its reachable operations
+against independent expected rows, including after upgrade. The direct builds
+use point, primary page and secondary prefix operations. The fluent builds
+execute eight query shapes per entity through the same endpoint. Numbers below
+are changes in uncompressed bytes at the release build profile.
+
+| Single change | Added Wasm bytes | Added code bytes |
+| --- | ---: | ---: |
+| Direct entities, 1 to 8, retained host | 17,696 | 17,353 |
+| Direct entities, 8 to 32, retained host | 64,162 | 62,999 |
+| Fluent entities, 1 to 8, eight shapes each | 28,103 | 27,688 |
+| One entity, add a second two-field index | 157 | 109 |
+| One entity, make the first fluent query reachable | 40,133 | 38,047 |
+| One entity, expand from one to eight fluent shapes | 1,309 | 1,281 |
+| Add eight application mapping call sites | 1,791 | 1,791 |
+
+The fluent slope is 4,015 raw bytes per added entity. Direct operations alone
+add 2,528 per entity from one to eight and 2,673 from eight to 32. The 2 KB
+objective remains open. Most of the first fluent query's cost is shared across
+subsequent shapes. Multiplying typed entities still matters even at fixed shape
+count. The seven-entity differential includes 10,407 extra bytes when fluent
+operations are reachable. These differences measure reachability and do not
+identify individual functions.
+
+**Where the repeated code lives.** Symbol-bearing builds of all four
+direct/fluent, one/eight-entity variants match their respective measured Wasm
+byte for byte across all non-custom sections. In the eight-entity fluent build,
+there is one 20,008-byte `fetch_rows` body and one named entity-page decoder.
+There are eight 202-byte typed `fetch` wrappers and eight 128-byte typed
+`revision` wrappers. Within each family only two bytes of the embedded schema
+address differ. Seven additional copies of both families occupy 2,310 function-body
+bytes in that artifact. This measures repetition within the eight-entity build.
+Inlining and layout change between builds, so it is not a removable-byte forecast.
+
+At fixed eight entities, enabling the eight fluent shapes grows the fixture's
+dispatch body from 19,491 to 28,022 bytes. Dispatch includes request construction,
+typed calls and inlined library work. The earlier [schema-pointer experiment](#deeper-specialization-investigation-018)
+merged the fetch wrappers at a measured execution cost. Keep the typed boundary
+and shared executor. The current audit changed no engine code. Names, per-function
+sizes and the section comparison are in the application receipt's `attribution/` directory.
+
+The extra index adds little Wasm but increases read-plus-replace work from
+1,210,588 to 1,719,521 instructions excluding opening. Both index values change.
+The full two-call balance cost increases from 15,533,354 to 16,080,971 cycles.
+For the first fluent shape at eight entities, the four opening stages sum to
+173,740 instructions warm and 535,288 after upgrade. Execution itself uses
+230,727 and 232,015 respectively. Cold schema construction and ordinary
+execution are separate costs in the retained-host fixture.
+
+**Canic endpoint composition.** Four release Wasm builds use the committed Canic
+0.220.0 database witness at `d652c55`, pointing its DB and Storage dependencies
+at IC DB 0.22.3 and Storage 0.78.0 in an isolated source copy. Schema, protocol
+types, owner guard and build profile are fixed. The table counts application
+endpoints in addition to the common init export.
+
+| Reachable application endpoints | Wasm bytes | Code-section bytes |
+| --- | ---: | ---: |
+| One listing | 481,002 | 369,977 |
+| Eight listings sharing the handler, each with its own frame ID | 492,544 | 375,063 |
+| Listing and write | 591,700 | 454,770 |
+| Listing, write and inspection | 715,588 | 539,112 |
+
+The seven additional listing exports added 11,542 bytes total, including 5,086
+code bytes. The write handler added 110,698 bytes over listing alone. Inspection
+added another 123,888 bytes. Those last two increments include the newly reachable
+operations and their transport types. The eight-listing build is an experimental
+channel-count control made by repeating Canic's query mount with distinct export
+names and method IDs 9001–9007. The released adapter supplies the three standard
+endpoints. Export names and Wasm validity were checked for each build. Endpoint
+latency, cycles and a matched legacy host remain unmeasured in this experiment.
+
+To repeat the application, entity and query checks with their recorded lockfile,
+use the qualification changes against `v0.22.3` and a prepared PocketIC server.
+
+```sh
+make m4-lifecycle
+make m1-entity-growth
+make m2-query-growth
+```
+
+Local receipts are in `target/evidence/application-growth-0223/` and
+`target/evidence/canic-growth-0223/`. They retain the build inputs, Wasm and
+logs. The Canic receipt includes its pinned source copy and variant build script.
+The earlier growth and mixed-history receipts are preserved under their
+`-before-0223` names.
 
 ### Storage 0.78 count comparison
 

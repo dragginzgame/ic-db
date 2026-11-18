@@ -257,6 +257,34 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let (handle, sequence, _, _) = job(0, vec![], 0).await;
     let (_, sequence, state, _) = job(1, handle.clone(), sequence).await;
     assert_eq!(state, 0);
+    let mut cursor: Option<Vec<u8>> = None;
+    let mut matches = Vec::new();
+    let mut empty_continued = 0;
+    for step in 0..4 {
+        let bytes = pic
+            .query_call(canister, canister, "mixed_page", encode(245, &cursor))
+            .await
+            .unwrap();
+        let (rows, next, examined, instructions): (Vec<u64>, Option<Vec<u8>>, u64, u64) =
+            decode(245, &bytes);
+        assert!(examined <= 1);
+        println!(
+            "sparse listing page {step}: examined={examined} returned={} instructions={instructions}",
+            rows.len()
+        );
+        if rows.is_empty() && next.is_some() {
+            empty_continued += 1;
+        }
+        matches.extend(rows);
+        if next.is_none() {
+            break;
+        }
+        assert_ne!(next, cursor);
+        assert!(step < 3, "sparse listing must complete");
+        cursor = next;
+    }
+    assert_eq!(empty_continued, 2);
+    assert_eq!(matches, model.snapshot(1, 100).5);
     check(
         &mut model,
         false,

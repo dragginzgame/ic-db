@@ -4,10 +4,10 @@
 )]
 //! Shared authored schema: compiled once for host collection and again for the target.
 
-use ic_db::entity;
+use ic_db::design::prelude::{entity, enum_, list, map, newtype, record, set};
 
 pub mod entries {
-    use ic_db::entity;
+    use ic_db::design::prelude::entity;
     #[entity( pk(field="id", source="external"),
     index(fields=["category", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
@@ -94,7 +94,7 @@ pub struct IdentityRow {}
         field(name="next", value(opt, item(prim="Nat64")), references(entity="Self",index="next,id"))))]
 pub struct OptionalLink {}
 
-#[ic_db::enum_(
+#[enum_(
     variant(name = "Ready"),
     variant(name = "Archived"),
     variant(name = "Draft")
@@ -112,9 +112,9 @@ pub struct Lifecycle {}
 )]
 pub struct EnumRow {}
 
-#[ic_db::set(item(is = "Lifecycle"), max_items = 3)]
+#[set(item(is = "Lifecycle"), max_items = 3)]
 pub struct LifecycleSet {}
-#[ic_db::map(key(is = "Lifecycle"), value(opt, item(prim = "Nat16")), max_items = 3)]
+#[map(key(is = "Lifecycle"), value(opt, item(prim = "Nat16")), max_items = 3)]
 pub struct LifecycleCounts {}
 #[entity(
     pk(field = "id"),
@@ -126,17 +126,17 @@ pub struct LifecycleCounts {}
 )]
 pub struct EnumCollectionsRow {}
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "label", value(item(prim = "Text", max_bytes = 8))),
     field(name = "x", value(item(prim = "Nat16")))
 ))]
 pub struct Details {}
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "left", value(item(indirect, is = "NestedPayload"))),
     field(name = "right", value(item(indirect, is = "NestedPayload")))
 ))]
 pub struct Branch {}
-#[ic_db::enum_(
+#[enum_(
     variant(name = "Data", value(item(is = "Details"))),
     variant(name = "Idle"),
     variant(name = "Loop", value(item(indirect, is = "Self"))),
@@ -154,8 +154,14 @@ pub struct NestedPayload {}
 )]
 pub struct NestedRow {}
 
-#[ic_db::record(fields(field(name = "children", value(many, max_items = 4, item(is = "Self")))))]
+#[record(fields(field(name = "children", value(many, max_items = 4, item(is = "Self")))))]
 pub struct ListNode {}
+
+#[newtype(item(prim = "Nat16"))]
+pub struct Sample {}
+
+#[list(item(is = "Sample"), max_items = 3)]
+pub struct Samples {}
 #[entity(
     pk(field = "id"),
     fields(
@@ -164,13 +170,13 @@ pub struct ListNode {}
             name = "labels",
             value(opt, many, max_items = 3, item(prim = "Text", max_bytes = 4))
         ),
-        field(name = "numbers", value(many, max_items = 3, item(prim = "Nat16"))),
+        field(name = "numbers", value(item(is = "Samples"))),
         field(name = "trees", value(many, max_items = 4, item(is = "ListNode")))
     )
 )]
 pub struct ListRow {}
 
-#[ic_db::set(item(prim = "Int16"), max_items = 3)]
+#[set(item(prim = "Int16"), max_items = 3)]
 pub struct Scores {}
 #[entity(
     pk(field = "id"),
@@ -181,7 +187,7 @@ pub struct Scores {}
 )]
 pub struct SetRow {}
 
-#[ic_db::map(
+#[map(
     key(prim = "Int16"),
     value(opt, item(prim = "Text", max_bytes = 4)),
     max_items = 3
@@ -196,7 +202,7 @@ pub struct Rates {}
 )]
 pub struct MapRow {}
 
-#[ic_db::map(key(prim = "Nat16"), value(item(is = "Self")), max_items = 256)]
+#[map(key(prim = "Nat16"), value(item(is = "Self")), max_items = 256)]
 pub struct MapTree {}
 #[entity(
     pk(field = "id"),

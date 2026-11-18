@@ -32,8 +32,8 @@ pub enum FieldType {
         /// Maximum number of elements, from zero through 256.
         max_items: u32,
     },
-    /// A named record, enum, set or map. Unit enums support secondary keys;
-    /// other named shapes and named primary/reference keys remain unsupported.
+    /// A compiler-resolved named value. Scalar newtypes and unit enums support
+    /// secondary keys. Primary and reference keys require supported primitives.
     Named(TypeLink),
     /// Exact unsigned 8-bit integer.
     Nat8,
