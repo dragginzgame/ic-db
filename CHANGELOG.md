@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.22.3] - Unreleased
+## [0.22.3] - 2026-11-18
 
 - Add the fluent Rust terminal `count_index_entries()` for a bounded, explicitly selected secondary index range. It counts physical entries, including dangling entries, and reports zero owner rows fetched.
 
