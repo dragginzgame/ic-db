@@ -28,40 +28,15 @@ type Selection = (
     u32,
     (Option<String>, Option<String>),
     Option<String>,
-    (
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-    ),
+    blob::Filters,
 );
 fn configured<'a, E: Entity>(
     query: Query<'a, E, Backing>,
     selection: &'a Selection,
 ) -> Result<Query<'a, E, Backing>, String> {
-    let (
-        entity,
-        select,
-        _,
-        limit,
-        (group_min, group_max),
-        group_order,
-        (minimum, maximum, prefix, suffix),
-    ) = selection;
-    if entity != "BinaryObject"
-        && (minimum.is_some() || maximum.is_some() || prefix.is_some() || suffix.is_some())
-    {
-        return Err(
-            "--payload-min, --payload-max, --payload-prefix and --payload-suffix apply to BinaryObject".into(),
-        );
-    }
-    let query = blob::filter(
-        query,
-        minimum.as_deref(),
-        maximum.as_deref(),
-        prefix.as_deref(),
-        suffix.as_deref(),
-    );
+    let (entity, select, _, limit, (group_min, group_max), group_order, filters) = selection;
+    blob::validate(entity, filters)?;
+    let query = blob::filter(query, filters);
     select_groups(
         query.limit(*limit as usize),
         select,

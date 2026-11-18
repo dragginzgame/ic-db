@@ -4303,8 +4303,9 @@ cargo test --offline --locked -p ic-db --test jobs retained_blob_suffix
 
 No durable/schema change or additional execution path is introduced. These are
 native checks for the 0.22 release; the subsequent CLI witness below adds Wasm
-qualification. No performance comparison is claimed. Blob `Contains` remains
-unsupported.
+qualification. No performance comparison is claimed. The later Blob substring checks use
+the same sparse-page oracle with raw slice windows and cover overlapping
+escape-boundary matches, group extrema and retained count after reopen.
 
 ### Blob suffix console (pending)
 

@@ -62,10 +62,14 @@ pub(super) fn admit(
     // A class is then either wholly rejected or emitted before an exclusive
     // continuation can advance into it. Other filters use the complete collection.
     for predicate in &request.predicates {
-        if remaining & (1 << position(predicate.field)?) == 0
-            && !index.fields[..fixed].contains(&predicate.field)
-        {
-            return complete(request);
+        let right = match predicate.operand {
+            super::Operand::Field(name) => Some(name),
+            super::Operand::Literal(_) => None,
+        };
+        for name in std::iter::once(predicate.field).chain(right) {
+            if remaining & (1 << position(name)?) == 0 && !index.fields[..fixed].contains(&name) {
+                return complete(request);
+            }
         }
     }
     for name in &index.fields[..fixed] {

@@ -905,7 +905,7 @@ uses this checkout's explicitly prepared `.tools/testkit-server` server.
 
 ## Development
 
-Rust 1.100.0 and published Toko Tooling 0.45.0 are pinned. Read [AGENTS.md](AGENTS.md)
+Rust 1.100.0 and published Toko Tooling 0.45.3 are pinned. Read [AGENTS.md](AGENTS.md)
 and [TOKO-TOOLING.md](TOKO-TOOLING.md). Common scripts live in `vendor/toko-tooling/`;
 upstream reference documentation stays upstream.
 
@@ -1044,7 +1044,7 @@ performance/comparison workloads remain explicitly selected.
 | Installed M0 / fixture owners | `m0-core`: one artifact/session, entrypoints + rollback + batch + reads; separate `m0-aggregation` and `m0-maintenance` variants | Message boundaries, final-state constraints, pages, revision invalidation and interrupted migration; fixture source/features, server and compiler |
 | Installed product / fixture owners | `m1-records-wasm`, `m1-commit-failures`, `m3-maintenance-wasm` (including `m3-jobs`), `m3-cli` | Generated types, product rollback, copy/cancel/publish/reclaim, retained jobs and CLI/terminal composition; exact built artifacts and native callers |
 | Version/delivery / shared runner + IC Build | Two-lock metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; follow verified tag delivery with `make publish` |
-| Hosted CI | Secret scan once; `make ci` on Linux and both supported macOS architectures | Push/PR; independent hosted evidence, not a reason to repeat that whole matrix locally |
+| Hosted CI | Secret scan once; `make ci` on Linux and both supported macOS architectures | Main-branch pushes and pull requests; independent hosted evidence, not a reason to repeat that whole matrix locally |
 | Frozen comparison / explicit consumer selection | Pinned IcyDB schema/canister and comparison targets remain isolated | A changed comparison question or explicit benchmark request; excluded from routine release lint and gates |
 
 Required stages execute once per attempt, fail fast, and retain raw logs plus

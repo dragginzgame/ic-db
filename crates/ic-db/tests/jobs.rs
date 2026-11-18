@@ -505,6 +505,11 @@ fn retained_blob_suffix_binding_survives_reopen() {
     retained_blob_pattern_reopen(Comparison::EndsWith, &[255]);
 }
 
+#[test]
+fn retained_blob_substring_binding_survives_reopen() {
+    retained_blob_pattern_reopen(Comparison::Contains, &[255]);
+}
+
 fn retained_blob_pattern_reopen(comparison: Comparison, pattern: &[u8]) {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -534,6 +539,7 @@ fn retained_blob_pattern_reopen(comparison: Comparison, pattern: &[u8]) {
         .filter(|v| match comparison {
             Comparison::StartsWith => v.starts_with(pattern),
             Comparison::EndsWith => v.ends_with(pattern),
+            Comparison::Contains => v.windows(pattern.len()).any(|w| w == pattern),
             _ => unreachable!(),
         })
         .count() as u64;
@@ -5320,4 +5326,73 @@ fn numeric_newtype_inputs_share_widening_and_retained_decimal_rounding() {
         .resume_avg::<Price>(&mut jobs, &handle, first.sequence, time(2))
         .unwrap();
     assert!(matches!(rest.outcome, JobOutcome::Complete(Some(value)) if value == expected));
+}
+
+#[ic_db::record(fields(field(name = "price", value(item(is = "UnitPrice")))))]
+struct NamedPrice {}
+#[ic_db::newtype(item(prim = "Decimal", scale = 2))]
+struct Discount {}
+#[ic_db::record(fields(field(name = "price", value(item(is = "Discount")))))]
+struct WrongUnit {}
+#[ic_db::newtype(name = "UnitPrice", item(prim = "Decimal", scale = 3))]
+struct OtherScale {}
+#[ic_db::record(fields(field(name = "price", value(item(is = "OtherScale")))))]
+struct ChangedUnit {}
+#[ic_db::record(fields(field(name = "amount", value(opt, item(is = "Quantity")))))]
+struct NamedAmount {}
+
+#[test]
+fn numeric_results_preserve_exact_units_across_job_steps() {
+    let runtime = host(VectorMemory::default());
+    let (mut db, mut jobs) = create_stores(&runtime, Schema::new(&[Line::SCHEMA]).unwrap());
+    let price = |cents| UnitPrice(ic_db::Decimal::try_new(cents, 2).unwrap());
+    let mut batch = Batch::new();
+    for (id, cents, amount) in [(1, 124, i16::MAX), (2, 125, 1)] {
+        batch
+            .insert(&Line {
+                id,
+                flag: 0,
+                price: price(cents),
+                amount: Some(Quantity(amount)),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let query = || db.query::<Line>();
+    assert_eq!(
+        query().sum::<NamedPrice>().unwrap().value.unwrap().price,
+        price(249)
+    );
+    assert!(matches!(
+        query().sum::<NamedAmount>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    assert!(matches!(
+        query().avg::<WrongUnit>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        query().avg::<ChangedUnit>(),
+        Err(Error::InvalidQuery)
+    ));
+    let groups = query().group_avg::<Flag, NamedPrice>().unwrap().value;
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].value.as_ref().unwrap().price, price(124));
+
+    let handle = query()
+        .start_avg::<NamedPrice>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let step = query()
+        .work_limit(1)
+        .resume_avg::<NamedPrice>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(step.outcome, JobOutcome::Running));
+    assert!(matches!(
+        query().resume_avg::<Price>(&mut jobs, &handle, step.sequence, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    let last = query()
+        .resume_avg::<NamedPrice>(&mut jobs, &handle, step.sequence, time(2))
+        .unwrap();
+    assert!(matches!(last.outcome, JobOutcome::Complete(Some(value)) if value.price == price(124)));
 }

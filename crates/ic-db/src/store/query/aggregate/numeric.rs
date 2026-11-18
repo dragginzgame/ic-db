@@ -11,7 +11,7 @@ use ic_storage::Memory;
 impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Sum one integer or Decimal field into a single-field result record with the same field
     /// name and optionality. Scalar newtype inputs use their declared primitive.
-    /// The result field uses a primitive whose integer width may match or widen the source within
+    /// The result may preserve the exact input newtype. A primitive integer result may widen within
     /// the same signed/unsigned family. Unsigned results may widen to U256.
     /// Decimal results preserve the source's declared scale; coefficients accumulate
     /// exactly in I256 and must fit i128 at completion. No rescaling or rounding.
@@ -47,7 +47,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     }
 
     /// Average an integer or Decimal field (including a scalar newtype) into a single-field Decimal record.
-    /// Preserve the field name and optionality; the result declares scale 0–28.
+    /// Preserve the field name and optionality. A primitive Decimal selects scale 0–28;
+    /// a Decimal newtype result preserves the exact input newtype and its scale.
     /// Ignore absent operands, returning `None` for empty/all-absent input.
     /// Divide the exact total by the present count once, rounding to nearest with
     /// ties to even at the result scale. No floating-point conversion or scale fallback.
@@ -130,12 +131,17 @@ impl NumericAggregate {
             return Err(Error::InvalidQuery);
         }
         let input = crate::key::operand_type(source.value);
+        // A named result keeps the exact stored field contract, as in a projection.
+        if matches!(result.value, FieldType::Named(_)) {
+            super::admit_projection(entity, output)?;
+        }
+        let result_type = crate::key::operand_type(result.value);
         let source_scale = match input {
             FieldType::Decimal { scale } => scale,
             _ => 0,
         };
         let signed = if matches!(operation, Operation::Average) {
-            if !matches!(result.value, FieldType::Decimal { scale: 0..=28 }) {
+            if !matches!(result_type, FieldType::Decimal { scale: 0..=28 }) {
                 return Err(Error::InvalidQuery);
             }
             match input {
@@ -143,7 +149,7 @@ impl NumericAggregate {
                 value => integer(value).ok_or(Error::InvalidQuery)?.0,
             }
         } else {
-            match (input, result.value) {
+            match (input, result_type) {
                 (FieldType::Decimal { scale: source }, FieldType::Decimal { scale: result })
                     if source == result =>
                 {
@@ -256,8 +262,9 @@ impl NumericAggregate {
         if self.count == 0 {
             return Ok(Completed::Value(None));
         }
+        let result_type = crate::key::operand_type(self.output.value);
         if matches!(self.operation, Operation::Average) {
-            let FieldType::Decimal { scale } = self.output.value else {
+            let FieldType::Decimal { scale } = result_type else {
                 return Err(Error::Corrupt);
             };
             let numerator = match self.total {
@@ -288,7 +295,7 @@ impl NumericAggregate {
                 IndexValue::$variant(value).append_component(self.output.optional, &mut key);
             }};
         }
-        match (self.total, self.output.value) {
+        match (self.total, result_type) {
             (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, n),
             (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, n),
             (Total::Signed(n), FieldType::Int32) => encode!(int32, Int32, n),

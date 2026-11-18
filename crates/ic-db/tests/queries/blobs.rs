@@ -239,12 +239,6 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
         oracle
     );
     assert!(matches!(
-        db.query::<Binary>()
-            .filter("payload", C::Contains, [0_u8].as_slice())
-            .fetch(),
-        Err(Error::InvalidQuery)
-    ));
-    assert!(matches!(
         db.query::<Binary>().filter("payload", C::Eq, "").fetch(),
         Err(Error::InvalidOperand)
     ));
@@ -263,7 +257,7 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
 }
 
 #[test]
-fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
+fn blob_suffixes_and_substrings_match_raw_bytes_without_matching_inside_zero_escapes() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let mut db = Database::create(
@@ -286,6 +280,7 @@ fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
         vec![1],
         vec![128],
         vec![0, 255, 0],
+        vec![0, 255, 255, 128],
     ];
     let rows = values
         .into_iter()
@@ -307,7 +302,7 @@ fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
     }
     db.commit(batch).unwrap();
     let saved = backing.borrow().clone();
-    let suffixes = (0..=255)
+    let patterns = (0..=255)
         .map(|b| vec![b])
         .chain([
             vec![],
@@ -332,50 +327,60 @@ fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
                 Some(r.payload.clone())
             }
         };
-        for suffix in &suffixes {
-            for indexed in [false, true] {
-                for descending in [false, true] {
-                    let mut expected = rows
-                        .iter()
-                        .filter(|r| value(r).is_some_and(|v| v.ends_with(suffix)))
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    if indexed {
-                        expected.sort_by_key(|r| (value(r), r.id));
-                    }
-                    if descending {
-                        expected.reverse();
-                    }
-                    let mut actual = Vec::new();
-                    let mut cursor = None;
-                    let mut examined = 0;
-                    for page_number in 0..16 {
-                        let mut q = db
-                            .query::<Binary>()
-                            .filter(field, C::EndsWith, suffix.as_slice())
-                            .work_limit(3)
-                            .limit(2);
+        for comparison in [C::EndsWith, C::Contains] {
+            for needle in &patterns {
+                for indexed in [false, true] {
+                    for descending in [false, true] {
+                        let mut expected = rows
+                            .iter()
+                            .filter(|r| {
+                                value(r).is_some_and(|v| match comparison {
+                                    C::EndsWith => v.ends_with(needle),
+                                    _ => {
+                                        needle.is_empty()
+                                            || v.windows(needle.len()).any(|w| w == needle)
+                                    }
+                                })
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
                         if indexed {
-                            q = q.using_index(index, &[]);
+                            expected.sort_by_key(|r| (value(r), r.id));
                         }
                         if descending {
-                            q = q.descending();
+                            expected.reverse();
                         }
-                        if let Some(cursor) = &cursor {
-                            q = q.after(cursor);
+                        let mut actual = Vec::new();
+                        let mut cursor = None;
+                        let mut examined = 0;
+                        for page_number in 0..16 {
+                            let mut q = db
+                                .query::<Binary>()
+                                .filter(field, comparison, needle.as_slice())
+                                .work_limit(3)
+                                .limit(2);
+                            if indexed {
+                                q = q.using_index(index, &[]);
+                            }
+                            if descending {
+                                q = q.descending();
+                            }
+                            if let Some(cursor) = &cursor {
+                                q = q.after(cursor);
+                            }
+                            let page = q.fetch().unwrap();
+                            assert!(page.examined <= 3);
+                            examined += page.examined;
+                            actual.extend(page.rows);
+                            cursor = page.next;
+                            if cursor.is_none() {
+                                break;
+                            }
+                            assert!(page_number < 15, "pattern pages must progress");
                         }
-                        let page = q.fetch().unwrap();
-                        assert!(page.examined <= 3);
-                        examined += page.examined;
-                        actual.extend(page.rows);
-                        cursor = page.next;
-                        if cursor.is_none() {
-                            break;
-                        }
-                        assert!(page_number < 15, "suffix pages must progress");
+                        assert_eq!(actual, expected);
+                        assert_eq!(examined, rows.len(), "patterns remain residual filters");
                     }
-                    assert_eq!(actual, expected);
-                    assert_eq!(examined, rows.len(), "suffixes remain residual filters");
                 }
             }
         }
@@ -392,6 +397,19 @@ fn blob_suffixes_match_raw_bytes_without_matching_inside_zero_escapes() {
             .map(|g| g.key.payload)
             .collect::<Vec<_>>(),
         vec![vec![0, 255], vec![1, 255], vec![255], vec![255, 255]]
+    );
+    let groups = db
+        .query::<Binary>()
+        .filter_groups(C::Contains, [255, 255].as_slice())
+        .group_max::<Payload, Optional>()
+        .unwrap()
+        .value;
+    assert_eq!(
+        groups
+            .into_iter()
+            .map(|g| g.key.payload)
+            .collect::<Vec<_>>(),
+        [vec![0, 255, 255, 128], vec![255, 255]]
     );
     assert_eq!(*backing.borrow(), saved);
 }

@@ -1,4 +1,4 @@
-use super::{Command, charged_cycles, parse_console_line};
+use super::{Command, PayloadArgs, charged_cycles, parse_console_line};
 
 #[test]
 fn blob_literals_are_exact_bounded_bytes() {
@@ -10,7 +10,7 @@ fn blob_literals_are_exact_bounded_bytes() {
         let cli =
             parse_console_line(&format!("query BinaryObject --payload-min {literal}")).unwrap();
         assert!(
-            matches!(cli.command, Some(Command::Query {payload_min:Some(value),..}) if value.0==expected)
+            matches!(cli.command, Some(Command::Query {payload: PayloadArgs {payload_min:Some(value),..},..}) if value.0==expected)
         );
     }
     let max = format!("0x{}", "ff".repeat(1024));
@@ -33,7 +33,7 @@ fn blob_literals_are_exact_bounded_bytes() {
     let cli =
         parse_console_line("aggregate BinaryObject --payload-min 0x --payload-max 0xFF").unwrap();
     assert!(matches!(cli.command, Some(Command::Aggregate {
-        payload_min: Some(lower), payload_max: Some(upper), ..
+        payload: PayloadArgs { payload_min: Some(lower), payload_max: Some(upper), .. }, ..
     }) if lower.0.is_empty() && upper.0 == [255]));
     for command in ["query", "aggregate"] {
         let cli = parse_console_line(&format!(
@@ -41,8 +41,8 @@ fn blob_literals_are_exact_bounded_bytes() {
         ))
         .unwrap();
         let suffix = match cli.command.unwrap() {
-            Command::Query { payload_suffix, .. } | Command::Aggregate { payload_suffix, .. } => {
-                payload_suffix.unwrap()
+            Command::Query { payload, .. } | Command::Aggregate { payload, .. } => {
+                payload.payload_suffix.unwrap()
             }
             _ => panic!("wrong command"),
         };
@@ -58,8 +58,8 @@ fn blob_literals_are_exact_bounded_bytes() {
         let cli =
             parse_console_line(&format!("{command} BinaryObject --payload-prefix 0x00fF")).unwrap();
         let prefix = match cli.command.unwrap() {
-            Command::Query { payload_prefix, .. } | Command::Aggregate { payload_prefix, .. } => {
-                payload_prefix.unwrap()
+            Command::Query { payload, .. } | Command::Aggregate { payload, .. } => {
+                payload.payload_prefix.unwrap()
             }
             _ => panic!("wrong command"),
         };

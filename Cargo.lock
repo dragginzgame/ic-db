@@ -350,9 +350,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.1"
+version = "0.45.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc38b1d6932310739c21ab8a821c811d4bf43e306f89751faea38638c8bc1373"
+checksum = "41141f3a04bea22cacdaa5e36774d69e1335f5461098311eb6bb2731ee113da5"
 
 [[package]]
 name = "typenum"

@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.23.2] - Unreleased
+
+### ➕ Added
+
+- Compare two fields on each row with `.filter_fields("actual", Comparison::Gt, "expected")`.
+  Equality and ordering use the declared scalar types, including optional values.
+
+- Fluent queries accept `.filter_present("field")` and `.filter_absent("field")`
+  for optional fields. Present empty strings, blobs and collections match
+  `filter_present`.
+
+- Use `Comparison::Contains` to find an exact byte sequence in a Blob field
+  or a completed Blob group extremum. An empty sequence matches every present
+  Blob, including an empty one. Try it on the local fixture’s `0x00ff80` payload:
+
+  ```sh
+  make db
+  db query BinaryObject --payload-contains 0xff --select payload
+  db aggregate BinaryObject --payload-contains 0xff --select count
+  ```
+
+- Fluent sums can return the input field’s numeric newtype. Averages can
+  return the input’s Decimal newtype at its declared scale, including when
+  the calculation spans multiple calls.
+
+### 🔧 Changed
+
+- Adopt Toko Tooling 0.45.3 in both workspaces. CI setup diagnostics now
+  redact environment assignments and URL fragments. Release timing reports
+  include more detail about repeated checks.
+
 ## [0.23.1] - 2026-11-18
 
 ### ➕ Added

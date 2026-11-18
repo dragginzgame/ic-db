@@ -84,6 +84,74 @@ fn ids(rows: &[Entry]) -> Vec<u64> {
 }
 
 #[test]
+fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for (left, comparison, right, expected) in [
+        ("maybe", C::Eq, "id", vec![1, 2, 4, 5, 7, 8]),
+        ("id", C::Ne, "maybe", vec![3, 6]),
+        ("maybe", C::Eq, "maybe", (1..=8).collect()),
+        ("maybe", C::Lt, "amount", vec![1, 2, 4, 5, 7, 8]),
+        ("amount", C::Gt, "maybe", vec![1, 2, 4, 5, 7, 8]),
+        ("id", C::Le, "maybe", vec![1, 2, 4, 5, 7, 8]),
+        ("maybe", C::Ge, "id", vec![1, 2, 4, 5, 7, 8]),
+    ] {
+        let query = || db.query::<Entry>().filter_fields(left, comparison, right);
+        assert_eq!(ids(&query().fetch().unwrap().rows), expected);
+        assert_eq!(query().count().unwrap().value, expected.len() as u64);
+    }
+    let query = |right| {
+        db.query::<Entry>()
+            .filter_fields("id", C::Eq, right)
+            .work_limit(1)
+    };
+    let cursor = query("maybe").fetch().unwrap().next.unwrap();
+    assert_eq!(
+        ids(&query("maybe").after(&cursor).fetch().unwrap().rows),
+        [2]
+    );
+    assert!(matches!(
+        query("amount").after(&cursor).fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    for (comparison, right) in [(C::Eq, "category"), (C::Eq, "missing"), (C::Contains, "id")] {
+        assert!(matches!(
+            db.query::<Entry>()
+                .filter_fields("id", comparison, right)
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+}
+
+#[test]
+fn distinct_checks_a_field_operand_that_varies_within_an_index_class() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    let mut batch = Batch::new();
+    for id in 1..=8 {
+        let mut entry = row(id);
+        entry.amount = 4;
+        batch.replace(&entry).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let query = || {
+        db.query::<Entry>()
+            .using_index("amount,id", &[])
+            .filter_fields("amount", C::Lt, "id")
+            .distinct()
+    };
+    assert!(matches!(
+        query().work_limit(4).fetch_as::<AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    let page = query().fetch_as::<AmountOnly>().unwrap();
+    assert_eq!(page.examined, 8);
+    assert!(page.next.is_none());
+    assert_eq!(page.rows.iter().map(|r| r.amount).collect::<Vec<_>>(), [4]);
+}
+
+#[test]
 fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefixes() {
     let runtime = host(VectorMemory::default());
     let mut db = create(&runtime, 1);
@@ -2682,23 +2750,31 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
     );
     let cursor = db
         .query::<PresenceData>()
-        .filter("blob", C::Eq, IndexValue::Absent)
+        .filter_absent("blob")
         .work_limit(1)
         .fetch()
         .unwrap()
         .next
         .unwrap();
+    let resumed = db
+        .query::<PresenceData>()
+        .filter("blob", C::Eq, IndexValue::Absent)
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    assert_eq!(
+        resumed.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [3]
+    );
     assert!(matches!(
         db.query::<PresenceData>()
-            .filter("blob", C::Ne, IndexValue::Absent)
+            .filter_present("blob")
             .after(&cursor)
             .fetch(),
         Err(Error::InvalidCursor)
     ));
     assert!(matches!(
-        db.query::<PresenceData>()
-            .filter("missing", C::Eq, IndexValue::Absent)
-            .fetch(),
+        db.query::<PresenceData>().filter_absent("missing").fetch(),
         Err(Error::InvalidQuery)
     ));
     assert_eq!(*backing.borrow(), before);
@@ -3075,7 +3151,7 @@ fn sparse_compound_membership_requires_every_optional_component() {
     for comparison in [C::StartsWith, C::EndsWith, C::Contains] {
         let page = db
             .query::<SparsePair>()
-            .filter("left", C::Ne, IndexValue::Absent)
+            .filter_present("left")
             .filter("right", comparison, "")
             .order_by(&["left", "right"])
             .fetch()

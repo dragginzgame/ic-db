@@ -27,20 +27,30 @@ pub(super) fn optional_hex(value: Option<Vec<u8>>) -> String {
     value.map_or_else(|| "—".into(), |v| hex(&v))
 }
 
+pub(super) type Filters = [Option<Vec<u8>>; 5];
+
+pub(super) fn validate(entity: &str, filters: &Filters) -> Result<(), String> {
+    if entity != "BinaryObject" && filters.iter().any(Option::is_some) {
+        return Err("payload filters apply to BinaryObject".into());
+    }
+    Ok(())
+}
+
 pub(super) fn filter<'a, E: Entity>(
     mut query: Query<'a, E, Backing>,
-    minimum: Option<&'a [u8]>,
-    maximum: Option<&'a [u8]>,
-    prefix: Option<&'a [u8]>,
-    suffix: Option<&'a [u8]>,
+    filters: &'a Filters,
 ) -> Query<'a, E, Backing> {
     for (comparison, operand) in [
-        (Comparison::Ge, minimum),
-        (Comparison::Le, maximum),
-        (Comparison::StartsWith, prefix),
-        (Comparison::EndsWith, suffix),
-    ] {
-        if let Some(operand) = operand {
+        Comparison::Ge,
+        Comparison::Le,
+        Comparison::StartsWith,
+        Comparison::EndsWith,
+        Comparison::Contains,
+    ]
+    .into_iter()
+    .zip(filters)
+    {
+        if let Some(operand) = operand.as_deref() {
             query = query.filter("payload", comparison, operand);
         }
     }

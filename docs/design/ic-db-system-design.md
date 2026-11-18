@@ -133,6 +133,12 @@ copy its schema into the engine, or cut capabilities it does not happen to use.
 Toko compatibility does not override the accepted SQL/join/window exclusions.
 It is not a prerequisite for specifying generic capabilities or starting M1.
 
+For the current `toko-new` signup experiment, the maintainer accepted a fresh
+start for `user_hub` and `user_shard`. Fresh stores use the named `DisplayName`
+and the hub’s `Pending`/`Ready` status. Migration from the earlier text-name
+and boolean-ready layouts is outside this integration’s scope. Opening an
+existing store still requires an exact schema match.
+
 The deleted local Toko checkout was obsolete. Earlier conclusions drawn from it
 are superseded and must be rechecked remotely before making compatibility claims.
 Do not restore or consult that checkout. This source decision does not change the
@@ -640,8 +646,11 @@ Borrowing a wrapper produces the inner scalar operand for fluent predicates and
 index prefixes. Rust fields and record projections retain the nominal type.
 Set elements and map keys use the same primitive order, retaining the wrapper
 in the compiled schema. Sum and average accept newtypes over their supported
-integer and Decimal inputs. The result record declares a primitive field with
-the usual width or scale. Grouped and retained operations use the same rule.
+integer and Decimal inputs. A result record can select a primitive width or
+Decimal scale, or preserve the exact input newtype when its primitive supports
+the result. Named results use projection admission to check both logical name
+and definition. A named Decimal average uses the source scale. The retained
+job binds the declared result field type, including the wrapper name. Grouped and retained operations use the same rule.
 Frozen IcyDB delegated newtype numeric conversion to the wrapped item
 (`icydb-model-macros/src/imp/numeric_value.rs` at `6d421e3`). IC DB reads the
 compiled primitive descriptor so exact accumulation needs no generated
@@ -2211,8 +2220,7 @@ The 0.22 fluent Blob prefix increment reuses the escaped component comparison
 and secondary prefix range used by Text. Prefix matching begins at the component
 boundary, so zero escaping preserves raw-byte prefix identity. Blob suffixes
 also use the shared comparator, rejecting matches that begin inside a zero escape.
-Substring matching remains Text-only; Blob substring search needs its own bounded
-algorithm before admission.
+Blob substring matching is a bounded residual filter as described below.
 Frozen IcyDB `6d421e3`, `db/predicate/runtime/mod.rs` and its
 `borrowed_field_pairs_match_general_comparison_semantics` regression, retain strict
 Text/Blob separation but do not implement Blob prefix comparison. IC DB extends
@@ -2223,6 +2231,8 @@ retained aggregate commands, combining it with inclusive byte bounds through one
 shared predicate builder. The private query/retained request tuples change with
 their callers; durable row, index and job formats do not. Qualification evidence
 and its exact Wasm identity are recorded in the qualification guide.
+The fixture accepts `--payload-contains HEX` for bounded substring filtering on
+synchronous and retained queries, including an empty needle (`0x`).
 Version 0.22.1 also exposes `--payload-suffix` for both commands through that same
 builder. Prefix, suffix and inclusive bounds compose; suffixes use the existing
 residual predicate, and retained jobs bind them across resume. The private
@@ -2467,7 +2477,23 @@ qualification covers both directions, fixed prefixes, duplicate classes, empty
 ranges and upgrade continuation. These are correctness and candidate-work
 observations, not comparative IC instruction or Wasm-size measurements.
 
-`Eq(Absent)` and `Ne(Absent)` also accept optional blobs, lists, named records,
+`filter_fields(left, comparison, right)` admits top-level, key-comparable fields
+of the same declared type for Eq, Ne, Lt, Le, Gt and Ge. Text or Blob fields
+can have different size limits within their respective families. Optionality
+may differ. Two absent values compare equal; ordering requires both values.
+The scanner compares the two row components under the usual candidate budget.
+Both fields participate in DISTINCT class admission and continuation identity.
+The installed-Wasm retained-count witness scans two candidates per call.
+Changing only the right field refuses with `InvalidJob`; that refusal and a
+trapped advance each preserve stable memory byte for byte. After a same-code
+upgrade, the original job finishes with five matches across six candidates.
+Field comparisons provide no constant index bound or sparse-index membership proof.
+This keeps the two-field admission check from frozen IcyDB `6d421e3`
+(`db/query/predicate/validate.rs`) and omits its cross-type coercion rules.
+
+The fluent methods `filter_absent(field)` and `filter_present(field)` lower directly
+to `Eq(Absent)` and `Ne(Absent)`, preserving cursor and job identity.
+Both comparisons also accept optional blobs, lists, named records,
 payload enums, sets and maps. Empty values and unit variants are present. Required
 fields reject absent operands; unknown fields refuse rather than implying absence.
 Other comparisons on non-orderable types remain unsupported. Admission marks these
@@ -2535,8 +2561,8 @@ comparison identity. This is native qualification, not new Wasm performance evid
 `Comparison::StartsWith`, `EndsWith` and `Contains` admit present Text operands under the declared byte
 limit, for row filters and completed text min/max group selection. Matching is
 literal, case-sensitive UTF-8 with no normalization; an empty operand matches
-every present text value, including empty text, but not absence. `StartsWith` also
-accepts Blob as specified above; `EndsWith` does too, while `Contains` remains Text-only.
+every present text value, including empty text, but not absence. All three
+comparisons also accept Blob operands and match raw bytes.
 Shared admission and comparison reuse existing terminated text keys,
 stripping presence and terminator framing only when matching, while preserving
 escaped NUL bytes. This prevents optional empty text from matching suffix U+0001.
@@ -2559,10 +2585,12 @@ framing first and checking the preceding byte preserves exact raw-byte semantics
 without decoding buffers or a new predicate representation. Frozen IcyDB's
 `predicate/runtime/mod.rs` at `6d421e3` permits suffixes for Text but only Eq/Ne
 for Blob; this is an IC DB extension using its owned key encoding. Blob substring
-matching stays deferred: naive overlapping searches can lose the existing
-linear-time Text search guarantee, while nonoverlapping searches can miss valid
-matches after a false escape-boundary match. Suffix qualification is native only;
-the earlier text/prefix Wasm evidence is not a suffix claim.
+search first finds the encoded needle. A match beginning inside a zero escape
+is ambiguous because a valid occurrence may overlap it. Only in that case,
+decode both bounded components and search the raw bytes once. Each temporary
+holds at most 4 KiB. Both searches take linear time. Text cannot trigger the
+fallback because a UTF-8 needle cannot start with FF. The predicate uses
+ordinary scan work limits and the existing cursor and job bindings.
 
 Mandatory `StartsWith` on the first index field after the admitted fixed prefix
 now narrows that same scan interval. Remove only the encoded Text terminator,

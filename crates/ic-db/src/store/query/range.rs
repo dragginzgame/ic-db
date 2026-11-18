@@ -59,6 +59,9 @@ pub(super) fn bounds(
     if let Some(field) = field {
         for clause in plan.terms.split_inclusive(|term| !term.or_next) {
             let [term] = clause else { continue };
+            let super::TermOperand::Literal { bytes, .. } = &term.operand else {
+                continue;
+            };
             let byte_prefix = secondary && term.comparison == Comparison::StartsWith;
             if entity.fields[term.position].name != field
                 || !(byte_prefix
@@ -77,11 +80,9 @@ pub(super) fn bounds(
             // escaped bytes, but drops the terminator so extensions remain in range.
             // Empty prefixes span all present values, excluding absence.
             let operand = if byte_prefix {
-                term.operand
-                    .strip_suffix(&[0, 0])
-                    .ok_or(Error::InvalidQuery)?
+                bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
             } else {
-                &term.operand
+                bytes.as_slice()
             };
             // A residual operand may legally exceed the physical key bound.
             // Optimization must not introduce a refusal for that existing query.

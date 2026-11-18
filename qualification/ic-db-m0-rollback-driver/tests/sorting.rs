@@ -85,12 +85,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
                 distinct,
                 (None::<String>, None::<String>),
                 None::<String>,
-                (
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                ),
+                [None::<Vec<u8>>, None, None, None, None],
             ),
         );
         let reply = pic
@@ -231,12 +226,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 distinct,
                 (None::<String>, None::<String>),
                 None::<String>,
-                (
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                ),
+                [None::<Vec<u8>>, None, None, None, None],
             ),
         );
         if measured {

@@ -377,12 +377,7 @@ async fn existence_queries_keep_work_bounds_and_upgrade_behavior() {
                 false,
                 (None::<String>, None::<String>),
                 None::<String>,
-                (
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                ),
+                [None::<Vec<u8>>, None, None, None, None],
             ),
         );
         let reply = pic
@@ -1093,12 +1088,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                     distinct,
                     (group_min, None::<&str>),
                     group_order,
-                    (
-                        None::<Vec<u8>>,
-                        None::<Vec<u8>>,
-                        None::<Vec<u8>>,
-                        None::<Vec<u8>>,
-                    ),
+                    [None::<Vec<u8>>, None, None, None, None],
                 ),
             );
             let reply = pic
@@ -1854,12 +1844,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
                 false,
                 (minimum, None::<&str>),
                 select.starts_with("zone,").then_some("desc"),
-                (
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                    None::<Vec<u8>>,
-                ),
+                [None::<Vec<u8>>, None, None, None, None],
             ),
         );
         let reply = pic

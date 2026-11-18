@@ -67,12 +67,7 @@ type Request = (
         bool,
         (Option<String>, Option<String>),
         Option<String>,
-        (
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-        ),
+        blob::Filters,
     ),
 );
 type Page = (
@@ -151,24 +146,10 @@ fn query(
         work,
         bytes,
         select,
-        (
-            distinct,
-            (group_min, group_max),
-            group_order,
-            (payload_min, payload_max, payload_prefix, payload_suffix),
-        ),
+        (distinct, (group_min, group_max), group_order, filters),
     ): Request,
 ) -> Result<Page, String> {
-    if entity != "BinaryObject"
-        && (payload_min.is_some()
-            || payload_max.is_some()
-            || payload_prefix.is_some()
-            || payload_suffix.is_some())
-    {
-        return Err(
-            "--payload-min, --payload-max, --payload-prefix and --payload-suffix apply to BinaryObject".into(),
-        );
-    }
+    blob::validate(&entity, &filters)?;
     let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = cursor
         .as_deref()
@@ -287,13 +268,7 @@ fn query(
             },
         ),
         "BinaryObject" => {
-            let query = blob::filter(
-                blob::query(&db, minimum, category, entry_id)?,
-                payload_min.as_deref(),
-                payload_max.as_deref(),
-                payload_prefix.as_deref(),
-                payload_suffix.as_deref(),
-            );
+            let query = blob::filter(blob::query(&db, minimum, category, entry_id)?, &filters);
             execute(
                 configure(
                     query,

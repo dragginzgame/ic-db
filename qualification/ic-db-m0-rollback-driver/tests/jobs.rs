@@ -6,6 +6,16 @@ type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
 
 #[tokio::test]
 async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
+    check_job_binding_across_upgrade(14, 15, "0:3,1:3").await;
+}
+
+#[tokio::test]
+async fn retained_field_comparison_binds_the_right_field_across_upgrade() {
+    // Entry ids are 1..=6, category is id % 2. Only id 1 fails id > category.
+    check_job_binding_across_upgrade(18, 19, "5").await;
+}
+
+async fn check_job_binding_across_upgrade(operation: u8, changed: u8, expected: &str) {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
     let owned = instance().await.unwrap();
@@ -20,7 +30,7 @@ async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
             canister,
             "job_start",
             ic_wire::encode(
-                &(14_u8, 0_i64, 100_i64, 0_u64),
+                &(operation, 0_i64, 100_i64, 0_u64),
                 Encoding::Frame {
                     method: 110,
                     direction: Direction::Request,
@@ -69,29 +79,32 @@ async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
         )
         .unwrap()
     };
-    let first = decode(advance(14, 0, 0).await.unwrap()).unwrap();
+    let first = decode(advance(operation, 0, 0).await.unwrap()).unwrap();
     assert_eq!((first.0, first.2, first.4), (1, 2, 0));
     let before = pic.get_stable_memory(canister).await;
-    assert!(decode(advance(15, first.0, 0).await.unwrap()).is_err());
+    assert_eq!(
+        decode(advance(changed, first.0, 0).await.unwrap()).unwrap_err(),
+        "InvalidJob"
+    );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert!(advance(14, first.0, 1).await.is_err());
+    assert!(advance(operation, first.0, 1).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     let mut sequence = first.0;
     for _ in 0..4 {
-        let step = decode(advance(14, sequence, 0).await.unwrap()).unwrap();
+        let step = decode(advance(operation, sequence, 0).await.unwrap()).unwrap();
         sequence = step.0;
         if step.4 == 1 {
             assert_eq!(step.2, 6);
-            assert_eq!(step.5.as_deref(), Some("0:3,1:3"));
+            assert_eq!(step.5.as_deref(), Some(expected));
             owned.drop().await;
             return;
         }
         assert_eq!(step.4, 0);
     }
-    panic!("bounded grouped OR must finish");
+    panic!("retained operation {operation} did not finish within its work bound");
 }
 
 #[tokio::test]

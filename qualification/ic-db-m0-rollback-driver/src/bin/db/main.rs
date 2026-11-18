@@ -175,18 +175,8 @@ enum Command {
         /// DISTINCT counts include absence; count:optional counts only present values.
         #[arg(long, default_value = "count")]
         select: String,
-        /// BinaryObject.payload >= HEX; exact 0x-prefixed bytes, at most 1024 bytes.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_min: Option<BlobArg>,
-        /// BinaryObject.payload <= HEX; use 0x for empty bytes.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_max: Option<BlobArg>,
-        /// BinaryObject.payload starts with HEX; 0x matches every present payload.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_prefix: Option<BlobArg>,
-        /// BinaryObject.payload ends with HEX; residual filtering consumes scan work.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_suffix: Option<BlobArg>,
+        #[command(flatten)]
+        payload: PayloadArgs,
         /// Entry.amount >= VALUE.
         #[arg(long = "min")]
         minimum: Option<u64>,
@@ -226,19 +216,8 @@ enum Command {
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
-        /// BinaryObject.payload >= HEX; use 0x00ff80, or 0x for empty bytes.
-        /// Exactly two hex digits per byte, at most 1024 bytes; no text conversion.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_min: Option<BlobArg>,
-        /// BinaryObject.payload <= HEX; same byte syntax as --payload-min.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_max: Option<BlobArg>,
-        /// BinaryObject.payload starts with exact raw bytes; combines with range bounds.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_prefix: Option<BlobArg>,
-        /// BinaryObject.payload ends with HEX; residual filtering consumes scan work.
-        #[arg(long, value_name="HEX", value_parser=parse_blob)]
-        payload_suffix: Option<BlobArg>,
+        #[command(flatten)]
+        payload: PayloadArgs,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
         after: Option<CursorArg>,
@@ -309,6 +288,37 @@ enum Command {
 }
 #[derive(Clone, Debug)]
 struct CursorArg(Vec<u8>);
+#[derive(clap::Args, Debug)]
+struct PayloadArgs {
+    /// BinaryObject.payload >= HEX; use 0x00ff80, or 0x for empty bytes.
+    /// Exactly two hex digits per byte, at most 1024 bytes; no text conversion.
+    #[arg(long, value_name="HEX", value_parser=parse_blob)]
+    payload_min: Option<BlobArg>,
+    /// BinaryObject.payload <= HEX; same byte syntax as --payload-min.
+    #[arg(long, value_name="HEX", value_parser=parse_blob)]
+    payload_max: Option<BlobArg>,
+    /// BinaryObject.payload starts with exact raw bytes; combines with range bounds.
+    #[arg(long, value_name="HEX", value_parser=parse_blob)]
+    payload_prefix: Option<BlobArg>,
+    /// BinaryObject.payload ends with HEX; residual filtering consumes scan work.
+    #[arg(long, value_name="HEX", value_parser=parse_blob)]
+    payload_suffix: Option<BlobArg>,
+    /// BinaryObject.payload contains HEX anywhere; 0x matches every present payload.
+    #[arg(long, value_name="HEX", value_parser=parse_blob)]
+    payload_contains: Option<BlobArg>,
+}
+impl PayloadArgs {
+    fn into_filters(self) -> [Option<Vec<u8>>; 5] {
+        [
+            self.payload_min,
+            self.payload_max,
+            self.payload_prefix,
+            self.payload_suffix,
+            self.payload_contains,
+        ]
+        .map(|arg| arg.map(|v| v.0))
+    }
+}
 #[derive(Clone, Debug)]
 struct BlobArg(Vec<u8>);
 fn parse_blob(text: &str) -> Result<BlobArg, String> {
@@ -754,10 +764,7 @@ async fn session(
             Command::Aggregate {
                 entity,
                 select,
-                payload_min,
-                payload_max,
-                payload_prefix,
-                payload_suffix,
+                payload,
                 minimum,
                 category,
                 entry_id,
@@ -776,7 +783,7 @@ async fn session(
                     limit,
                     (group_min.as_deref(), group_max.as_deref()),
                     group_order.as_deref(),
-                    (payload_min.map(|v| v.0), payload_max.map(|v| v.0), payload_prefix.map(|v| v.0), payload_suffix.map(|v| v.0)),
+                    payload.into_filters(),
                 );
                 let reply = invoke(
                     CallKind::Update,
@@ -983,10 +990,7 @@ async fn session(
             }
             Command::Query {
                 entity,
-                payload_min,
-                payload_max,
-                payload_prefix,
-                payload_suffix,
+                payload,
                 after,
                 limit,
                 minimum,
@@ -1019,7 +1023,7 @@ async fn session(
                             bytes,
                             select,
                             (distinct, (group_min, group_max), group_order,
-                             (payload_min.map(|v|v.0), payload_max.map(|v|v.0), payload_prefix.map(|v|v.0), payload_suffix.map(|v|v.0))),
+                             payload.into_filters()),
                         ),
                         Encoding::Frame {
                             method: 3,

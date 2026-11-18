@@ -55,8 +55,8 @@ pub enum Comparison {
     /// Present Text or Blob ends with an exact operand of the same type.
     /// Empty suffixes match all present values; text is not normalized.
     EndsWith = 7,
-    /// Present text contains the exact UTF-8 operand, without normalization.
-    /// Empty needles match all present text; this is not collection membership.
+    /// Present Text or Blob contains the exact byte sequence of the same type.
+    /// Empty needles match every present value. Text uses UTF-8 without normalization.
     Contains = 8,
 }
 
@@ -64,9 +64,8 @@ impl Comparison {
     fn admit(self, field: FieldType, optional: bool, value: IndexValue<'_>) -> Result<(), Error> {
         value.admit(field, optional)?;
         let field = key::operand_type(field);
-        if (matches!(self, Self::StartsWith | Self::EndsWith)
-            && !matches!(field, FieldType::Text { .. } | FieldType::Blob { .. }))
-            || (self == Self::Contains && !matches!(field, FieldType::Text { .. }))
+        if matches!(self, Self::StartsWith | Self::EndsWith | Self::Contains)
+            && !matches!(field, FieldType::Text { .. } | FieldType::Blob { .. })
         {
             return Err(Error::InvalidQuery);
         }
@@ -102,10 +101,7 @@ impl Comparison {
                         Self::EndsWith => actual
                             .strip_suffix(operand)
                             .is_some_and(|prefix| prefix.last() != Some(&0)),
-                        // Valid UTF-8 needles cannot start within an escaped NUL
-                        // (00 FF) or a multibyte character. Search is linear and
-                        // constant-space even for repetitive bounded operands.
-                        _ => memchr::memmem::find(actual, operand).is_some(),
+                        _ => contains_component(actual, operand),
                     })
             }
             _ if actual.is_none() || operand.is_none() => false,
@@ -125,6 +121,31 @@ impl Comparison {
             _ => false,
         }
     }
+}
+
+// Both slices are validated component contents with presence/terminator removed.
+fn contains_component(actual: &[u8], needle: &[u8]) -> bool {
+    let Some(start) = memchr::memmem::find(actual, needle) else {
+        return false;
+    };
+    if start == 0 || actual[start - 1] != 0 {
+        return true;
+    }
+    // Only a Blob needle starting FF can match inside an escaped zero (00 FF).
+    // A valid overlapping match may follow. One raw search avoids repeatedly
+    // scanning long prefixes. Each temporary is bounded by the row byte limit.
+    fn raw(content: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(content.len().min(crate::codec::MAX_ROW_BYTES));
+        let mut encoded = content.iter();
+        while let Some(&byte) = encoded.next() {
+            bytes.push(byte);
+            if byte == 0 {
+                encoded.next();
+            }
+        }
+        bytes
+    }
+    memchr::memmem::find(&raw(actual), &raw(needle)).is_some()
 }
 
 /// A bounded logical position, bound to database, schema, query and direction.
@@ -216,10 +237,16 @@ impl QueryPage<Vec<u8>> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Operand<'a> {
+    Literal(IndexValue<'a>),
+    Field(&'a str),
+}
+
 struct Predicate<'a> {
     field: &'a str,
     comparison: Comparison,
-    value: IndexValue<'a>,
+    operand: Operand<'a>,
     // Consecutive alternatives form one clause; clauses are ANDed.
     or_next: bool,
 }
@@ -261,14 +288,14 @@ impl Default for Request<'_> {
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
     #[inline(never)]
-    fn filter(&mut self, field: &'a str, comparison: Comparison, value: impl Into<IndexValue<'a>>) {
+    fn filter(&mut self, field: &'a str, comparison: Comparison, operand: Operand<'a>) {
         if self.predicates.len() == MAX_TERMS {
             self.over_limit = true;
         } else {
             self.predicates.push(Predicate {
                 field,
                 comparison,
-                value: value.into(),
+                operand,
                 or_next: false,
             });
         }
@@ -287,7 +314,7 @@ impl<'a> Request<'a> {
                 |(i, (field, comparison, value))| Predicate {
                     field,
                     comparison,
-                    value,
+                    operand: Operand::Literal(value),
                     or_next: i + 1 < count,
                 },
             ));
@@ -301,7 +328,7 @@ impl<'a> Request<'a> {
             return;
         }
         for &value in values {
-            self.filter(field, Comparison::Ne, value);
+            self.filter(field, Comparison::Ne, Operand::Literal(value));
         }
     }
 
@@ -420,8 +447,29 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         comparison: Comparison,
         value: impl Into<IndexValue<'a>>,
     ) -> Self {
-        self.request.filter(field, comparison, value);
+        self.request
+            .filter(field, comparison, Operand::Literal(value.into()));
         self
+    }
+    /// Compare two top-level ordered fields on the same row using Eq, Ne, Lt, Le, Gt or Ge.
+    /// Types must match; Text and Blob bounds may differ within their respective families.
+    /// Two absent values are equal. An ordered comparison requires two present values.
+    #[must_use]
+    pub fn filter_fields(mut self, left: &'a str, comparison: Comparison, right: &'a str) -> Self {
+        self.request.filter(left, comparison, Operand::Field(right));
+        self
+    }
+    /// Match rows whose optional field has a value, including an empty value.
+    /// Required and unknown fields return `InvalidQuery` at admission.
+    #[must_use]
+    pub fn filter_present(self, field: &'a str) -> Self {
+        self.filter(field, Comparison::Ne, IndexValue::Absent)
+    }
+    /// Match rows whose optional field has no value.
+    /// Required and unknown fields return `InvalidQuery` at admission.
+    #[must_use]
+    pub fn filter_absent(self, field: &'a str) -> Self {
+        self.filter(field, Comparison::Eq, IndexValue::Absent)
     }
     /// Match a present field inside an inclusive range, ANDed with other filters.
     /// Equivalent to `filter(field, Comparison::Ge, lower)` followed by
@@ -633,9 +681,13 @@ fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u16, E
 struct Term {
     position: usize,
     comparison: Comparison,
-    operand: Vec<u8>,
-    absent: bool,
+    operand: TermOperand,
     or_next: bool,
+}
+
+enum TermOperand {
+    Literal { bytes: Vec<u8>, absent: bool },
+    Field(usize),
 }
 
 fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
@@ -732,7 +784,10 @@ impl<'a> Plan<'a> {
         for value in request
             .predicates
             .iter()
-            .map(|p| &p.value)
+            .filter_map(|p| match &p.operand {
+                Operand::Literal(value) => Some(value),
+                Operand::Field(_) => None,
+            })
             .chain(request.index.iter().flat_map(|(_, values)| values.iter()))
         {
             if match value {
@@ -770,33 +825,62 @@ impl<'a> Plan<'a> {
                 .position(|f| f.name == predicate.field)
                 .ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
-            let ordered = key::supports(field.value);
-            if !ordered
-                && !(predicate.value == IndexValue::Absent
-                    && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne))
-            {
-                return Err(Error::InvalidQuery);
-            }
-            predicate
-                .comparison
-                .admit(field.value, field.optional, predicate.value)?;
-            let absent = predicate.value == IndexValue::Absent;
-            let mut operand = Vec::new();
-            predicate
-                .value
-                .append_component(field.optional, &mut operand);
+            let operand = match predicate.operand {
+                Operand::Field(name) => {
+                    let right = entity
+                        .fields
+                        .iter()
+                        .position(|f| f.name == name)
+                        .ok_or(Error::InvalidQuery)?;
+                    let right_type = entity.fields[right].value;
+                    let compatible = field.value == right_type
+                        || matches!(
+                            (field.value, right_type),
+                            (FieldType::Text { .. }, FieldType::Text { .. })
+                                | (FieldType::Blob { .. }, FieldType::Blob { .. })
+                        );
+                    if !compatible
+                        || !key::supports(field.value)
+                        || !matches!(
+                            predicate.comparison,
+                            Comparison::Eq
+                                | Comparison::Ne
+                                | Comparison::Lt
+                                | Comparison::Le
+                                | Comparison::Gt
+                                | Comparison::Ge
+                        )
+                    {
+                        return Err(Error::InvalidQuery);
+                    }
+                    plan.selected |= (1 << position) | (1 << right);
+                    TermOperand::Field(right)
+                }
+                Operand::Literal(value) => {
+                    let absent = value == IndexValue::Absent;
+                    if key::supports(field.value) {
+                        plan.selected |= 1 << position;
+                    } else if absent
+                        && matches!(predicate.comparison, Comparison::Eq | Comparison::Ne)
+                    {
+                        plan.presence |= 1 << position;
+                    } else {
+                        return Err(Error::InvalidQuery);
+                    }
+                    predicate
+                        .comparison
+                        .admit(field.value, field.optional, value)?;
+                    let mut bytes = Vec::new();
+                    value.append_component(field.optional, &mut bytes);
+                    TermOperand::Literal { bytes, absent }
+                }
+            };
             plan.terms.push(Term {
                 position,
                 comparison: predicate.comparison,
                 operand,
-                absent,
                 or_next: predicate.or_next,
             });
-            if ordered {
-                plan.selected |= 1 << position;
-            } else {
-                plan.presence |= 1 << position;
-            }
         }
         // Admit every operand before selecting a path, even for empty or
         // contradictory queries. The scanner consumes this one proven choice.
@@ -837,8 +921,17 @@ impl<'a> Plan<'a> {
         hash.update(&plan.prefix);
         for term in &plan.terms {
             hash.update([term.position as u8, term.comparison as u8]);
-            hash.update((term.operand.len() as u32).to_le_bytes());
-            hash.update(&term.operand);
+            match &term.operand {
+                TermOperand::Literal { bytes, .. } => {
+                    hash.update((bytes.len() as u32).to_le_bytes());
+                    hash.update(bytes);
+                }
+                TermOperand::Field(right) => {
+                    // Outside the bounded literal length domain.
+                    hash.update(u32::MAX.to_le_bytes());
+                    hash.update([*right as u8]);
+                }
+            }
         }
         // Keep existing conjunction identities unchanged. A bounded clause mask
         // distinguishes OR grouping without persisting another predicate model.
@@ -1013,6 +1106,7 @@ fn execute_inner<M: Memory>(
         .as_ref()
         .map(|_| sort::Collection::new(request, plan.distinct == distinct::Strategy::Sorted));
     let mut component = Vec::new();
+    let mut right_component = Vec::new();
     // Each processed equivalence class is either wholly rejected or already
     // emitted. Inclusive byte retries point at an unreturned class instead.
     let mut previous = if let Some(cursor) = request.cursor.filter(|c| !c.inclusive) {
@@ -1089,11 +1183,26 @@ fn execute_inner<M: Memory>(
                     }
                     let value = values[term.position];
                     component.clear();
-                    value.append_component(entity.fields[term.position].optional, &mut component);
+                    let (operand, optional) = match &term.operand {
+                        TermOperand::Literal { bytes, absent } => (
+                            (!absent).then_some(bytes.as_slice()),
+                            entity.fields[term.position].optional,
+                        ),
+                        TermOperand::Field(right) => {
+                            let rhs = values[*right];
+                            right_component.clear();
+                            rhs.append_component(false, &mut right_component);
+                            (
+                                (rhs != IndexValue::Absent).then_some(right_component.as_slice()),
+                                false,
+                            )
+                        }
+                    };
+                    value.append_component(optional, &mut component);
                     term.comparison.accepts(
                         (value != IndexValue::Absent).then_some(component.as_slice()),
-                        (!term.absent).then_some(term.operand.as_slice()),
-                        entity.fields[term.position].optional,
+                        operand,
+                        optional,
                     )
                 })
             });

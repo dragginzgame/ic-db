@@ -152,9 +152,7 @@ fn complete_membership(
                             .any(|clause| {
                                 clause.iter().all(|predicate| {
                                     predicate.field == *name
-                                        && !predicate
-                                            .comparison
-                                            .accepts_absent(predicate.value == IndexValue::Absent)
+                                        && matches!(predicate.operand, super::Operand::Literal(value) if !predicate.comparison.accepts_absent(value == IndexValue::Absent))
                                 })
                             })
                 })
@@ -216,8 +214,9 @@ fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
             if let [predicate] = clause
                 && predicate.field == field
                 && predicate.comparison == Comparison::Eq
+                && let super::Operand::Literal(value) = predicate.operand
             {
-                Some(predicate.value)
+                Some(value)
             } else {
                 None
             }
