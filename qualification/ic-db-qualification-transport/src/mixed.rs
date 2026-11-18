@@ -60,8 +60,8 @@ pub enum CountReply {
 pub enum Reply {
     /// Batch outcome and instructions inside its handler.
     Batch(Result<(), u8>, u64),
-    /// Retained job outcome or engine refusal.
-    Count(Result<CountReply, String>),
+    /// Retained job outcome or refusal, and instructions inside its handler.
+    Count(Result<CountReply, String>, u64),
 }
 
 /// Complete model observation: rows by entity, counts, revisions, filtered IDs,

@@ -1,8 +1,8 @@
 //! Read-only Canic inspection. Applications retain query/write and exposure policy.
 use canic::db::{RPC_LIMITS, inspection as protocol};
-use canic_wire::{Direction, Encoding};
 use clap::Args;
 use ic_host_text::{bordered_table, escape};
+use ic_wire::{Direction, Encoding};
 
 #[derive(Args)]
 pub(super) struct Options {
@@ -20,7 +20,7 @@ pub(super) struct Options {
 }
 
 fn decode(bytes: &[u8], request: &protocol::Request) -> Result<protocol::Response, String> {
-    let response = canic_wire::decode::<protocol::Reply>(
+    let response = ic_wire::decode::<protocol::Reply>(
         bytes,
         Encoding::Frame {
             method: protocol::INSPECT,
@@ -60,7 +60,7 @@ async fn call(
     request: &protocol::Request,
     statistics: &mut Vec<String>,
 ) -> Result<protocol::Response, String> {
-    let payload = canic_wire::encode(
+    let payload = ic_wire::encode(
         request,
         Encoding::Frame {
             method: protocol::INSPECT,

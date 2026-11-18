@@ -148,11 +148,11 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
 }
 
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
-    canic_wire::encode(
+    ic_wire::encode(
         value,
-        canic_wire::Encoding::Frame {
+        Encoding::Frame {
             method,
-            direction: canic_wire::Direction::Request,
+            direction: Direction::Request,
         },
         canic::db::RPC_LIMITS,
     )
@@ -160,15 +160,126 @@ fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
 }
 
 fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    canic_wire::decode(
+    ic_wire::decode(
         bytes,
-        canic_wire::Encoding::Frame {
+        Encoding::Frame {
             method,
-            direction: canic_wire::Direction::Response,
+            direction: Direction::Response,
         },
         canic::db::RPC_LIMITS,
     )
     .unwrap()
+}
+
+fn seed_batches() -> [(&'static str, Vec<Command>); 2] {
+    [
+        (
+            "seed-parents",
+            (1..=4).map(|id| (0, 0, id, id * 10, 0)).collect(),
+        ),
+        (
+            "seed-dependants",
+            (1..=12)
+                .flat_map(|id| [(2, 0, id, id, 0), (1, 0, id, id % 4 + 1, id * 10)])
+                .collect(),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn compare_retained_count_advance_at_the_same_checkpoint() {
+    use ic_testkit::pocket_ic::Time;
+
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    // Fix both clocks so the job generation, expiry and observed timestamps agree.
+    let clock = |offset_seconds| {
+        Time::from_nanos_since_unix_epoch((2_000_000_000_u64 + offset_seconds) * 1_000_000_000)
+    };
+    let mut warm_observation = None;
+    for upgraded in [false, true] {
+        let pic = instance().await.unwrap();
+        pic.set_time(clock(0)).await;
+        let canister = pic.create_canister().await;
+        pic.add_cycles(canister, 10_000_000_000_000).await;
+        pic.install_canister(canister, wasm.clone(), vec![], None)
+            .await;
+        let call = async |request| {
+            let bytes = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "db_write",
+                    application_request(241, &request),
+                )
+                .await
+                .unwrap();
+            application_reply::<Reply>(241, &bytes)
+        };
+        for (_, commands) in seed_batches() {
+            assert!(matches!(
+                call(Update::Batch(false, commands)).await,
+                Reply::Batch(Ok(()), _)
+            ));
+        }
+        let count = async |action| {
+            let Reply::Count(result, instructions) =
+                call(Update::Count(CountRequest::Run(false, action))).await
+            else {
+                panic!("expected count reply")
+            };
+            (result.unwrap(), instructions)
+        };
+        let (CountReply::Started(handle), _) = count(CountAction::Start).await else {
+            panic!("expected handle")
+        };
+        let advance = async |sequence| count(CountAction::Resume(handle.clone(), sequence)).await;
+        assert_eq!(
+            advance(0).await.0,
+            CountReply::Advanced(1, CountOutcome::Running)
+        );
+        let checkpoint = pic.get_stable_memory(canister).await;
+        pic.set_time(clock(600)).await;
+        if upgraded {
+            ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+            assert!(pic.get_stable_memory(canister).await == checkpoint);
+        }
+        pic.set_time(clock(601)).await;
+        // Settle the simulated idle interval before sampling the update balance.
+        pic.tick().await;
+        let before = pic.cycle_balance(canister).await;
+        let (result, instructions) = advance(1).await;
+        let cycles = before - pic.cycle_balance(canister).await;
+        assert_eq!(result, CountReply::Advanced(2, CountOutcome::Running));
+        let next_checkpoint = pic.get_stable_memory(canister).await;
+        assert!(next_checkpoint != checkpoint);
+        let observation = (handle.clone(), checkpoint, next_checkpoint);
+        if let Some(reference) = &warm_observation {
+            assert!(
+                reference == &observation,
+                "handle and both checkpoints must match byte for byte"
+            );
+        } else {
+            warm_observation = Some(observation);
+        }
+        println!(
+            "opening/count-advance upgraded={upgraded}: handler_instructions={instructions} update_balance_delta={cycles}"
+        );
+        for sequence in 2..=6 {
+            let expected = if sequence == 6 {
+                CountOutcome::Complete(12)
+            } else {
+                CountOutcome::Running
+            };
+            assert_eq!(
+                advance(sequence).await.0,
+                CountReply::Advanced(sequence + 1, expected)
+            );
+        }
+        pic.drop().await;
+    }
 }
 
 #[tokio::test]
@@ -302,22 +413,38 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             }
         };
     let mut model = Model::default();
-    check(
-        &mut model,
-        false,
-        (1..=4).map(|id| (0, 0, id, id * 10, 0)).collect(),
-        "seed-parents",
-    )
-    .await;
-    check(
-        &mut model,
-        false,
-        (1..=12)
-            .flat_map(|id| [(2, 0, id, id, 0), (1, 0, id, id % 4 + 1, id * 10)])
-            .collect(),
-        "seed-dependants",
-    )
-    .await;
+    for (label, commands) in seed_batches() {
+        check(&mut model, false, commands, label).await;
+    }
+    // Repeat identical operations on unchanged rows across one executable upgrade.
+    // A query can initialize the host heap only for its own execution.
+    let measured_page = async |phase: &str| {
+        let (page, instructions) = items(false, 0, None).await;
+        let page = page.unwrap();
+        assert_eq!(page.ids, [4]);
+        assert_eq!(page.examined, 1);
+        println!("opening/indexed-page {phase}: handler_instructions={instructions}");
+        page.next.expect("more items for this parent")
+    };
+    let measured_batch = async |phase: &str| {
+        let before = pic.cycle_balance(canister).await;
+        let (result, instructions) = write(false, &[(1, 1, 1, 2, 10)]).await;
+        let cycles = before - pic.cycle_balance(canister).await;
+        assert_eq!(result, Ok(()));
+        println!(
+            "opening/identical-replace {phase}: handler_instructions={instructions} update_balance_delta={cycles}"
+        );
+    };
+    let backing = pic.get_stable_memory(canister).await;
+    let cursor = measured_page("seeded").await;
+    measured_batch("seeded").await;
+    upgrade().await;
+    assert_eq!(measured_page("first-query-after-upgrade").await, cursor);
+    assert_eq!(measured_page("second-query-after-upgrade").await, cursor);
+    measured_batch("first-update-after-upgrade").await;
+    assert_eq!(measured_page("after-first-update").await, cursor);
+    measured_batch("after-first-update").await;
+    assert_eq!(pic.get_stable_memory(canister).await, backing);
     let inspected = pic
         .query_call(
             canister,
@@ -337,7 +464,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             application_request(241, &Update::Count(request)),
         )
         .await;
-        let Reply::Count(result) = application_reply(241, &bytes) else {
+        let Reply::Count(result, _) = application_reply(241, &bytes) else {
             panic!("expected count reply")
         };
         result

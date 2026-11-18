@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, fmt::Write};
 type Row = (u64, u64, u64);
 #[derive(Debug, PartialEq, Eq)]
 enum Answer {
+    Exists(bool),
     Row(Option<Row>),
     Rows(Vec<Row>),
     Groups(Vec<(u64, u64)>),
@@ -76,6 +77,10 @@ fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
         9 => {
             let (value, open, execution): (Option<u64>, u64, u64) = decode(id, bytes);
             (Answer::Count(value), open + execution)
+        }
+        10 => {
+            let (value, work) = decode(id, bytes);
+            (Answer::Exists(value), work)
         }
         _ => unreachable!(),
     }
@@ -274,6 +279,7 @@ async fn matched_query_matrix() {
         std::env::var_os("IC_DB_QUERY_MATRIX_DIR").expect("run make m2-query-matrix"),
     );
     let count_paths = std::env::var_os("IC_DB_COUNT_PATHS").is_some();
+    let exists = std::env::var_os("IC_DB_EXISTS_COMPARISON").is_some();
     let mut samples = Vec::new();
     for (engine, variable, legacy) in [
         ("ic-db", "IC_DB_RECORDS_BENCHMARK_WASM", false),
@@ -291,19 +297,23 @@ async fn matched_query_matrix() {
             .map(String::as_str)
             .collect();
         let mut expected = vec![
-            "canister_query count_rows",
             "canister_query listing",
             "canister_query lookup",
             "canister_update advance_startup",
             "canister_update insert",
             "canister_update read_modify_write",
         ];
-        if !count_paths {
+        if exists {
+            expected.push("canister_query category_exists");
+        } else {
+            expected.push("canister_query count_rows");
+        }
+        if !count_paths && !exists {
             expected.extend([
                 "canister_query fluent_listing",
                 "canister_query grouped_aggregate",
             ]);
-        } else if !legacy {
+        } else if count_paths && !legacy {
             expected.push("canister_query count_profile");
         }
         expected.sort_unstable();
@@ -369,7 +379,23 @@ async fn matched_query_matrix() {
                     }
                     source.push(row);
                 }
-                let cases = if count_paths {
+                let cases = if exists {
+                    [0_u64, 3, 99]
+                        .into_iter()
+                        .map(|category| {
+                            let found = source.iter().any(|row| row.1 == category);
+                            Case {
+                                name: format!("exists-{category}"),
+                                family: if found { "exists-hit" } else { "exists-miss" },
+                                method: "category_exists",
+                                id: 10,
+                                request: encode(10, &category),
+                                expected: Answer::Exists(found),
+                                legacy_refuses: false,
+                            }
+                        })
+                        .collect()
+                } else if count_paths {
                     prefix_counts(&source, legacy)
                 } else {
                     cases(&source, std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some())

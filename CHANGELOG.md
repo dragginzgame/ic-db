@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.23.7] - Unreleased
+
+### Fluent queries
+
+- Primary-key ranges finish on the page that processes their inclusive endpoint.
+  For IDs 3 through 5 with a one-candidate budget, three calls suffice in either
+  direction when all three IDs exist. Counts can also finish exactly at their
+  work limit. For a single ID that fails another filter, `.exists()` returns
+  false after checking that row.
+
+- Ordered queries can now use another path when a valid field value would
+  exceed the 512-byte index key limit. Filtering and page work limits still
+  apply. An explicitly requested oversized index prefix returns `Limit`.
+
+- An ordered entity or projection query with an exact primary-key filter can
+  reach its row with a work budget of one, even with additional indexed filters.
+  Other predicates still decide whether that row is returned. A live cursor
+  issued for a previously selected secondary path requires a fresh query.
+
+- `.exists()` automatically seeks a secondary index when its leading fields
+  cover all equality filters. A hit reads and validates one owner row. A miss
+  reads zero rows. Try the missing reference in the local fixture.
+
+  ```sh
+  db query Document --select exists --entry-id 999 --work 1
+  ```
+
+- `.filter_between_fields("price", "floor", "ceiling")` includes prices at
+  either bound. `.filter_not_between_fields(...)` selects a price below the
+  floor or above the ceiling. Both take their bounds from the current row.
+- The local console accepts both filters for queries and retained aggregates.
+  On the six-row fixture, the first command returns ID 1 and the second counts five rows.
+
+  ```sh
+  db query Entry --between-fields category id amount --select id
+  db aggregate Entry --not-between-fields category id amount --select count --work 1
+  ```
+
+### Qualification
+
+- Indexed existence used 37–60% fewer handler instructions than frozen IcyDB’s
+  maintained-count lookup across 36 matched PocketIC cases.
+  [Existence comparison](qualification/README.md#indexed-existence-0237)
+
+- Updated Canic to 0.223.1 and removed the Wire 0.24 compatibility dependency.
+  All maintained qualification callers use IC Wire 0.25.0.
+- Measured an indexed page, an identical replacement and a retained-count
+  advance across upgrade. The count advance used 14.6% more handler instructions
+  and 1.6% more cycles at the same checkpoint. [Opening costs](qualification/README.md#opening-costs-through-the-canic-mount-0237)
+
 ## [0.23.6] - 2026-11-18
 
 ### Qualification

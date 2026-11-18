@@ -125,6 +125,93 @@ fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
 }
 
 #[test]
+fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
+    use ic_db::QueryOperand::Field;
+
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let inside = || {
+        db.query::<Entry>()
+            .filter_between_fields("id", "maybe", "amount")
+    };
+    let expected = [1, 2, 4, 5, 7, 8];
+    assert_eq!(ids(&inside().fetch().unwrap().rows), expected);
+    let first = inside().limit(2).fetch().unwrap();
+    assert_eq!(ids(&first.rows), expected[..2]);
+    let rest = db
+        .query::<Entry>()
+        .filter_fields("id", C::Ge, "maybe")
+        .filter_fields("id", C::Le, "amount")
+        .after(first.next.as_ref().unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), expected[2..]);
+
+    // id < amount holds even on rows 3 and 6, where the other bound is absent.
+    let outside = || {
+        db.query::<Entry>()
+            .filter_not_between_fields("id", "amount", "maybe")
+    };
+    assert_eq!(outside().count().unwrap().value, 8);
+    let first = outside().limit(2).fetch().unwrap();
+    let rest = db
+        .query::<Entry>()
+        .filter_any_operands(&[
+            ("id", C::Lt, Field("amount")),
+            ("id", C::Gt, Field("maybe")),
+        ])
+        .after(first.next.as_ref().unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [3, 4, 5, 6, 7, 8]);
+    assert_eq!(
+        db.query::<Entry>()
+            .filter_not_between_fields("maybe", "amount", "id")
+            .count()
+            .unwrap()
+            .value,
+        6
+    );
+    assert_eq!(
+        db.query::<Entry>()
+            .filter_between_fields("id", "amount", "maybe")
+            .count()
+            .unwrap()
+            .value,
+        0
+    );
+    assert_eq!(
+        db.query::<Entry>()
+            .filter_not_between_fields("id", "id", "id")
+            .count()
+            .unwrap()
+            .value,
+        0
+    );
+    // Only the upper comparison can match here. Absent upper bounds exclude rows 3 and 6.
+    let above_ceiling = db
+        .query::<Entry>()
+        .filter_not_between_fields("amount", "id", "maybe")
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&above_ceiling.rows), expected);
+    for bound in ["category", "missing"] {
+        assert!(matches!(
+            db.query::<Entry>()
+                .filter_between_fields("id", bound, "id")
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+        assert!(matches!(
+            db.query::<Entry>()
+                .filter_not_between_fields("id", "amount", bound)
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+}
+
+#[test]
 fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
     use ic_db::QueryOperand::{Field, Literal};
     let runtime = host(VectorMemory::default());
@@ -550,6 +637,27 @@ fn oversized_index_range_operands_fall_back_to_admitted_residual_comparison() {
     }
     db.commit(batch).unwrap();
     for operand in ["m".repeat(501), "m".repeat(600), "\0".repeat(300)] {
+        // A legal field operand can exceed the complete secondary-key limit.
+        // Automatic selection can still enumerate this query in primary order.
+        let ordered = || {
+            db.query::<WideRange>()
+                .filter("text", C::Eq, operand.as_str())
+                .order_by(&["id"])
+                .work_limit(1)
+        };
+        let mut page = ordered().fetch().unwrap();
+        for _ in 0..2 {
+            assert!(page.rows.is_empty());
+            assert_eq!(page.examined, 1);
+            page = ordered().after(&page.next.unwrap()).fetch().unwrap();
+        }
+        assert!(page.rows.is_empty() && page.next.is_none());
+        assert!(matches!(
+            ordered()
+                .using_index("text", &[operand.as_str().into()])
+                .fetch(),
+            Err(Error::Limit)
+        ));
         for comparison in [C::Eq, C::Lt, C::Le, C::Gt, C::Ge, C::StartsWith] {
             let expected = db
                 .query::<WideRange>()
@@ -792,6 +900,16 @@ fn primary_range_pages_clamp_cursors_and_retry_byte_limited_rows() {
                 q = q.after(c);
             }
             let page = q.fetch().unwrap();
+            if page
+                .rows
+                .last()
+                .is_some_and(|r| r.id == if descending { 3 } else { 6 })
+            {
+                assert!(
+                    page.next.is_none(),
+                    "processed the inclusive end of the range"
+                );
+            }
             actual.extend(ids(&page.rows));
             assert_eq!(page.examined, page.rows.len());
             cursor = page.next;
@@ -1867,6 +1985,30 @@ fn any_clauses_compose_with_and_and_progress_without_duplicate_rows() {
 }
 
 #[test]
+fn ordered_primary_equality_seeks_one_row_before_checking_secondary_predicates() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for descending in [false, true] {
+        for (id, category, expected, examined) in
+            [(8_u64, 0_u8, Some(8), 1), (8, 1, None, 1), (9, 1, None, 0)]
+        {
+            let mut query = db
+                .query::<Entry>()
+                .filter("category", C::Eq, category)
+                .filter("id", C::Eq, id)
+                .order_by(&["amount"])
+                .work_limit(1);
+            if descending {
+                query = query.descending();
+            }
+            let page = query.fetch().unwrap();
+            assert_eq!(ids(&page.rows), expected.into_iter().collect::<Vec<_>>());
+            assert_eq!((page.examined, page.fetched), (examined, examined));
+        }
+    }
+}
+
+#[test]
 fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
@@ -2109,6 +2251,18 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
         (none.value, none.examined, none.output_bytes),
         (false, 8, 1)
     );
+    for (amount, expected, reads) in [(80_u64, true, 1), (81_u64, false, 0)] {
+        let result = db
+            .query::<Entry>()
+            .filter("amount", C::Eq, amount)
+            .work_limit(1)
+            .exists()
+            .unwrap();
+        assert_eq!(
+            (result.value, result.examined, result.fetched),
+            (expected, reads, reads)
+        );
+    }
     let empty = db.query::<Other>().work_limit(1).exists().unwrap();
     assert_eq!((empty.value, empty.examined), (false, 0));
     let indexed = db
@@ -2128,6 +2282,44 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
         .unwrap();
     assert_eq!((sparse.value, sparse.examined), (true, 1));
     assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn exact_primary_existence_and_count_complete_with_one_candidate() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for (id, amount, expected, fetched) in [
+        (8_u64, 80_u64, true, 1),
+        (8, 90, false, 1),
+        (9, 90, false, 0),
+    ] {
+        let result = db
+            .query::<Entry>()
+            .filter("amount", C::Ge, amount)
+            .filter("id", C::Eq, id)
+            .work_limit(1)
+            .exists()
+            .unwrap();
+        assert_eq!(
+            (result.value, result.examined, result.fetched),
+            (expected, fetched, fetched)
+        );
+    }
+    let count = db
+        .query::<Entry>()
+        .filter("id", C::Eq, 8_u64)
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+    let page = db
+        .query::<Entry>()
+        .filter("id", C::Eq, 8_u64)
+        .limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [8]);
+    assert!(page.next.is_none());
 }
 
 #[test]
@@ -2538,7 +2730,7 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
     ));
     assert!(matches!(db.query::<Entry>().exists(), Err(Error::Corrupt)));
     assert!(matches!(
-        db.query::<Entry>().filter("amount", C::Eq, 0_u64).exists(),
+        db.query::<Entry>().filter("amount", C::Eq, 10_u64).exists(),
         Err(Error::Corrupt)
     ));
     // This path reaches a valid category-0 row before the corrupt category-1 row.
@@ -3328,6 +3520,26 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     let runtime = host(backing.clone());
     let db = create(&runtime, 10);
     let before = backing.borrow().clone();
+    // The presence clause proves sparse membership, but the absent equality
+    // cannot form a sparse key. Other indexes and both predicates still apply.
+    let contradiction = db
+        .query::<Entry>()
+        .filter_absent("maybe")
+        .filter_present("maybe")
+        .filter("amount", C::Eq, 20_u64)
+        .order_by(&["id"])
+        .fetch()
+        .unwrap();
+    assert!(contradiction.rows.is_empty());
+    assert_eq!(contradiction.examined, 1);
+    let absent_prefix = db
+        .query::<Entry>()
+        .filter_absent("maybe")
+        .filter_present("maybe")
+        .order_by(&["id"])
+        .fetch()
+        .unwrap();
+    assert!(absent_prefix.rows.is_empty());
     for (comparison, operand) in [
         (C::Ne, IndexValue::Absent),
         (C::Ge, 4_u64.into()),
@@ -7135,10 +7347,12 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
             (count.value, count.examined, count.fetched),
             (expected as u64, expected, 0)
         );
-        assert!(matches!(
-            range().work_limit(expected).count(),
-            Err(Error::Limit)
-        ));
+        let exact = range().work_limit(expected).count();
+        if upper == C::Le {
+            assert_eq!(exact.unwrap().value, expected as u64);
+        } else {
+            assert!(matches!(exact, Err(Error::Limit)));
+        }
         assert_eq!(range().count_validated().unwrap().fetched, expected);
     }
     let empty = db
@@ -7149,6 +7363,25 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
         .count()
         .unwrap();
     assert_eq!((empty.value, empty.examined), (0, 0));
+    // The final physical key proves exhaustion even when its row fails the filter.
+    let none = db
+        .query::<Entry>()
+        .filter("id", C::Ge, 6_u64)
+        .filter("id", C::Le, 8_u64)
+        .filter("amount", C::Gt, 100_u64)
+        .work_limit(3)
+        .exists()
+        .unwrap();
+    assert_eq!((none.value, none.examined), (false, 3));
+    // An inclusive bound beyond the highest stored key has not been visited.
+    assert!(matches!(
+        db.query::<Entry>()
+            .filter("id", C::Ge, 6_u64)
+            .filter("id", C::Le, 9_u64)
+            .work_limit(3)
+            .count(),
+        Err(Error::Limit)
+    ));
     let point = db
         .query::<Entry>()
         .filter("id", C::Eq, 1_u64)

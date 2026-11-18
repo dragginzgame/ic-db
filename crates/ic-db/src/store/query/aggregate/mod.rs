@@ -334,6 +334,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Whether at least one row matches, without materializing an entity.
+    /// Automatically seeks a secondary index when its equality prefix covers every predicate.
     /// Stops after validating the first matching row; later rows are not inspected.
     /// Returns false only after observing the end of the selected input.
     /// `limit` does not truncate input. The boolean result occupies one byte.
@@ -345,7 +346,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
-        let plan = self.aggregate_plan(None, false)?;
+        let mut plan = self.aggregate_plan(None, false)?;
+        if plan.index.is_none() && !super::range::covers_primary(&plan) {
+            super::order::select_covered_prefix(E::SCHEMA, &self.request, &mut plan)?;
+        }
         let mut found = false;
         let page = execute(
             &self.db.map,
@@ -367,7 +371,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// covered equality prefixes or primary-key comparison ranges. Other predicates use row execution. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
-    /// Completion must be observed before `work_limit` is reached; an exact-boundary
+    /// Completion must be established within `work_limit`; an exact-boundary
     /// scan can conservatively refuse. Use `start_count`/`resume_count` for retained work.
     /// # Errors
     /// Refuses cursors, DISTINCT, explicit ordering and the ordinary query failures.
@@ -389,7 +393,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             });
         }
         if super::range::covers_primary(&plan)
-            || super::order::count_prefix(E::SCHEMA, &self.request, &mut plan)?
+            || super::order::select_covered_prefix(E::SCHEMA, &self.request, &mut plan)?
         {
             return self.count_keys(&plan);
         }
@@ -428,11 +432,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn count_keys(&self, plan: &Plan<'_>) -> Result<Aggregate<u64>, Error> {
         let bounds = super::range::bounds(E::SCHEMA, &self.request, plan)?;
-        let examined = bounds.map_or(0, |range| {
-            self.db.map.range(range).take(self.request.work).count()
-        });
-        if examined == self.request.work {
-            return Err(Error::Limit);
+        let mut examined = 0;
+        if let Some(range) = bounds {
+            let terminal = super::range::terminal_key(&range, false);
+            let entries = self.db.map.range((range.0.as_ref(), range.1.as_ref()));
+            for entry in entries.take(self.request.work) {
+                examined += 1;
+                if examined == self.request.work && terminal.is_none_or(|end| end != entry.key()) {
+                    return Err(Error::Limit);
+                }
+            }
         }
         Ok(Aggregate {
             value: examined as u64,
@@ -516,7 +525,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Errors
     /// Refuses unsupported key types, cursors, DISTINCT and explicit ordering.
     /// Work, group or retained-state exhaustion returns `Limit`, never partial groups.
-    /// Completion must be observed before `work_limit`; a boundary scan can refuse.
+    /// Completion must be established within `work_limit`; a boundary scan can refuse.
     /// Ordinary projection/query integrity and byte-limit errors also apply.
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.

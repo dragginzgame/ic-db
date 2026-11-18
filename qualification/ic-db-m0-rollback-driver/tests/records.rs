@@ -433,7 +433,7 @@ fn console_inspects_and_queries() {
     };
     let existence = run_console(
         &binary,
-        "query Entry --select exists --work 1 --bytes 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 2\nquit\n",
+        "query Entry --select exists --work 1 --bytes 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 1\nquit\n",
     );
     let blobs = run_console(
         &binary,
@@ -479,6 +479,7 @@ fn console_inspects_and_queries() {
         vec![vec!["true"], vec!["true"], vec!["false"], vec!["false"]]
     );
     assert!(existence.contains("1 row; 1 examined; 1 fetched; 1 encoded bytes."));
+    assert!(existence.contains("1 row; 0 examined; 0 fetched; 1 encoded bytes."));
     let distinct = run_console(&binary, "query Entry --select category --distinct\nquit\n");
     assert_eq!(result_table_rows(&distinct), [vec!["1"], vec!["0"]]);
     assert!(distinct.contains("2 rows; 6 examined; 6 fetched; 16 encoded bytes."));
@@ -701,6 +702,8 @@ fn console_inspects_and_queries() {
         "query Entry --length id eq 1",
         "query Entry --present id",
         "query Document --absent missing",
+        "query Entry --between-fields id amount",
+        "query Entry --not-between-fields id amount missing",
         "query Entry --compare amount contains category",
         "query Document --compare id eq title",
         "query Entry --text id eq 1",
@@ -751,6 +754,14 @@ fn console_inspects_and_queries() {
             vec!["0"]
         ]
     );
+    let ranges = run_console(
+        &binary,
+        concat!(
+            "query Entry --between-fields category id amount --select id\n",
+            "query Entry --not-between-fields category id amount --select count\nquit\n",
+        ),
+    );
+    assert_eq!(result_table_rows(&ranges), [vec!["1"], vec!["5"]]);
     let prefix_output = run_console(
         &binary,
         concat!(
@@ -837,7 +848,9 @@ fn console_inspects_and_queries() {
             })
             .collect::<String>();
         commands.push_str("aggregate Entry\naggregate Entry\naggregate Entry\n");
-        let controls: [ConsoleCase<'_>; 13] = [
+        let controls: [ConsoleCase<'_>; 15] = [
+            ("count --between-fields category id amount", &[&["1"]]),
+            ("count --not-between-fields category id amount", &[&["5"]]),
             ("count --compare id gt category", &[&["5"]]),
             ("count --min 40", &[&["3"]]),
             ("sum:amount --min 40 --limit 1", &[&["151"]]),

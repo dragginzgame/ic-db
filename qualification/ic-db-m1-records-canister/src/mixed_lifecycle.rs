@@ -206,7 +206,12 @@ fn apply_update(_: ic_db::Principal, request: Update, time_ns: u64) -> Reply {
             )
         }
         Update::Count(request) => {
-            Reply::Count(count(request, time_ns).map_err(|error| format!("{error:?}")))
+            let start = ic_platform_runtime::raw::instruction_counter();
+            let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
+            Reply::Count(
+                result,
+                ic_platform_runtime::raw::instruction_counter() - start,
+            )
         }
     }
 }

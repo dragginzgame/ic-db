@@ -6,6 +6,14 @@ use std::{cmp::Ordering, ops::Bound};
 
 type Bounds = (Bound<StoreKey>, Bound<StoreKey>);
 
+// Only an inclusive endpoint can be observed as the final physical map key.
+pub(super) fn terminal_key(bounds: &Bounds, descending: bool) -> Option<&StoreKey> {
+    match if descending { &bounds.0 } else { &bounds.1 } {
+        Bound::Included(key) => Some(key),
+        _ => None,
+    }
+}
+
 // Skip an entire encoded prefix, including every trailing component/owner.
 // Namespace framing guarantees a successor, even for all-FF component bytes.
 fn successor(mut bytes: Vec<u8>) -> Result<Vec<u8>, Error> {

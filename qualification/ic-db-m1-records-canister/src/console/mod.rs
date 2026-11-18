@@ -61,6 +61,8 @@ fn filter_rows<'a, E: Entity>(
     let RowFilters {
         payload,
         compare,
+        between_fields,
+        not_between_fields,
         text,
         boolean,
         present,
@@ -77,6 +79,12 @@ fn filter_rows<'a, E: Entity>(
     }
     if let Some([left, op, right]) = compare {
         query = query.filter_fields(left, comparison(op)?, right);
+    }
+    if let Some([field, lower, upper]) = between_fields {
+        query = query.filter_between_fields(field, lower, upper);
+    }
+    if let Some([field, lower, upper]) = not_between_fields {
+        query = query.filter_not_between_fields(field, lower, upper);
     }
     if let Some((field, value)) = boolean {
         query = query.filter(field, Comparison::Eq, *value);

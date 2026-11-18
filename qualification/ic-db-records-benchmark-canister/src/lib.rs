@@ -322,3 +322,25 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
         }
     })
 }
+
+#[cfg(feature = "exists-comparison")]
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "category_exists",
+    guard = crate::transport::admit::<10>,
+    decode = crate::transport::decode::<_, 10>,
+    encode = crate::transport::encode::<_, 10>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn category_exists(category: u64) -> (bool, u64) {
+    measure(|| {
+        database()
+            .query::<Entry>()
+            .filter("category", ic_db::Comparison::Eq, category)
+            .work_limit(1)
+            .exists()
+            .unwrap()
+            .value
+    })
+}

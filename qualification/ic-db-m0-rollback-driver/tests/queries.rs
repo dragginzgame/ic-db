@@ -306,6 +306,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
         .unwrap()
     };
     let backing = pic.get_stable_memory(canister).await;
+    assert_eq!(call(None, false, 4, 4, 1, 8).await, (vec![4], None, 1));
     let ascending = call(None, false, 3, 5, 1, 8).await;
     let descending = call(None, true, 3, 5, 1, 8).await;
     assert_eq!((&ascending.0, ascending.2), (&vec![3], 1));
@@ -316,13 +317,14 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
+    assert_eq!(call(None, true, 4, 4, 1, 8).await, (vec![4], None, 1));
     for (direction, first, expected) in [
         (false, ascending, vec![3, 4, 5]),
         (true, descending, vec![5, 4, 3]),
     ] {
         let mut rows = first.0;
         let mut cursor = first.1;
-        for _ in 0..3 {
+        for _ in 0..2 {
             let page = call(cursor, direction, 3, 5, 1, 8).await;
             assert_eq!(page.2 as usize, page.0.len());
             rows.extend(page.0);

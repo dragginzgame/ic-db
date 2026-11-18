@@ -536,6 +536,28 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             (field, Comparison::Gt, upper.into()),
         ])
     }
+    /// Match `lower <= field && field <= upper` using three top-level fields of the row.
+    /// Both comparisons require present values of compatible types. Equal endpoints
+    /// are inclusive. Uses the same two comparison terms and continuation as the
+    /// equivalent chained `filter_fields` calls.
+    #[must_use]
+    pub fn filter_between_fields(self, field: &'a str, lower: &'a str, upper: &'a str) -> Self {
+        self.filter_fields(field, Comparison::Ge, lower)
+            .filter_fields(field, Comparison::Le, upper)
+    }
+
+    /// Match `field < lower || field > upper` using fields of the same row.
+    /// A missing bound makes only its own comparison false. A missing tested field
+    /// never matches. Uses one OR clause and the same two comparison terms and
+    /// continuation as the equivalent `filter_any_operands` call.
+    #[must_use]
+    pub fn filter_not_between_fields(self, field: &'a str, lower: &'a str, upper: &'a str) -> Self {
+        self.filter_any_operands(&[
+            (field, Comparison::Lt, QueryOperand::Field(lower)),
+            (field, Comparison::Gt, QueryOperand::Field(upper)),
+        ])
+    }
+
     /// Add an OR clause of exact top-level comparisons, ANDed with other filters.
     /// Each clause must contain at least one comparison; all filters together
     /// may contain at most eight. Empty/oversized clauses refuse with `Error::Limit`
@@ -856,6 +878,13 @@ struct Plan<'a> {
     descending: bool,
 }
 impl<'a> Plan<'a> {
+    fn use_index(&mut self, entity: &EntitySchema, path: order::IndexPath<'a>) {
+        self.index = Some(path.index);
+        self.prefix = path.prefix;
+        self.fixed_components = path.fixed;
+        self.selected |= entity.key_fields();
+    }
+
     fn admit(
         entity: &'a EntitySchema,
         request: &Request<'_>,
@@ -1019,12 +1048,7 @@ impl<'a> Plan<'a> {
         // contradictory queries. The scanner consumes this one proven choice.
         match order::select(entity, request)? {
             order::Path::Primary => {}
-            order::Path::Index(path) => {
-                plan.index = Some(path.index);
-                plan.prefix = path.prefix;
-                plan.selected |= entity.key_fields();
-                plan.fixed_components = path.fixed;
-            }
+            order::Path::Index(path) => plan.use_index(entity, path),
             order::Path::Sort(fields) => {
                 for &(position, _) in &fields {
                     plan.selected |= 1 << position;
@@ -1238,7 +1262,8 @@ fn execute_inner<M: Memory>(
     let Some(bounds) = range::bounds(entity, request, plan)? else {
         return Ok(page);
     };
-    let mut entries = map.range(bounds);
+    let terminal = range::terminal_key(&bounds, plan.descending);
+    let mut entries = map.range((bounds.0.as_ref(), bounds.1.as_ref()));
     let mut collected = if plan.distinct == distinct::Strategy::Complete {
         Some(distinct::Collection::new(
             plan.projection.ok_or(Error::InvalidQuery)?,
@@ -1426,6 +1451,9 @@ fn execute_inner<M: Memory>(
                 .as_deref()
                 .is_some_and(|used| *used > STEP_INPUT_BYTES - CANDIDATE_BYTES)
         {
+            if terminal == Some(stored_key) {
+                break;
+            }
             if (aggregate.is_some() && input_bytes.is_none())
                 || collected.is_some()
                 || sorted.is_some()

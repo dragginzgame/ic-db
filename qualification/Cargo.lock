@@ -392,11 +392,11 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.219.0"
-source = "git+https://github.com/dragginzgame/canic?rev=3d2ef2719450e57484638b4f1db6cb6bcc41d64c#3d2ef2719450e57484638b4f1db6cb6bcc41d64c"
+version = "0.223.1"
+source = "git+https://github.com/dragginzgame/canic?rev=bbc13c36afc88f8dcd09072c1cbfd4478943fffd#bbc13c36afc88f8dcd09072c1cbfd4478943fffd"
 dependencies = [
  "ic-platform-runtime 0.23.17",
- "ic-wire 0.24.6",
+ "ic-wire 0.25.0",
  "serde",
 ]
 
@@ -1492,7 +1492,6 @@ dependencies = [
  "ic-host-artifacts",
  "ic-host-text",
  "ic-testkit",
- "ic-wire 0.24.6",
  "ic-wire 0.25.0",
  "rusqlite",
  "rustyline",
@@ -1773,18 +1772,6 @@ name = "ic-wire"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12f9ea1376af8b628c513c838043106a79d0c94c2946fe4a79b8fefbc595c250"
-dependencies = [
- "bytemuck",
- "postcard",
- "serde",
- "serde_bytes",
-]
-
-[[package]]
-name = "ic-wire"
-version = "0.24.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c807d4a24382291f57bfdaacd200ccc38b4be57983612c978444999465a78295"
 dependencies = [
  "bytemuck",
  "postcard",

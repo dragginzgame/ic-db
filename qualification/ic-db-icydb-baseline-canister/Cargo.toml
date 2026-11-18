@@ -22,6 +22,7 @@ crate-type = ["cdylib"]
 envelope = ["ic-db-icydb-baseline-schema/envelope"]
 aggregate-comparison = []
 count-comparison = []
+exists-comparison = []
 fluent-comparison = []
 query-matrix = ["fluent-comparison", "aggregate-comparison", "count-comparison"]
 

@@ -310,3 +310,25 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
         Some(query.execute_exact_count().unwrap())
     })
 }
+
+#[cfg(feature = "exists-comparison")]
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "category_exists",
+    guard = crate::transport::admit::<10>,
+    decode = crate::transport::decode::<_, 10>,
+    encode = crate::transport::encode::<_, 10>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn category_exists(category: u64) -> (bool, u64) {
+    measure(|| {
+        db().unwrap()
+            .query::<Entry>()
+            .unwrap()
+            .filter(icydb::db::query::FieldRef::new("category").eq(category))
+            .execute_exact_count()
+            .unwrap()
+            > 0
+    })
+}

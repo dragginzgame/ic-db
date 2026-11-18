@@ -10,6 +10,27 @@ pub(super) struct IndexPath<'a> {
     pub fixed: usize,
 }
 
+// Failure to encode a derived prefix disqualifies this candidate only. The
+// original predicates have already been admitted and remain on the plan.
+fn automatic_prefix<'a>(
+    entity: &EntitySchema,
+    index: &'a IndexSchema,
+    values: &[IndexValue<'_>],
+) -> Result<Option<IndexPath<'a>>, Error> {
+    if index.present_only && values.contains(&IndexValue::Absent) {
+        return Ok(None);
+    }
+    match admit_index_prefix(entity, index, values) {
+        Ok(prefix) => Ok(Some(IndexPath {
+            index,
+            prefix,
+            fixed: values.len(),
+        })),
+        Err(Error::Limit) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) enum Path<'a> {
     Primary,
     Index(IndexPath<'a>),
@@ -43,6 +64,8 @@ pub(super) fn select<'a>(
             positions[i] = (position, request.order_descending & (1 << i) != 0);
         }
     }
+    let single_row = request.order.is_some() && equality(request, entity.primary_key).is_some();
+    let fits_order = |index, fixed| single_row || satisfies(entity, request, index, fixed);
     if let Some((name, values)) = &request.index {
         let index = entity
             .indexes
@@ -54,7 +77,7 @@ pub(super) fn select<'a>(
         }
         let prefix = admit_index_prefix(entity, index, values)?;
         if !complete_membership(entity, index, values, request)
-            || !satisfies(entity, request, Some(index), values.len())
+            || !fits_order(Some(index), values.len())
         {
             return Err(Error::InvalidQuery);
         }
@@ -65,19 +88,22 @@ pub(super) fn select<'a>(
         }));
     }
     // Keep the existing no-order contract and its cursors unchanged.
-    if request.order.is_none() {
+    // A mandatory primary equality admits at most one row under any valid order.
+    // Projected DISTINCT retains its path-dependent continuation strategy.
+    if request.order.is_none() || (single_row && !request.distinct) {
         return Ok(Path::Primary);
     }
-    let primary_fits = satisfies(entity, request, None, 0);
-    let mut best: Option<(&IndexSchema, Vec<IndexValue<'_>>)> = None;
+    let primary_fits = fits_order(None, 0);
+    let mut best: Option<IndexPath<'_>> = None;
     for index in entity.indexes {
         let values: Vec<_> = index
             .fields
             .iter()
             .map_while(|name| equality(request, name))
             .collect();
-        if !complete_membership(entity, index, &values, request)
-            || !satisfies(entity, request, Some(index), values.len())
+        if (primary_fits && values.is_empty())
+            || !complete_membership(entity, index, &values, request)
+            || !fits_order(Some(index), values.len())
         {
             continue;
         }
@@ -88,44 +114,42 @@ pub(super) fn select<'a>(
             index.fields.len(),
             index.name,
         );
-        if best.as_ref().is_none_or(|(old, old_values)| {
+        if best.as_ref().is_none_or(|old| {
             rank < (
-                std::cmp::Reverse(old_values.len()),
-                old.fields.len(),
-                old.name,
+                std::cmp::Reverse(old.fixed),
+                old.index.fields.len(),
+                old.index.name,
             )
-        }) {
-            best = Some((index, values));
+        }) && let Some(path) = automatic_prefix(entity, index, &values)?
+        {
+            best = Some(path);
         }
     }
     // A restrictive prefix avoids unrelated candidates. Otherwise prefer direct
     // primary traversal to fetching rows through an equally broad index scan.
-    if primary_fits && best.as_ref().is_none_or(|(_, values)| values.is_empty()) {
+    if let Some(path) = best {
+        return Ok(Path::Index(path));
+    }
+    if primary_fits {
         return Ok(Path::Primary);
     }
-    let Some((index, values)) = best else {
-        // Complete sorting never accepts a live cursor. DISTINCT separately
-        // proves projected equivalence after this access path is admitted.
-        if request.cursor.is_some() {
-            return Err(Error::InvalidQuery);
-        }
-        let mut positions =
-            positions[..request.order.as_ref().ok_or(Error::InvalidQuery)?.len()].to_vec();
-        let primary = entity
-            .fields
-            .iter()
-            .position(|f| f.name == entity.primary_key)
-            .ok_or(Error::InvalidQuery)?;
-        if positions.last().map(|(position, _)| *position) != Some(primary) {
-            positions.push((primary, false));
-        }
-        return Ok(Path::Sort(positions));
-    };
-    Ok(Path::Index(IndexPath {
-        index,
-        prefix: admit_index_prefix(entity, index, &values)?,
-        fixed: values.len(),
-    }))
+
+    // Complete sorting never accepts a live cursor. DISTINCT separately
+    // proves projected equivalence after this access path is admitted.
+    if request.cursor.is_some() {
+        return Err(Error::InvalidQuery);
+    }
+    let mut positions =
+        positions[..request.order.as_ref().ok_or(Error::InvalidQuery)?.len()].to_vec();
+    let primary = entity
+        .fields
+        .iter()
+        .position(|f| f.name == entity.primary_key)
+        .ok_or(Error::InvalidQuery)?;
+    if positions.last().map(|(position, _)| *position) != Some(primary) {
+        positions.push((primary, false));
+    }
+    Ok(Path::Sort(positions))
 }
 
 // A key-only count can discard predicates only when the fixed prefix implies
@@ -140,7 +164,7 @@ fn covers(request: &Request<'_>, index: &IndexSchema, values: &[IndexValue<'_>])
     })
 }
 
-pub(super) fn count_prefix<'a>(
+pub(super) fn select_covered_prefix<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
@@ -156,21 +180,13 @@ pub(super) fn count_prefix<'a>(
             .iter()
             .map_while(|field| equality(request, field))
             .collect();
-        if !covers(request, index, &values)
-            || !complete_membership(entity, index, &values, request)
-            || (index.present_only && values.contains(&IndexValue::Absent))
+        if !covers(request, index, &values) || !complete_membership(entity, index, &values, request)
         {
             continue;
         }
-        match admit_index_prefix(entity, index, &values) {
-            Ok(prefix) => {
-                plan.prefix = prefix;
-                plan.index = Some(index);
-                plan.fixed_components = values.len();
-                return Ok(true);
-            }
-            Err(Error::Limit) => continue,
-            Err(error) => return Err(error),
+        if let Some(path) = automatic_prefix(entity, index, &values)? {
+            plan.use_index(entity, path);
+            return Ok(true);
         }
     }
     Ok(false)
@@ -250,7 +266,7 @@ fn satisfies(
     let fixed =
         |name: &&str| fields[..prefix_len].contains(name) || equality(request, name).is_some();
     // A fixed primary key admits at most one record, so every admitted order fits.
-    if fixed(&entity.primary_key) {
+    if fields[..prefix_len].contains(&entity.primary_key) {
         return true;
     }
     // Current physical keys share one direction. Constant fields do not affect

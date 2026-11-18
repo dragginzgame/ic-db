@@ -2650,8 +2650,7 @@ both endpoints, the same cursor/job identity and two ordinary comparison terms.
 Operands must have the field's exact admitted type; absence refuses as a bound
 and never matches as a field value. Reversed bounds match nothing but do not
 bypass admission. This retains frozen IcyDB `6d421e3`'s inclusive `FieldRef::between`
-semantics (`db/query/builder/field/mod.rs`), without its allocated expression tree
-or field-to-field bounds. Existing range selection and execution remain the owners.
+semantics (`db/query/builder/field/mod.rs`), without its allocated expression tree. Existing range selection and execution remain the owners.
 
 `filter_not_between` lowers to one OR clause (`Lt lower`, then `Gt upper`),
 retaining IcyDB's `FieldRef::not_between` semantics and two-term budget without
@@ -2660,6 +2659,15 @@ bounds match every present value once, even when both alternatives match. Existi
 single-path traversal bounds apply; there is no two-range seek or union plan.
 Sparse scan/index pages and retained counts through reopen use the same explicit
 comparison identity. This is native qualification, not new Wasm performance evidence.
+
+The fluent `filter_between_fields("price", "floor", "ceiling")` compares three
+fields on each row. Its two inclusive comparisons must both succeed.
+`filter_not_between_fields` uses a strict comparison on each side in one OR
+clause. If one bound is absent the other comparison can still match. Both
+methods lower to the same comparisons as frozen IcyDB’s
+[`FieldRef` range builders](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/query/builder/field/mod.rs#L199).
+IC DB’s existing field-comparison admission, work limits and cursor binding
+apply to these two terms.
 
 `Comparison::StartsWith`, `EndsWith` and `Contains` admit present Text operands under the declared byte
 limit, for row filters and completed text min/max group selection. Matching is
@@ -2775,7 +2783,17 @@ An equality inside a multi-alternative OR clause cannot establish a fixed field
 or an index prefix, even when several alternatives happen to be identical.
 Ordering compares requested and physical field sequences after removing constant
 components, ending at the unique primary key. Presence proof does not fix a field
-to one value or create an equality prefix. Compatible indexes rank by longest
+to one value or create an equality prefix. For ordinary ordered pages a mandatory literal primary-key equality selects the
+primary range before comparing secondary indexes. The one possible row satisfies
+any admitted order and still passes all residual checks. Explicit index requests
+and DISTINCT retain their own traversal contracts. This reuses frozen IcyDB
+`6d421e3`’s primary-lookup preference (`db/query/plan/planner/mod.rs`) with the
+existing primary range scanner. Automatic selection considers only prefixes
+that can form a complete physical key within 512 bytes, including the owner
+suffix where required. An absent component also disqualifies a derived prefix
+on a present-only index. The admitted predicates still apply on the selected
+path. Explicit prefixes go through the original strict admission.
+Compatible secondary indexes rank by longest
 equality prefix, then fewest fields, then logical name. Prefer direct primary
 traversal when it supplies the order and no compatible index has a restrictive
 prefix. This is deterministic bounded metadata inspection (at most eight indexes
@@ -2949,11 +2967,19 @@ Synchronous `exists()` returns `Aggregate<bool>` using the same admitted path an
 scanner. It validates each examined row/index and stops at the first match,
 including a match on the final allowed candidate. False requires observed input
 exhaustion; work exhaustion without a match returns `Limit`, including an exact
-boundary whose end has not been observed. It does not materialize an entity or
+boundary whose end has not been observed. Processing the inclusive terminal key of the physical range
+establishes exhaustion within the same candidate budget, including when that
+row fails a residual filter. Ascending traversal checks its upper bound and
+descending traversal checks its lower bound. A matching row deferred by the
+output-byte limit must still be retried. Row pages, reductions and key counts share this rule.
+A secondary equality prefix may still contain many owners. Existence does not materialize an entity or
 inspect later rows after a match. The result occupies one logical byte. Output
 `limit` does not truncate input; cursors, DISTINCT, input ordering and group
-modifiers refuse under the scalar admission rules. Explicit index paths remain
-available. The transient existence accumulator has no admitted job checkpoint.
+modifiers refuse under the scalar admission rules. Without an explicit index,
+a covered primary range takes precedence. For literal equalities, the same
+complete secondary-prefix proof used by count can select an index. A hit
+still fetches and validates its owner. An empty prefix range returns false
+without fetching a row. The transient existence accumulator has no admitted job checkpoint.
 This retains frozen IcyDB `6d421e3`'s false-initial/true-on-match reducer semantics
 from `aggregate/contracts/state/reducer` and `grouped`; early completion is a
 small scanner branch instead of a copied expression/reducer framework. Native

@@ -24,4 +24,8 @@ pub struct RowFilters {
     pub text: Option<[String; 3]>,
     /// Field and Boolean equality operand.
     pub boolean: Option<(String, bool)>,
+    /// Field, inclusive lower field and inclusive upper field.
+    pub between_fields: Option<[String; 3]>,
+    /// Field, lower field and upper field for the strict outside-range comparison.
+    pub not_between_fields: Option<[String; 3]>,
 }

@@ -11,7 +11,7 @@ IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable co
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.24's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.25.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 frozen IcyDB comparison retains its separate transitive Wire 0.22.4 selection;
 there is no cross-version Wire type exchange or product Wire dependency.
@@ -246,6 +246,8 @@ The frozen IcyDB source/revision and sibling Canic integration are unchanged.
 
 The [November 18 three-engine performance matrix](#three-engine-performance-matrix-0234)
 adds a current PocketIC rerun and matched native timings for SQLite.
+The [indexed existence comparison](#indexed-existence-0237) covers the subsequent
+fluent equality-prefix change.
 
 Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
 IcyDB `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (package 0.310.2).
@@ -2738,10 +2740,53 @@ driver, lock, feature graphs, compiler/build receipts and both artifacts identif
 the run. The qualified lock SHA-256 is
 `0344fcaf2a4482df6935a9e70a146622095086f329ca594f6bb070ffcd078f1a`.
 
+### Opening costs through the Canic mount (0.23.7)
+
+Run `make m4-lifecycle` to reproduce these observations. The fixture uses
+Canic 0.223.1 at `bbc13c36afc88f8dcd09072c1cbfd4478943fffd` and workspace
+IC DB. The separate `make m4-inspection` builds the signed-HTTP producer from
+that Canic revision with its own locked dependencies. Both paths use Wire 0.25.0.
+
+The database contains four parents, twelve items and twelve links. The indexed
+query returns the same item and cursor after examining one candidate. The batch
+replaces an item with its existing values. All calls together preserve the
+complete stable backing. Each row is one PocketIC observation.
+
+| Application call | After seeding | First call of its kind after upgrade | After the first update |
+| --- | ---: | ---: | ---: |
+| Indexed page, handler instructions | 469,812 | 759,195 | 465,649 |
+| Identical replacement, handler instructions | 425,347 | 717,369 | 423,709 |
+| Identical replacement, canister balance decrease in cycles | 7,439,318 | 7,731,959 | 7,437,715 |
+
+A second query before any update also used 759,195 instructions. Both queries
+initialized the heap for their own execution. The first successful update
+retained the initialized host for later calls. Handler instructions include
+opening and database work. They exclude Canic guard and frame processing.
+The balance deltas measure complete update calls and can include periodic charges.
+These results cover reopening a populated database after upgrade.
+
+The retained-count comparison uses two installations seeded by the same batches.
+Both start a count and process two items. One installation then upgrades with
+the same Wasm. At the same simulated time, both receive the same handle and
+sequence 1 with a two-candidate budget. The driver checks byte-identical stable
+memory in the two installations both before and after this measured advance.
+Both return sequence 2, still running, and complete with 12 items at sequence 7.
+
+| Retained-count advance | Warm installation | First update after upgrade | Increase |
+| --- | ---: | ---: | ---: |
+| Handler instructions | 890,112 | 1,020,156 | 130,044 (14.6%) |
+| Canister balance decrease in cycles | 7,962,317 | 8,092,571 | 130,254 (1.6%) |
+
+The cycle sample starts after the upgrade and a simulator tick. It covers the
+complete update, including transport. The instruction counter covers the
+handler, including opening the database and job store and saving progress.
+These totals establish the first-advance premium for this fixture. They do
+not isolate the cost of either store.
+
 ### Mixed-history qualification (0.19)
 
 Run `make m4-lifecycle` after the existing `make m0-setup`. This selects only the
-`mixed-lifecycle` host feature and one driver test; it does not run the full
+`mixed-lifecycle` host feature and the mixed-history and paired-count driver tests; it does not run the full
 qualification suite or expose fault controls in ordinary builds. Product crates,
 formats and public APIs are unchanged. The model uses ordinary `BTreeMap`s and
 full-state uniqueness/reference checks, without an IC DB dependency, codecs,
@@ -4671,6 +4716,14 @@ and secondary index on (category, ID). Balanced and skewed data each run at 32,
 | Group minimum | 208.94 | 1,190.20 | 93.47 | 9.34 | 41.94 |
 | Group maximum | 206.34 | 1,189.85 | 90.94 | 9.33 | 41.94 |
 
+The balanced category-3 listing above has 128 candidates in its category/ID
+index range. The fixture formula puts the eighth qualifying row at candidate
+121 ascending (ID 483) and 124 descending (ID 19). These positions are derived
+from the source tuples. The selected index supplies the requested order, while
+the amount threshold still requires checking candidate rows. The 0.23.7
+primary-equality change applies to requests specifying one exact ID. Neither
+listing specifies an ID.
+
 For prefix cardinality with no row predicate, the [matched count paths](#prefix-count-paths-0234)
 also measure IC DB’s `count_index_entries()` on these populations.
 
@@ -4761,6 +4814,33 @@ from the broad matrix. IC DB Wasm SHA-256
 `7a2e25d1f090aa59b8e5261c0b33d4b13c0fa86a79cbb2e27985d68e1de6dadc`;
 legacy `88fc1aa3a228ecde1458842a461c6a19612c5b9cf630e7899b8debfe599c491c`.
 
+
+### Indexed existence (0.23.7)
+
+Run `bash scripts/measure-records.sh exists` to compare a category equality
+lookup against frozen IcyDB `6d421e3`. IC DB calls fluent `.exists()` with a
+one-candidate work limit and validates the owner on a hit. The legacy typed
+query uses `.execute_exact_count() > 0`, which reads maintained prefix
+metadata. Both handlers include database opening and return a boolean.
+The instruction counter excludes transport framing and fixture updates.
+
+The matrix checks categories 0, 3 and 99 against the original input tuples at
+32, 128 and 511 rows on balanced and skewed data, before and after upgrade
+settling. All 36 pairs agreed and stable backing was identical across each
+group of reads. IC DB used 37–60% fewer handler instructions across these
+pairs. The settled 511-row skewed fixture measured:
+
+| Category | Matching rows | IC DB instructions | Frozen IcyDB instructions |
+| --- | ---: | ---: | ---: |
+| 0 | 415 | 966,946 | 1,554,918 |
+| 3 | 32 | 945,783 | 1,562,289 |
+| 99 | 0 | 831,164 | 1,560,621 |
+
+[All 72 observations](measurements/0.23.7-indexed-existence.csv). Wasm SHA-256
+was `2972e6b4b878d82de272da56a94314f624d2550d16789421333ac8ff02954e02` for
+IC DB and `18f65881f60bb0d77642bdf656f4112a233e026c8376aa05af72b5c264d0d528`
+for IcyDB. Exact counting still has different scaling because it must establish
+the total number of matches.
 
 ### Automatic prefix counts (0.23.5)
 

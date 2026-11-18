@@ -212,7 +212,7 @@ enum Command {
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; non-identity results retain at most 32 distinct tuples. Duplicates consume scan work; a 33rd distinct tuple refuses even with --limit 1. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all four query entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; budget exhaustion without a match refuses, never returns false. --select count counts matching rows; category,count groups Entry rows. Aggregates require completion before --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or exactly the projected fields in --order-by; non-identity results retain at most 32 distinct tuples. Duplicates consume scan work; a 33rd distinct tuple refuses even with --limit 1. Remove duplicates before applying --limit.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all four query entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Otherwise it collects one complete result, preserving first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; false requires a proven end of input. --select count counts matching rows; category,count groups Entry rows. Aggregates must finish within --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
@@ -301,6 +301,12 @@ struct FilterArgs {
     /// Compare two fields using eq, ne, lt, le, gt or ge. Text and Blob also accept starts-with, ends-with and contains.
     #[arg(long, num_args=3, value_names=["LEFT", "OP", "RIGHT"], action=clap::ArgAction::Set)]
     compare: Vec<String>,
+    /// Match a field at or between two other fields on the same row.
+    #[arg(long, num_args=3, value_names=["FIELD", "LOWER_FIELD", "UPPER_FIELD"], action=clap::ArgAction::Set)]
+    between_fields: Vec<String>,
+    /// Match a field below the lower field or above the upper field on the same row.
+    #[arg(long, num_args=3, value_names=["FIELD", "LOWER_FIELD", "UPPER_FIELD"], action=clap::ArgAction::Set)]
+    not_between_fields: Vec<String>,
     /// Compare a field with literal text using eq, ne, lt, le, gt, ge, starts-with, ends-with or contains.
     #[arg(long, num_args=3, value_names=["FIELD", "OP", "VALUE"], action=clap::ArgAction::Set, allow_hyphen_values=true)]
     text: Vec<String>,
@@ -365,6 +371,8 @@ impl FilterArgs {
             ]
             .map(|arg| arg.map(|v| v.0)),
             compare: operands(self.compare)?,
+            between_fields: operands(self.between_fields)?,
+            not_between_fields: operands(self.not_between_fields)?,
             text: operands(self.text)?,
             boolean,
             length,

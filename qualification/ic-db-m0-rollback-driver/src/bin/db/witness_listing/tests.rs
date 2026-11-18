@@ -22,7 +22,7 @@ fn listing_bounds_refuse_before_calls() {
 fn listing_reply_is_bounded_and_empty_pages_keep_continuation() {
     // Independent producer-shaped tuples; no client output DTO used for encoding.
     let frame = |rows: Vec<(u64, u64)>, next: Option<Vec<u8>>, examined: u32, method| {
-        canic_wire::encode(
+        ic_wire::encode(
             &Ok::<_, u8>((rows, next, examined)),
             Encoding::Frame {
                 method,
