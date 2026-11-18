@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.8] - Unreleased
+## [0.23.8] - 2026-11-18
 
 - Enable `test-support` on a native `ic-db` dev-dependency to use
   `ic_db::testing::Fixture`. Create and reopen a database under application
