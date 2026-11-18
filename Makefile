@@ -94,7 +94,12 @@ m0-setup:
 	@umask 077; launcher="$$(bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-testkit --version 0.110.0 --bin ic-testkit-server --profile release --features cli)" && \
 	  mkdir -p "$(CURDIR)/qualification/target/evidence/testkit" && \
 	  attempt="$$(mktemp -d "$(CURDIR)/qualification/target/evidence/testkit/setup.XXXXXX")" && \
-	  "$$launcher" setup "$(CURDIR)/.tools/testkit-server" "$$attempt/evidence" "$$(command -v curl)" "$$(command -v gzip)"
+	  if test -e "$(CURDIR)/.tools/testkit-server/pocket-ic"; then \
+	    "$$launcher" check "$(CURDIR)/.tools/testkit-server" > "$$attempt/check.log" 2>&1 || { cat "$$attempt/check.log" >&2; exit 1; }; \
+	    cat "$$attempt/check.log"; \
+	  else \
+	    "$$launcher" setup "$(CURDIR)/.tools/testkit-server" "$$attempt/evidence" "$$(command -v curl)" "$$(command -v gzip)"; \
+	  fi
 
 .PHONY: m2-sqlite-reference
 m2-sqlite-reference:

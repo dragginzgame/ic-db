@@ -1112,7 +1112,9 @@ consumer wiring qualification, not the upstream tooling test suite.
 Tooling adoption checks the published snapshot against both Cargo locks with
 `make toko-tooling-check`, admits prepared tools and exercises changed local
 callers. Testkit adoption additionally runs the driver's focused Clippy and
-server/terminal checks after explicit `make m0-setup`; launcher lifetime changes
+server/terminal checks after explicit `make m0-setup`. Setup verifies the installed
+simulator with Testkit or downloads it on a fresh installation. An invalid installed
+binary fails verification. Launcher lifetime changes
 select the ignored idle regression. These are development checks, not a release
 or publication request. Generic Tooling and Testkit regression suites stay upstream.
 
