@@ -16,6 +16,7 @@ ignored = ["toko-tooling"]
 
 [features]
 build = ["dep:ctor"]
+test-support = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ctor = { workspace = true, optional = true }

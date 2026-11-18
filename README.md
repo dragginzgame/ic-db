@@ -826,6 +826,17 @@ later. For a real executable declaration and write/reopen journey, see
 [the CLI fixture](qualification/ic-db-m1-records-canister/src/lib.rs).
 Run `make m1-records` for their focused native and Wasm checks.
 
+## Test an application database on the host
+
+Enable the `test-support` feature on the application’s `ic-db` dev-dependency.
+`ic_db::testing::Fixture::new("app.profiles.v1")` allocates empty storage.
+Call `fixture.create(schema.clone(), incarnation)?` to get a database for normal
+synchronous reads and writes. Drop that handle, then call `fixture.open(schema)?`
+to check that a fresh runtime can open the same bytes. Both calls return the
+original IC DB errors. For a test of your own IC Storage allocation setup, pass
+its lease-opening function to `Fixture::with_allocation`.
+[Runnable example](crates/ic-db/src/testing.rs)
+
 ## Build a canister-local schema
 
 Keep the declarations in `src/schema.rs` or `src/schema/mod.rs`. In a workspace

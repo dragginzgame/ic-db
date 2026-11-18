@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.23.8] - Unreleased
+
+- Enable `test-support` on a native `ic-db` dev-dependency to use
+  `ic_db::testing::Fixture`. Create and reopen a database under application
+  schemas on retained vector backing, or supply a named allocation factory.
+
 ## [0.23.7] - 2026-11-18
 
 ### Fluent queries

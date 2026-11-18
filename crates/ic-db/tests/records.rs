@@ -3140,3 +3140,46 @@ fn earlier_unit_enum_contract_is_refused_without_touching_its_bytes() {
     ));
     assert_eq!(*backing.borrow(), before);
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn native_fixture_reopens_application_storage_after_refusals() {
+    use ic_db::testing::Fixture;
+    let backing = VectorMemory::default();
+    let retained = backing.clone();
+    let fixture = Fixture::with_allocation(move || {
+        host(retained.clone())
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap()
+    });
+    let schema = Schema::new(&[TokenRow::SCHEMA]).unwrap();
+    let before = backing.borrow().clone();
+    assert!(matches!(fixture.open(schema.clone()), Err(Error::Corrupt)));
+    assert_eq!(*backing.borrow(), before);
+    assert!(matches!(
+        fixture.create(schema.clone(), [0; 16]),
+        Err(Error::InvalidSchema)
+    ));
+    let mut db = fixture.create(schema.clone(), [42; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&TokenRow { id: 1, token: 7 }).unwrap();
+    db.commit(batch).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&TokenRow { id: 2, token: 7 }).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+    drop(db);
+
+    let populated = backing.borrow().clone();
+    assert!(matches!(
+        fixture.create(schema.clone(), [43; 16]),
+        Err(Error::Exists)
+    ));
+    assert!(matches!(
+        fixture.open(Schema::new(&[Document::SCHEMA]).unwrap()),
+        Err(Error::IncompatibleSchema)
+    ));
+    assert_eq!(*backing.borrow(), populated);
+    let db = fixture.open(schema).unwrap();
+    assert_eq!(db.get::<TokenRow>(1).unwrap().unwrap().token, 7);
+    assert!(db.get::<TokenRow>(2).unwrap().is_none());
+}

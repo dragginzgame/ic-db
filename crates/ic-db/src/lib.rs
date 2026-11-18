@@ -57,6 +57,9 @@ mod ulid;
 #[cfg(all(feature = "build", not(target_arch = "wasm32")))]
 pub mod build;
 
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+pub mod testing;
+
 /// Emit constructor registration only in explicitly selected host schema builds.
 #[doc(hidden)]
 #[cfg(all(feature = "build", not(target_arch = "wasm32")))]

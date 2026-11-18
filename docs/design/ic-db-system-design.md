@@ -9,6 +9,14 @@ and local operation; it does not establish remote application support.
 The 0.22.1 native CLI adds Canic application inspection; section 9 separates
 its checked inspection/listing scope from broader application qualification.
 The changelog and Git tags record releases.
+Native application tests can opt into `ic_db::testing::Fixture` with the
+`test-support` feature. A named vector-backed allocation is retained across
+database handles. Creation and reopen use ordinary schema admission and return
+the engine’s errors. As in frozen IcyDB `6d421e3`’s
+`db/diagnostics/memory_allocations/tests.rs`, rebuilding the runtime requires
+fresh admission to the retained name. Installed probes own IC rollback and
+upgrade qualification.
+
 Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration

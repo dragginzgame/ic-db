@@ -67,13 +67,13 @@ check:
 	cargo check --locked -p ic-db -p ic-db-macros
 
 test:
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build,ic-db/test-support
 
 clippy:
-	cargo clippy --locked -p ic-db -p ic-db-macros --features ic-db/build --all-targets -- -D warnings
+	cargo clippy --locked -p ic-db -p ic-db-macros --features ic-db/build,ic-db/test-support --all-targets -- -D warnings
 
 doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --locked -p ic-db -p ic-db-macros --features ic-db/build --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc --locked -p ic-db -p ic-db-macros --features ic-db/build,ic-db/test-support --no-deps
 
 docs-check:
 	perl vendor/toko-tooling/scripts/ci/check-documentation-links.pl --root . README.md AGENTS.md CHANGELOG.md docs/design/ic-db-system-design.md qualification/README.md
