@@ -433,7 +433,7 @@ fn console_inspects_and_queries() {
     };
     let existence = run_console(
         &binary,
-        "query Entry --select exists --work 1 --bytes 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 1\nquit\n",
+        "query Entry --select exists --work 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 1\nquit\n",
     );
     let blobs = run_console(
         &binary,
@@ -710,21 +710,17 @@ fn console_inspects_and_queries() {
         "query Document --bool published yes",
         "query Document --bool title true",
         "query Document --text title unknown needle",
-        "query Document --select title --bytes 17",
         "query Entry --select note",
-        "query Entry --select id --bytes 7",
         "query Entry --select category --distinct --limit 1",
         "query Entry --min 0 --select count --work 6",
         "query Entry --select exists --min 999 --work 6",
         "query Entry --select exists --group-min 0",
         "query Entry --select exists --distinct",
         "query Entry --select category,sum:amount --work 6",
-        "query Entry --select category,sum:amount --bytes 47",
         "query Entry --select sum:amount --work 6",
         "query Entry --select sum:amount --group-min 0",
         "query Entry --select max:amount --work 6",
         "query Entry --select category,max:amount --work 6",
-        "query Entry --select category,min:amount --bytes 31",
         "query Document --select min:amount",
         "query Entry --select category,count --order-by category",
         "query Entry --group-order key",
@@ -785,7 +781,7 @@ fn console_inspects_and_queries() {
     );
     let projected = run_console(
         &binary,
-        "query Document --text title contains doc --select title --bytes 18\nquery Document --select note --distinct --bytes 1\nquit\n",
+        "query Document --text title contains doc --select title\nquery Document --select note --distinct\nquit\n",
     );
     assert!(projected.contains("First document"), "{projected}");
     assert!(
@@ -924,7 +920,6 @@ fn console_inspects_and_queries() {
             "aggregate Entry --select invalid",
             "aggregate Entry --work 0",
             "aggregate Entry --page-size 33",
-            "aggregate Entry --select min:amount --bytes 1",
             "aggregate Entry --limit 0",
             "aggregate Entry --limit 33",
             "aggregate Entry --select count --group-min 1",
@@ -938,7 +933,6 @@ fn console_inspects_and_queries() {
             "aggregate DecimalRow --select sum:amount",
             "aggregate BinaryObject --min 0",
             "aggregate BinaryObject --select sum:payload",
-            "aggregate BinaryObject --select max:payload --bytes 1",
             "aggregate Entry --select category,count --group-min 1.5",
             "aggregate Entry --select category,count --group-min 4 --group-max -1",
             "aggregate DecimalRow --select zone,avg:value --group-max 0.001",

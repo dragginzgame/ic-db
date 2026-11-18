@@ -185,7 +185,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
             .order_by(&["amount", "category"])
             .descending()
             .limit(1)
-            .byte_limit(16)
+            .test_output_limit(16)
             .fetch_as::<Summary>()
             .unwrap()
             .rows[0]
@@ -196,7 +196,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
         db.query::<Entry>()
             .order_by(&["amount", "category"])
             .limit(1)
-            .byte_limit(15)
+            .test_output_limit(15)
             .fetch_as::<Summary>(),
         Err(Error::RowTooLarge)
     ));
@@ -204,7 +204,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
         db.query::<Entry>()
             .order_by(&["amount", "category"])
             .limit(2)
-            .byte_limit(16)
+            .test_output_limit(16)
             .fetch_as::<Summary>(),
         Err(Error::Limit)
     ));
@@ -571,7 +571,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
             .filter("category", C::Eq, 1_u8)
             .order_by_each(&order)
             .limit(2)
-            .byte_limit(16);
+            .test_output_limit(16);
         let page = if let Some(cursor) = &cursor {
             query.after(cursor)
         } else {
@@ -710,17 +710,20 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
         Err(Error::Limit)
     ));
     assert!(matches!(
-        query().byte_limit(8).fetch_as::<CategoryAmount>(),
+        query().test_output_limit(8).fetch_as::<CategoryAmount>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
-        query().limit(2).byte_limit(9).fetch_as::<CategoryAmount>(),
+        query()
+            .limit(2)
+            .test_output_limit(9)
+            .fetch_as::<CategoryAmount>(),
         Err(Error::Limit)
     ));
     assert_eq!(
         query()
             .limit(1)
-            .byte_limit(9)
+            .test_output_limit(9)
             .fetch_as::<CategoryAmount>()
             .unwrap()
             .rows
@@ -891,7 +894,7 @@ fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
                 .order_by_each(&[("amount", Desc), ("category", Asc)])
                 .distinct()
                 .limit(limit)
-                .byte_limit(limit * 9)
+                .test_output_limit(limit * 9)
                 .work_limit(129);
             let page = if reverse { query.descending() } else { query }
                 .fetch_as::<CategoryAmount>()

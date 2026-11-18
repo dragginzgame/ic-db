@@ -121,6 +121,7 @@ version = "0.23.10"
 dependencies = [
  "ctor",
  "ethnum",
+ "ic-db",
  "ic-db-macros",
  "ic-platform-protocol",
  "ic-platform-runtime",

@@ -151,7 +151,7 @@ fn advance(
         .limit(limit as usize)
         .order_groups(GroupOrder::AggregateDescending)
         .work_limit(work as usize)
-        .byte_limit(output_bytes as usize)
+        .test_output_limit(output_bytes as usize)
         .group_page(size as usize, cursor.as_ref());
     // Map already-completed typed results to passive bytes for the independent
     // native oracle. No fixture-side comparison, sorting or aggregation.
@@ -181,7 +181,7 @@ fn advance(
             db.query::<EnvelopeRow>()
                 .limit(limit as usize)
                 .work_limit(work as usize)
-                .byte_limit(output_bytes as usize)
+                .test_output_limit(output_bytes as usize)
                 .group_page(size as usize, cursor.as_ref())
                 .resume_group_max::<IdText, Text>(&mut jobs, &handle, sequence, now)?,
             |page| {
@@ -198,7 +198,7 @@ fn advance(
             db.query::<BinaryObject>()
                 .limit(limit as usize)
                 .work_limit(work as usize)
-                .byte_limit(output_bytes as usize)
+                .test_output_limit(output_bytes as usize)
                 .group_page(size as usize, cursor.as_ref())
                 .resume_group_max::<Id, Payload>(&mut jobs, &handle, sequence, now)?,
             |page| {

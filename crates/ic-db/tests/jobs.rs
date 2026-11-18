@@ -141,7 +141,7 @@ fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
                 let saved = backing.borrow().clone();
                 if cursor.is_some() {
                     assert!(matches!(
-                        groups().byte_limit(1).resume_group_count::<Payload>(
+                        groups().test_output_limit(1).resume_group_count::<Payload>(
                             &mut jobs,
                             &grouped,
                             sequence,
@@ -1315,7 +1315,7 @@ fn query_result_shape_and_sequence_refusals_preserve_progress() {
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(1)
+            .test_output_limit(1)
             .resume_sum::<Amount>(&mut jobs, &handle, 0, time(1)),
         Err(Error::RowTooLarge)
     ));
@@ -1946,7 +1946,7 @@ fn average_finalization_errors_preserve_exact_checkpoint_without_scale_fallback(
     let before = backing.borrow().clone();
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(1)
+            .test_output_limit(1)
             .resume_avg::<Average0>(&mut jobs, &avg, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
@@ -2340,13 +2340,13 @@ fn grouped_job_bindings_and_output_refusals_leave_the_checkpoint_intact() {
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(8)
+            .test_output_limit(8)
             .resume_group_count::<Flag>(&mut jobs, &handle, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(9)
+            .test_output_limit(9)
             .resume_group_count::<Flag>(&mut jobs, &handle, 1, time(2)),
         Err(Error::Limit)
     ));
@@ -2782,7 +2782,7 @@ fn grouped_numeric_bindings_output_and_hidden_overflow_preserve_checkpoints() {
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(1)
+            .test_output_limit(1)
             .resume_group_avg::<Flag, Average0>(&mut jobs, &avg, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
@@ -3423,14 +3423,18 @@ fn retained_field_binding_and_output_refusals_preserve_progress() {
         Err(Error::InvalidJob)
     ));
     assert!(matches!(
-        db.query::<Row>()
-            .byte_limit(1)
-            .resume_count_field("id", &mut jobs, &scalar, 1, time(2)),
+        db.query::<Row>().test_output_limit(1).resume_count_field(
+            "id",
+            &mut jobs,
+            &scalar,
+            1,
+            time(2)
+        ),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(9)
+            .test_output_limit(9)
             .resume_group_count_field::<Flag>("amount", &mut jobs, &grouped, 1, time(2)),
         Err(Error::Limit)
     ));
@@ -3678,7 +3682,7 @@ fn retained_distinct_binding_output_and_source_revision_are_enforced() {
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(1)
+            .test_output_limit(1)
             .resume_count_distinct::<Amount>(&mut jobs, &handle, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
@@ -3911,7 +3915,7 @@ fn retained_group_distinct_reopens_sets_and_binds_both_projections_and_selection
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(9)
+            .test_output_limit(9)
             .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 1, time(2)),
         Err(Error::Limit)
     ));
@@ -4229,7 +4233,7 @@ fn completed_pages_retry_the_group_that_did_not_fit() {
         .unwrap();
     let step = db
         .query::<LabelRow>()
-        .byte_limit(20)
+        .test_output_limit(20)
         .group_page(3, None)
         .resume_group_count::<Label>(&mut jobs, &handle, 0, time(1))
         .unwrap();
@@ -4243,7 +4247,7 @@ fn completed_pages_retry_the_group_that_did_not_fit() {
     let before = backing.borrow().clone();
     assert!(matches!(
         db.query::<LabelRow>()
-            .byte_limit(20)
+            .test_output_limit(20)
             .group_page(3, Some(&cursor))
             .resume_group_count::<Label>(&mut jobs, &handle, 1, time(2)),
         Err(Error::RowTooLarge)
@@ -4251,7 +4255,7 @@ fn completed_pages_retry_the_group_that_did_not_fit() {
     assert_eq!(*backing.borrow(), before);
     let JobOutcome::Complete(page) = db
         .query::<LabelRow>()
-        .byte_limit(200)
+        .test_output_limit(200)
         .group_page(3, Some(&cursor))
         .resume_group_count::<Label>(&mut jobs, &handle, 1, time(2))
         .unwrap()
@@ -4541,7 +4545,7 @@ fn empty_completed_group_page_has_no_continuation() {
         .unwrap();
     let step = query()
         .group_page(1, None)
-        .byte_limit(1)
+        .test_output_limit(1)
         .resume_group_count::<Flag>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     assert_eq!(step.output_bytes, 0);
@@ -4719,7 +4723,7 @@ fn retained_extrema_bind_operation_field_and_query_and_preserve_refused_progress
     ));
     assert!(matches!(
         db.query::<Row>()
-            .byte_limit(16)
+            .test_output_limit(16)
             .resume_min::<Amount>(&mut jobs, &handle, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
@@ -4863,7 +4867,7 @@ fn retained_extrema_state_caps_and_final_output_budgets_are_separate() {
     let before = backing.borrow().clone();
     assert!(matches!(
         db.query::<WideLabelRow>()
-            .byte_limit(5)
+            .test_output_limit(5)
             .resume_max::<WideLabel>(&mut jobs, &max, 1, time(2)),
         Err(Error::RowTooLarge)
     ));
@@ -4885,7 +4889,7 @@ fn retained_extrema_state_caps_and_final_output_budgets_are_separate() {
         .unwrap();
     let step = db
         .query::<WideLabelRow>()
-        .byte_limit(5)
+        .test_output_limit(5)
         .resume_min::<WideLabel>(&mut jobs, &min, 0, time(2))
         .unwrap();
     let JobOutcome::Complete(Some(value)) = step.outcome else {
@@ -4903,19 +4907,19 @@ fn retained_extrema_state_caps_and_final_output_budgets_are_separate() {
     db.commit(batch).unwrap();
     let min = db
         .query::<LabelRow>()
-        .byte_limit(5)
+        .test_output_limit(5)
         .start_min::<Label>(&mut jobs, time(0), time(100))
         .unwrap();
     let first = db
         .query::<LabelRow>()
         .work_limit(1)
-        .byte_limit(5)
+        .test_output_limit(5)
         .resume_min::<Label>(&mut jobs, &min, 0, time(1))
         .unwrap();
     assert!(matches!(first.outcome, JobOutcome::Running));
     let step = db
         .query::<LabelRow>()
-        .byte_limit(5)
+        .test_output_limit(5)
         .resume_min::<Label>(&mut jobs, &min, 1, time(2))
         .unwrap();
     let JobOutcome::Complete(Some(value)) = step.outcome else {
@@ -5082,14 +5086,14 @@ fn retained_group_extrema_filter_order_ties_and_byte_pages_use_final_winners() {
     assert!(matches!(
         query()
             .group_page(2, None)
-            .byte_limit(17)
+            .test_output_limit(17)
             .resume_group_max::<Flag, Amount>(&mut jobs, &handle, 0, time(1)),
         Err(Error::RowTooLarge)
     ));
     assert_eq!(*backing.borrow(), before);
     let step = query()
         .group_page(2, None)
-        .byte_limit(18)
+        .test_output_limit(18)
         .resume_group_max::<Flag, Amount>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     let JobOutcome::Complete(page) = step.outcome else {
@@ -5106,7 +5110,7 @@ fn retained_group_extrema_filter_order_ties_and_byte_pages_use_final_winners() {
     let next = page.next.unwrap();
     let step = query()
         .group_page(2, Some(&next))
-        .byte_limit(18)
+        .test_output_limit(18)
         .resume_group_max::<Flag, Amount>(&mut jobs, &handle, step.sequence, time(2))
         .unwrap();
     let JobOutcome::Complete(page) = step.outcome else {

@@ -204,7 +204,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Supports ordered scalars/unit enums without requiring an index. The result
     /// preserves the declared type and optionality; empty/all-absent input returns
     /// `None`. `limit` never truncates input. Only the winning record's bytes count
-    /// toward `byte_limit`; an absent result occupies zero payload bytes.
+    /// toward the engine output bound; an absent result occupies zero payload bytes.
     /// # Errors
     /// Refuses multi-field projections, unsupported types, cursors, DISTINCT and
     /// explicit ordering. Work exhaustion or a comparison key beyond 4096 bytes
@@ -526,7 +526,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// is required. Results default to ascending tuple order in canonical field-name order.
     /// `filter_groups` and `order_groups` select completed results before output limits.
     /// `limit` selects the first completed groups (1..=32), never input rows.
-    /// `byte_limit` bounds key-record bytes plus eight count bytes per group.
+    /// The engine output allowance bounds key-record bytes plus eight count bytes per group.
     /// Empty input yields no groups. At most 32 groups and 128 KiB of key/output
     /// state may be retained, independently of the requested output limit;
     /// each comparison key is capped at 4096 bytes, independently of index-key limits.

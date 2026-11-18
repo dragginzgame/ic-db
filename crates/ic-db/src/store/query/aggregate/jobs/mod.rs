@@ -129,7 +129,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain an exact count job without scanning input. Expiry must be after the
     /// host-captured `now` and at most one hour later. No write freeze is acquired.
     /// Reconstruct this fluent query on every advance; predicates/access path bind
-    /// the job, while work/output limits may change. Limit never truncates input.
+    /// the job, while the per-call work limit may change. Limit never truncates input.
     /// # Errors
     /// Ordinary count admission, invalid expiry, or all 16 retained slots occupied.
     /// # Panics

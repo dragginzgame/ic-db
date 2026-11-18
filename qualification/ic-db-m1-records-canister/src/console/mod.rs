@@ -379,7 +379,7 @@ fn configure<'a, E: Entity>(
     query = query
         .limit(limit as usize)
         .work_limit(work as usize)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if !order.is_empty() {
         query = query.order_by_each(order);
     }
@@ -842,7 +842,7 @@ fn message(error: Error) -> String {
         Error::InvalidQuery => {
             "unsupported order, projection, DISTINCT or aggregate shape for this entity".into()
         }
-        Error::RowTooLarge => "one matching result exceeds --bytes".into(),
+        Error::RowTooLarge => "one matching result exceeds the output budget".into(),
         Error::ArithmeticOverflow => "aggregate exceeds its declared result range".into(),
         Error::Limit => "query exceeds a database limit".into(),
         other => format!("database refused query: {other:?}"),

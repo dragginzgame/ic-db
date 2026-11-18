@@ -780,7 +780,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             query("BinaryObject", "payload", None, None, 1)
                 .await
                 .unwrap_err()
-                .contains("exceeds --bytes")
+                .contains("exceeds the output budget")
         );
     }
     for (entity, suffix) in [("BinaryObject", vec![0; 1025]), ("Entry", vec![])] {

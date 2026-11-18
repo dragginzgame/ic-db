@@ -11,7 +11,7 @@ pub const COPY_SOURCE: &str = "m1.copy.source.v1";
 pub const COPY_TARGET: &str = "m1.copy.target.v1";
 pub const COPY_NEXT: &str = "m1.copy.next.v1";
 
-#[ic_db::entity(name = "Entry", pk(field = "id", source = "external"),
+#[ic_db::entity(name = "Entry", pk(field = "id"),
     index(fields = ["category", "id"]), fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "category", value(item(prim = "Nat64"))),
@@ -537,7 +537,7 @@ fn maintenance_whole_copy((operation, trap): (u8, bool)) -> Result<WholeCopyRepl
     Ok(result)
 }
 
-#[ic_db::entity(name = "Entry", pk(field = "id", source = "external"),
+#[ic_db::entity(name = "Entry", pk(field = "id"),
     index(fields = ["category", "id"]), index(field = "note"), fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "category", value(item(prim = "Nat64"))),

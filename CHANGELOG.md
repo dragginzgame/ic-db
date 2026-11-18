@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.23.11] - Unreleased
+
+### 🔎 Queries
+
+- Query output uses the engine’s 128 KiB limit automatically. Remove
+  `.byte_limit(...)` from application queries and `--bytes` from local CLI
+  commands. Row limits, work bounds and continuations retain their meanings.
+
+- `Database::get_by_unique` returns one optional entity for a complete unique
+  index key. A hit verifies the owner row. No page or caller-selected limits
+  are needed.
+
+### Schema authoring
+
+- Declare the primary key with `pk(field = "id")`. Remove `source = "external"`
+  from existing declarations. Callers supply the key on insert. This syntax
+  change requires no stored-data migration.
+
 ## [0.23.10] - 2026-11-18
 
 ### 🗄️ Database handles

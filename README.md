@@ -98,14 +98,13 @@ let page = db.query::<Entry>()
     .descending()
     .limit(20)
     .work_limit(100)
-    .byte_limit(4096)
     .fetch()?;
 ```
 
 Omit `using_index` for primary-key order. Filter operands must match the exact
 declared type. `page.next` resumes the same query through `.after(&cursor)`;
-an empty page can still carry a continuation. Output budgets count encoded row
-bytes; transport framing remains host-owned. This first slice supports AND
+an empty page can still carry a continuation. IC DB automatically caps each
+query response at 128 KiB of encoded rows. Transport framing remains host-owned. This first slice supports AND
 clauses over top-level ordered scalar/unit-enum comparisons. `make m2-queries` checks its native/Wasm
 boundaries. The local CLI constructs its documented subset of fluent operations.
 
@@ -314,7 +313,7 @@ an exact-boundary scan whose end has not yet been observed. The result occupies
 one byte; `limit` does not truncate input. Like scalar counts, this terminal
 refuses cursors, DISTINCT, input ordering and group modifiers. It validates every
 examined row, but stops before inspecting rows beyond the first match.
-Try `db query Entry --select exists --work 1 --bytes 1` in the local fixture.
+Try `db query Entry --select exists --work 1` in the local fixture.
 
 Use `.count()` for whole-entity and filtered row counts. For example:
 
@@ -493,7 +492,7 @@ and then `page.next.as_ref()`. This setting is separate from the query's bound
 total `limit`, and applies only to retained grouped resume terminals.
 
 Pages enumerate the immutable completed result, so later source writes cannot
-move groups across pages. Page size and byte allowance may change. Byte exhaustion
+move groups across pages. Page size may change. Byte exhaustion
 leaves the unreturned group for the next page; an oversized first group returns
 `RowTooLarge`. The 28-byte `GroupCursor` is bound to the job handle and a validated
 result position. Retrying it reads the same position, until expiry/cancellation.
@@ -513,7 +512,7 @@ input. For optional fields, a present result retains the record's `Some(value)`.
 No index is required; the scanner retains only the current winner. The comparison
 key is bounded to 4096 bytes; the retained record uses the existing row bound.
 All matching input must complete within the work budget, regardless of `limit`.
-Only the final record's bytes count toward `byte_limit` (zero when no result).
+Only the final record's bytes count toward the engine output limit (zero when no result).
 An oversized provisional winner does not reject a smaller final answer.
 
 ```rust
@@ -951,8 +950,7 @@ continues to accept multiple command lines.
 `Entry` is the default entity. Copy the returned hexadecimal cursor into `--after`
 with the same entity, filters, order and projection. The old `--after ID` syntax
 is retired. Limits may change: `--limit` bounds returned rows (1–32), `--work`
-bounds examined candidates (1–512), and `--bytes` bounds encoded results
-(1–131072). An empty page can still have a next cursor. `--order-by` uses a complete
+bounds examined candidates (1–512). IC DB applies its output bound automatically. An empty page can still have a next cursor. `--order-by` uses a complete
 ordered path or the bounded complete sort above; `--desc` reverses the whole order.
 Each field accepts `:asc` or `:desc`; omitted directions and the implicit primary
 tie-breaker are ascending. The fluent equivalent is

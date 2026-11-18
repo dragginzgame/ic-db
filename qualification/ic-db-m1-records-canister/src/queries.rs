@@ -170,7 +170,7 @@ fn fluent_text_seek(
         .using_index("published,title", &[false.into()])
         .filter("title", Comparison::StartsWith, needle.as_str())
         .work_limit(work as usize)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if descending {
         query = query.descending();
     }
@@ -242,7 +242,7 @@ fn range_read(
         .filter(field, Comparison::Ge, lower)
         .filter(field, Comparison::Le, upper)
         .work_limit(work as usize)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if let Some(prefix) = index_prefix {
         query = query.using_index("category,id", prefix);
     }
@@ -298,7 +298,7 @@ fn fluent_sparse_presence(
         ])
         .order_by(&["maybe"])
         .work_limit(1)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if descending {
         query = query.descending();
     }
@@ -374,7 +374,7 @@ fn text_match(
         .filter("note", comparison, needle.as_str())
         .limit(1)
         .work_limit(work as usize)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
@@ -414,7 +414,7 @@ fn read(
     }
     .limit(limit as usize)
     .work_limit(work as usize)
-    .byte_limit(bytes as usize);
+    .test_output_limit(bytes as usize);
     if let Some(category) = category {
         query = if matches!(shape, Shape::Ordered) {
             query.filter("category", Comparison::Eq, category)
@@ -544,7 +544,7 @@ fn measured_listing(
         .descending()
         .limit(20)
         .work_limit(work as usize)
-        .byte_limit(bytes as usize);
+        .test_output_limit(bytes as usize);
     if hinted {
         q = q.using_index("entry_id,score", &[1_u64.into()]);
     }

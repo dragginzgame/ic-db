@@ -527,7 +527,7 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
                 .using_index("text,id", &[])
                 .filter("text", C::Ge, "a")
                 .filter("text", C::Le, "ab")
-                .byte_limit(8)
+                .test_output_limit(8)
                 .work_limit(32);
             if descending {
                 query = query.descending();
@@ -947,7 +947,7 @@ fn primary_range_pages_clamp_cursors_and_retry_byte_limited_rows() {
                 vec![3, 4, 5, 6]
             }
         );
-        let mut q = query().byte_limit(row(1).encode().unwrap().len());
+        let mut q = query().test_output_limit(row(1).encode().unwrap().len());
         if descending {
             q = q.descending();
         }
@@ -1297,7 +1297,7 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
                         .filter("text", comparison, needle)
                         .order_by(&["text"])
                         .work_limit(1)
-                        .byte_limit(80);
+                        .test_output_limit(80);
                     if descending {
                         query = query.descending();
                     }
@@ -1968,7 +1968,7 @@ fn any_clauses_compose_with_and_and_progress_without_duplicate_rows() {
                     .order_by(&["id"])
                     .limit(2)
                     .work_limit(work)
-                    .byte_limit(16);
+                    .test_output_limit(16);
                 if descending {
                     query = query.descending();
                 }
@@ -2225,7 +2225,7 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
     let first = db
         .query::<Entry>()
         .work_limit(1)
-        .byte_limit(1)
+        .test_output_limit(1)
         .exists()
         .unwrap();
     assert_eq!(
@@ -2238,7 +2238,7 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
         (true, 1, 1, 1)
     );
     assert!(matches!(
-        db.query::<Entry>().byte_limit(1).fetch(),
+        db.query::<Entry>().test_output_limit(1).fetch(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
@@ -2424,7 +2424,7 @@ fn existence_admits_every_operand_and_refuses_incompatible_modifiers() {
         Err(Error::InvalidQuery)
     ));
     assert!(matches!(
-        db.query::<Entry>().byte_limit(0).exists(),
+        db.query::<Entry>().test_output_limit(0).exists(),
         Err(Error::Limit)
     ));
     let cursor = db.query::<Entry>().limit(1).fetch().unwrap().next.unwrap();
@@ -2541,7 +2541,7 @@ fn output_budget_retries_the_matching_candidate_without_skipping_it() {
     let size = row(1).encode().unwrap().len();
     let first = db
         .query::<Entry>()
-        .byte_limit(size * 2 - 1)
+        .test_output_limit(size * 2 - 1)
         .fetch()
         .unwrap();
     assert_eq!(ids(&first.rows), [1]);
@@ -2551,19 +2551,19 @@ fn output_budget_retries_the_matching_candidate_without_skipping_it() {
     let next = db
         .query::<Entry>()
         .after(&cursor)
-        .byte_limit(4096)
+        .test_output_limit(4096)
         .fetch()
         .unwrap();
     assert_eq!(ids(&next.rows), [2, 3, 4, 5, 6, 7, 8]);
     assert!(next.next.is_none());
     assert!(matches!(
-        db.query::<Entry>().byte_limit(size - 1).fetch(),
+        db.query::<Entry>().test_output_limit(size - 1).fetch(),
         Err(Error::RowTooLarge)
     ));
     let none = db
         .query::<Entry>()
         .filter("id", C::Gt, 20_u64)
-        .byte_limit(1)
+        .test_output_limit(1)
         .fetch()
         .unwrap();
     assert!(none.rows.is_empty());
@@ -2571,7 +2571,7 @@ fn output_budget_retries_the_matching_candidate_without_skipping_it() {
     let first = db
         .query::<Entry>()
         .descending()
-        .byte_limit(size * 2 - 1)
+        .test_output_limit(size * 2 - 1)
         .fetch()
         .unwrap();
     assert_eq!(ids(&first.rows), [8]);
@@ -2684,7 +2684,7 @@ fn admission_and_cursors_refuse_before_data_access() {
         Err(Error::Limit)
     ));
     assert!(matches!(
-        db.query::<Entry>().byte_limit(0).fetch(),
+        db.query::<Entry>().test_output_limit(0).fetch(),
         Err(Error::Limit)
     ));
     let mut query = db.query::<Entry>();
@@ -2886,7 +2886,7 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
                 .query::<Entry>()
                 .using_index("category,amount,id", &[1_u8.into()])
                 .filter("amount", C::Ge, 50_u64)
-                .byte_limit(31)
+                .test_output_limit(31)
                 .work_limit(2);
             if descending {
                 query = query.descending();
@@ -2913,12 +2913,14 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
         );
     }
     assert!(matches!(
-        db.query::<Entry>().byte_limit(15).fetch_as::<Summary>(),
+        db.query::<Entry>()
+            .test_output_limit(15)
+            .fetch_as::<Summary>(),
         Err(Error::RowTooLarge)
     ));
     let page = db
         .query::<Entry>()
-        .byte_limit(31)
+        .test_output_limit(31)
         .fetch_as::<Summary>()
         .unwrap();
     assert_eq!(
@@ -2948,7 +2950,7 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
     let absent = db
         .query::<Entry>()
         .filter("maybe", C::Eq, IndexValue::Absent)
-        .byte_limit(1)
+        .test_output_limit(1)
         .fetch_as::<OptionalOnly>()
         .unwrap();
     assert_eq!(absent.rows, [OptionalOnly { maybe: None }]);
@@ -3277,7 +3279,7 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
                         .query::<PresenceData>()
                         .filter(field, comparison, IndexValue::Absent)
                         .work_limit(1)
-                        .byte_limit(8)
+                        .test_output_limit(8)
                         .distinct();
                     if descending {
                         query = query.descending();
@@ -3302,7 +3304,7 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
             assert_eq!(
                 db.query::<PresenceData>()
                     .filter(field, comparison, IndexValue::Absent)
-                    .byte_limit(1)
+                    .test_output_limit(1)
                     .exists()
                     .unwrap()
                     .value,
@@ -3490,7 +3492,7 @@ fn projection_checks_transitive_types_and_decodes_nested_values() {
     ));
     let page = db
         .query::<Rich>()
-        .byte_limit(19)
+        .test_output_limit(19)
         .fetch_as::<RichOutput>()
         .unwrap();
     assert_eq!(
@@ -3534,7 +3536,7 @@ fn automatic_order_matches_a_full_sort_with_ties_and_sparse_pages() {
                     .filter("amount", C::Ge, 10_u64)
                     .limit(2)
                     .work_limit(1)
-                    .byte_limit(16);
+                    .test_output_limit(16);
                 if let Some(category) = category {
                     query = query.filter("category", C::Eq, category);
                 }
@@ -4132,7 +4134,7 @@ fn distinct_prefixes_span_work_pages_and_retry_output_bytes() {
             .query::<Entry>()
             .order_by(&["category"])
             .distinct()
-            .byte_limit(1);
+            .test_output_limit(1);
         if descending {
             q = q.descending();
         }
@@ -4275,7 +4277,7 @@ fn distinct_filters_reject_or_emit_whole_classes_across_pages() {
                         .order_by(&["category"])
                         .distinct()
                         .work_limit(work)
-                        .byte_limit(1);
+                        .test_output_limit(1);
                     if descending {
                         query = query.descending();
                     }
@@ -4314,7 +4316,7 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
             .query::<Entry>()
             .distinct()
             .limit(2)
-            .byte_limit(2)
+            .test_output_limit(2)
             .work_limit(9);
         if descending {
             query = query.descending();
@@ -4346,14 +4348,14 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
     assert!(matches!(
         db.query::<Entry>()
             .distinct()
-            .byte_limit(1)
+            .test_output_limit(1)
             .fetch_as::<CategoryOnly>(),
         Err(Error::Limit)
     ));
     assert!(matches!(
         db.query::<Entry>()
             .distinct()
-            .byte_limit(1)
+            .test_output_limit(1)
             .fetch_as::<AmountOnly>(),
         Err(Error::RowTooLarge)
     ));
@@ -4542,7 +4544,7 @@ fn exact_counts_and_groups_complete_before_output_limits() {
     let count = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(8)
+        .test_output_limit(8)
         .work_limit(9)
         .count()
         .unwrap();
@@ -4572,7 +4574,7 @@ fn exact_counts_and_groups_complete_before_output_limits() {
     let first = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(9)
+        .test_output_limit(9)
         .group_count::<CategoryOnly>()
         .unwrap();
     assert_eq!(first.value.len(), 1);
@@ -4664,7 +4666,7 @@ fn present_counts_and_distinct_tuple_counts_have_different_absence_semantics() {
     let distinct = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(8)
+        .test_output_limit(8)
         .count_distinct::<OptionalOnly>()
         .unwrap();
     assert_eq!(
@@ -4730,7 +4732,7 @@ fn present_counts_and_distinct_tuple_counts_have_different_absence_semantics() {
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .byte_limit(7)
+            .test_output_limit(7)
             .count_distinct::<OptionalOnly>(),
         Err(Error::RowTooLarge)
     ));
@@ -4892,18 +4894,18 @@ fn counts_refuse_incomplete_or_ambiguous_results() {
         ));
     }
     assert!(matches!(
-        db.query::<Entry>().byte_limit(7).count(),
+        db.query::<Entry>().test_output_limit(7).count(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .byte_limit(8)
+            .test_output_limit(8)
             .group_count::<CategoryOnly>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .byte_limit(17)
+            .test_output_limit(17)
             .group_count::<CategoryOnly>(),
         Err(Error::Limit)
     ));
@@ -5219,13 +5221,13 @@ fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
     let min = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(8)
+        .test_output_limit(8)
         .min::<AmountOnly>()
         .unwrap();
     let max = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(8)
+        .test_output_limit(8)
         .max::<AmountOnly>()
         .unwrap();
     assert_eq!(min.value.unwrap().amount, 10);
@@ -5254,7 +5256,7 @@ fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
         Err(Error::Limit)
     ));
     assert!(matches!(
-        db.query::<Entry>().byte_limit(7).min::<AmountOnly>(),
+        db.query::<Entry>().test_output_limit(7).min::<AmountOnly>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
@@ -5325,19 +5327,21 @@ fn extrema_own_text_winners_and_bound_comparison_and_final_output_separately() {
     // An oversized provisional winner must not refuse a smaller final answer.
     let min = db
         .query::<GroupText>()
-        .byte_limit(6)
+        .test_output_limit(6)
         .min::<TextKey>()
         .unwrap();
     let max = db
         .query::<GroupText>()
-        .byte_limit(6)
+        .test_output_limit(6)
         .max::<TextKey>()
         .unwrap();
     assert_eq!(&min.value.unwrap().label, labels.iter().min().unwrap());
     assert_eq!(&max.value.unwrap().label, labels.iter().max().unwrap());
     assert_eq!((min.examined, min.output_bytes), (5, 6));
     assert!(matches!(
-        db.query::<GroupText>().byte_limit(5).min::<TextKey>(),
+        db.query::<GroupText>()
+            .test_output_limit(5)
+            .min::<TextKey>(),
         Err(Error::RowTooLarge)
     ));
     let mut batch = Batch::new();
@@ -5441,7 +5445,7 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     let limited = db
         .query::<GroupedOptional>()
         .limit(1)
-        .byte_limit(10)
+        .test_output_limit(10)
         .group_max::<OptionalCategory, OptionalOnly>()
         .unwrap();
     assert_eq!(limited.value.len(), 1);
@@ -5451,7 +5455,7 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     let absent = db
         .query::<GroupedOptional>()
         .filter("category", C::Eq, 1_u8)
-        .byte_limit(2)
+        .test_output_limit(2)
         .group_min::<OptionalCategory, OptionalOnly>()
         .unwrap();
     assert_eq!(absent.value.len(), 1);
@@ -5503,7 +5507,7 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     let absent_output = db
         .query::<GroupedOptional>()
         .filter_groups(C::Eq, IndexValue::Absent)
-        .byte_limit(2)
+        .test_output_limit(2)
         .group_min::<OptionalCategory, OptionalOnly>()
         .unwrap();
     assert_eq!(absent_output.output_bytes, 2);
@@ -5548,13 +5552,13 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     assert!(matches!(
         db.query::<GroupedOptional>()
             .limit(1)
-            .byte_limit(9)
+            .test_output_limit(9)
             .group_max::<OptionalCategory, OptionalOnly>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<GroupedOptional>()
-            .byte_limit(22)
+            .test_output_limit(22)
             .group_max::<OptionalCategory, OptionalOnly>(),
         Err(Error::Limit)
     ));
@@ -5623,7 +5627,7 @@ fn grouped_winner_replacement_reclaims_state_and_growth_can_refuse() {
     // Output admission uses the small final winners, not provisional values.
     let result = db
         .query::<GroupedText>()
-        .byte_limit(90)
+        .test_output_limit(90)
         .group_max::<CategoryOnly, TextKey>()
         .unwrap();
     assert_eq!(
@@ -5702,7 +5706,10 @@ fn completed_group_selection_precedes_output_limits_not_input_bounds() {
                 .order_groups(O::AggregateDescending)
                 .limit(1)
         };
-        let result = query.byte_limit(9).group_count::<CategoryOnly>().unwrap();
+        let result = query
+            .test_output_limit(9)
+            .group_count::<CategoryOnly>()
+            .unwrap();
         assert_eq!(result.value.len(), 1);
         assert_eq!(
             (result.value[0].key.category, result.value[0].count),
@@ -5746,7 +5753,7 @@ fn completed_group_selection_precedes_output_limits_not_input_bounds() {
         .query::<Entry>()
         .filter_groups(C::Ge, 20_u64)
         .order_groups(O::AggregateDescending)
-        .byte_limit(9)
+        .test_output_limit(9)
         .group_min::<CategoryOnly, AmountOnly>()
         .unwrap();
     assert_eq!(minimum.value.len(), 1);
@@ -5755,7 +5762,7 @@ fn completed_group_selection_precedes_output_limits_not_input_bounds() {
     let none = db
         .query::<Entry>()
         .filter_groups(C::Gt, 8_u64)
-        .byte_limit(1)
+        .test_output_limit(1)
         .group_count::<CategoryOnly>()
         .unwrap();
     assert!(none.value.is_empty());
@@ -6066,7 +6073,7 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
     let sum = db
         .query::<Entry>()
         .limit(1)
-        .byte_limit(16)
+        .test_output_limit(16)
         .sum::<WideAmount>()
         .unwrap();
     assert_eq!(sum.value.unwrap().amount, 360);
@@ -6084,7 +6091,7 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
     assert!(
         db.query::<Entry>()
             .filter("id", C::Gt, 100_u64)
-            .byte_limit(1)
+            .test_output_limit(1)
             .sum::<WideAmount>()
             .unwrap()
             .value
@@ -6112,7 +6119,9 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
         Err(Error::Limit)
     ));
     assert!(matches!(
-        db.query::<Entry>().byte_limit(15).sum::<WideAmount>(),
+        db.query::<Entry>()
+            .test_output_limit(15)
+            .sum::<WideAmount>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
@@ -6401,7 +6410,7 @@ fn grouped_sums_finish_before_filter_sort_and_limit() {
         .limit(1)
         .filter_groups(C::Ge, 180_u128)
         .order_groups(O::AggregateDescending)
-        .byte_limit(17)
+        .test_output_limit(17)
         .group_sum::<CategoryOnly, WideAmount>()
         .unwrap();
     assert_eq!(filtered.value[0].key.category, 0);
@@ -6452,13 +6461,13 @@ fn grouped_sums_finish_before_filter_sort_and_limit() {
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .byte_limit(16)
+            .test_output_limit(16)
             .group_sum::<CategoryOnly, WideAmount>(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .byte_limit(33)
+            .test_output_limit(33)
             .group_sum::<CategoryOnly, WideAmount>(),
         Err(Error::Limit)
     ));
@@ -6529,7 +6538,7 @@ fn grouped_sums_keep_absence_and_zero_distinct() {
     let absent = db
         .query::<GroupedOptional>()
         .filter_groups(C::Eq, IndexValue::Absent)
-        .byte_limit(2)
+        .test_output_limit(2)
         .group_sum::<OptionalCategory, WideOptional>()
         .unwrap();
     assert_eq!(absent.value.len(), 1);
@@ -6788,7 +6797,7 @@ fn decimal_sums_are_exact_and_group_selection_uses_completed_decimal_values() {
     );
     assert!(matches!(
         db.query::<DecimalSale>()
-            .byte_limit(17)
+            .test_output_limit(17)
             .sum::<OptionalPrice>(),
         Err(Error::RowTooLarge)
     ));
@@ -7043,7 +7052,7 @@ fn grouped_averages_filter_rounded_results_and_retain_absence() {
     ));
     assert!(matches!(
         db.query::<DecimalSale>()
-            .byte_limit(17)
+            .test_output_limit(17)
             .avg::<OptionalPrice>(),
         Err(Error::RowTooLarge)
     ));
@@ -7309,7 +7318,7 @@ fn grouped_distinct_counts_include_absent_tuples_and_filter_completed_counts() {
     ));
     assert!(matches!(
         db.query::<GroupedOptional>()
-            .byte_limit(8)
+            .test_output_limit(8)
             .group_count_distinct::<OptionalCategory, OptionalOnly>(),
         Err(Error::RowTooLarge)
     ));
@@ -7562,7 +7571,7 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         Err(Error::Limit)
     ));
     assert!(matches!(
-        query().byte_limit(7).count_index_entries(),
+        query().test_output_limit(7).count_index_entries(),
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(

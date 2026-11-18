@@ -690,9 +690,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Allow 1..=131072 encoded result-row bytes. Transport framing is host-owned.
+    /// Exercise output exhaustion with a small response in qualification fixtures.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     #[must_use]
-    pub fn byte_limit(mut self, bytes: usize) -> Self {
+    pub fn test_output_limit(mut self, bytes: usize) -> Self {
         self.request.bytes = bytes;
         self
     }

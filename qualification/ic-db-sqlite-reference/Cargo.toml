@@ -16,7 +16,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dev-dependencies]
-ic-db.workspace = true
+ic-db = { workspace = true, features = ["test-support"] }
 ic-storage.workspace = true
 rusqlite.workspace = true
 

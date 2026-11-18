@@ -9,7 +9,7 @@ pub(crate) const TARGET: &str = "m1.console.migration.target.v1";
 
 #[ic_db::entity(
     name = "Item",
-    pk(field = "id", source = "external"),
+    pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "amount", value(item(prim = "Nat64")))
@@ -17,7 +17,7 @@ pub(crate) const TARGET: &str = "m1.console.migration.target.v1";
 )]
 struct Before {}
 
-#[ic_db::entity(name = "Item", pk(field = "id", source = "external"),
+#[ic_db::entity(name = "Item", pk(field = "id"),
     index(fields = ["label"]), fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "amount", value(item(prim = "Nat128"))),

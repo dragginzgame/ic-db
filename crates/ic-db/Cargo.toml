@@ -34,5 +34,8 @@ memchr.workspace = true
 sha2.workspace = true
 ulid.workspace = true
 
+[dev-dependencies]
+ic-db = { path = ".", features = ["test-support"] }
+
 [lints]
 workspace = true

@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 aggregate-jobs = ["fault-injection"]
 retained-console = []
 query-measurements = []
-fault-injection = ["ic-db/test-support"]
+fault-injection = []
 maintenance = []
 maintenance-v2 = ["maintenance"]
 maintenance-faults = ["maintenance", "fault-injection"]
@@ -32,7 +32,7 @@ mixed-lifecycle = ["dep:canic"]
 canic = { workspace = true, optional = true }
 
 [dependencies]
-ic-db.workspace = true
+ic-db = { workspace = true, features = ["test-support"] }
 ic-db-m1-records-schema.workspace = true
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }

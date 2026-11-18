@@ -58,9 +58,19 @@ fn next_index<M: Memory>(
     if !entry.key().starts_with(prefix) {
         return Ok(None);
     }
-    let id = RowKey::decode(&entry.value(), key_type)?;
-    let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
+    let (id, bytes) = index_owner(map, entity, key_type, &entry.value())?;
     Ok(Some((entry.key().clone(), id, bytes)))
+}
+
+fn index_owner<M: Memory>(
+    map: &Map<M>,
+    entity: u32,
+    key_type: FieldType,
+    owner: &[u8],
+) -> Result<(RowKey, Vec<u8>), Error> {
+    let id = RowKey::decode(owner, key_type)?;
+    let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
+    Ok((id, bytes))
 }
 
 #[inline(never)]
@@ -484,6 +494,35 @@ impl<M: Memory> Database<M> {
             next_after: if rows.len() == limit { last } else { None },
             rows,
         })
+    }
+
+    /// Look up one entity by all components of a declared unique index.
+    /// A missing index entry returns `None`. A hit reads and verifies its owner row.
+    /// # Errors
+    /// Refuses unknown indexes, non-unique indexes, incomplete keys, invalid
+    /// operands and inconsistent owner rows.
+    pub fn get_by_unique<E: Entity>(
+        &self,
+        index: &str,
+        values: &[IndexValue<'_>],
+    ) -> Result<Option<E>, Error> {
+        let entity = self.schema.admits(E::SCHEMA)?;
+        let index = entity
+            .indexes
+            .iter()
+            .find(|i| i.name == index)
+            .ok_or(Error::InvalidSchema)?;
+        if !index.unique || values.len() != index.fields.len() {
+            return Err(Error::InvalidQuery);
+        }
+        let key = StoreKey::new(admit_index_prefix(entity, index, values)?)?;
+        let Some(owner) = self.map.get(&key) else {
+            return Ok(None);
+        };
+        let (id, bytes) = index_owner(&self.map, entity.id, entity.key_type()?, &owner)?;
+        let row = E::decode(&bytes)?;
+        validate_index_entry(entity, &row.__row_info(), id, &key)?;
+        Ok(Some(row))
     }
 
     /// Read the first bounded collection under an exact, nonempty leading index prefix.

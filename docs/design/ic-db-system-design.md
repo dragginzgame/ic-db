@@ -306,7 +306,7 @@ The implemented scalar spelling is:
 
 ```rust
 #[entity(
-    pk(field = "id", source = "external"),
+    pk(field = "id"),
     index(fields = ["amount", "id"]),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -1857,14 +1857,14 @@ scanning still uses the shared bounded in-memory grouping allowance. Encoding th
 checkpoint, finalizing/filtering/sorting at most 32 groups and converting output
 must all succeed before persistence. Output refusal preserves previous progress.
 Group predicates, order and output row limit are mathematical result selections,
-so they bind the job; work/output-byte allowances remain adjustable. Return only
+so they bind the job; work remains adjustable and the engine owns the output allowance. Return only
 complete selected groups. Larger retained-state envelopes need separate evidence.
 
 Retained grouped resume methods return `GroupPage { rows, next }` for row/field/
 DISTINCT counts, sums, averages and extrema. This deliberately replaces the earlier vector result;
 callers map `rows` while retaining `next`. Without a page request, the full selected
 result must fit as before. `.group_page(size, after)` is a resume-only modifier:
-page size 1–32 and byte allowance can vary, while `limit` continues to cap the
+page size 1–32 can vary, while `limit` continues to cap the
 entire selected result. Finalize all groups, filter and order before slicing; a
 hidden overflow still refuses. Empty input has empty rows and no continuation.
 Byte exhaustion returns a partial page and a position before the unreturned group;
@@ -2839,6 +2839,13 @@ unchanged selected paths retain their identities and cleanup remains available.
 Larger sorting and general DISTINCT remain work; this is not
 a general cost-based planner.
 
+**Next query increment (planned).** For an ordinary entity fetch, recognize
+mandatory literal equality filters that bind every component of a declared
+unique index, in any filter order. Use the schema to select the lookup without
+an index hint. Check residual predicates on the verified owner row. Qualify hits,
+misses, sparse-index membership, and continuation compatibility against the
+existing traversal. Partial keys and disjunctions alone do not prove uniqueness.
+
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply
 the requested order, the same scanner traverses the primary range and retains
 the best requested 1–32 matching rows. It checks all scanned rows and residual predicates,
@@ -2913,7 +2920,7 @@ decimal-equality invariant from frozen IcyDB's
 its general value/hash representation. It does not qualify all retained types.
 
 `limit` bounds returned rows (1–32), `work_limit` bounds examined candidates
-(1–512), and `byte_limit` bounds summed encoded output-row bytes (1–131072).
+(1–512), and the engine bounds summed encoded output-row bytes at 128 KiB.
 Default limits are 32 rows, 128 candidates and 131072 bytes. Literal text operands
 are bounded to 4096 bytes before encoding; eight terms and four prefix components
 bound request preparation. Transport framing and its separate limits remain with

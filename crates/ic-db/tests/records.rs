@@ -5,7 +5,7 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
-#[entity( pk(field="id", source="external"), index(fields=["category", "id"]),
+#[entity( pk(field="id"), index(fields=["category", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="category", value(item(prim="Nat64"))),
         field(name="amount", value(item(prim="Nat64")))))]
@@ -2104,6 +2104,15 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
         [other]
     );
     for row in &expected {
+        assert_eq!(
+            db.get_by_unique::<TextIndex>(
+                "first,second",
+                &[row.first.as_str().into(), row.second.as_str().into()]
+            )
+            .unwrap()
+            .as_ref(),
+            Some(row)
+        );
         let exact = db
             .index_prefix::<TextIndex>(
                 "first,second",
@@ -2113,6 +2122,22 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
             .unwrap();
         assert_eq!(exact, std::slice::from_ref(row));
     }
+    assert!(
+        db.get_by_unique::<TextIndex>("first,second", &["missing".into(), "".into()])
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        db.get_by_unique::<TextIndex>("first,second", &["a".into()]),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.get_by_unique::<TextIndex>(
+            "bucket,first,second",
+            &[false.into(), "a".into(), "".into()]
+        ),
+        Err(Error::InvalidQuery)
+    ));
     let starts_with_a: Vec<_> = expected
         .iter()
         .filter(|row| row.first == "a")

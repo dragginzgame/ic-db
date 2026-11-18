@@ -202,24 +202,15 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             once(&mut logical_name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("pk") {
             let mut key = None;
-            let mut source = None;
             for part in meta_items(&meta)? {
                 if part.path().is_ident("field") {
                     once(&mut key, text(&part)?, &part)?;
-                } else if part.path().is_ident("source") {
-                    once(&mut source, text(&part)?, &part)?;
                 } else {
                     return Err(syn::Error::new_spanned(
                         part,
-                        "unsupported primary-key option",
+                        "pk accepts only field = \"name\"",
                     ));
                 }
-            }
-            if source.as_deref().is_some_and(|source| source != "external") {
-                return Err(syn::Error::new_spanned(
-                    meta,
-                    "this slice requires externally supplied keys",
-                ));
             }
             let key = key.ok_or_else(|| syn::Error::new_spanned(&meta, "pk requires field"))?;
             once(&mut primary, key, &meta)?;

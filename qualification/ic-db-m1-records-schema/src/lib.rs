@@ -8,7 +8,7 @@ use ic_db::design::prelude::{entity, enum_, list, map, newtype, record, set};
 
 pub mod entries {
     use ic_db::design::prelude::entity;
-    #[entity( pk(field="id", source="external"),
+    #[entity( pk(field="id"),
     index(fields=["category", "id"]),
     fields(field(name="id", value(item(prim="Nat64"))),
         field(name="category", value(item(prim="Nat64"))),

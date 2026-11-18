@@ -21,6 +21,9 @@ use std::{
     time::Instant,
 };
 
+// Payload allowance for the local fixture transport, shared by query and aggregate.
+const FIXTURE_OUTPUT_BYTES: u32 = 4096;
+
 #[derive(Clone, Copy)]
 enum CallKind {
     Query,
@@ -207,12 +210,10 @@ enum Command {
         work: u32,
         #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=32))]
         page_size: u32,
-        #[arg(long, default_value_t=4096, value_parser=clap::value_parser!(u32).range(1..=131072))]
-        bytes: u32,
     },
     /// Read one fluent page from a local fixture entity.
     #[command(
-        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or all varying projected fields first in --order-by (ignore fields fixed by a mandatory literal equality); the sorter keeps the best --limit distinct results. Duplicates consume scan work.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates; --bytes counts encoded results, excluding transport framing.\n--select id works for all four query entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Without an explicit sort or an eligible live path, it collects one complete result in first-match order: at most 32 values, no --after, and no partial output when work, state, --limit or --bytes cannot fit.\n--select exists stops at the first validated match; false requires a proven end of input. --select count counts matching rows; category,count groups Entry rows. Aggregates must finish within --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
+        after_help = "Order defaults to the primary key. --order-by prefers a complete ordered path; otherwise it scans all matches and retains the best requested rows (at most 32, 128 KiB retained buffers). --desc reverses every component.\nComplete sorting applies --limit after scanning; work exhaustion refuses. It has no cursor. Sorted DISTINCT requires an identity result or all varying projected fields first in --order-by (ignore fields fixed by a mandatory literal equality); the sorter keeps the best --limit distinct results. Duplicates consume scan work.\nUse the returned cursor with --after and the same entity, filters, order, projection and DISTINCT setting. An empty page may still continue.\n--limit counts returned rows; --work counts examined candidates, including duplicates.\n--select id works for all four query entities; id,amount and category work for Entry. Filters use the fields' exact declared types.\nCategory DISTINCT uses live pages with --order-by category when filters are constant per category. Without an explicit sort or an eligible live path, it collects one complete result in first-match order: at most 32 values, no --after, and no partial output when work, state, row or output bounds cannot fit.\n--select exists stops at the first validated match; false requires a proven end of input. --select count counts matching rows; category,count groups Entry rows. Aggregates must finish within --work, refuse --after, --distinct and input ordering, and never return partial aggregates. --limit selects completed groups, not input rows. Extrema return no rows when no present value exists."
     )]
     Query {
         #[arg(default_value="Entry", value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
@@ -241,8 +242,6 @@ enum Command {
         desc: bool,
         #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
         work: u32,
-        #[arg(long, default_value_t=4096, value_parser=clap::value_parser!(u32).range(1..=131072))]
-        bytes: u32,
         /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
         /// category,count or category,count:FIELD. Field counts exclude absence.
         /// category,distinct-count:amount or category,distinct-count:category for Entry;
@@ -838,7 +837,6 @@ async fn session(
                 group_order,
                 work,
                 page_size,
-                bytes,
             } => {
                 let selection = (
                     entity.as_str(),
@@ -882,7 +880,7 @@ async fn session(
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
                         let reply = invoke(CallKind::Update, "aggregate_resume",
-                            ic_wire::encode(&(&selection, &handle, sequence, work, bytes, page_size, &after), Encoding::Frame { method: 121, direction: Direction::Request }, LIMITS).map_err(|e| e.to_string())?)
+                            ic_wire::encode(&(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after), Encoding::Frame { method: 121, direction: Direction::Request }, LIMITS).map_err(|e| e.to_string())?)
                             .await.map_err(|e| format!("{e:?}"))?;
                         type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
                         type Progress = (u64, String, u64, u64, u64, Output);
@@ -1063,7 +1061,6 @@ async fn session(
                 order_by,
                 desc,
                 work,
-                bytes,
                 select,
                 distinct,
                 group_min,
@@ -1084,7 +1081,7 @@ async fn session(
                             order_by,
                             desc,
                             work,
-                            bytes,
+                            FIXTURE_OUTPUT_BYTES,
                             select,
                             (distinct, (group_min, group_max), group_order,
                              filters.into_filters()?),

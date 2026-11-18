@@ -282,7 +282,7 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
             pk(field = "id"),
             fields(field(name = "id", value(item(prim = "Text"))))
         ),
-        quote!(pk(field="id", source="generated"), fields(#field)),
+        quote!(pk(field="id", unknown=true), fields(#field)),
         quote!(
             pk(field = "id"),
             fields(field(name = "id", value(opt, item(prim = "Nat64"))))
@@ -887,7 +887,6 @@ fn ulid_keys_are_supplied_nonoptional_scalars() {
                 value(many, max_items = 2, item(prim = "Ulid"))
             ))
         ),
-        quote!(pk(field="id",source="generated"),fields(#id)),
         quote!(pk(field="id"),fields(#id,field(name="next",value(item(prim="Ulid",max_bytes=16))))),
     ] {
         assert!(
@@ -935,7 +934,6 @@ fn primary_keys_require_nonoptional_scalar_fields() {
             quote!(pk(field="id"),fields(field(name="id",value(opt,item(prim=#prim))))),
             quote!(pk(field="id"),fields(field(name="id",value(many,max_items=2,item(prim=#prim))))),
             quote!(pk(field="id"),fields(field(name="id",value(item(prim=#prim,max_bytes=32))))),
-            quote!(pk(field="id",source="generated"),fields(#id)),
         ] {
             assert!(
                 expand(

@@ -124,7 +124,7 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
                     .filter("lane", Comparison::Eq, 0_u8)
                     .order_by(&["rank", "id"])
                     .filter("visible", Comparison::Eq, true)
-                    .byte_limit(bytes)
+                    .test_output_limit(bytes)
                     .work_limit(2);
                 if hinted {
                     q = q.using_index("lane,rank", &prefix);

@@ -4294,8 +4294,8 @@ They refuse `--after`, `--distinct`, explicit ordering and execution that reache
 `--work` before observing completion; an exact-boundary scan can also refuse.
 The separate `aggregate` command follows retained progress and completed-page
 continuations as described in the retained CLI qualification above.
-For `query`, `--limit` bounds output rows, `--work` bounds candidates and `--bytes` bounds encoded
-output. Their defaults are 3, 128 and 4096. An empty page may still continue.
+For `query`, `--limit` defaults to 3 output rows and `--work` to 128 candidates.
+The local fixture supplies its 4096-byte output allowance automatically. An empty page may still continue.
 The CLI prints a hexadecimal next cursor or `none`; copy it to `--after` with the
 same entity, filters, order and projection. Numeric after-ID syntax is retired.
 A full final page may need one last empty call. Both schema information

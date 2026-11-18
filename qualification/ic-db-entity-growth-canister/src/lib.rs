@@ -56,7 +56,7 @@ macro_rules! declare_entity {
         declare_entity!(@fields $name,);
     };
     (@fields $name:ident, $($extra:tt)*) => {
-        #[entity(pk(field = "id", source = "external"),
+        #[entity(pk(field = "id"),
             index(fields = ["category", "id"]), $($extra)*
             fields(field(name = "id", value(item(prim = "Nat64"))),
                 field(name = "category", value(item(prim = "Nat64"))),

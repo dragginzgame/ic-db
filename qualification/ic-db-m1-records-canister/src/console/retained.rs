@@ -404,7 +404,9 @@ fn resume_query<'a, E: Entity>(
     select: &str,
     (work, bytes, page_size, cursor): (u32, u32, u32, Option<&'a GroupCursor>),
 ) -> Result<Query<'a, E>, String> {
-    query = query.work_limit(work as usize).byte_limit(bytes as usize);
+    query = query
+        .work_limit(work as usize)
+        .test_output_limit(bytes as usize);
     if select.contains(',') {
         query = query.group_page(page_size as usize, cursor);
     } else if cursor.is_some() {

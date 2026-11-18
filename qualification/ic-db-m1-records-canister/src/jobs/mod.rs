@@ -514,7 +514,7 @@ fn job_page(
     faults::arm_job_write(fault);
     let result = query(&db, 3)
         .group_page(size as usize, cursor.as_ref())
-        .byte_limit(bytes as usize)
+        .test_output_limit(bytes as usize)
         .resume_group_count::<Category>(&mut jobs, &handle, sequence, Timestamp::from_millis(now));
     faults::finish_job_write();
     if trap_after {

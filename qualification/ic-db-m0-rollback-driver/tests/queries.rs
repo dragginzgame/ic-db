@@ -1216,7 +1216,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     }
     assert_eq!(
         complete_distinct(2, 7, 7, false).await.unwrap_err(),
-        "one matching result exceeds --bytes"
+        "one matching result exceeds the output budget"
     );
     let ordered_request = (
         "Entry",
