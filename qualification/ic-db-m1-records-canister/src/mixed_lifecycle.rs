@@ -4,6 +4,10 @@ use ic_db::{
     AggregateJobs, Batch, Comparison, Database, Entity, Error, JobHandle, JobOutcome,
     RetiredSource, Schema, SchemaCopy, SchemaTransition, Timestamp,
 };
+use ic_db_qualification_transport::mixed::{
+    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
+    Reply, Snapshot, Update,
+};
 use ic_storage::{RuntimeMemory, StableKey};
 
 pub(super) const KEYS: [&str; 3] = [
@@ -73,11 +77,10 @@ fn refusal(error: Error) -> u8 {
         Error::ReferenceViolation => 5,
         Error::Limit => 6,
         Error::Maintenance => 7,
+        Error::InvalidCursor => 8,
         other => panic!("unexpected mixed-history error: {other:?}"),
     }
 }
-// Entity, operation (insert/replace/delete/read-modify), key, value, score/delta.
-type Command = (u8, u8, u64, u64, u64);
 fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
     let host = runtime();
     let mut db = open(&host, target)?;
@@ -152,34 +155,116 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
     }
     db.commit(batch)
 }
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "mixed_write",
-    guard = crate::transport::admit::<241>,
-    decode = crate::transport::decode::<_,241>,
-    encode = crate::transport::encode::<_,241>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn mixed_write((target, commands): (bool, Vec<Command>)) -> (Result<(), u8>, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
-    let result = write(target, commands).map_err(refusal);
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+// Application-owned protocol for this installed workload. Canic owns the guards,
+// framed entrypoints and reply encoding. Only the fixture's own principal is admitted.
+mod protocol {
+    pub(super) const INSPECT: u64 = 246;
+    pub(super) const QUERY: u64 = 242;
+    pub(super) const WRITE: u64 = 241;
+    pub(super) type InspectRequest = bool;
+    pub(super) type InspectReply = Result<u64, u8>;
+    pub(super) type QueryRequest = super::Query;
+    pub(super) type QueryReply = super::QueryReply;
+    pub(super) type WriteRequest = super::Update;
+    pub(super) type WriteReply = super::Reply;
 }
-// Independent driver compares all fields, not a digest produced by this writer.
-type Snapshot = (
-    Vec<(u64, u64)>,
-    Vec<(u64, u64, u128)>,
-    Vec<(u64, u64)>,
-    [u64; 3],
-    [u64; 3],
-    Vec<u64>,
-    Vec<(u64, u64)>,
-    Vec<u64>,
-);
+
+// Mount the fixture’s inspection, reads and updates through Canic.
+canic::mount_db_endpoints! {
+    protocol = crate::mixed_lifecycle::protocol,
+    authorize = crate::mixed_lifecycle::authorize,
+    inspect = crate::mixed_lifecycle::inspect,
+    query = crate::mixed_lifecycle::query,
+    write = crate::mixed_lifecycle::apply_update,
+}
+
+// Only the fixture canister itself may invoke the mounted operations.
+fn authorize(caller: ic_db::Principal, _: canic::db::Operation) -> Result<(), String> {
+    if caller == ic_platform_runtime::system::canister_self() {
+        Ok(())
+    } else {
+        Err("mixed workload caller denied".into())
+    }
+}
+
+// Report the parent count for the selected live schema.
+fn inspect(_: ic_db::Principal, target: protocol::InspectRequest) -> protocol::InspectReply {
+    open(&runtime(), target)
+        .and_then(|db| db.cardinality::<Parent>())
+        .map_err(refusal)
+}
+
+// Commit a batch or operate on a retained count.
+fn apply_update(_: ic_db::Principal, request: Update, time_ns: u64) -> Reply {
+    match request {
+        Update::Batch(target, commands) => {
+            let start = ic_platform_runtime::raw::instruction_counter();
+            let result = write(target, commands).map_err(refusal);
+            Reply::Batch(
+                result,
+                ic_platform_runtime::raw::instruction_counter() - start,
+            )
+        }
+        Update::Count(request) => {
+            Reply::Count(count(request, time_ns).map_err(|error| format!("{error:?}")))
+        }
+    }
+}
+
+fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
+    let now_ms = (time_ns / 1_000_000) as i64;
+    let host = runtime();
+    let mut jobs = AggregateJobs::open(memory(&host, 2))?;
+    match request {
+        CountRequest::Run(target, action) => {
+            let db = open(&host, target)?;
+            if target {
+                run_count::<TargetItem>(&db, &mut jobs, action, now_ms)
+            } else {
+                run_count::<Item>(&db, &mut jobs, action, now_ms)
+            }
+        }
+        CountRequest::Cancel(bytes) => {
+            jobs.cancel(&JobHandle::from_bytes(&bytes)?)?;
+            Ok(CountReply::Cancelled)
+        }
+    }
+}
+
+fn run_count<E: Entity>(
+    db: &Database<Backing>,
+    jobs: &mut AggregateJobs<Backing>,
+    action: CountAction,
+    now_ms: i64,
+) -> Result<CountReply, Error> {
+    match action {
+        CountAction::Start => {
+            let handle = db.query::<E>().start_count(
+                jobs,
+                Timestamp::from_millis(now_ms),
+                Timestamp::from_millis(now_ms + 3_600_000),
+            )?;
+            Ok(CountReply::Started(handle.to_bytes()))
+        }
+        CountAction::Resume(bytes, sequence) => {
+            let handle = JobHandle::from_bytes(&bytes)?;
+            let step = db.query::<E>().work_limit(2).resume_count(
+                jobs,
+                &handle,
+                sequence,
+                Timestamp::from_millis(now_ms),
+            )?;
+            let outcome = match step.outcome {
+                JobOutcome::Running => CountOutcome::Running,
+                JobOutcome::Complete(value) => CountOutcome::Complete(value),
+                JobOutcome::Invalidated => CountOutcome::Invalidated,
+                JobOutcome::Expired => CountOutcome::Expired,
+            };
+            Ok(CountReply::Advanced(step.sequence, outcome))
+        }
+    }
+}
+
 fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
     let host = runtime();
     let db = open(&host, target)?;
@@ -253,109 +338,69 @@ fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
         ordered,
     ))
 }
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "mixed_read",
-    guard = crate::transport::admit::<242>,
-    decode = crate::transport::decode::<_,242>,
-    encode = crate::transport::encode::<_,242>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn mixed_read((target, parent, minimum): (bool, u64, u64)) -> (Result<Snapshot, u8>, u64) {
+// Read a full fixture snapshot or one bounded item page.
+fn query(_: ic_db::Principal, request: Query) -> QueryReply {
     let start = ic_platform_runtime::raw::instruction_counter();
-    let result = read(target, parent, minimum).map_err(refusal);
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
+    match request {
+        Query::Snapshot(target, parent, minimum) => {
+            let result = read(target, parent, minimum).map_err(refusal);
+            QueryReply::Snapshot(
+                result,
+                ic_platform_runtime::raw::instruction_counter() - start,
+            )
+        }
+        Query::Items {
+            target,
+            parent,
+            minimum,
+            after,
+        } => {
+            let result = open(&runtime(), target)
+                .and_then(|db| {
+                    if target {
+                        item_page::<TargetItem>(
+                            &db,
+                            parent,
+                            u128::from(minimum).into(),
+                            after.as_deref(),
+                        )
+                    } else {
+                        item_page::<Item>(&db, parent, minimum.into(), after.as_deref())
+                    }
+                })
+                .map_err(refusal);
+            QueryReply::Items(
+                result,
+                ic_platform_runtime::raw::instruction_counter() - start,
+            )
+        }
+    }
 }
-// One query message per page. A work budget of one forces progress through
-// residual nonmatches before the qualifying item on the same parent index.
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "mixed_page",
-    guard = crate::transport::admit::<245>,
-    decode = crate::transport::decode::<_,245>,
-    encode = crate::transport::encode::<_,245>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn mixed_page(cursor: Option<Vec<u8>>) -> (Vec<u64>, Option<Vec<u8>>, u64, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
-    let host = runtime();
-    let db = open(&host, false).unwrap();
-    let cursor = cursor
-        .as_deref()
-        .map(ic_db::QueryCursor::from_bytes)
-        .transpose()
-        .unwrap();
-    let prefix = [1_u64.into()];
+
+fn item_page<E: Entity<Key = u64>>(
+    db: &Database<Backing>,
+    parent: u64,
+    minimum: ic_db::IndexValue<'_>,
+    after: Option<&[u8]>,
+) -> Result<ItemPage, Error> {
+    let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
+    let prefix = [parent.into()];
     let mut query = db
-        .query::<Item>()
+        .query::<E>()
         .using_index("parent,id", &prefix)
-        .filter("score", Comparison::Ge, 100_u64)
+        .filter("score", Comparison::Ge, minimum)
         .order_by(&["parent", "id"])
         .work_limit(1)
         .limit(2);
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
-    let page = query.fetch().unwrap();
-    (
-        page.rows.into_iter().map(|row| row.id).collect(),
-        page.next.map(|cursor| cursor.to_bytes()),
-        page.examined as u64,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
-}
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "mixed_job",
-    guard = crate::transport::admit::<243>,
-    decode = crate::transport::decode::<_,243>,
-    encode = crate::transport::encode::<_,243>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn mixed_job((operation, bytes, sequence): (u8, Vec<u8>, u64)) -> (Vec<u8>, u64, u8, Option<u64>) {
-    let host = runtime();
-    let mut jobs = AggregateJobs::open(memory(&host, 2)).unwrap();
-    if operation == 2 {
-        jobs.cancel(&JobHandle::from_bytes(&bytes).unwrap())
-            .unwrap();
-        return (bytes, sequence, 4, None);
-    }
-    let db = open(&host, false).unwrap();
-    if operation == 0 {
-        let handle = db
-            .query::<Item>()
-            .start_count(
-                &mut jobs,
-                Timestamp::from_millis(0),
-                Timestamp::from_millis(10000),
-            )
-            .unwrap();
-        return (handle.to_bytes(), 0, 0, None);
-    }
-    assert_eq!(operation, 1);
-    let step = db
-        .query::<Item>()
-        .work_limit(2)
-        .resume_count(
-            &mut jobs,
-            &JobHandle::from_bytes(&bytes).unwrap(),
-            sequence,
-            Timestamp::from_millis(1),
-        )
-        .unwrap();
-    let (state, value) = match step.outcome {
-        JobOutcome::Running => (0, None),
-        JobOutcome::Complete(value) => (1, Some(value)),
-        JobOutcome::Invalidated => (2, None),
-        JobOutcome::Expired => (3, None),
-    };
-    (bytes, step.sequence, state, value)
+    let page = query.fetch()?;
+    Ok(ItemPage {
+        ids: page.rows.iter().map(Entity::key).collect(),
+        next: page.next.map(|cursor| cursor.to_bytes()),
+        examined: page.examined as u64,
+    })
 }
 fn migrate(operation: u8) -> Result<(u64, bool), Error> {
     let host = runtime();
@@ -407,6 +452,8 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
         _ => panic!("invalid migration control"),
     }
 }
+
+// Drive one explicit maintenance step for the installed qualification workload.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "mixed_migrate",

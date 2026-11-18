@@ -270,14 +270,14 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         .unwrap()
         .unwrap()
     };
-    let advance = async |handle: &[u8], sequence: u64| {
+    let advance = async |handle: &[u8], sequence: u64, work: u32| {
         let reply = pic
             .update_call(
                 canister,
                 canister,
                 "job_advance",
                 ic_wire::encode(
-                    &(handle, 1_u8, sequence, 12_u32, 1_i64, 0_u64, false),
+                    &(handle, 1_u8, sequence, work, 1_i64, 0_u64, false),
                     Encoding::Frame {
                         method: 111,
                         direction: Direction::Request,
@@ -346,7 +346,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         let mut sequence = 0;
         let mut revision = None;
         for call in 1..=9 {
-            let step = advance(&handle, sequence).await.unwrap();
+            let step = advance(&handle, sequence, 12).await.unwrap();
             assert_eq!(step.1, *revision.get_or_insert(step.1));
             assert_eq!(step.2, (call * 12).min(96));
             sequence = step.0;
@@ -370,8 +370,46 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             }
         }
         controlled(control(0, &handle).await.unwrap());
-        assert!(advance(&handle, sequence).await.is_err());
+        assert!(advance(&handle, sequence, 12).await.is_err());
         eprintln!("schedule={name} rows=96 work=12 advances=9 outcome=complete sum={base}");
+    }
+
+    // Start at each of four offsets before the next committed source write.
+    // A full final chunk still needs another call to establish end of input.
+    for work in [12_u32, 48] {
+        let mut completions = 0;
+        for calls_before_write in 1..=4 {
+            let handle = start().await;
+            let mut sequence = 0;
+            for _ in 0..calls_before_write {
+                let step = advance(&handle, sequence, work).await.unwrap();
+                sequence = step.0;
+                if step.4 == 1 {
+                    assert_eq!((step.2, step.5), (96, Some(base.to_string())));
+                    break;
+                }
+                assert_eq!((step.4, step.5), (0, None));
+            }
+            assert_eq!(write(1, 12, 0).await, Ok(()));
+            let outcome = advance(&handle, sequence, work).await.unwrap();
+            if calls_before_write * work > 96 {
+                assert_eq!(
+                    (outcome.2, outcome.4, outcome.5),
+                    (96, 1, Some(base.to_string()))
+                );
+                completions += 1;
+            } else {
+                assert_eq!(
+                    (outcome.2, outcome.4, outcome.5),
+                    (u64::from(calls_before_write * work), 2, None)
+                );
+            }
+            controlled(control(0, &handle).await.unwrap());
+            assert_eq!(write(1, 11, 0).await, Ok(()));
+        }
+        eprintln!(
+            "schedule=four-source-write-offsets rows=96 work={work} completed={completions}/4"
+        );
     }
 
     // Three caller-chosen restarts under writes all invalidate. Never report a
@@ -381,7 +419,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     let mut previous_revision = None;
     for attempt in 0..3 {
         let handle = start().await;
-        let first = advance(&handle, 0).await.unwrap();
+        let first = advance(&handle, 0, 12).await.unwrap();
         assert_eq!((first.2, first.4, first.5), (12, 0, None));
         if let Some(previous) = previous_revision {
             assert!(first.1 > previous);
@@ -399,18 +437,18 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 .await
                 .unwrap();
         }
-        let invalid = advance(&handle, first.0).await.unwrap();
+        let invalid = advance(&handle, first.0, 12).await.unwrap();
         assert_eq!(
             (invalid.1, invalid.2, invalid.4, &invalid.5),
             (first.1, 12, 2, &None)
         );
-        let retry = advance(&handle, 0).await.unwrap();
+        let retry = advance(&handle, 0, 12).await.unwrap();
         assert_eq!(
             (retry.0, retry.1, retry.2, retry.4, retry.5),
             (invalid.0, invalid.1, invalid.2, 2, None)
         );
         controlled(control(0, &handle).await.unwrap());
-        assert!(advance(&handle, 0).await.is_err());
+        assert!(advance(&handle, 0, 12).await.is_err());
         eprintln!(
             "schedule=source-write attempt={} examined=12 outcome=invalidated",
             attempt + 1
@@ -420,7 +458,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     let mut sequence = 0;
     let mut captured_revision = 0;
     for call in 1..=9 {
-        let step = advance(&handle, sequence).await.unwrap();
+        let step = advance(&handle, sequence, 12).await.unwrap();
         sequence = step.0;
         captured_revision = step.1;
         if call == 9 {
@@ -433,7 +471,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         }
     }
     controlled(control(2, &[]).await.unwrap());
-    let historical = advance(&handle, sequence).await.unwrap();
+    let historical = advance(&handle, sequence, 12).await.unwrap();
     assert_eq!(
         (historical.1, historical.4, historical.5),
         (captured_revision, 1, Some((base + changes).to_string()))

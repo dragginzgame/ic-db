@@ -15,6 +15,44 @@ async fn command(args: Vec<String>) -> std::process::Output {
     .unwrap()
 }
 
+async fn insert(
+    pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
+    canister: ic_testkit::pocket_ic::CanisterId,
+    owner: ic_testkit::pocket_ic::CanisterId,
+    rows: &[(u64, u64)],
+) {
+    let reply = pic
+        .update_call(
+            canister,
+            owner,
+            "db_write",
+            canic_wire::encode(
+                &rows,
+                canic_wire::Encoding::Frame {
+                    method: canic_wire::method_id("canic-db-witness.write.v1"),
+                    direction: canic_wire::Direction::Request,
+                },
+                canic::db::RPC_LIMITS,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let expected = Ok::<_, ()>((u32::try_from(rows.len()).unwrap(), String::new()));
+    assert_eq!(
+        reply,
+        canic_wire::encode(
+            &expected,
+            canic_wire::Encoding::Frame {
+                method: canic_wire::method_id("canic-db-witness.write.v1"),
+                direction: canic_wire::Direction::Response,
+            },
+            canic::db::RPC_LIMITS
+        )
+        .unwrap()
+    );
+}
+
 #[tokio::test]
 async fn explicit_application_inspection_preserves_authority_and_storage() {
     let artifacts =
@@ -45,28 +83,14 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, normal.clone(), owner.as_slice().to_vec(), None)
         .await;
-    // Application writes are test setup, never a write-capable CLI command.
-    for rows in [
-        &[(1_u64, 1_u64), (2, 2), (3, 30), (4, 40)][..],
-        &[(5, 5), (6, 60)][..],
-    ] {
-        pic.update_call(
-            canister,
-            owner,
-            "db_write",
-            canic_wire::encode(
-                &rows,
-                canic_wire::Encoding::Frame {
-                    method: canic_wire::method_id("canic-db-witness.write.v1"),
-                    direction: canic_wire::Direction::Request,
-                },
-                canic::db::RPC_LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    }
+    insert(
+        &pic,
+        canister,
+        owner,
+        &[(10, 1), (20, 2), (30, 30), (40, 40)],
+    )
+    .await;
+    insert(&pic, canister, owner, &[(50, 5), (60, 60)]).await;
     let url = pic.make_live(None).await;
     let base = vec![
         "inspect".into(),
@@ -203,6 +227,24 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
         }
     }
     assert_eq!(pic.get_stable_memory(canister).await, before);
+    // The sparse page stopped at key 10. Both inserts match the filter.
+    insert(&pic, canister, owner, &[(5, 50), (15, 35)]).await;
+    let fresh = invoke_command(
+        "witness-list",
+        &["--minimum", "30", "--limit", "1", "--work", "1", "--json"],
+        false,
+    )
+    .await;
+    assert!(
+        fresh.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh.stderr)
+    );
+    let fresh: serde_json::Value = serde_json::from_slice(&fresh.stdout).unwrap();
+    assert_eq!(
+        fresh["page"]["rows"],
+        serde_json::json!([{"id":5,"score":50}])
+    );
     pic.stop_live().await;
     for (wasm, admission) in [
         (normal, "Readable"),
@@ -244,7 +286,7 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
             assert!(value["inspection"]["admission"].get("Readable").is_some());
             assert_eq!(
                 value["inspection"]["selection"]["Entity"]["cardinality"]["Available"],
-                6
+                8
             );
         } else {
             assert_eq!(value["inspection"]["admission"], admission);
@@ -259,7 +301,7 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
             let mut pages = 0;
             while let Some(cursor) = after {
                 pages += 1;
-                assert!(pages <= 7);
+                assert!(pages <= 8);
                 let reply = invoke_command(
                     "witness-list",
                     &[
@@ -293,7 +335,7 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
             }
             assert_eq!(
                 rows,
-                serde_json::json!([{"id":3,"score":30},{"id":4,"score":40},{"id":6,"score":60}])
+                serde_json::json!([{"id":15,"score":35},{"id":30,"score":30},{"id":40,"score":40},{"id":60,"score":60}])
                     .as_array()
                     .unwrap()
                     .clone()

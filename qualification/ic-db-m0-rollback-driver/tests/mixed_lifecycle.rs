@@ -6,18 +6,11 @@ use ic_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::{BTreeMap, BTreeSet};
 
-type Command = (u8, u8, u64, u64, u64);
-type Snapshot = (
-    Vec<(u64, u64)>,
-    Vec<(u64, u64, u128)>,
-    Vec<(u64, u64)>,
-    [u64; 3],
-    [u64; 3],
-    Vec<u64>,
-    Vec<(u64, u64)>,
-    Vec<u64>,
-);
-type Job = (Vec<u8>, u64, u8, Option<u64>);
+use ic_db_qualification_transport::mixed::{
+    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
+    Reply, Snapshot, Update,
+};
+
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 struct Model {
     parents: BTreeMap<u64, u64>,
@@ -154,11 +147,37 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     .unwrap()
 }
 
+fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
+    canic_wire::encode(
+        value,
+        canic_wire::Encoding::Frame {
+            method,
+            direction: canic_wire::Direction::Request,
+        },
+        canic::db::RPC_LIMITS,
+    )
+    .unwrap()
+}
+
+fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
+    canic_wire::decode(
+        bytes,
+        canic_wire::Encoding::Frame {
+            method,
+            direction: canic_wire::Direction::Response,
+        },
+        canic::db::RPC_LIMITS,
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let path = std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle");
     let (wasm, facts) = artifact::read(std::fs::File::open(path).unwrap()).unwrap();
-    assert!(facts.exports.contains("canister_update mixed_write"));
+    assert!(facts.exports.contains("canister_update db_write"));
+    assert!(!facts.exports.contains("canister_update mixed_job"));
+    assert!(!facts.exports.contains("canister_query mixed_page"));
     assert!(!facts.exports.contains("canister_update fault_batch"));
     assert!(!facts.exports.contains("canister_query fault_status"));
     println!(
@@ -171,22 +190,63 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
+    let before = pic.get_stable_memory(canister).await;
+    let anonymous = ic_testkit::pocket_ic::CanisterId::anonymous();
+    let denied = pic
+        .update_call(
+            canister,
+            anonymous,
+            "db_write",
+            application_request(241, &Update::Batch(false, vec![(0, 0, 1, 10, 0)])),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        denied
+            .reject_message
+            .contains("mixed workload caller denied"),
+        "{denied:?}"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
     let update = async |method: &str, bytes: Vec<u8>| {
         pic.update_call(canister, canister, method, bytes)
             .await
             .unwrap()
     };
+    let query = async |caller, request: Query| {
+        pic.query_call(
+            canister,
+            caller,
+            "db_query",
+            application_request(242, &request),
+        )
+        .await
+    };
     let read = async |target: bool, parent: u64, minimum: u64| {
-        let bytes = pic
-            .query_call(
-                canister,
-                canister,
-                "mixed_read",
-                encode(242, &(target, parent, minimum)),
-            )
+        let bytes = query(canister, Query::Snapshot(target, parent, minimum))
             .await
             .unwrap();
-        decode::<(Result<Snapshot, u8>, u64)>(242, &bytes)
+        let QueryReply::Snapshot(result, instructions) = application_reply(242, &bytes) else {
+            panic!("expected snapshot reply")
+        };
+        (result, instructions)
+    };
+    let items = async |target, minimum, after| {
+        let bytes = query(
+            canister,
+            Query::Items {
+                target,
+                parent: 1,
+                minimum,
+                after,
+            },
+        )
+        .await
+        .unwrap();
+        let QueryReply::Items(result, instructions) = application_reply(242, &bytes) else {
+            panic!("expected items reply")
+        };
+        (result, instructions)
     };
     let upgrade = async || {
         let before = pic.get_stable_memory(canister).await;
@@ -197,6 +257,17 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             .unwrap();
         assert_eq!(pic.get_stable_memory(canister).await, before);
     };
+    let write = async |target: bool, commands: &[Command]| {
+        let bytes = update(
+            "db_write",
+            application_request(241, &Update::Batch(target, commands.to_vec())),
+        )
+        .await;
+        let Reply::Batch(result, instructions) = application_reply(241, &bytes) else {
+            panic!("expected batch reply")
+        };
+        (result, instructions)
+    };
     let mut samples = BTreeMap::<&str, Vec<(u64, u128)>>::new();
     let mut read_samples = Vec::new();
     let mut check =
@@ -205,9 +276,8 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             let expected = model.apply(&commands);
             let backing = pic.get_stable_memory(canister).await;
             let cycles = pic.cycle_balance(canister).await;
-            let bytes = update("mixed_write", encode(241, &(target, commands))).await;
+            let (actual, instructions) = write(target, &commands).await;
             let cycles = cycles - pic.cycle_balance(canister).await;
-            let (actual, instructions) = decode::<(Result<(), u8>, u64)>(241, &bytes);
             assert_eq!(actual, expected, "{label}");
             if *model == previous {
                 assert_eq!(
@@ -248,25 +318,95 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         "seed-dependants",
     )
     .await;
-    let job = async |operation: u8, handle: Vec<u8>, sequence: u64| {
-        decode::<Job>(
-            243,
-            &update("mixed_job", encode(243, &(operation, handle, sequence))).await,
+    let inspected = pic
+        .query_call(
+            canister,
+            canister,
+            "db_inspect",
+            application_request(246, &false),
         )
+        .await
+        .unwrap();
+    assert_eq!(
+        application_reply::<Result<u64, u8>>(246, &inspected),
+        Ok(model.parents.len() as u64)
+    );
+    let job = async |request: CountRequest| {
+        let bytes = update(
+            "db_write",
+            application_request(241, &Update::Count(request)),
+        )
+        .await;
+        let Reply::Count(result) = application_reply(241, &bytes) else {
+            panic!("expected count reply")
+        };
+        result
     };
-    let (handle, sequence, _, _) = job(0, vec![], 0).await;
-    let (_, sequence, state, _) = job(1, handle.clone(), sequence).await;
-    assert_eq!(state, 0);
+    let start = async |target| {
+        let CountReply::Started(handle) = job(CountRequest::Run(target, CountAction::Start))
+            .await
+            .unwrap()
+        else {
+            panic!("expected handle")
+        };
+        handle
+    };
+    let advance = async |target, handle: &[u8], sequence| {
+        let CountReply::Advanced(next, outcome) = job(CountRequest::Run(
+            target,
+            CountAction::Resume(handle.to_vec(), sequence),
+        ))
+        .await
+        .unwrap() else {
+            panic!("expected progress")
+        };
+        (next, outcome)
+    };
+    let finish_count = async |target, handle: &[u8], mut sequence, expected: u64| {
+        for _ in 0..=expected {
+            let (next, state) = advance(target, handle, sequence).await;
+            match state {
+                CountOutcome::Complete(value) => {
+                    assert_eq!(value, expected);
+                    return next;
+                }
+                CountOutcome::Running => assert!(next > sequence),
+                unexpected => panic!("unexpected count outcome {unexpected:?}"),
+            }
+            sequence = next;
+        }
+        panic!("bounded count did not finish");
+    };
+    let handle = start(false).await;
+    let before = pic.get_stable_memory(canister).await;
+    let denied = pic
+        .update_call(
+            canister,
+            anonymous,
+            "db_write",
+            application_request(241, &Update::Count(CountRequest::Cancel(handle.clone()))),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        denied
+            .reject_message
+            .contains("mixed workload caller denied"),
+        "{denied:?}"
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let (sequence, state) = advance(false, &handle, 0).await;
+    assert_eq!(state, CountOutcome::Running);
     let mut cursor: Option<Vec<u8>> = None;
     let mut matches = Vec::new();
     let mut empty_continued = 0;
     for step in 0..4 {
-        let bytes = pic
-            .query_call(canister, canister, "mixed_page", encode(245, &cursor))
-            .await
-            .unwrap();
-        let (rows, next, examined, instructions): (Vec<u64>, Option<Vec<u8>>, u64, u64) =
-            decode(245, &bytes);
+        let (result, instructions) = items(false, 100, cursor.clone()).await;
+        let ItemPage {
+            ids: rows,
+            next,
+            examined,
+        } = result.unwrap();
         assert!(examined <= 1);
         println!(
             "sparse listing page {step}: examined={examined} returned={} instructions={instructions}",
@@ -281,6 +421,34 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         }
         assert_ne!(next, cursor);
         assert!(step < 3, "sparse listing must complete");
+        if step == 0 {
+            assert_eq!(empty_continued, 1);
+            upgrade().await;
+            let before = pic.get_stable_memory(canister).await;
+            let denied = query(
+                anonymous,
+                Query::Items {
+                    target: false,
+                    parent: 1,
+                    minimum: 100,
+                    after: next.clone(),
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                denied
+                    .reject_message
+                    .contains("mixed workload caller denied"),
+                "{denied:?}"
+            );
+            assert!(matches!(items(false, 101, next.clone()).await.0, Err(8)));
+            assert!(matches!(
+                items(false, 100, Some(vec![0xff])).await.0,
+                Err(8)
+            ));
+            assert_eq!(pic.get_stable_memory(canister).await, before);
+        }
         cursor = next;
     }
     assert_eq!(empty_continued, 2);
@@ -301,33 +469,50 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     )
     .await;
     upgrade().await;
-    let (_, sequence, state, _) = job(1, handle.clone(), sequence).await;
+    let (sequence, state) = advance(false, &handle, sequence).await;
     assert_eq!(
-        state, 0,
+        state,
+        CountOutcome::Running,
         "unrelated, refused and no-op writes must preserve input revision"
     );
     check(&mut model, false, vec![(1, 3, 1, 0, 1)], "read-modify").await;
-    assert_eq!(job(1, handle.clone(), sequence).await.2, 2);
-    job(2, handle, 0).await;
-    let (handle, mut sequence, _, _) = job(0, vec![], 0).await;
-    for attempt in 0..=12 {
-        let (_, next, state, value) = job(1, handle.clone(), sequence).await;
-        sequence = next;
-        if state == 1 {
-            assert_eq!(value, Some(12));
-            break;
-        }
-        assert!(attempt < 12 && state == 0, "bounded job must make progress");
-    }
-    check(&mut model, false, vec![(1, 0, 50, 1, 50)], "insert-item").await;
-    let completed = job(1, handle.clone(), sequence).await;
     assert_eq!(
-        (completed.2, completed.3),
-        (1, Some(12)),
+        advance(false, &handle, sequence).await.1,
+        CountOutcome::Invalidated
+    );
+    assert_eq!(
+        job(CountRequest::Cancel(handle)).await,
+        Ok(CountReply::Cancelled)
+    );
+    let handle = start(false).await;
+    let sequence = finish_count(false, &handle, 0, model.items.len() as u64).await;
+    check(&mut model, false, vec![(1, 0, 50, 1, 50)], "insert-item").await;
+    let (_, completed) = advance(false, &handle, sequence).await;
+    assert_eq!(
+        completed,
+        CountOutcome::Complete(12),
         "completed result retains its original input"
     );
-    job(2, handle, 0).await;
+    assert_eq!(
+        job(CountRequest::Cancel(handle)).await,
+        Ok(CountReply::Cancelled)
+    );
     check(&mut model, false, vec![(1, 2, 50, 0, 0)], "delete-item").await;
+
+    let expiring = start(false).await;
+    pic.advance_time(std::time::Duration::from_secs(3601)).await;
+    pic.tick().await;
+    assert_eq!(advance(false, &expiring, 0).await.1, CountOutcome::Expired);
+    assert_eq!(
+        job(CountRequest::Cancel(expiring.clone())).await,
+        Ok(CountReply::Cancelled)
+    );
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        job(CountRequest::Run(false, CountAction::Resume(expiring, 0))).await,
+        Err("InvalidJob".into())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
 
     // Fixed reproducible histories, with changing keys, values and batch order.
     for round in 0..12_u64 {
@@ -434,6 +619,32 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let migrate = async |operation: u8| {
         decode::<(u64, bool, u64)>(244, &update("mixed_migrate", encode(244, &operation)).await)
     };
+    // The dependent-first batch is valid on either live schema.
+    let chain = [(2, 0, 51, 51, 0), (1, 0, 51, 51, 1051), (0, 0, 51, 510, 0)];
+    // Keep the same logical request across the score widening and copy.
+    let source_page = items(false, 1030, None).await.0.unwrap();
+    assert!(source_page.ids.is_empty());
+    let source_cursor = source_page.next.expect("continued source page");
+    let source_job = start(false).await;
+    let (source_sequence, outcome) = advance(false, &source_job, 0).await;
+    assert_eq!(outcome, CountOutcome::Running);
+    let resume_source_job = async |target| {
+        job(CountRequest::Run(
+            target,
+            CountAction::Resume(source_job.clone(), source_sequence),
+        ))
+        .await
+    };
+    let expect_closed = async |target: bool| {
+        let before = pic.get_stable_memory(canister).await;
+        assert_eq!(resume_source_job(target).await, Err("Maintenance".into()));
+        assert_eq!(write(target, &chain).await.0, Err(7));
+        assert!(matches!(
+            items(target, 1030, Some(source_cursor.clone())).await.0,
+            Err(7)
+        ));
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    };
     migrate(0).await;
     assert_eq!(read(false, 1, 25).await.0, Err(7));
     assert_eq!(read(true, 1, 25).await.0, Err(7));
@@ -442,8 +653,14 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         let (rows, done, _) = migrate(1).await;
         assert!(rows <= 2);
         copied += rows;
-        if step == 2 {
+        if step == 0 {
+            assert!(
+                !done,
+                "exercise write admission during unfinished maintenance"
+            );
             upgrade().await;
+            expect_closed(false).await;
+            expect_closed(true).await;
         }
         if done {
             break;
@@ -456,8 +673,14 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     );
     for step in 0..128 {
         let (_, done, _) = migrate(2).await;
-        if step == 2 {
+        if step == 0 {
+            assert!(
+                !done,
+                "exercise write admission during unfinished maintenance"
+            );
             upgrade().await;
+            expect_closed(false).await;
+            expect_closed(true).await;
         }
         if done {
             break;
@@ -475,6 +698,16 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         model.links.len().div_ceil(2) as u64,
     ];
     assert_eq!(read(true, 1, 25).await.0.unwrap(), model.snapshot(1, 25));
+    assert!(matches!(
+        items(true, 1030, Some(source_cursor.clone())).await.0,
+        Err(8)
+    ));
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(resume_source_job(true).await, Err("InvalidJob".into()));
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let target_page = items(true, 1030, None).await.0.unwrap();
+    let mut listed = target_page.ids;
+    let mut after = target_page.next.expect("continued target page");
     check(
         &mut model,
         true,
@@ -482,8 +715,26 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         "target-read-modify",
     )
     .await;
+    let mut target_count = None;
     for step in 0..128 {
         let (_, done, _) = migrate(4).await;
+        if step == 0 {
+            assert!(
+                !done,
+                "exercise writes with retired allocations still pending"
+            );
+            expect_closed(false).await;
+            check(&mut model, true, chain.to_vec(), "target-insert-chain").await;
+            assert_eq!(
+                job(CountRequest::Cancel(source_job.clone())).await,
+                Ok(CountReply::Cancelled)
+            );
+            let handle = start(true).await;
+            let (sequence, state) = advance(true, &handle, 0).await;
+            assert_eq!(state, CountOutcome::Running);
+            target_count = Some((handle, sequence));
+            upgrade().await;
+        }
         assert_eq!(
             read(true, 2, 1030).await.0.unwrap(),
             model.snapshot(2, 1030)
@@ -499,6 +750,40 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         model.snapshot(3, 1030)
     );
     assert_eq!(read(false, 1, 0).await.0, Err(7));
+    let (handle, sequence) = target_count.expect("count started during cleanup");
+    // A delayed cancellation from before cutover must leave the new checkpoint intact.
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        job(CountRequest::Cancel(source_job)).await,
+        Err("InvalidJob".into())
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    // Simulate losing the first target advance reply and resending its original sequence.
+    assert_eq!(
+        advance(true, &handle, 0).await,
+        (sequence, CountOutcome::Running)
+    );
+    finish_count(true, &handle, sequence, model.items.len() as u64).await;
+    assert_eq!(
+        job(CountRequest::Cancel(handle)).await,
+        Ok(CountReply::Cancelled)
+    );
+    // The intervening writes leave the membership of this parent listing intact.
+    // Resume the target cursor obtained before cleanup and check every remaining page.
+    for step in 0..=model.items.len() {
+        let page = items(true, 1030, Some(after.clone())).await.0.unwrap();
+        assert!(page.examined <= 1);
+        listed.extend(page.ids);
+        let Some(next) = page.next else {
+            break;
+        };
+        assert_ne!(after, next);
+        after = next;
+        assert!(step < model.items.len(), "target listing must finish");
+    }
+    let expected = model.snapshot(1, 1030).5;
+    assert!(!expected.is_empty());
+    assert_eq!(listed, expected);
     drop(check);
     println!(
         "complete read checks: n={} instructions={}..{} (all rows, metadata, two indexes, grouping)",

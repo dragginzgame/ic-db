@@ -2775,6 +2775,51 @@ The 2026-11-16 run passes:
   match the transformed model; target writes and reads remain valid through
   bounded retired-source cleanup and another upgrade.
 
+In 0.23.6 the three-entity fixture mounts Canic 0.219.0’s typed endpoints over
+the workspace IC DB engine. The independent driver sends all ordinary batches
+and full snapshot queries through the mount. The synthetic application admits
+its own canister principal, rejects an anonymous write, and exposes the parent
+count through its typed inspection method. The same authorized update mount
+starts, resumes and cancels retained item counts. An unrelated write and an
+upgrade preserve progress. A source write invalidates a running count. A count
+completed at 12 still returns 12 after another insert. The application uses
+Canic’s message time for its one-hour deadline. After expiry, cancellation
+releases the handle and a stale resume preserves the backing. An anonymous
+caller holding a valid handle cannot cancel it. The sparse listing uses the same query mount as the snapshot.
+One candidate per call yields two empty continued pages before the matching
+item. After the first page, the driver upgrades and retries with a different
+score threshold, malformed cursor bytes and an anonymous caller. Each refuses,
+and the original cursor still completes in index order.
+
+The migration driver keeps an empty source page’s continuation for the same
+parent and minimum score across copy and validation. After upgrades in each
+phase, both schemas refuse the listing with the maintenance error. Publication
+opens the target, where presenting the source cursor returns a cursor error.
+A fresh target listing uses the widened score type and returns its first page
+before retired-source cleanup. Its continuation finishes after cleanup and
+upgrade, with all IDs checked against the independent model.
+
+The same run pauses an item count before maintenance. During copy and
+validation, resumes against either schema receive `Maintenance` and preserve
+stable backing. After publication, the target refuses the source handle with
+`InvalidJob`. The caller cancels it during retired-source cleanup and starts a
+target count after the final item write. The new count checkpoints before an
+upgrade. After cleanup and another upgrade, retrying cancellation of the old
+handle preserves every stable byte. Resending the new count’s first advance
+returns its existing checkpoint. The count then completes with the 13 items
+in the independent model.
+
+Migration uses a private fixture control. The signed HTTP CLI test uses the separate
+pinned Canic application and its inspection protocol.
+
+The 0.23.6 driver also submits the same three-record insert during interrupted
+copy, validation and retired-source cleanup. It creates a link, its item and the
+item’s parent in dependent-first order. After an upgrade in each pre-publication
+phase, both source and target refuse the batch with the maintenance error and
+preserve the full stable backing. After the first cleanup chunk the source still
+refuses it, while the target accepts it. The driver upgrades again and checks
+the target against the independent model after every remaining cleanup chunk.
+
 The fixture found no product defect in this envelope. It supplements the separate
 backing-write trap, instruction-exhaustion, growth-refusal and migration-cancellation
 probes; it does not replace them. It does not establish random-history coverage,
@@ -3360,7 +3405,7 @@ endpoints exercise the actual engine and supplier; no new endpoint, product stat
 or host scheduler is introduced. Testkit owns the local PocketIC instance.
 
 The dataset has 96 entries with independently calculated amounts
-`id * 10 + id % 2`. Each advance permits 12 candidates. The successful runs
+`id * 10 + id % 2`. In the schedules below, each advance permits 12 candidates. The successful runs
 need nine advances: eight process 96 rows and the ninth observes exhaustion.
 
 | Intervening messages | Observed result |
@@ -3372,6 +3417,14 @@ need nine advances: eight process 96 rows and the ninth observes exhaustion.
 | Refused duplicate insertion after each running step | Complete, same revision and sum; full backing unchanged by each refusal |
 | Source change after the first step, three explicit attempts | All invalidated after 12 examined rows, without a result or hidden restart |
 | Fresh attempt after those writes stop | Complete, sum 46,610 for the newly captured revision |
+
+The 0.23.6 probe starts the same sum one, two, three or four advances before a
+committed source write. At 12 candidates per advance, all four jobs invalidate.
+At 48, the jobs with three or four advances available complete with 46,608.
+Two advances process all 96 candidates but leave exhaustion unconfirmed, so a
+write at that point still invalidates the job. Each attempt restores the initial
+row values. These four deterministic offsets measure the completion boundary
+for this fixture. Production completion rates depend on application traffic.
 
 One contended attempt restores the old row value and upgrades before resuming;
 it still invalidates. Retrying an invalidated handle preserves its outcome, and
@@ -4414,8 +4467,10 @@ formatting and documentation checks pass; this is not a second release.
 The same pinned Canic witness now serves `db witness-list` over verified HTTP.
 Setup inserts six literal rows through the application's bounded write endpoint;
 CLI operations remain read-only. Minimum score 30 with one-candidate work starts
-with an empty page and a cursor. After upgrade the CLI forwards each cursor
-unchanged and returns exactly IDs 3, 4 and 6. Changed minimum, corrupt cursor and
+with an empty page and a cursor at ID 10. The 0.23.6 driver then inserts
+matching IDs 5 and 15 in a single application batch. A fresh listing sees ID 5.
+After upgrade the CLI resumes the original cursor and returns exactly IDs
+15, 30, 40 and 60. Inspection reports all eight rows. Changed minimum, corrupt cursor and
 an unauthorized caller refuse; closed/incompatible storage refuses ordinary
 listing. Both inspection and listing leave backing unchanged. Each listing
 command reports one query call; JSON uses hex continuation and separate statistics.

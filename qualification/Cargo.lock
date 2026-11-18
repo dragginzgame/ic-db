@@ -1509,6 +1509,7 @@ dependencies = [
 name = "ic-db-m1-records-canister"
 version = "0.0.0"
 dependencies = [
+ "canic",
  "ic-db",
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
@@ -3597,9 +3598,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.6"
+version = "0.45.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a1ec2a953eb8c41f66fdb121591c64e7ae3b6d77196a982740e790f0ed021a"
+checksum = "81d14bd09e3a2cc71dc12c17af6221eeae4377030bee77848496d00eb7f505b7"
 
 [[package]]
 name = "toml_datetime"

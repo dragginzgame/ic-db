@@ -22,7 +22,7 @@ mod managed;
 mod migration_capacity;
 #[cfg(feature = "maintenance-faults")]
 mod migration_references;
-#[cfg(feature = "mixed-lifecycle")]
+#[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
 mod mixed_lifecycle;
 mod principal_keys;
 mod queries;
@@ -91,7 +91,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
         );
         requests
     };
-    #[cfg(feature = "mixed-lifecycle")]
+    #[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
     let requests = {
         let mut requests = requests;
         requests.extend(mixed_lifecycle::KEYS.map(|key| MemoryRequest::new("m1", key).unwrap()));
@@ -191,7 +191,7 @@ fn initialize((): ()) {
     db.commit(batch).unwrap();
     #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
     aggregate_store::initialize(&host);
-    #[cfg(feature = "mixed-lifecycle")]
+    #[cfg(all(feature = "mixed-lifecycle", target_arch = "wasm32"))]
     mixed_lifecycle::initialize(&host);
 }
 fn status(db: &Database<Backing>) -> Status {

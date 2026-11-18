@@ -26,7 +26,10 @@ fault-injection = []
 maintenance = []
 maintenance-v2 = ["maintenance"]
 maintenance-faults = ["maintenance", "fault-injection"]
-mixed-lifecycle = []
+mixed-lifecycle = ["dep:canic"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+canic = { workspace = true, optional = true }
 
 [dependencies]
 ic-db.workspace = true

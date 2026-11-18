@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.23.6] - Unreleased
+
+### Qualification
+
+- Exercised a live listing across a write and upgrade through the pinned Canic
+  application. Measured when an exact sum completes before the next source
+  write at two candidate budgets. Reproduce with `make m4-inspection` and
+  `make m2-contention`.
+- The three-entity workload now runs its ordinary batches, snapshot queries, sparse listings and retained counts
+  through Canic’s typed adapter against the current IC DB engine.
+- Extended `make m4-lifecycle` to check a three-entity batch during copy,
+  validation and retired-source cleanup, including an upgrade after the target
+  accepts the batch. The listing also checks cursor lifetime across cutover:
+  the target refuses a source cursor, and a fresh target cursor survives cleanup
+  and upgrade.
+- Qualified retained counts across cutover. The target refuses a source job,
+  the caller releases it, and a fresh target count completes across cleanup and upgrade.
+  The fixture retries the old cancellation and replays a lost advance reply on the new count.
+
+### Tooling
+
+- Updated both Cargo workspaces and the vendored snapshot to Toko Tooling 0.45.7.
+
 ## [0.23.5] - 2026-11-18
 
 ### 🔧 Changed

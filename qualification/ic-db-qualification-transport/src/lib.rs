@@ -3,6 +3,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod hooks;
+pub mod mixed;
 #[cfg(target_arch = "wasm32")]
 pub use hooks::*;
 

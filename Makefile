@@ -318,6 +318,7 @@ m4-lifecycle:
 	@git diff --binary > qualification/target/evidence/mixed-lifecycle/working.patch
 	@rustc -Vv > qualification/target/evidence/mixed-lifecycle/compiler.txt
 	@cp qualification/Cargo.lock qualification/target/evidence/mixed-lifecycle/Cargo.lock
+	@cp qualification/ic-db-qualification-transport/src/mixed.rs qualification/target/evidence/mixed-lifecycle/protocol.rs
 	@cp qualification/ic-db-m1-records-canister/src/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/host.rs
 	@cp qualification/ic-db-m0-rollback-driver/tests/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/driver.rs
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features mixed-lifecycle --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/mixed-lifecycle/build.jsonl
