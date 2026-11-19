@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.19] - Unreleased
+## [0.23.19] - 2026-11-19
 
 - Adopt Toko Tooling 0.45.21 in both workspaces and apply its shared Clippy policy.
 
