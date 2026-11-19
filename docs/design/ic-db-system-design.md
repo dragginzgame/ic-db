@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.6 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.7 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -2586,7 +2586,10 @@ may differ. For same-family Text or Blob fields, StartsWith, EndsWith and
 Contains take their exact needle from the right-hand field. Both fields must
 be present. An empty needle matches any present value. These checks are
 residual because the needle varies by row. Two absent values compare equal; ordering requires both values.
-The scanner compares the two row components under the usual candidate budget.
+When mandatory equalities or supplied index components fix both fields, the
+planner can disprove Eq or Ne before traversal. A count can prove the comparison
+from a selected key prefix only when that prefix supplies both values.
+Other field comparisons use the row evaluator under the usual candidate budget.
 Both fields participate in DISTINCT class admission and continuation identity.
 The fixture CLI accepts `--text FIELD OP VALUE` for a text literal (including
 an empty string), `--bool FIELD true|false` for Boolean equality, and
@@ -2642,9 +2645,12 @@ the declared element type and the same comparator as scalar equality.
 `filter_length(field, comparison, n)` compares UTF-8 bytes for Text, raw bytes for
 Blob, and item counts for lists, maps and sets, including named lists and scalar
 wrappers. Absent values match only Ne. Eq(0) therefore selects present empty
-values and Gt(0) selects present nonempty values. A length term is residual:
-the u32 prefix comes from the fully validated field span, and the threshold is
-bound to cursor and job identity. `QueryOperand::Length(n)` uses the same term
+values and Gt(0) selects present nonempty values. A mandatory literal equality or an explicit index prefix fixes the byte
+length of a Text or Blob. The planner can reject a contradictory clause before
+traversal and an index covering the other filters can count entries directly.
+The length uses the original value, including UTF-8 and raw zero bytes.
+For residual length filters the u32 count comes from the validated field span.
+The threshold is bound to cursor and job identity. `QueryOperand::Length(n)` uses the same term
 inside an OR clause. The local `db query` and `db aggregate` commands pass
 `--length FIELD OP N` to the same builder. Frozen IcyDB `6d421e3` tested Text and list emptiness in
 `db/predicate/runtime/compare/value.rs`; the current row format supplies an

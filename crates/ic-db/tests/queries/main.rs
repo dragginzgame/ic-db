@@ -845,6 +845,40 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
 }
 
 #[test]
+fn field_equality_counts_use_both_fixed_components() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let prefix = [20_u64.into(), 2_u64.into()];
+    for explicit in [false, true] {
+        let fixed = || {
+            let query = db.query::<Entry>();
+
+            if explicit {
+                query.using_index("amount,id", &prefix)
+            } else {
+                query.eq(Entry::AMOUNT, 20_u64).eq(Entry::ID, 2_u64)
+            }
+        };
+        let differs = || fixed().filter_fields(Entry::AMOUNT, C::Ne, Entry::ID);
+        let count = differs().count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+        assert_eq!(differs().count_validated().unwrap().value, count.value);
+        let empty = fixed()
+            .filter_fields(Entry::ID, C::Eq, Entry::AMOUNT)
+            .count()
+            .unwrap();
+        assert_eq!((empty.value, empty.examined, empty.fetched), (0, 0, 0));
+    }
+    let residual = db
+        .query::<Entry>()
+        .using_index("amount,id", &prefix[..1])
+        .filter_fields(Entry::AMOUNT, C::Ne, Entry::ID)
+        .count()
+        .unwrap();
+    assert_eq!((residual.value, residual.fetched), (1, 1));
+}
+
+#[test]
 fn absent_index_prefix_checks_presence_before_scanning() {
     let runtime = host(VectorMemory::default());
     let (db, input) = text_rows(&runtime);
@@ -1707,6 +1741,23 @@ fn length_compares_text_in_utf8_bytes_and_binds_pages() {
             expected
         );
     }
+    let fixed = || db.query::<TextRow>().eq(TextRow::TEXT, "β");
+    let matches = fixed()
+        .filter_length(TextRow::TEXT, C::Eq, 2)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (matches.value, matches.examined, matches.fetched),
+        (1, 1, 0)
+    );
+    let impossible = fixed()
+        .filter_length(TextRow::TEXT, C::Le, 1)
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!((impossible.rows.len(), impossible.examined), (0, 0));
+    assert!(impossible.next.is_none());
+
     let cursor = db
         .query::<TextRow>()
         .filter_length("text", C::Ge, 2)

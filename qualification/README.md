@@ -34,7 +34,7 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
 ## External simulator ownership (0.19)
 
-The native driver uses PocketIC 16.1.0 through Testkit 0.110.0 with default
+The native driver uses PocketIC 16.1.0 through Testkit 0.110.3 with default
 features disabled. It requires
 `IC_TESTKIT_POCKET_IC_URL`, borrows the upstream async client on the caller's Tokio
 runtime and explicitly attempts instance deletion. It has no binary discovery,

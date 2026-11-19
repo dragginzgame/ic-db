@@ -31,12 +31,12 @@ ic-db = { path = "../crates/ic-db" }
 ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }
 ic-db-m1-records-schema = { path = "ic-db-m1-records-schema" }
 ic-db-qualification-transport = { path = "ic-db-qualification-transport" }
-ic-host-artifacts = "0.80.1"
-ic-host-text = "0.77.2"
-ic-platform-runtime = { version = "0.23.21", default-features = false }
-ic-storage = "0.78.0"
-ic-testkit = { version = "0.110.0", default-features = false }
-ic-wire = "0.26.0"
+ic-host-artifacts = "0.80.6"
+ic-host-text = "0.77.4"
+ic-platform-runtime = { version = "0.23.22", default-features = false }
+ic-storage = "0.78.7"
+ic-testkit = { version = "0.110.3", default-features = false }
+ic-wire = "0.26.1"
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
 rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
 rustyline = { version = "19.0.0", default-features = false }

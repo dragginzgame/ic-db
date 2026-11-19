@@ -113,6 +113,19 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
     db.commit(batch).unwrap();
     drop(db);
     let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+    // The embedded zero expands in an index key. Its raw Blob length is still two.
+    let prefix = [IndexValue::Blob(&[0, 255])];
+    let by_length = |n| {
+        db.query::<Binary>()
+            .using_index("payload,id", &prefix)
+            .filter_length(Binary::PAYLOAD, C::Eq, n)
+    };
+    let count = by_length(2).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+    assert_eq!(by_length(2).count_validated().unwrap().value, count.value);
+    let impossible = by_length(3).count().unwrap();
+    assert_eq!((impossible.value, impossible.examined), (0, 0));
+
     let mut expected = rows.clone();
     expected.sort_by(|a, b| (&a.payload, a.id).cmp(&(&b.payload, b.id)));
     let mut actual = Vec::new();

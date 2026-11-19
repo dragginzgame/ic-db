@@ -132,6 +132,16 @@ impl Comparison {
         }
     }
 
+    fn accepts_length(self, actual: Option<u32>, threshold: u32) -> bool {
+        let encoded = actual.map(u32::to_be_bytes);
+
+        self.accepts(
+            encoded.as_ref().map(|v| v.as_slice()),
+            Some(&threshold.to_be_bytes()),
+            false,
+        )
+    }
+
     // One side is absent. Equality/inequality are symmetric; execution,
     // presence-only filters and sparse membership share this rule.
     fn accepts_absent(self, other_absent: bool) -> bool {
@@ -1575,13 +1585,9 @@ fn execute_inner<M: Memory>(
                     let (start, end) = spans[term.position];
                     let span = &bytes[usize::from(start)..usize::from(end)];
                     let actual =
-                        crate::codec::validated_length(span, entity.fields[term.position].optional)
-                            .map(u32::to_be_bytes);
-                    return Ok(term.comparison.accepts(
-                        actual.as_ref().map(|v| v.as_slice()),
-                        Some(&length.to_be_bytes()),
-                        false,
-                    ));
+                        crate::codec::validated_length(span, entity.fields[term.position].optional);
+
+                    return Ok(term.comparison.accepts_length(actual, *length));
                 }
                 TermOperand::Literal { bytes, absent } => (
                     (!absent).then_some(bytes.as_slice()),

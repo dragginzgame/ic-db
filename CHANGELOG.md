@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.23.20] - Unreleased
+
+- Update product dependencies to IC Platform Types 0.21.4, Runtime 0.23.22 and
+  Storage 0.78.7. Qualification uses Host Artifacts 0.80.6, Host Text 0.77.4,
+  Wire 0.26.1 and the Testkit 0.110.3 client. Canic inspection still uses its
+  pinned producer’s Wire 0.25 contract and the external PocketIC launcher stays
+  at 0.110.0. The release editor stays at IC Build 0.84.1 because 0.87.6 does
+  not ship the required `ic-build-release-metadata` binary.
+
+- A fixed Text or Blob value can satisfy or disprove a length filter before
+  reading rows. A covered count uses its index entries directly. Conflicting
+  byte lengths finish with zero candidate visits.
+- `filter_fields(left, Eq/Ne, right)` can also count from a compound index
+  when its prefix fixes both fields. A contradictory equality or inequality
+  between two known values finishes before traversal.
+
 ## [0.23.19] - 2026-11-19
 
 - Adopt Toko Tooling 0.45.21 in both workspaces and apply its shared Clippy policy.

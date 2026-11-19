@@ -286,7 +286,8 @@ fn covers_keys(
                 (matches!(p.operand, QueryOperand::Literal(IndexValue::Absent))
                     && p.comparison == Comparison::Ne
                     && index.is_some_and(|i| i.present_only && i.fields.contains(&p.field)))
-                    || fixed_comparison(p, prefix_value(fields, values, p.field)) == Some(true)
+                    || fixed_comparison(p, &|field| prefix_value(fields, values, field))
+                        == Some(true)
             });
             key_proves_clause
                 || match terms {
@@ -439,14 +440,30 @@ pub(super) fn literal_equalities<'r, 'a>(
     })
 }
 
-// An admitted equality or inequality is decidable when the field value is fixed.
-fn fixed_comparison(predicate: &Predicate<'_>, fixed: Option<IndexValue<'_>>) -> Option<bool> {
-    let QueryOperand::Literal(operand) = predicate.operand else {
-        return None;
+// The caller supplies either known query values or just the selected key prefix.
+fn fixed_comparison<'a>(
+    predicate: &Predicate<'_>,
+    lookup: &dyn Fn(&str) -> Option<IndexValue<'a>>,
+) -> Option<bool> {
+    let left = lookup(predicate.field)?;
+    let right = match predicate.operand {
+        QueryOperand::Length(threshold) => {
+            let length = match left {
+                IndexValue::Text(text) => Some(u32::try_from(text.len()).ok()?),
+                IndexValue::Blob(bytes) => Some(u32::try_from(bytes.len()).ok()?),
+                IndexValue::Absent => None,
+                _ => return None,
+            };
+
+            return Some(predicate.comparison.accepts_length(length, threshold));
+        }
+        QueryOperand::Literal(operand) => operand,
+        QueryOperand::Field(field) => lookup(field)?,
     };
+
     match predicate.comparison {
-        Comparison::Eq => Some(fixed? == operand),
-        Comparison::Ne => Some(fixed? != operand),
+        Comparison::Eq => Some(left == right),
+        Comparison::Ne => Some(left != right),
         _ => None,
     }
 }
@@ -474,10 +491,17 @@ pub(super) fn prefix_proves_clause(
         return false;
     };
     let fixed = &index.fields[..plan.fixed_components];
-    clause.iter().any(|p| {
-        fixed.contains(&p.field)
-            && fixed_comparison(p, constrained_value(request, Some(index), p.field)) == Some(true)
-    })
+    let lookup = |field: &str| {
+        if fixed.contains(&field) {
+            constrained_value(request, Some(index), field)
+        } else {
+            None
+        }
+    };
+
+    clause
+        .iter()
+        .any(|p| fixed_comparison(p, &lookup) == Some(true))
 }
 
 // A mandatory clause is impossible only if every alternative is disproved.
@@ -503,13 +527,12 @@ pub(super) fn has_conflicting_predicates(
     {
         return true;
     }
+    let lookup = |field: &str| constrained_value(request, index, field);
+
     request.clauses().any(|clause| {
-        clause.iter().all(|predicate| {
-            fixed_comparison(
-                predicate,
-                constrained_value(request, index, predicate.field),
-            ) == Some(false)
-        })
+        clause
+            .iter()
+            .all(|predicate| fixed_comparison(predicate, &lookup) == Some(false))
     })
 }
 
