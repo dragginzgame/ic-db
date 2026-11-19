@@ -86,42 +86,39 @@ pub struct JobStep<T> {
     /// Explicit progress, completion, invalidation or expiry.
     pub outcome: JobOutcome<T>,
 }
-impl<T> JobStep<T> {
-    fn try_map<R>(self, f: impl FnOnce(T) -> Result<R, Error>) -> Result<JobStep<R>, Error> {
+
+impl JobStep<()> {
+    // Conversion and output refusal happen before saving the prepared checkpoint.
+    // A refused result must leave the previous checkpoint available for retry.
+    fn finish_and_save<T, M: Memory>(
+        self,
+        jobs: &mut AggregateJobs<M>,
+        handle: &JobHandle,
+        record: &Record,
+        limit: usize,
+        finish: impl FnOnce() -> Result<(T, usize), Error>,
+    ) -> Result<JobStep<T>, Error> {
+        let (outcome, output_bytes) = match self.outcome {
+            JobOutcome::Running => (JobOutcome::Running, 0),
+            JobOutcome::Invalidated => (JobOutcome::Invalidated, 0),
+            JobOutcome::Expired => (JobOutcome::Expired, 0),
+            JobOutcome::Complete(()) => {
+                let (value, bytes) = finish()?;
+                if bytes > limit {
+                    return Err(Error::RowTooLarge);
+                }
+                (JobOutcome::Complete(value), bytes)
+            }
+        };
+        jobs.save(handle, record)?;
         Ok(JobStep {
             sequence: self.sequence,
             source_revision: self.source_revision,
             examined: self.examined,
             input_bytes: self.input_bytes,
-            output_bytes: self.output_bytes,
-            outcome: match self.outcome {
-                JobOutcome::Running => JobOutcome::Running,
-                JobOutcome::Invalidated => JobOutcome::Invalidated,
-                JobOutcome::Expired => JobOutcome::Expired,
-                JobOutcome::Complete(value) => JobOutcome::Complete(f(value)?),
-            },
+            output_bytes,
+            outcome,
         })
-    }
-}
-
-impl JobStep<()> {
-    // Conversion and output refusal happen before saving the prepared checkpoint.
-    fn finish<T>(
-        self,
-        limit: usize,
-        finish: impl FnOnce() -> Result<(T, usize), Error>,
-    ) -> Result<JobStep<T>, Error> {
-        let mut output_bytes = 0;
-        let mut step = self.try_map(|()| {
-            let (value, bytes) = finish()?;
-            if bytes > limit {
-                return Err(Error::RowTooLarge);
-            }
-            output_bytes = bytes;
-            Ok(value)
-        })?;
-        step.output_bytes = output_bytes;
-        Ok(step)
     }
 }
 
@@ -168,7 +165,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         field: Option<&str>,
     ) -> Result<JobHandle, Error> {
         let plan = self.aggregate_plan(None, false)?;
-        let reducer = self.count_reducer(field)?;
+        let mut reducer = self.count_reducer(field)?;
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
@@ -178,7 +175,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
-            vec![0; 32],
+            &Accumulator::Scalar(&mut reducer),
         )
     }
 
@@ -233,7 +230,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut reducer = self.count_reducer(field)?;
         let expected = field_binding(binding(&plan, &reducer)?, field);
         let bytes = self.request.bytes;
-        let step = prepare(
+        prepare(
             self.db,
             E::SCHEMA,
             self.request,
@@ -244,9 +241,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             sequence,
             now,
         )?
-        .finish(bytes, || Ok((reducer.finish()?.into_count()?, 8)))?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        .finish_and_save(jobs, handle, &record, bytes, || {
+            Ok((reducer.finish()?.into_count()?, 8))
+        })
     }
 
     /// Retain an integer/Decimal sum job with synchronous sum's exact result shape.
@@ -325,14 +322,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
         operation: Operation,
     ) -> Result<JobHandle, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(None, operation)?;
+        let (plan, mut reducer) = self.numeric_plan::<R>(None, operation)?;
         start(
             jobs,
             binding(&plan, &reducer)?,
             self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
-            vec![0; 32],
+            &Accumulator::Scalar(&mut reducer),
         )
     }
 
@@ -360,7 +357,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut record = jobs.load(handle)?;
         let expected = binding(&plan, &reducer)?;
         let limit = self.request.bytes;
-        let step = prepare(
+        prepare(
             self.db,
             E::SCHEMA,
             self.request,
@@ -371,14 +368,12 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             sequence,
             now,
         )?
-        .finish(limit, || {
+        .finish_and_save(jobs, handle, &record, limit, || {
             let bytes = reducer.finish()?.into_value()?;
             let size = bytes.as_ref().map_or(0, Vec::len);
             let value = bytes.as_deref().map(decode_record).transpose()?;
             Ok((value, size))
-        })?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        })
     }
 }
 fn field_binding(binding: [u8; 32], field: Option<&str>) -> [u8; 32] {
@@ -424,7 +419,7 @@ fn start<M: Memory>(
     revision: u64,
     now: Timestamp,
     expires: Timestamp,
-    state: Vec<u8>,
+    accumulator: &Accumulator<'_>,
 ) -> Result<JobHandle, Error> {
     let lifetime = expires
         .as_millis()
@@ -433,6 +428,7 @@ fn start<M: Memory>(
     if !(1..=MAX_LIFETIME_MS).contains(&lifetime) {
         return Err(Error::Limit);
     }
+    let (count, state) = accumulator.checkpoint()?;
     jobs.insert(Record {
         generation: 0,
         binding,
@@ -444,7 +440,7 @@ fn start<M: Memory>(
         input_bytes: 0,
         phase: JobOutcome::Running,
         cursor: Vec::new(),
-        count: 0,
+        count,
         state,
     })
 }
@@ -519,7 +515,7 @@ fn prepare<M: Memory>(
                 JobOutcome::Running
             };
             record.sequence += 1;
-            accumulator.checkpoint(record)?;
+            (record.count, record.state) = accumulator.checkpoint()?;
         }
     }
     record.observed = now;

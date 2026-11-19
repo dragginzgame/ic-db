@@ -6,7 +6,7 @@ use ic_db_m1_records_schema::EnvelopeRow;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
-fn write(
+pub(super) fn write(
     mode: u8,
     count: u8,
     generation: u8,
@@ -62,17 +62,23 @@ fn write(
     runtime = ic_platform_runtime,
     name = "envelope_write",
     guard = crate::transport::admit::<88>,
-    decode = crate::transport::decode::<_, 88>,
+    decode = crate::transport::decode_measured::<_, 88>,
     encode = crate::transport::encode::<_, 88>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn envelope_write(
-    (mode, count, generation, oversized, trap): (u8, u8, u8, bool, bool),
+    ((mode, count, generation, oversized, trap), counter): crate::transport::Measured<(
+        u8,
+        u8,
+        u8,
+        bool,
+        bool,
+    )>,
 ) -> (Result<(), u8>, u64) {
     // Includes reopen, row construction, batch preparation and commit. Transport
     // decode/encode is outside this interval; the driver measures whole-call cycles.
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let result = match write(mode, count, generation, oversized, 60) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
@@ -82,7 +88,7 @@ fn envelope_write(
     if trap {
         crate::system::trap("after envelope commit");
     }
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 
 /// Inspect the selected index and generation after an envelope write.
@@ -90,14 +96,16 @@ fn envelope_write(
     runtime = ic_platform_runtime,
     name = "envelope_read",
     guard = crate::transport::admit::<89>,
-    decode = crate::transport::decode::<_, 89>,
+    decode = crate::transport::decode_measured::<_, 89>,
     encode = crate::transport::encode::<_, 89>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
+fn envelope_read(
+    ((index, generation), counter): crate::transport::Measured<(u8, u8)>,
+) -> (Vec<u64>, u64, u64) {
     assert!(index < 8 && generation <= 1);
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let host = runtime();
     let db = open(&host);
     let index = &EnvelopeRow::SCHEMA.indexes[usize::from(index)];
@@ -113,7 +121,7 @@ fn envelope_read((index, generation): (u8, u8)) -> (Vec<u64>, u64, u64) {
         .unwrap();
     let ids = rows.into_iter().map(|row| row.id).collect();
     let revision = db.revision::<EnvelopeRow>().unwrap();
-    (ids, revision, crate::system::instruction_counter() - start)
+    (ids, revision, counter() - start)
 }
 
 /// Read the fixture’s four text fields by row ID.
@@ -139,22 +147,22 @@ fn envelope_row(id: u64) -> (String, String, String, String) {
     runtime = ic_platform_runtime,
     name = "envelope_comparison_write",
     guard = crate::transport::admit::<93>,
-    decode = crate::transport::decode::<_, 93>,
+    decode = crate::transport::decode_measured::<_, 93>,
     encode = crate::transport::encode::<_, 93>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn envelope_comparison_write(
-    (mode, generation, text_len): (u8, u8, u16),
+    ((mode, generation, text_len), counter): crate::transport::Measured<(u8, u8, u16)>,
 ) -> (Result<(), u16>, u64) {
     assert!(mode <= 1 && matches!(text_len, 48 | 61 | 1018));
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let result = match write(mode, 32, generation, false, usize::from(text_len)) {
         Ok(()) => Ok(()),
         Err(Error::Limit) => Err(1),
         Err(error) => panic!("unexpected comparison refusal: {error:?}"),
     };
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 
 /// List matching fixture IDs for the requested generation.

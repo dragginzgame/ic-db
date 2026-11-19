@@ -4,6 +4,8 @@ mod blob;
 pub(crate) mod migration;
 #[cfg(feature = "retained-console")]
 mod retained;
+#[cfg(all(test, feature = "retained-console"))]
+mod tests;
 use crate::handles::Query;
 use crate::{
     open,
@@ -176,15 +178,17 @@ fn cardinality(entity: String) -> Result<u64, String> {
     runtime = ic_platform_runtime,
     name = "measured_query",
     guard = crate::transport::admit::<147>,
-    decode = crate::transport::decode::<_, 147>,
+    decode = crate::transport::decode_measured::<_, 147>,
     encode = crate::transport::encode::<_, 147>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn measured_query(request: Request) -> (Result<Page, String>, u64) {
-    let start = crate::system::instruction_counter();
+fn measured_query(
+    (request, counter): crate::transport::Measured<Request>,
+) -> (Result<Page, String>, u64) {
+    let start = counter();
     let result = query(request);
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 
 /// Read the requested bounded result from the local fixture.

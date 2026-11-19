@@ -120,15 +120,15 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
     runtime = ic_platform_runtime,
     name = "migration_capacity",
     guard = crate::transport::admit::<140>,
-    decode = crate::transport::decode::<_, 140>,
+    decode = crate::transport::decode_measured::<_, 140>,
     encode = crate::transport::encode::<_, 140>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity(
-    (operation, first, limit, bytes, deny_growth, stop_after): (u8, u16, u8, u32, bool, u64),
+    ((operation, first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<(u8, u16, u8, u32, bool, u64)>,
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
-    let start = crate::system::instruction_counter();
+    let start = counter();
     faults::arm(stop_after, deny_growth, false);
     let result = control(operation, first, limit, bytes).map_err(|error| match error {
         Failure::Database(Error::Limit) => 1,
@@ -138,12 +138,7 @@ fn migration_capacity(
         Failure::Runtime => 4,
     });
     let (writes, grows) = faults::finish();
-    (
-        result,
-        writes,
-        grows,
-        crate::system::instruction_counter() - start,
-    )
+    (result, writes, grows, counter() - start)
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);

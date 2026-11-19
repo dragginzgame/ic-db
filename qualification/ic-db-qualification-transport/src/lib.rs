@@ -10,6 +10,9 @@ pub use hooks::*;
 use ic_wire::{Direction, Encoding, Error, Limits};
 use serde::{Serialize, de::DeserializeOwned};
 
+/// Decoded request and the instruction meter supplied by installed dispatch.
+pub type Measured<T> = (T, fn() -> u64);
+
 // Fixed fixture budgets, independently selectable in each direction.
 const REQUEST_LIMITS: Limits = Limits {
     bytes: 65_536,

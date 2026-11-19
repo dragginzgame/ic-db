@@ -4272,6 +4272,33 @@ fn sparse_compound_membership_requires_every_optional_component() {
         (covered.value, covered.examined, covered.fetched),
         (1, 1, 0)
     );
+    // Only one stored key has this prefix, but the unfixed ID leaves room for more.
+    let prefix = [1_u64.into(), "a".into()];
+    let partial = || {
+        db.query::<SparsePair>()
+            .using_index("left,right,id", &prefix)
+    };
+    assert!(matches!(
+        partial().work_limit(1).count_index_entries(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        partial().work_limit(2).count_index_entries().unwrap().value,
+        1
+    );
+    for (id, expected) in [(3_u64, 1), (5, 0)] {
+        let key = [1_u64.into(), "a".into(), id.into()];
+        let count = db
+            .query::<SparsePair>()
+            .using_index("left,right,id", &key)
+            .work_limit(1)
+            .count_index_entries()
+            .unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected as u64, expected, 0)
+        );
+    }
     for comparison in [C::StartsWith, C::EndsWith, C::Contains] {
         let page = db
             .query::<SparsePair>()

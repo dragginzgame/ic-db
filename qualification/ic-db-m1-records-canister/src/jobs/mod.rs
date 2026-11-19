@@ -374,15 +374,17 @@ fn job_advance(
     runtime = ic_platform_runtime,
     name = "job_advance_cost",
     guard = crate::transport::admit::<115>,
-    decode = crate::transport::decode::<_, 115>,
+    decode = crate::transport::decode_measured::<_, 115>,
     encode = crate::transport::encode::<_, 115>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) {
-    let start = crate::system::instruction_counter();
+fn job_advance_cost(
+    (request, counter): crate::transport::Measured<AdvanceRequest>,
+) -> (Result<Response, String>, u64) {
+    let start = counter();
     let result = job_advance(request);
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 
 /// Measure a page read from completed group output.
@@ -390,15 +392,17 @@ fn job_advance_cost(request: AdvanceRequest) -> (Result<Response, String>, u64) 
     runtime = ic_platform_runtime,
     name = "job_page_cost",
     guard = crate::transport::admit::<116>,
-    decode = crate::transport::decode::<_, 116>,
+    decode = crate::transport::decode_measured::<_, 116>,
     encode = crate::transport::encode::<_, 116>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn job_page_cost(request: PageRequest) -> (Result<PageResponse, String>, u64) {
-    let start = crate::system::instruction_counter();
+fn job_page_cost(
+    (request, counter): crate::transport::Measured<PageRequest>,
+) -> (Result<PageResponse, String>, u64) {
+    let start = counter();
     let result = job_page(request);
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 // operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
 // 4 unrelated entity mutation; 5 mutate source then trap.
@@ -457,22 +461,26 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
     runtime = ic_platform_runtime,
     name = "job_control_cost",
     guard = crate::transport::admit::<117>,
-    decode = crate::transport::decode::<_, 117>,
+    decode = crate::transport::decode_measured::<_, 117>,
     encode = crate::transport::encode::<_, 117>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn job_control_cost(
-    (request, fault, trap_after): (ControlRequest, u64, bool),
+    ((request, fault, trap_after), counter): crate::transport::Measured<(
+        ControlRequest,
+        u64,
+        bool,
+    )>,
 ) -> (Result<u64, String>, u64, u64) {
-    let start = crate::system::instruction_counter();
+    let start = counter();
     faults::arm_job_write(fault);
     let result = job_control(request);
     let writes = faults::finish_job_write();
     if trap_after {
         crate::system::trap("after aggregate lifecycle operation");
     }
-    (result, crate::system::instruction_counter() - start, writes)
+    (result, counter() - start, writes)
 }
 
 // Private qualification endpoint; product endpoints remain adapter-owned.

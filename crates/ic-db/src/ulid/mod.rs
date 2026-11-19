@@ -5,23 +5,23 @@ use std::{fmt, str::FromStr};
 #[cfg(target_arch = "wasm32")]
 mod canister;
 mod generator;
-#[cfg_attr(
-    all(not(target_arch = "wasm32"), not(test)),
-    expect(
-        dead_code,
-        reason = "only the IC issuance API and native stream tests own a process-local generator"
-    )
-)]
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
 mod pseudo;
 #[cfg(test)]
 mod tests;
+#[cfg(target_arch = "wasm32")]
+use canister as platform;
+#[cfg(not(target_arch = "wasm32"))]
+use native as platform;
+
 pub use generator::{UlidGenerationError, UlidGenerator};
 pub use pseudo::SeededUlidGenerator;
 
 /// Failure to obtain fresh entropy for a ULID.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum UlidEntropyError {
-    /// The management call failed or produced no successful reply.
+    /// The native entropy source failed or the IC management call produced no successful reply.
     Unavailable,
     /// The management protocol frame was invalid.
     InvalidFrame,
@@ -40,8 +40,8 @@ impl std::error::Error for UlidEntropyError {}
 
 /// A 128-bit ULID with exact 16-byte storage and canonical uppercase text.
 ///
-/// Use `Ulid::generate_prand()` for synchronous canister-local issuance on Wasm. Construct
-/// supplied identifiers with [`Self::from_bytes`], [`Self::from_u128`] or parsing.
+/// Use [`Self::generate_prand`] for synchronous issuance on the IC or a native host.
+/// Construct supplied identifiers with [`Self::from_bytes`], [`Self::from_u128`] or parsing.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Ulid([u8; 16]);
 

@@ -146,6 +146,13 @@ pub struct IndexSchema {
     pub present_only: bool,
 }
 
+impl IndexSchema {
+    /// An admitted equality prefix identifies at most one owner when it fixes the entire unique key.
+    pub(crate) fn is_unique_lookup(&self, fixed_components: usize) -> bool {
+        self.unique && fixed_components == self.fields.len()
+    }
+}
+
 /// Compiled entity metadata emitted by the entity macro.
 pub struct EntitySchema {
     /// Generated storage handle; schema authors do not assign this number.
@@ -162,6 +169,10 @@ pub struct EntitySchema {
 }
 
 impl EntitySchema {
+    pub(crate) fn field_position(&self, name: &str) -> Option<usize> {
+        self.fields.iter().position(|field| field.name == name)
+    }
+
     pub(crate) fn has_managed(&self) -> bool {
         self.fields.iter().any(|field| field.managed.is_some())
     }
@@ -242,12 +253,7 @@ impl EntitySchema {
     }
 
     pub(crate) fn row_info(&self, keys: &[IndexValue<'_>; MAX_FIELDS]) -> Result<RowInfo, Error> {
-        let position = |name: &str| {
-            self.fields
-                .iter()
-                .position(|field| field.name == name)
-                .ok_or(Error::Corrupt)
-        };
+        let position = |name: &str| self.field_position(name).ok_or(Error::Corrupt);
         let indexes = self
             .indexes
             .iter()

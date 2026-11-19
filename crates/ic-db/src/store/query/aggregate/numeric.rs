@@ -121,12 +121,10 @@ impl NumericAggregate {
         let TypeBody::Record([result]) = output.body else {
             return Err(Error::InvalidQuery);
         };
-        let (position, source) = entity
-            .fields
-            .iter()
-            .enumerate()
-            .find(|(_, field)| field.name == result.name)
+        let position = entity
+            .field_position(result.name)
             .ok_or(Error::InvalidQuery)?;
+        let source = &entity.fields[position];
         if source.optional != result.optional {
             return Err(Error::InvalidQuery);
         }

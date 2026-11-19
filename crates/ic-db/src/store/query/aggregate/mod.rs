@@ -324,7 +324,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         initial: Reducer,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (groups, page) = self.grouped(plan, initial)?;
-        let (value, output_bytes) = value_output(groups, self.request.rows, self.request.bytes)?;
+        let (value, output_bytes) = group_output(
+            groups,
+            self.request.rows,
+            self.request.bytes,
+            decode_group_value,
+        )?;
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -414,8 +419,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Like other scalar counts, the row limit does not truncate the input.
     /// # Errors
     /// Requires an explicit index. Row predicates, ordering, cursors, grouping
-    /// and DISTINCT refuse. Reaching the work limit before observing completion
-    /// returns `Limit`; fewer than eight output bytes returns `RowTooLarge`.
+    /// and DISTINCT refuse. Visiting the inclusive terminal key proves completion,
+    /// even on the last allowed visit. Exhausting the work budget earlier returns
+    /// `Limit`; fewer than eight output bytes returns `RowTooLarge`.
     /// # Panics
     /// Malformed supplier storage can trap during traversal.
     pub fn count_index_entries(self) -> Result<Aggregate<u64>, Error> {
@@ -599,7 +605,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         self.select_aggregate_row_path(&mut plan)?;
         let (groups, page) = self.grouped(&plan, reducer)?;
-        let (value, output_bytes) = count_output(groups, self.request.rows, self.request.bytes)?;
+        let (value, output_bytes) = group_output(
+            groups,
+            self.request.rows,
+            self.request.bytes,
+            decode_group_count,
+        )?;
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -611,17 +622,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     fn count_reducer(&self, field: Option<&str>) -> Result<Reducer, Error> {
         // Presence needs only the validated tag, not an ordered scalar slot.
         let presence = field
-            .map(|name| {
-                E::SCHEMA
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .find(|(_, f)| f.name == name)
-                    .map(|(i, f)| f.optional.then_some(i))
-                    .ok_or(Error::InvalidQuery)
-            })
+            .map(|name| E::SCHEMA.field_position(name).ok_or(Error::InvalidQuery))
             .transpose()?
-            .flatten();
+            .filter(|&i| E::SCHEMA.fields[i].optional);
         Ok(Reducer::Count { presence, total: 0 })
     }
 
@@ -685,37 +688,20 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 }
 
-fn value_output<K: Value, R: Value>(
+fn group_output<T>(
     groups: Groups,
     rows: usize,
     bytes: usize,
-) -> Result<(Vec<GroupValue<K, R>>, usize), Error> {
+    decode: fn(&[u8], Completed) -> Result<T, Error>,
+) -> Result<(Vec<T>, usize), Error> {
     let mut output_bytes = 0;
     let value = groups
         .into_output()?
         .into_iter()
         .take(rows)
-        .map(|(key, reducer)| {
-            admit_output(key.len() + reducer.encoded_len(), bytes, &mut output_bytes)?;
-            decode_group_value(&key, reducer)
-        })
-        .collect::<Result<_, Error>>()?;
-    Ok((value, output_bytes))
-}
-
-fn count_output<K: Value>(
-    groups: Groups,
-    rows: usize,
-    bytes: usize,
-) -> Result<(Vec<GroupCount<K>>, usize), Error> {
-    let mut output_bytes = 0;
-    let value = groups
-        .into_output()?
-        .into_iter()
-        .take(rows)
-        .map(|(key, reducer)| {
-            admit_output(key.len() + 8, bytes, &mut output_bytes)?;
-            decode_group_count(&key, reducer)
+        .map(|(key, result)| {
+            admit_output(key.len() + result.encoded_len(), bytes, &mut output_bytes)?;
+            decode(&key, result)
         })
         .collect::<Result<_, Error>>()?;
     Ok((value, output_bytes))

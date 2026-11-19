@@ -22,9 +22,7 @@ async fn issue_key(
     (millis, randomness, value, mode): (i64, [u8; 10], u64, u8),
 ) -> Result<[u8; 16], u8> {
     let id = match mode {
-        #[cfg(target_arch = "wasm32")]
         3 => Ulid::generate_prand(),
-        #[cfg(target_arch = "wasm32")]
         4 | 5 => {
             let mut stream = if mode == 4 {
                 Ulid::generator().await.map_err(|_| 6_u8)?
@@ -33,14 +31,15 @@ async fn issue_key(
             };
             let first = stream.next_id();
             let second = stream.next_id();
-            assert_eq!(
-                u128::from_be_bytes(second.to_bytes()),
-                u128::from_be_bytes(first.to_bytes()) + 1
-            );
+            // The host clock may advance between calls.
+            assert!(second > first);
+            let previous = u128::from_be_bytes(first.to_bytes());
+            let current = u128::from_be_bytes(second.to_bytes());
+            if previous >> 80 == current >> 80 {
+                assert_eq!(current, previous + 1);
+            }
             second
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        3..=5 => panic!("IC-issued ULIDs require an installed canister"),
         _ => ISSUER
             .with(|issuer| {
                 issuer

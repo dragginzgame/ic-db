@@ -1,11 +1,17 @@
 //! Private maintenance controls; production authorization/endpoints belong to Canic.
 use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
 use crate::{Entry, KEY, compiled, runtime, schema::ManagedRow};
-use ic_db::{Batch, Entity, Error, QueryCursor, Schema, SchemaTransition, Timestamp};
+use ic_db::{Batch, Entity, EntitySchema, Error, QueryCursor, Schema, SchemaTransition, Timestamp};
 use ic_storage::StableKey;
 
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
+
+const TRANSITION_VERSION: u32 = if cfg!(feature = "maintenance-v2") {
+    2
+} else {
+    1
+};
 
 pub const COPY_SOURCE: &str = "m1.copy.source.v1";
 pub const COPY_TARGET: &str = "m1.copy.target.v1";
@@ -19,12 +25,19 @@ pub const COPY_NEXT: &str = "m1.copy.next.v1";
 ))]
 struct EntryV2 {}
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "copy_next transfers ownership of the decoded source row"
+)]
+fn widen_entry(row: Entry, _: &[u8]) -> Result<EntryV2, Error> {
+    Ok(EntryV2 {
+        id: row.id,
+        category: row.category,
+        amount: u128::from(row.amount) + 100,
+    })
+}
+
 fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
-    let version = if cfg!(feature = "maintenance-v2") {
-        2
-    } else {
-        1
-    };
     let source = compiled();
     let entities: Vec<_> = source
         .entities()
@@ -38,8 +51,14 @@ fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
         })
         .collect();
     let target = Schema::new(&entities).map_err(|error| format!("{error:?}"))?;
-    let transition = SchemaTransition::new(&source, &target, "widen-entry-amount", version, inputs)
-        .map_err(|error| format!("{error:?}"))?;
+    let transition = SchemaTransition::new(
+        &source,
+        &target,
+        "widen-entry-amount",
+        TRANSITION_VERSION,
+        inputs,
+    )
+    .map_err(|error| format!("{error:?}"))?;
     Ok((source, transition))
 }
 
@@ -115,21 +134,26 @@ fn maintenance_source(
     ))
 }
 
-fn copy_declaration() -> Result<(Schema, Schema, SchemaTransition), Error> {
-    let source = Schema::new(&[Entry::SCHEMA])?;
-    let target = Schema::new(&[EntryV2::SCHEMA])?;
-    let version = if cfg!(feature = "maintenance-v2") {
-        2
-    } else {
-        1
-    };
-    let transition = SchemaTransition::new(&source, &target, "copy-entry", version, &[])?;
-    Ok((source, target, transition))
-}
-
 fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
-    let (source, target, transition) = copy_declaration()?;
     let host = runtime();
+    let target = Schema::new(&[EntryV2::SCHEMA])?;
+    if operation == 6 {
+        let memory = host
+            .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+            .unwrap();
+        let mut db = Database::open(memory, target)?;
+        let mut batch = Batch::new();
+        batch.replace(&EntryV2 {
+            id: 1,
+            category: 1,
+            amount: 999,
+        })?;
+        db.commit(batch)?;
+        return Ok((1, true));
+    }
+    let source = Schema::new(&[Entry::SCHEMA])?;
+    let transition =
+        SchemaTransition::new(&source, &target, "copy-entry", TRANSITION_VERSION, &[])?;
     let source_memory = host
         .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
         .unwrap();
@@ -163,28 +187,10 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
         )?;
         return Ok((0, false));
     }
-    if operation == 6 {
-        let mut db = Database::open(target_memory, target)?;
-        let mut batch = Batch::new();
-        batch.replace(&EntryV2 {
-            id: 1,
-            category: 1,
-            amount: 999,
-        })?;
-        db.commit(batch)?;
-        return Ok((1, true));
-    }
     let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
     match operation {
         2 => {
-            let step =
-                copy.copy_next::<Entry, EntryV2>(usize::from(limit), 128 * 1024, |row, _| {
-                    Ok(EntryV2 {
-                        id: row.id,
-                        category: row.category,
-                        amount: u128::from(row.amount) + 100,
-                    })
-                })?;
+            let step = copy.copy_next(usize::from(limit), 128 * 1024, widen_entry)?;
             Ok((step.rows as u64, step.complete))
         }
         3 => Ok((0, copy.cancel_step(usize::from(limit))?)),
@@ -230,13 +236,14 @@ type CopyEntries = (bool, Vec<(Vec<u8>, Vec<u8>)>);
 )]
 fn maintenance_copy_entries(target: bool) -> CopyEntries {
     let host = runtime();
-    let key = StableKey::parse(if target { COPY_TARGET } else { COPY_SOURCE }).unwrap();
-    let (source_schema, target_schema, _) = copy_declaration().unwrap();
-    let open = Database::open(
-        host.open_memory(&key).unwrap(),
-        if target { target_schema } else { source_schema },
-    )
-    .is_ok();
+    let (key, entry) = if target {
+        (COPY_TARGET, EntryV2::SCHEMA)
+    } else {
+        (COPY_SOURCE, Entry::SCHEMA)
+    };
+    let key = StableKey::parse(key).unwrap();
+    let schema = Schema::new(&[entry]).unwrap();
+    let open = Database::open(host.open_memory(&key).unwrap(), schema).is_ok();
     let raw = ic_storage::adapter::StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
         host.open_memory(&key).unwrap(),
     );
@@ -272,12 +279,8 @@ type ManagedCopyReply = (bool, Vec<(u64, String, i64, i64)>);
 fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
     let source = Schema::new(&[ManagedRow::SCHEMA])?;
     let target = Schema::new(&[ManagedV2::SCHEMA])?;
-    let version = if cfg!(feature = "maintenance-v2") {
-        2
-    } else {
-        1
-    };
-    let transition = SchemaTransition::new(&source, &target, "preserve-times", version, &[])?;
+    let transition =
+        SchemaTransition::new(&source, &target, "preserve-times", TRANSITION_VERSION, &[])?;
     let host = runtime();
     let source_memory = host
         .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
@@ -407,15 +410,15 @@ struct CopyEmpty {}
 
 type WholeCopyReply = (bool, Option<String>, Vec<(u64, u64, u128)>);
 
+fn whole_schema(entry: &'static EntitySchema) -> Result<Schema, Error> {
+    Schema::new(&[entry, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])
+}
+
 fn whole_declaration() -> Result<(Schema, Schema, SchemaTransition), Error> {
-    let source = Schema::new(&[Entry::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
-    let target = Schema::new(&[EntryV2::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
-    let version = if cfg!(feature = "maintenance-v2") {
-        2
-    } else {
-        1
-    };
-    let transition = SchemaTransition::new(&source, &target, "whole-database", version, &[])?;
+    let source = whole_schema(Entry::SCHEMA)?;
+    let target = whole_schema(EntryV2::SCHEMA)?;
+    let transition =
+        SchemaTransition::new(&source, &target, "whole-database", TRANSITION_VERSION, &[])?;
     Ok((source, target, transition))
 }
 
@@ -428,36 +431,36 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
         .unwrap();
-    if operation == 0 || (cfg!(feature = "aggregate-jobs") && operation == 10) {
-        let mut db = Database::create(source_memory, source.clone(), [7; 16])?;
-        let mut batch = Batch::new();
-        for id in 0..2 {
-            batch.insert(&CopyMapping {
-                id: id + 1,
-                entry: id,
-            })?;
-            batch.insert(&Entry {
-                id,
-                category: 1,
-                amount: id * 10,
-            })?;
-        }
-        db.commit(batch)?;
-        if operation == 10 {
-            return Ok((false, None, vec![]));
-        }
+    let jobs_enabled = cfg!(feature = "aggregate-jobs");
+    if operation == 0 || (jobs_enabled && matches!(operation, 10 | 11)) {
+        let db = if operation == 11 {
+            Database::open(source_memory, source.clone())?
+        } else {
+            let mut db = Database::create(source_memory, source.clone(), [7; 16])?;
+            let mut batch = Batch::new();
+            for id in 0..2 {
+                batch.insert(&CopyMapping {
+                    id: id + 1,
+                    entry: id,
+                })?;
+                batch.insert(&Entry {
+                    id,
+                    category: 1,
+                    amount: id * 10,
+                })?;
+            }
+            db.commit(batch)?;
+            if operation == 10 {
+                return Ok((false, None, vec![]));
+            }
+            db
+        };
         let copy = db.begin_maintenance(&transition)?.begin_copy(
             target_memory,
             source,
             target,
             [8; 16],
         )?;
-        return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
-    }
-    if cfg!(feature = "aggregate-jobs") && operation == 11 {
-        let copy = Database::open(source_memory, source.clone())?
-            .begin_maintenance(&transition)?
-            .begin_copy(target_memory, source, target, [8; 16])?;
         return Ok((false, copy.next_entity().map(str::to_owned), vec![]));
     }
     if operation == 6 {
@@ -488,16 +491,7 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
     let complete = match operation {
         1 => copy.copy_unchanged::<CopyMapping>(2, 4096)?.complete,
-        2 => {
-            copy.copy_next::<Entry, EntryV2>(2, 4096, |row, _| {
-                Ok(EntryV2 {
-                    id: row.id,
-                    category: row.category,
-                    amount: u128::from(row.amount) + 100,
-                })
-            })?
-            .complete
-        }
+        2 => copy.copy_next(2, 4096, widen_entry)?.complete,
         3 => copy.copy_unchanged::<CopyEmpty>(2, 4096)?.complete,
         4 => copy.validate_next(2)?,
         5 => {
@@ -548,22 +542,16 @@ struct EntryV3 {}
 
 // The third allocation is fresh fixture memory, not a reset/reuse mechanism.
 fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
-    let (_, source, previous) = whole_declaration()?;
-    let target = Schema::new(&[EntryV3::SCHEMA, CopyMapping::SCHEMA, CopyEmpty::SCHEMA])?;
-    let version = if cfg!(feature = "maintenance-v2") {
-        2
-    } else {
-        1
-    };
-    let transition = SchemaTransition::new(&source, &target, "whole-database-note", version, &[])?;
     let host = runtime();
     if operation == 7 {
+        let (_, _, previous) = whole_declaration()?;
         let memory = host
             .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
             .unwrap();
         let mut retired = RetiredSource::resume(memory, &previous, [7; 16], [8; 16])?;
         return Ok((retired.cleanup_step(2)?, None, vec![]));
     }
+    let source = whole_schema(EntryV2::SCHEMA)?;
     let source_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
         .unwrap();
@@ -584,14 +572,6 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
         db.commit(batch)?;
         return Ok((true, None, vec![]));
     }
-    if operation == 1 {
-        Database::open(source_memory, source)?.begin_maintenance(&transition)?;
-        return Ok((false, None, vec![]));
-    }
-    if operation == 8 {
-        let mut retired = RetiredSource::resume(source_memory, &transition, [8; 16], [9; 16])?;
-        return Ok((retired.cleanup_step(2)?, None, vec![]));
-    }
     if operation == 10 {
         let db = Database::open(source_memory, source)?;
         let rows = db
@@ -601,6 +581,22 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
             .map(|row| (row.id, row.category, row.amount))
             .collect();
         return Ok((true, None, rows));
+    }
+    let target = whole_schema(EntryV3::SCHEMA)?;
+    let transition = SchemaTransition::new(
+        &source,
+        &target,
+        "whole-database-note",
+        TRANSITION_VERSION,
+        &[],
+    )?;
+    if operation == 1 {
+        Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+        return Ok((false, None, vec![]));
+    }
+    if operation == 8 {
+        let mut retired = RetiredSource::resume(source_memory, &transition, [8; 16], [9; 16])?;
+        return Ok((retired.cleanup_step(2)?, None, vec![]));
     }
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_NEXT).unwrap())

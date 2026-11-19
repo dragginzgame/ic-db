@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.23.15] - Unreleased
+
+### 🆔 ULIDs
+
+- Use `ids.next_at(timestamp)?` to issue a seeded ULID with the same captured
+  time passed to `Batch::at(timestamp)`.
+- Native applications and canisters can both call `Ulid::generate_prand()`,
+  `Ulid::generator_prand()`, and `Ulid::generator().await` directly. Native
+  issuance uses the system clock and OS entropy. Canister pseudorandom issuance
+  continues to use the existing principal/version seed without an IC call.
+
+### 🔎 Queries
+
+- Filters, projections, sorting and aggregates now resolve field positions from
+  the same compiled entity declaration used to inspect stored rows.
+- Explicit and automatic index selection, counting and scan bounds now share
+  the rule for a unique lookup. On a unique `(issuer, subject)` index, fixing
+  both fields identifies at most one row. Fixing only `issuer` can match many.
+
+### 🔄 Retained aggregates
+
+- Job creation and resume now use the same checkpoint encoder. Existing saved
+  jobs keep their encoding and operation identity.
+- Scalar and grouped aggregates now share the final check before saving
+  progress. If a completed result exceeds the output budget, the caller can
+  retry from the previous checkpoint.
+
+### ▶️ Try it
+
+With the local fixture CLI installed, run this from the repository root to
+exercise grouped counting in two-candidate steps and request one group per page.
+Each of the two categories has three entries.
+
+```sh
+db aggregate Entry --select category,count --work 2 --page-size 1
+```
+
+### 🧪 Testing
+
+- Installed qualification probes supply the IC instruction counter at dispatch.
+  Native tests exercise the database operations directly. [#7](https://github.com/dragginzgame/ic-db/issues/7)
+- Retained console aggregates use one IC timestamp per start or resume. A native
+  test checks expiry at exactly 60,000 milliseconds. [#8](https://github.com/dragginzgame/ic-db/issues/8)
+
+- A raw stable-memory check now verifies the initial checkpoint bytes for
+  counts, sums, minima, DISTINCT counts and grouped counts. Query tests also
+  cover the last allowed visit for complete and partial compound unique keys.
+- The product and qualification workspaces now use Toko Tooling 0.45.18.
+  In the mixed-lifecycle fixture, one Wasm guard covers the Canic endpoint mount
+  and its caller check. Native builds also compile the database handlers.
+
 ## [0.23.14] - 2026-11-19
 
 - Fix rust-analyzer marking active schema entities as inactive on non-UEFI

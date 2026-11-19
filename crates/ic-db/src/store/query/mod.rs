@@ -308,6 +308,10 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
+    fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> {
+        self.predicates.split_inclusive(|p| !p.or_next)
+    }
+
     #[inline(never)]
     fn filter(&mut self, field: &'a str, comparison: Comparison, operand: QueryOperand<'a>) {
         if self.predicates.len() == MAX_TERMS {
@@ -873,9 +877,7 @@ fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u16, E
     let mut mask = 0;
     for field in *fields {
         let position = entity
-            .fields
-            .iter()
-            .position(|f| f.name == field.name)
+            .field_position(field.name)
             .ok_or(Error::InvalidQuery)?;
         let stored = &entity.fields[position];
         if stored.value != field.value || stored.optional != field.optional {
@@ -1032,6 +1034,10 @@ struct Plan<'a> {
     descending: bool,
 }
 impl<'a> Plan<'a> {
+    fn clauses(&self) -> impl Iterator<Item = &[Term]> {
+        self.terms.split_inclusive(|term| !term.or_next)
+    }
+
     fn use_index(&mut self, entity: &EntitySchema, path: order::IndexPath<'a>) {
         self.index = Some(path.index);
         self.prefix = path.prefix;
@@ -1077,9 +1083,8 @@ impl<'a> Plan<'a> {
             }
         }
         let primary = entity
-            .fields
-            .iter()
-            .position(|f| f.name == entity.primary_key && !f.optional)
+            .field_position(entity.primary_key)
+            .filter(|&i| !entity.fields[i].optional)
             .ok_or(Error::InvalidQuery)?;
         let mut plan = Self {
             primary,
@@ -1099,9 +1104,7 @@ impl<'a> Plan<'a> {
         };
         for predicate in &request.predicates {
             let position = entity
-                .fields
-                .iter()
-                .position(|f| f.name == predicate.field)
+                .field_position(predicate.field)
                 .ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
             let member = if predicate.comparison == Comparison::Contains {
@@ -1128,11 +1131,7 @@ impl<'a> Plan<'a> {
                     TermOperand::Length(length)
                 }
                 QueryOperand::Field(name) => {
-                    let right = entity
-                        .fields
-                        .iter()
-                        .position(|f| f.name == name)
-                        .ok_or(Error::InvalidQuery)?;
+                    let right = entity.field_position(name).ok_or(Error::InvalidQuery)?;
                     let right_type = entity.fields[right].value;
                     let left_type = member.unwrap_or(field.value);
                     let compatible = left_type == right_type
@@ -1273,11 +1272,7 @@ impl<'a> Plan<'a> {
             hash.update([order.len() as u8]);
             for name in order {
                 // Field names were admitted by order selection above.
-                hash.update([entity
-                    .fields
-                    .iter()
-                    .position(|f| f.name == *name)
-                    .ok_or(Error::InvalidQuery)? as u8]);
+                hash.update([entity.field_position(name).ok_or(Error::InvalidQuery)? as u8]);
             }
         }
         if request.order_descending != 0 {
@@ -1559,7 +1554,7 @@ fn execute_inner<M: Memory>(
             ))
         };
         let matches = 'matches: {
-            'clause: for clause in plan.terms.split_inclusive(|term| !term.or_next) {
+            'clause: for clause in plan.clauses() {
                 for term in clause {
                     if accepts(term)? {
                         continue 'clause;

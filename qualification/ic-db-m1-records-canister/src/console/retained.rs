@@ -16,17 +16,6 @@ use ic_db::{
     Timestamp,
 };
 
-fn now() -> Timestamp {
-    #[cfg(target_arch = "wasm32")]
-    let now = ic_platform_runtime::system::time() / 1_000_000;
-    #[cfg(not(target_arch = "wasm32"))]
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    Timestamp::from_millis(i64::try_from(now).expect("representable fixture timestamp"))
-}
-
 // Reconstructed on every call; product admission binds these semantics to the job.
 type Selection = (
     String,
@@ -56,32 +45,32 @@ fn configured<'a, E: Entity>(
     runtime = ic_platform_runtime,
     name = "aggregate_start",
     guard = crate::transport::admit::<120>,
-    decode = crate::transport::decode::<_, 120>,
+    decode = crate::transport::decode_timed::<_, 120>,
     encode = crate::transport::encode::<_, 120>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Platform entrypoints receive an owned decoded request"
-)]
-fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
+fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, String> {
+    start_at(&selection, message_time(time_ns))
+}
+
+fn message_time(time_ns: u64) -> Timestamp {
+    Timestamp::from_millis((time_ns / 1_000_000) as i64)
+}
+
+pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>, String> {
     let host = runtime();
     let db = open(&host);
     let mut jobs = open_jobs(&host);
-    let now = now();
     let expires = Timestamp::from_millis(
         now.as_millis()
             .checked_add(60_000)
             .ok_or("clock overflow")?,
     );
-    let (entity, select, (minimum, category, entry_id), ..) = &selection;
+    let (entity, select, (minimum, category, entry_id), ..) = selection;
     let result = match entity.as_str() {
         "Entry" => start_entry(
-            configured(
-                entry_query(&db, *minimum, *category, *entry_id)?,
-                &selection,
-            )?,
+            configured(entry_query(&db, *minimum, *category, *entry_id)?, selection)?,
             &mut jobs,
             now,
             expires,
@@ -90,7 +79,7 @@ fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
         "Document" => start_document(
             configured(
                 document_query(&db, *minimum, *category, *entry_id)?,
-                &selection,
+                selection,
             )?,
             &mut jobs,
             now,
@@ -100,7 +89,7 @@ fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
         "DecimalRow" => start_decimal(
             configured(
                 decimal_query(&db, *minimum, *category, *entry_id)?,
-                &selection,
+                selection,
             )?,
             &mut jobs,
             now,
@@ -108,10 +97,7 @@ fn aggregate_start(selection: Selection) -> Result<Vec<u8>, String> {
             select,
         ),
         "BinaryObject" => start_blob(
-            configured(
-                blob::query(&db, *minimum, *category, *entry_id)?,
-                &selection,
-            )?,
+            configured(blob::query(&db, *minimum, *category, *entry_id)?, selection)?,
             &mut jobs,
             now,
             expires,
@@ -222,13 +208,18 @@ fn values<K, R>(
     runtime = ic_platform_runtime,
     name = "aggregate_resume",
     guard = crate::transport::admit::<121>,
-    decode = crate::transport::decode::<_, 121>,
+    decode = crate::transport::decode_timed::<_, 121>,
     encode = crate::transport::encode::<_, 121>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn aggregate_resume(
+fn aggregate_resume((request, time_ns): (Request, u64)) -> Result<Response, String> {
+    resume_at(request, message_time(time_ns))
+}
+
+pub(super) fn resume_at(
     (selection, handle, sequence, work, bytes, page_size, after): Request,
+    now: Timestamp,
 ) -> Result<Response, String> {
     let host = runtime();
     let db = open(&host);
@@ -239,7 +230,6 @@ fn aggregate_resume(
         .map(GroupCursor::from_bytes)
         .transpose()
         .map_err(|e| e.to_string())?;
-    let now = now();
     let (entity, select, (minimum, category, entry_id), ..) = &selection;
     let budgets = (work, bytes, page_size, cursor.as_ref());
     let result = match entity.as_str() {

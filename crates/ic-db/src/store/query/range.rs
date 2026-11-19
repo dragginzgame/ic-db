@@ -116,8 +116,7 @@ pub(super) fn has_secondary_bound(
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
 ) -> bool {
-    plan.terms
-        .split_inclusive(|term| !term.or_next)
+    plan.clauses()
         .any(|clause| bounds_index_clause(entity, path, clause))
 }
 
@@ -152,19 +151,18 @@ pub(super) fn preserves_primary_bounds(
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
 ) -> bool {
-    plan.terms
-        .split_inclusive(|term| !term.or_next)
-        .all(|clause| {
-            let primary_bound = match clause {
-                [term] => {
-                    term.position == plan.primary
-                        && matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
-                }
-                _ => membership_interval(entity, entity.primary_key, clause, plan.prefix.len())
-                    .is_some(),
-            };
-            !primary_bound || bounds_index_clause(entity, path, clause)
-        })
+    plan.clauses().all(|clause| {
+        let primary_bound = match clause {
+            [term] => {
+                term.position == plan.primary
+                    && matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
+            }
+            _ => {
+                membership_interval(entity, entity.primary_key, clause, plan.prefix.len()).is_some()
+            }
+        };
+        !primary_bound || bounds_index_clause(entity, path, clause)
+    })
 }
 
 // Every predicate must independently constrain this same primary-key interval.
@@ -194,7 +192,7 @@ pub(super) fn bounds(
     };
     let full_unique = plan
         .index
-        .is_some_and(|index| index.unique && plan.fixed_components == index.fields.len());
+        .is_some_and(|index| index.is_unique_lookup(plan.fixed_components));
     let mut upper = if full_unique {
         Endpoint {
             key: lower.key.clone(),
@@ -207,7 +205,7 @@ pub(super) fn bounds(
         }
     };
     if let Some((field, secondary)) = next_field(entity, plan.index, plan.fixed_components) {
-        for clause in plan.terms.split_inclusive(|term| !term.or_next) {
+        for clause in plan.clauses() {
             let [term] = clause else {
                 if let Some((low, high)) =
                     membership_interval(entity, field, clause, plan.prefix.len())

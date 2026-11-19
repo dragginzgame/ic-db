@@ -1,5 +1,5 @@
 //! Retained extrema over the synchronous comparator and shared job lifecycle.
-use super::{AggregateJobs, JobHandle, JobStep, binding, start};
+use super::{Accumulator, AggregateJobs, JobHandle, JobStep, binding, start};
 use crate::{Entity, Error, GroupPage, GroupValue, Timestamp, Value, store::Query};
 use ic_storage::Memory;
 
@@ -154,14 +154,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
         maximum: bool,
     ) -> Result<JobHandle, Error> {
-        let (plan, reducer) = self.extremum_plan::<R>(maximum)?;
+        let (plan, mut reducer) = self.extremum_plan::<R>(maximum)?;
         start(
             jobs,
             binding(&plan, &reducer)?,
             self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
-            Vec::new(),
+            &Accumulator::Scalar(&mut reducer),
         )
     }
 }

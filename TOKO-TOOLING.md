@@ -751,20 +751,23 @@ These rules apply to handwritten and generated Rust.
 - Separate item-level macro invocations and functions with a blank line, including
   adjacent methods, tests and test helpers. Keep comments and attributes attached
   to their item. Give each named argument its own line in multi-argument endpoint
-  mounts and attributes. Document each mount’s role, each guard’s access policy
-  and each endpoint’s caller-visible purpose.
-- Compile shared logic on all supported targets. Within that logic, use a target guard only for an
-  operation that requires a target-exclusive API or a different implementation.
-  Prefer an existing portable API. For example, isolate IC-specific clock or
-  entropy acquisition and keep the callers unconditional.
-  The same rule applies to `#[cfg(any(test, target_arch = "wasm32"))]`.
-  A helper having only test and canister callers is insufficient reason to
-  hide it from ordinary host builds.
-- A Wasm-only canister may guard its private state module with
-  `#[cfg(any(target_arch = "wasm32", test))]` when native unit tests exercise
-  the same implementation and an ordinary host build has no state API.
-  Put the guard on the module declaration so storage dependencies can stay
-  scoped to Wasm builds and tests.
+  mounts and attributes. Document each mount’s role and each guard’s access policy.
+- Group a canister’s endpoint mount macros and directly exported query and
+  update handlers at the top of its library root, immediately after module
+  declarations and imports. Put constants, types, guard implementations and
+  operation helpers below this group or in their owning modules. Use the
+  crate’s top-level `lib.rs` for a small canister. If the endpoint surface has
+  a dedicated `endpoints/` directory, use `endpoints/lib.rs` as the canister
+  library root (set Cargo’s `[lib] path` when needed). Introduce `ops/` when
+  operations have enough independent behavior to warrant their own modules.
+  When both directories exist, place `endpoints/` and `ops/` under the same parent.
+- Immediately above each canister endpoint’s attributes, write an ordinary
+  `//` comment block. Put the exact Rust function name alone on the first line
+  and its caller-visible behavior on the second. Follow with `// scope  :`
+  for the actual access policy and `// limits :` for endpoint-specific bounds.
+  Use `public` for unrestricted access and `none specified` when the endpoint
+  sets no explicit bound. Generate the same comments in endpoint templates.
+  Reserve `///` for Rust API documentation outside this endpoint header.
 - Use ordinary module discovery. The prohibition on `#[path]` includes
   conditional path overrides. Use either `foo.rs` or `foo/mod.rs` for a module.
   When adding a `foo/` directory for children, tests or fixtures, move `foo.rs`
@@ -772,15 +775,30 @@ These rules apply to handwritten and generated Rust.
   Keep executable entrypoints free of embedded Rust source injection and source
   patches, including in tests.
 - Keep test bodies and test-only helpers in `tests.rs`, `*_tests.rs` or
-  `tests/`. Move their references with them, retain the test module’s existing
-  conditional attributes and declare fixture-only package roles explicitly.
+  `tests/`. Move their references with them and preserve test selection, including
+  `#[cfg(test)]` on unit-test modules. Apply the [Wasm target guard rule](#wasm-target-guards)
+  to any target condition on the declaration. Declare fixture-only package roles explicitly.
 
-For examples, test layout and endpoint documentation, see the [Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md).
+For import and test layout examples, see the [Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/9e5d87fd59e297875cce3c4bc818a0f12cd07a9f/docs/principles/rust-code-hygiene.md).
 
 Prefer `#[expect(..., reason = "...")]` over `#[allow(...)]` for Rust lint
 suppressions. Repositories must review every `allow` for conversion and retain
 one only with a concrete reason why an expectation cannot work. Follow the
-[lint suppression rule](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md#lint-suppressions).
+[lint suppression rule](https://github.com/dragginzgame/toko-tooling/blob/9e5d87fd59e297875cce3c4bc818a0f12cd07a9f/docs/principles/rust-code-hygiene.md#lint-suppressions).
+
+### Wasm target guards
+
+Write canister Rust unconditionally by default. Remove a Wasm target guard
+unless removing it breaks the shipped Wasm build, required runtime behavior,
+or an explicitly supported consumer or test. For each guard kept, identify
+what fails and put the condition at the narrowest boundary that resolves it.
+Apply this to handwritten and generated Rust, including inverse and compound
+predicates such as `#[cfg(any(target_arch = "wasm32", test))]`.
+
+A Wasm-only product’s native unit tests count as supported tests. Running them
+does not establish support for ordinary host builds. Unused-code warnings on
+an unsupported host, fewer host dependencies, and the absence of host callers
+are insufficient reasons to retain a guard.
 
 ### Common Rust lint policy
 
@@ -985,7 +1003,7 @@ framework dependencies on core development. Follow the
 Do not add Python tooling. Read the applicable
 [workspace/tooling contracts](https://github.com/dragginzgame/toko-tooling/blob/a716b501274678a8ebf163ef576bbb549e974acd/rules/engineering-details.md#rust-workspaces-and-portable-tooling)
 for manifests, dependencies, hooks, installers or shared snapshots, and the
-[Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md) for Rust implementation.
+[Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/9e5d87fd59e297875cce3c4bc818a0f12cd07a9f/docs/principles/rust-code-hygiene.md) for Rust implementation.
 
 ## Host support
 

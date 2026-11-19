@@ -10,6 +10,40 @@ use ic_db_qualification_transport::mixed::{
 };
 use ic_storage::{RuntimeMemory, StableKey};
 
+// Canic exports its endpoint mount and Platform exposes caller identity only on Wasm.
+#[cfg(target_arch = "wasm32")]
+mod endpoints {
+    // Mount the fixture’s inspection, reads and updates through Canic.
+    canic::mount_db_endpoints! {
+        protocol = crate::mixed_lifecycle::protocol,
+        authorize = crate::mixed_lifecycle::endpoints::authorize,
+        inspect = crate::mixed_lifecycle::inspect,
+        query = crate::mixed_lifecycle::endpoints::query,
+        write = crate::mixed_lifecycle::endpoints::apply_update,
+    }
+
+    fn query(_: ic_db::Principal, request: super::Query) -> super::QueryReply {
+        super::query(request, ic_platform_runtime::raw::instruction_counter)
+    }
+
+    fn apply_update(_: ic_db::Principal, request: super::Update, time_ns: u64) -> super::Reply {
+        super::apply_update(
+            request,
+            time_ns,
+            ic_platform_runtime::raw::instruction_counter,
+        )
+    }
+
+    // Only the fixture canister itself may invoke the mounted operations.
+    fn authorize(caller: ic_db::Principal, _: canic::db::Operation) -> Result<(), String> {
+        if caller == ic_platform_runtime::system::canister_self() {
+            Ok(())
+        } else {
+            Err("mixed workload caller denied".into())
+        }
+    }
+}
+
 pub(super) const KEYS: [&str; 3] = [
     "m1.mixed.source.v1",
     "m1.mixed.target.v1",
@@ -174,26 +208,6 @@ mod protocol {
     pub(super) type WriteReply = super::Reply;
 }
 
-// Mount the fixture’s inspection, reads and updates through Canic.
-#[cfg(target_arch = "wasm32")]
-canic::mount_db_endpoints! {
-    protocol = crate::mixed_lifecycle::protocol,
-    authorize = crate::mixed_lifecycle::authorize,
-    inspect = crate::mixed_lifecycle::inspect,
-    query = crate::mixed_lifecycle::query,
-    write = crate::mixed_lifecycle::apply_update,
-}
-
-// Only the fixture canister itself may invoke the mounted operations.
-#[cfg(target_arch = "wasm32")]
-fn authorize(caller: ic_db::Principal, _: canic::db::Operation) -> Result<(), String> {
-    if caller == ic_platform_runtime::system::canister_self() {
-        Ok(())
-    } else {
-        Err("mixed workload caller denied".into())
-    }
-}
-
 // Report the parent count for the selected live schema.
 fn inspect(_: ic_db::Principal, target: protocol::InspectRequest) -> protocol::InspectReply {
     open(&runtime(), target)
@@ -202,17 +216,17 @@ fn inspect(_: ic_db::Principal, target: protocol::InspectRequest) -> protocol::I
 }
 
 // Commit a batch or operate on a retained count.
-fn apply_update(_: ic_db::Principal, request: Update, time_ns: u64) -> Reply {
+fn apply_update(request: Update, time_ns: u64, counter: fn() -> u64) -> Reply {
     match request {
         Update::Batch(target, commands) => {
-            let start = crate::system::instruction_counter();
+            let start = counter();
             let result = write(target, commands).map_err(refusal);
-            Reply::Batch(result, crate::system::instruction_counter() - start)
+            Reply::Batch(result, counter() - start)
         }
         Update::Count(request) => {
-            let start = crate::system::instruction_counter();
+            let start = counter();
             let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
-            Reply::Count(result, crate::system::instruction_counter() - start)
+            Reply::Count(result, counter() - start)
         }
     }
 }
@@ -345,12 +359,12 @@ fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
     ))
 }
 // Read a full fixture snapshot or one bounded item page.
-fn query(_: ic_db::Principal, request: Query) -> QueryReply {
-    let start = crate::system::instruction_counter();
+fn query(request: Query, counter: fn() -> u64) -> QueryReply {
+    let start = counter();
     match request {
         Query::Snapshot(target, parent, minimum) => {
             let result = read(target, parent, minimum).map_err(refusal);
-            QueryReply::Snapshot(result, crate::system::instruction_counter() - start)
+            QueryReply::Snapshot(result, counter() - start)
         }
         Query::Items {
             target,
@@ -375,7 +389,7 @@ fn query(_: ic_db::Principal, request: Query) -> QueryReply {
                     }
                 })
                 .map_err(refusal);
-            QueryReply::Items(result, crate::system::instruction_counter() - start)
+            QueryReply::Items(result, counter() - start)
         }
     }
 }
@@ -465,13 +479,13 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
     runtime = ic_platform_runtime,
     name = "mixed_migrate",
     guard = crate::transport::admit::<244>,
-    decode = crate::transport::decode::<_,244>,
+    decode = crate::transport::decode_measured::<_,244>,
     encode = crate::transport::encode::<_,244>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn mixed_migrate(operation: u8) -> (u64, bool, u64) {
-    let start = crate::system::instruction_counter();
+fn mixed_migrate((operation, counter): crate::transport::Measured<u8>) -> (u64, bool, u64) {
+    let start = counter();
     let (rows, complete) = migrate(operation).unwrap();
-    (rows, complete, crate::system::instruction_counter() - start)
+    (rows, complete, counter() - start)
 }

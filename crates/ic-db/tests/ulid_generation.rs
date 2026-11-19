@@ -2,6 +2,31 @@
 use ic_db::{Timestamp, Ulid, UlidGenerationError, UlidGenerator};
 
 #[test]
+fn native_signup_can_issue_ids_without_a_target_guard() {
+    let first = Ulid::generate_prand();
+    let mut owned = Ulid::generator_prand();
+    let owned_first = owned.next_id();
+    assert!(first < Ulid::generate_prand());
+    assert!(owned_first < owned.next_id());
+}
+
+#[test]
+fn seeded_stream_uses_operation_time_and_keeps_position_after_refusal() {
+    let mut stream = Ulid::generator_prand();
+    let at = Timestamp::from_millis;
+    let number = |id: Ulid| u128::from_be_bytes(id.to_bytes());
+    let first = number(stream.next_at(at(42)).unwrap());
+    assert_eq!(first >> 80, 42);
+    assert_eq!(
+        stream.next_at(at(-1)),
+        Err(UlidGenerationError::InvalidTimestamp)
+    );
+    assert_eq!(number(stream.next_at(at(42)).unwrap()), first + 1);
+    assert_eq!(number(stream.next_at(at(41)).unwrap()), first + 2);
+    assert_eq!(number(stream.next_at(at(43)).unwrap()), first + (1 << 80));
+}
+
+#[test]
 fn timestamp_and_suffix_are_exact_including_epoch_and_maximum() {
     let mut generator = UlidGenerator::new();
     assert_eq!(generator.last(), None);

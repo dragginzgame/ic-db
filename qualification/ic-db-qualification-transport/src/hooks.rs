@@ -6,6 +6,24 @@ use ic_platform_runtime::{
 };
 use ic_wire::Error;
 
+/// Decode the wire request and supply the installed instruction meter.
+/// # Errors
+/// Returns the same frame errors as the ordinary fixture decoder.
+pub fn decode_measured<T: serde::de::DeserializeOwned, const ID: u64>(
+    bytes: &[u8],
+) -> Result<super::Measured<T>, Error> {
+    Ok((super::decode::<T, ID>(bytes)?, raw::instruction_counter))
+}
+
+/// Capture the IC message time in nanoseconds for a decoded request.
+/// # Errors
+/// Returns the same frame errors as the ordinary fixture decoder.
+pub fn decode_timed<T: serde::de::DeserializeOwned, const ID: u64>(
+    bytes: &[u8],
+) -> Result<(T, u64), Error> {
+    Ok((super::decode::<T, ID>(bytes)?, system::time()))
+}
+
 /// Check ingress length and frame identity before Platform copies its payload.
 /// # Errors
 /// Never returns an error: invalid ingress traps, preserving prior fixture semantics.

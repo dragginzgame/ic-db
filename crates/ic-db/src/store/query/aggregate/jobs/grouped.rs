@@ -2,13 +2,20 @@
 use super::{
     super::super::Plan,
     super::{
-        Accumulator, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer, numeric::Operation,
+        Accumulator, Completed, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer,
+        decode_group_count, decode_group_value, numeric::Operation,
     },
     AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start,
 };
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
+
+pub(super) struct GroupJob<'a> {
+    plan: Plan<'a>,
+    groups: Groups,
+    binding: [u8; 32],
+}
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain grouped row counts without scanning input. K is the same exact key
@@ -57,15 +64,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let groups = self.admit_groups(&plan, self.count_reducer(field)?)?;
-        start(
-            jobs,
-            field_binding(group_binding(&plan, &groups, self.request.rows)?, field),
-            self.db.revision_by_id(E::SCHEMA.id)?,
-            now,
-            expires,
-            vec![0],
-        )
+        self.start_groups(jobs, now, expires, plan, self.count_reducer(field)?, field)
     }
 
     /// Advance grouped counts with scalar jobs' revision/retry/work/expiry contract.
@@ -115,28 +114,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         field: Option<&str>,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let mut groups = self.admit_groups(&plan, self.count_reducer(field)?)?;
-        let expected = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
-        let mut record = jobs.load(handle)?;
-        let page = self.request.groups.page;
-        pages::admit(page, handle, &record)?;
-        let (rows, bytes) = (self.request.rows, self.request.bytes);
-        let step = prepare(
-            self.db,
-            E::SCHEMA,
-            self.request,
-            &plan,
-            Accumulator::Groups(&mut groups),
-            &mut record,
-            expected,
-            sequence,
-            now,
-        )?
-        .finish(bytes, || {
-            pages::count_page(groups, rows, bytes, page, handle)
-        })?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        let job = self.retained_groups(plan, self.count_reducer(field)?, field)?;
+        self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 
     /// Retain grouped integer/Decimal sums with `group_sum`'s exact result types.
@@ -228,14 +207,26 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let (plan, reducer) = admitted;
-        let groups = self.admit_groups(&plan, reducer)?;
+        self.start_groups(jobs, now, expires, plan, reducer, None)
+    }
+
+    pub(super) fn start_groups(
+        &self,
+        jobs: &mut AggregateJobs<M>,
+        now: Timestamp,
+        expires: Timestamp,
+        plan: Plan<'_>,
+        reducer: Reducer,
+        field: Option<&str>,
+    ) -> Result<JobHandle, Error> {
+        let mut job = self.retained_groups(plan, reducer, field)?;
         start(
             jobs,
-            group_binding(&plan, &groups, self.request.rows)?,
+            job.binding,
             self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
-            vec![0],
+            &Accumulator::Groups(&mut job.groups),
         )
     }
 
@@ -260,49 +251,76 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         admitted: (Plan<'_>, Reducer),
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = admitted;
-        let mut groups = self.admit_groups(&plan, reducer)?;
-        let expected = group_binding(&plan, &groups, self.request.rows)?;
+        let job = self.retained_groups(plan, reducer, None)?;
+        self.resume_groups(jobs, handle, sequence, now, job, decode_group_value)
+    }
+
+    pub(super) fn resume_groups<T>(
+        self,
+        jobs: &mut AggregateJobs<M>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+        job: GroupJob<'_>,
+        decode: fn(&[u8], Completed) -> Result<T, Error>,
+    ) -> Result<JobStep<GroupPage<T>>, Error> {
+        let GroupJob {
+            plan,
+            mut groups,
+            binding,
+        } = job;
         let mut record = jobs.load(handle)?;
         let page = self.request.groups.page;
         pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
-        let step = prepare(
+        prepare(
             self.db,
             E::SCHEMA,
             self.request,
             &plan,
             Accumulator::Groups(&mut groups),
             &mut record,
-            expected,
+            binding,
             sequence,
             now,
         )?
-        .finish(bytes, || {
-            pages::value_page(groups, rows, bytes, page, handle)
-        })?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        .finish_and_save(jobs, handle, &record, bytes, || {
+            pages::group_page(groups, rows, bytes, page, handle, decode)
+        })
+    }
+
+    pub(super) fn retained_groups<'p>(
+        &self,
+        plan: Plan<'p>,
+        reducer: Reducer,
+        field: Option<&str>,
+    ) -> Result<GroupJob<'p>, Error> {
+        let groups = self.admit_groups(&plan, reducer)?;
+        let binding = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
+        Ok(GroupJob {
+            plan,
+            groups,
+            binding,
+        })
     }
 }
-pub(super) fn group_binding(
-    plan: &Plan<'_>,
-    groups: &Groups,
-    rows: usize,
-) -> Result<[u8; 32], Error> {
+
+fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 32], Error> {
     let mut hash = Sha256::new();
-    if matches!(groups.initial, Reducer::Numeric(_)) {
-        hash.update(b"ic-db:group-numeric-job:v1\0");
-        // Reuse the scalar numeric identity for operand, operation and result scale.
-        hash.update(super::binding(plan, &groups.initial)?);
-    } else if matches!(groups.initial, Reducer::Extremum { .. }) {
-        hash.update(b"ic-db:group-extremum-job:v1\0");
-        hash.update(super::binding(plan, &groups.initial)?);
-    } else if let Reducer::Distinct { mask, .. } = groups.initial {
-        hash.update(b"ic-db:group-distinct-count-job:v1\0");
-        hash.update(mask.to_le_bytes());
-    } else {
-        // Preserve existing grouped-count identities and payloads.
-        hash.update(b"ic-db:group-count-job:v1\0");
+    match &groups.initial {
+        Reducer::Numeric(_) => {
+            hash.update(b"ic-db:group-numeric-job:v1\0");
+            hash.update(super::binding(plan, &groups.initial)?);
+        }
+        Reducer::Extremum { .. } => {
+            hash.update(b"ic-db:group-extremum-job:v1\0");
+            hash.update(super::binding(plan, &groups.initial)?);
+        }
+        Reducer::Distinct { mask, .. } => {
+            hash.update(b"ic-db:group-distinct-count-job:v1\0");
+            hash.update(mask.to_le_bytes());
+        }
+        Reducer::Count { .. } => hash.update(b"ic-db:group-count-job:v1\0"),
     }
     hash.update(plan.binding);
     hash.update([

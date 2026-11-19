@@ -123,15 +123,17 @@ type Response = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
     runtime = ic_platform_runtime,
     name = "job_values_advance",
     guard = crate::transport::admit::<149>,
-    decode = crate::transport::decode::<_, 149>,
+    decode = crate::transport::decode_measured::<_, 149>,
     encode = crate::transport::encode::<_, 149>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn job_values_advance(request: AdvanceRequest) -> (Result<Response, String>, u64) {
-    let start = crate::system::instruction_counter();
+fn job_values_advance(
+    (request, counter): crate::transport::Measured<AdvanceRequest>,
+) -> (Result<Response, String>, u64) {
+    let start = counter();
     let result = advance(request).map_err(|e| e.to_string());
-    (result, crate::system::instruction_counter() - start)
+    (result, counter() - start)
 }
 
 fn advance(

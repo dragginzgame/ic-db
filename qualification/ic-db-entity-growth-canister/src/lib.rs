@@ -65,19 +65,25 @@ macro_rules! declare_entity {
     };
 }
 macro_rules! entities {
-    ($( $(#[$configuration:meta])* $name:ident = $selector:literal ),* $(,)?) => {
+    ($base:ident = $first:literal, $(#[$guard:meta] { $($name:ident = $selector:literal,)+ })+) => {
+        entities!(@entries
+            $base = $first,
+            $($(#[$guard] $name = $selector,)+)+
+        );
+    };
+    (@entries $( $(#[$configuration:meta])? $name:ident = $selector:literal, )+) => {
         $(
-            $(#[$configuration])*
+            $(#[$configuration])?
             declare_entity!($name);
         )*
         fn compiled() -> Schema {
-            Schema::new(&[$($(#[$configuration])* $name::SCHEMA),*]).unwrap()
+            Schema::new(&[$($(#[$configuration])? $name::SCHEMA),*]).unwrap()
         }
 
         fn dispatch(db: &mut Database, selector: u8, mode: u8, input: Row) -> Observation {
             match selector {
                 $(
-                    $(#[$configuration])*
+                    $(#[$configuration])?
                     $selector => operate(db, mode, input,
                         &$name { id: input.0, category: input.1, amount: input.2 },
                         |row: &$name| (row.id, row.category, row.amount)),
@@ -90,67 +96,42 @@ macro_rules! entities {
 entities!(
     Entry00 = 0,
     #[cfg(feature = "entities-8")]
-    Entry01 = 1,
-    #[cfg(feature = "entities-8")]
-    Entry02 = 2,
-    #[cfg(feature = "entities-8")]
-    Entry03 = 3,
-    #[cfg(feature = "entities-8")]
-    Entry04 = 4,
-    #[cfg(feature = "entities-8")]
-    Entry05 = 5,
-    #[cfg(feature = "entities-8")]
-    Entry06 = 6,
-    #[cfg(feature = "entities-8")]
-    Entry07 = 7,
+    {
+        Entry01 = 1,
+        Entry02 = 2,
+        Entry03 = 3,
+        Entry04 = 4,
+        Entry05 = 5,
+        Entry06 = 6,
+        Entry07 = 7,
+    }
     #[cfg(feature = "entities-32")]
-    Entry08 = 8,
-    #[cfg(feature = "entities-32")]
-    Entry09 = 9,
-    #[cfg(feature = "entities-32")]
-    Entry10 = 10,
-    #[cfg(feature = "entities-32")]
-    Entry11 = 11,
-    #[cfg(feature = "entities-32")]
-    Entry12 = 12,
-    #[cfg(feature = "entities-32")]
-    Entry13 = 13,
-    #[cfg(feature = "entities-32")]
-    Entry14 = 14,
-    #[cfg(feature = "entities-32")]
-    Entry15 = 15,
-    #[cfg(feature = "entities-32")]
-    Entry16 = 16,
-    #[cfg(feature = "entities-32")]
-    Entry17 = 17,
-    #[cfg(feature = "entities-32")]
-    Entry18 = 18,
-    #[cfg(feature = "entities-32")]
-    Entry19 = 19,
-    #[cfg(feature = "entities-32")]
-    Entry20 = 20,
-    #[cfg(feature = "entities-32")]
-    Entry21 = 21,
-    #[cfg(feature = "entities-32")]
-    Entry22 = 22,
-    #[cfg(feature = "entities-32")]
-    Entry23 = 23,
-    #[cfg(feature = "entities-32")]
-    Entry24 = 24,
-    #[cfg(feature = "entities-32")]
-    Entry25 = 25,
-    #[cfg(feature = "entities-32")]
-    Entry26 = 26,
-    #[cfg(feature = "entities-32")]
-    Entry27 = 27,
-    #[cfg(feature = "entities-32")]
-    Entry28 = 28,
-    #[cfg(feature = "entities-32")]
-    Entry29 = 29,
-    #[cfg(feature = "entities-32")]
-    Entry30 = 30,
-    #[cfg(feature = "entities-32")]
-    Entry31 = 31,
+    {
+        Entry08 = 8,
+        Entry09 = 9,
+        Entry10 = 10,
+        Entry11 = 11,
+        Entry12 = 12,
+        Entry13 = 13,
+        Entry14 = 14,
+        Entry15 = 15,
+        Entry16 = 16,
+        Entry17 = 17,
+        Entry18 = 18,
+        Entry19 = 19,
+        Entry20 = 20,
+        Entry21 = 21,
+        Entry22 = 22,
+        Entry23 = 23,
+        Entry24 = 24,
+        Entry25 = 25,
+        Entry26 = 26,
+        Entry27 = 27,
+        Entry28 = 28,
+        Entry29 = 29,
+        Entry30 = 30,
+        Entry31 = 31,
+    }
 );
 
 fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {

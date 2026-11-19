@@ -1,13 +1,10 @@
 //! Bounded pages over immutable completed groups; no additional durable state.
 use super::{
-    super::{
-        Completed, GroupCount, GroupValue, Groups, MAX_GROUPS, admit_output, decode_group_count,
-        decode_group_value,
-    },
+    super::{Completed, Groups, MAX_GROUPS, admit_output},
     JobHandle, JobOutcome,
     storage::Record,
 };
-use crate::{Error, Value};
+use crate::Error;
 
 /// One page of completed retained groups. Keep `next` when mapping `rows`.
 #[derive(Debug)]
@@ -70,67 +67,38 @@ pub(super) fn admit(
     Ok(())
 }
 
-pub(super) fn count_page<K: Value>(
+pub(super) fn group_page<T>(
     groups: Groups,
     limit: usize,
     bytes: usize,
     page: Option<PageRequest<'_>>,
     handle: &JobHandle,
-) -> Result<(GroupPage<GroupCount<K>>, usize), Error> {
-    let (raw, bytes) = select(groups, limit, bytes, page, handle)?;
-    Ok((
-        GroupPage {
-            rows: raw
-                .rows
-                .into_iter()
-                .map(|(key, value)| decode_group_count(&key, value))
-                .collect::<Result<_, _>>()?,
-            next: raw.next,
-        },
-        bytes,
-    ))
-}
-
-pub(super) fn value_page<K: Value, R: Value>(
-    groups: Groups,
-    limit: usize,
-    bytes: usize,
-    page: Option<PageRequest<'_>>,
-    handle: &JobHandle,
-) -> Result<(GroupPage<GroupValue<K, R>>, usize), Error> {
-    let (raw, bytes) = select(groups, limit, bytes, page, handle)?;
-    Ok((
-        GroupPage {
-            rows: raw
-                .rows
-                .into_iter()
-                .map(|(key, value)| decode_group_value(&key, value))
-                .collect::<Result<_, _>>()?,
-            next: raw.next,
-        },
-        bytes,
-    ))
-}
-
-// Finalize every group before selection; even an excluded overflow must refuse.
-// Recomputing at most 32 completed values avoids a durable output cache or cursor.
-type EncodedPage = GroupPage<(Vec<u8>, Completed)>;
-fn select(
-    groups: Groups,
-    limit: usize,
-    bytes: usize,
-    page: Option<PageRequest<'_>>,
-    handle: &JobHandle,
-) -> Result<(EncodedPage, usize), Error> {
+    decode: fn(&[u8], Completed) -> Result<T, Error>,
+) -> Result<(GroupPage<T>, usize), Error> {
+    // Finalize every group before selection; even an excluded overflow must refuse.
     let mut rows = groups.into_output()?;
     rows.truncate(limit);
+    let (range, next, used) = select(&rows, bytes, page, handle)?;
+    let rows = rows
+        .drain(range)
+        .map(|(key, value)| decode(&key, value))
+        .collect::<Result<_, _>>()?;
+    Ok((GroupPage { rows, next }, used))
+}
+
+fn select(
+    rows: &[(Vec<u8>, Completed)],
+    bytes: usize,
+    page: Option<PageRequest<'_>>,
+    handle: &JobHandle,
+) -> Result<(std::ops::Range<usize>, Option<GroupCursor>, usize), Error> {
     let start = page
         .and_then(|page| page.after)
         .map_or(0, |cursor| usize::from(cursor.position));
     if start > rows.len() {
         return Err(Error::InvalidCursor);
     }
-    let capacity = page.map_or(limit, |page| page.size);
+    let capacity = page.map_or(rows.len(), |page| page.size);
     let mut end = start;
     let mut used = 0;
     for (key, value) in rows.iter().skip(start).take(capacity) {
@@ -148,12 +116,5 @@ fn select(
         handle: handle.clone(),
         position: end as u8,
     });
-    let selected = rows.drain(start..end).collect();
-    Ok((
-        GroupPage {
-            rows: selected,
-            next,
-        },
-        used,
-    ))
+    Ok((start..end, next, used))
 }

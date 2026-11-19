@@ -735,7 +735,7 @@ schema-field generation remains separate work. The `ulid` dependency's default R
 Declare `pk(field = "id")` with `id` of `prim = "Ulid"` to use ULID primary keys.
 `get`, `delete` and `page` then accept ULIDs, including typed continuation keys.
 Inspect `KeyRow` and its mixed-key references with `db schema`.
-In a canister update, issue an ID synchronously:
+Issue an ID synchronously in a canister update or native application:
 
 ```rust
 let id = Ulid::generate_prand();
@@ -749,15 +749,26 @@ let first = ids.next_id();
 let second = ids.next_id();
 ```
 
+When a write already has an operation timestamp, use it for both issuance and
+managed fields:
+
+```rust
+let id = ids.next_at(timestamp)?;
+let mut batch = Batch::at(timestamp);
+```
+
 To seed an owned sequence with fresh IC entropy, use `Ulid::generator().await?`.
 Construction makes one bounded management request and can return
 `UlidEntropyError`. Obtain the generator before starting a synchronous write batch.
-Both owned generators use local IC time for subsequent IDs.
+On native targets, the same APIs use the system clock. Pseudorandom issuance
+seeds each thread once from the OS, and the fresh constructor seeds each owned
+sequence from the OS. On the IC, both owned generators use canister time.
 
-The first synchronous one-shot issuance in the heap hashes the principal and current version once.
+On the IC, the first call to `Ulid::generate_prand()` in a new heap hashes the
+canister principal and current canister version once.
 A new millisecond starts at that 80-bit suffix; further IDs at equal or earlier
 times increment it. An ordinary upgrade starts a new stream with a new version.
-The issuer needs no entropy or inter-canister calls. IDs are predictable;
+Subsequent calls advance that stream locally. IDs are predictable;
 the 79-bit seed allows collisions between streams. Applications requiring
 ordering across upgrades can own and checkpoint a generator.
 

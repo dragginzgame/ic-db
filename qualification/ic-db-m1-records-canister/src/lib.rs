@@ -80,41 +80,26 @@ fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
 
 fn new_runtime() -> MemoryRuntime<Backing> {
     let mut host = MemoryRuntime::new(Backing::default()).unwrap();
-    let requests = vec![MemoryRequest::new("m1", KEY).unwrap()];
-    #[cfg(feature = "maintenance")]
-    let requests = {
-        let mut requests = requests;
-        requests.extend(
-            [
-                maintenance::COPY_SOURCE,
-                maintenance::COPY_TARGET,
-                maintenance::COPY_NEXT,
-            ]
-            .map(|key| MemoryRequest::new("m1", key).unwrap()),
-        );
-        requests
-    };
-    #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
-    let requests = {
-        let mut requests = requests;
-        requests.push(MemoryRequest::new("m1", aggregate_store::KEY).unwrap());
-        requests
-    };
-    #[cfg(feature = "retained-console")]
-    let requests = {
-        let mut requests = requests;
-        requests.extend(
-            [console::migration::SOURCE, console::migration::TARGET]
-                .map(|key| MemoryRequest::new("m1", key).unwrap()),
-        );
-        requests
-    };
-    #[cfg(feature = "mixed-lifecycle")]
-    let requests = {
-        let mut requests = requests;
-        requests.extend(mixed_lifecycle::KEYS.map(|key| MemoryRequest::new("m1", key).unwrap()));
-        requests
-    };
+    let groups: &[&[&str]] = &[
+        &[KEY],
+        #[cfg(feature = "maintenance")]
+        &[
+            maintenance::COPY_SOURCE,
+            maintenance::COPY_TARGET,
+            maintenance::COPY_NEXT,
+        ],
+        #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
+        &[aggregate_store::KEY],
+        #[cfg(feature = "retained-console")]
+        &[console::migration::SOURCE, console::migration::TARGET],
+        #[cfg(feature = "mixed-lifecycle")]
+        &mixed_lifecycle::KEYS,
+    ];
+    let requests = groups
+        .iter()
+        .flat_map(|keys| keys.iter())
+        .map(|&key| MemoryRequest::new("m1", key).unwrap())
+        .collect();
     let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
     let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)

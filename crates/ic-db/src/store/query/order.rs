@@ -50,11 +50,7 @@ pub(super) fn select<'a>(
             return Err(Error::InvalidQuery);
         }
         for (i, name) in order.iter().enumerate() {
-            let position = entity
-                .fields
-                .iter()
-                .position(|f| f.name == *name)
-                .ok_or(Error::InvalidQuery)?;
+            let position = entity.field_position(name).ok_or(Error::InvalidQuery)?;
             let field = &entity.fields[position];
             if !key::supports(field.value)
                 || order[..i].contains(name)
@@ -79,8 +75,7 @@ pub(super) fn select<'a>(
         let prefix = admit_index_prefix(entity, index, values)?;
         let exact_owner = matches!(output, super::PlanOutput::Rows)
             && !request.distinct
-            && index.unique
-            && values.len() == index.fields.len();
+            && index.is_unique_lookup(values.len());
         if !complete_membership(entity, index, values, request)
             || !(request.order.is_none() || exact_owner || fits_order(Some(index), values.len()))
         {
@@ -150,9 +145,7 @@ pub(super) fn select<'a>(
     let mut positions =
         positions[..request.order.as_ref().ok_or(Error::InvalidQuery)?.len()].to_vec();
     let primary = entity
-        .fields
-        .iter()
-        .position(|f| f.name == entity.primary_key)
+        .field_position(entity.primary_key)
         .ok_or(Error::InvalidQuery)?;
     if positions.last().map(|(position, _)| *position) != Some(primary) {
         positions.push((primary, false));
@@ -174,7 +167,7 @@ fn unique_lookup<'a>(
         .filter(|i| i.unique && i.fields.len() <= request.predicates.len())
     {
         let values = leading_equalities(request, index);
-        if values.len() == index.fields.len()
+        if index.is_unique_lookup(values.len())
             && let Some(path) = automatic_prefix(entity, index, &values)?
         {
             return Ok(Some(path));
@@ -218,7 +211,7 @@ pub(super) fn select_aggregate_prefix<'a>(
             continue;
         };
         let covered = covers_index(entity, request, plan, index, &values, path.prefix.len());
-        let single_owner = index.unique && path.fixed == index.fields.len();
+        let single_owner = index.is_unique_lookup(path.fixed);
         // The exact key proves exhaustion in one visit. If it also covers
         // every predicate, no other candidate can improve the work bound.
         if single_owner && covered {
@@ -314,14 +307,11 @@ pub(super) fn requires_present_field(
     request: &Request<'_>,
     name: &str,
 ) -> bool {
-    request
-        .predicates
-        .split_inclusive(|p| !p.or_next)
-        .any(|clause| {
-            clause
-                .iter()
-                .all(|predicate| requires_presence(predicate, name, entity))
-        })
+    request.clauses().any(|clause| {
+        clause
+            .iter()
+            .all(|predicate| requires_presence(predicate, name, entity))
+    })
 }
 
 // Sparse traversal must cover every possible match. Each optional component needs
@@ -396,19 +386,16 @@ fn satisfies(
 pub(super) fn literal_equalities<'r, 'a>(
     request: &'r Request<'a>,
 ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
-    request
-        .predicates
-        .split_inclusive(|p| !p.or_next)
-        .filter_map(|clause| {
-            if let [predicate] = clause
-                && predicate.comparison == Comparison::Eq
-                && let QueryOperand::Literal(value) = predicate.operand
-            {
-                Some((predicate.field, value))
-            } else {
-                None
-            }
-        })
+    request.clauses().filter_map(|clause| {
+        if let [predicate] = clause
+            && predicate.comparison == Comparison::Eq
+            && let QueryOperand::Literal(value) = predicate.operand
+        {
+            Some((predicate.field, value))
+        } else {
+            None
+        }
+    })
 }
 
 fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {

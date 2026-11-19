@@ -7,7 +7,10 @@ fn ic_stream_reads_identity_once_and_separates_principals_and_versions() {
                 (crate::Principal::from_slice(&[principal]), version)
             });
             let next = |time| {
-                u128::from_be_bytes(super::pseudo::generate(time, || panic!("reseeded")).to_bytes())
+                u128::from_be_bytes(
+                    super::pseudo::generate(time, || -> ([u8; 1], u64) { panic!("reseeded") })
+                        .to_bytes(),
+                )
             };
             let suffix = u128::from_be_bytes(first.to_bytes());
             assert!(suffix < (1_u128 << 79));
@@ -37,12 +40,13 @@ fn owned_streams_advance_independently_of_one_shot_issuance() {
     let mut a = super::pseudo::owned(identity());
     let mut b = super::pseudo::owned(identity());
     let number = |id: super::Ulid| u128::from_be_bytes(id.to_bytes());
-    let (a0, b0) = (a.at(0), b.at(0));
+    let epoch = crate::Timestamp::from_millis(0);
+    let (a0, b0) = (a.next_at(epoch).unwrap(), b.next_at(epoch).unwrap());
     assert_ne!(a0, first);
     assert_ne!(b0, first);
     assert_ne!(a0, b0);
-    assert_eq!(number(a.at(0)), number(a0) + 1);
-    assert_eq!(number(b.at(0)), number(b0) + 1);
+    assert_eq!(number(a.next_at(epoch).unwrap()), number(a0) + 1);
+    assert_eq!(number(b.next_at(epoch).unwrap()), number(b0) + 1);
     assert_eq!(
         number(super::pseudo::generate(0, identity)),
         number(first) + 1

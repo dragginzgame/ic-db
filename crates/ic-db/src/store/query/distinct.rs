@@ -32,13 +32,7 @@ pub(super) fn admit(
     let Some(mut remaining) = projection else {
         return Ok(Strategy::Identity);
     };
-    let position = |name: &str| {
-        entity
-            .fields
-            .iter()
-            .position(|f| f.name == name)
-            .ok_or(Error::InvalidQuery)
-    };
+    let position = |name: &str| entity.field_position(name).ok_or(Error::InvalidQuery);
     if remaining & (1 << position(entity.primary_key)?) != 0 {
         return Ok(Strategy::Identity);
     }

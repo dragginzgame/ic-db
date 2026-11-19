@@ -153,15 +153,21 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
     runtime = ic_platform_runtime,
     name = "migration_references",
     guard = crate::transport::admit::<144>,
-    decode = crate::transport::decode::<_, 144>,
+    decode = crate::transport::decode_measured::<_, 144>,
     encode = crate::transport::encode::<_, 144>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn migration_references(
-    (operation, first, limit, bad, stop): (u8, u16, u8, bool, u64),
+    ((operation, first, limit, bad, stop), counter): crate::transport::Measured<(
+        u8,
+        u16,
+        u8,
+        bool,
+        u64,
+    )>,
 ) -> (Result<(u32, bool), u8>, u64, u64) {
-    let start = crate::system::instruction_counter();
+    let start = counter();
     faults::arm(if stop == u64::MAX { 0 } else { stop }, false, false);
     let result = control(operation, first, limit, bad).map_err(|error| match error {
         Error::ReferenceViolation => 1,
@@ -174,7 +180,7 @@ fn migration_references(
         crate::system::trap("reference migration trap after operation");
     }
     let (writes, _) = faults::finish();
-    (result, writes, crate::system::instruction_counter() - start)
+    (result, writes, counter() - start)
 }
 
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);

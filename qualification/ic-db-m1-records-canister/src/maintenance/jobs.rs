@@ -1,8 +1,8 @@
 //! Cutover witness over the unchanged mapping entity; no host routing authority.
-use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, whole_declaration};
+use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, Entry, EntryV2, whole_schema};
 use crate::handles::Database;
 use crate::{aggregate_store::open_jobs, runtime};
-use ic_db::{Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
+use ic_db::{Entity, Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
 use ic_storage::StableKey;
 
 // Position bytes, sequence, source revision, examined rows, completed count.
@@ -16,14 +16,14 @@ fn control(
     work: u32,
 ) -> Result<Reply, Error> {
     let host = runtime();
-    let (source_schema, target_schema, _) = whole_declaration()?;
-    let db = Database::open(
-        host.open_memory(
-            &StableKey::parse(if target { COPY_TARGET } else { COPY_SOURCE }).unwrap(),
-        )
-        .unwrap(),
-        if target { target_schema } else { source_schema },
-    )?;
+    let (key, entry) = if target {
+        (COPY_TARGET, EntryV2::SCHEMA)
+    } else {
+        (COPY_SOURCE, Entry::SCHEMA)
+    };
+    let schema = whole_schema(entry)?;
+    let memory = host.open_memory(&StableKey::parse(key).unwrap()).unwrap();
+    let db = Database::open(memory, schema)?;
     let revision = db.revision::<CopyMapping>()?;
     let query = db.query::<CopyMapping>().work_limit(work as usize);
     if operation == 2 {

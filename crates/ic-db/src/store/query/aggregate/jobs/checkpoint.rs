@@ -40,8 +40,8 @@ impl Accumulator<'_> {
         }
     }
 
-    pub(super) fn checkpoint(&self, record: &mut Record) -> Result<(), Error> {
-        (record.count, record.state) = match self {
+    pub(super) fn checkpoint(&self) -> Result<(u64, Vec<u8>), Error> {
+        Ok(match self {
             Self::Exists(_) => return Err(Error::InvalidQuery),
             Self::Groups(groups) => groups.checkpoint()?,
             Self::Scalar(Reducer::Extremum { selected, .. }) => selected
@@ -56,8 +56,7 @@ impl Accumulator<'_> {
                 let (count, total) = reducer.job_state()?;
                 (count, total.to_vec())
             }
-        };
-        Ok(())
+        })
     }
 }
 impl Reducer {

@@ -86,8 +86,10 @@ impl Memory for FaultMemory {
                         // The IC instruction meter must terminate this message;
                         // do not simulate exhaustion with an application trap.
                         let mut work = [0_u8; 4096];
+                        let mut byte = 0_u8;
                         loop {
-                            work.fill(crate::system::instruction_counter() as u8);
+                            work.fill(byte);
+                            byte = byte.wrapping_add(1);
                             std::hint::black_box(&work);
                         }
                     }

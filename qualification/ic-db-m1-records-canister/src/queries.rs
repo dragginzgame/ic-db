@@ -31,13 +31,13 @@ enum Shape {
     runtime = ic_platform_runtime,
     name = "fluent_query",
     guard = crate::transport::admit::<95>,
-    decode = crate::transport::decode::<_, 95>,
+    decode = crate::transport::decode_measured::<_, 95>,
     encode = crate::transport::encode::<_, 95>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_query(request: Request) -> Result<Page, u8> {
-    read(request, Shape::Entity)
+fn fluent_query((request, counter): crate::transport::Measured<Request>) -> Result<Page, u8> {
+    read(request, Shape::Entity, counter)
 }
 
 /// Project matching entries into the fixture result record.
@@ -45,13 +45,13 @@ fn fluent_query(request: Request) -> Result<Page, u8> {
     runtime = ic_platform_runtime,
     name = "fluent_projection",
     guard = crate::transport::admit::<96>,
-    decode = crate::transport::decode::<_, 96>,
+    decode = crate::transport::decode_measured::<_, 96>,
     encode = crate::transport::encode::<_, 96>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_projection(request: Request) -> Result<Page, u8> {
-    read(request, Shape::Projection)
+fn fluent_projection((request, counter): crate::transport::Measured<Request>) -> Result<Page, u8> {
+    read(request, Shape::Projection, counter)
 }
 
 /// Page matching entries in the requested order.
@@ -59,13 +59,13 @@ fn fluent_projection(request: Request) -> Result<Page, u8> {
     runtime = ic_platform_runtime,
     name = "fluent_ordered",
     guard = crate::transport::admit::<98>,
-    decode = crate::transport::decode::<_, 98>,
+    decode = crate::transport::decode_measured::<_, 98>,
     encode = crate::transport::encode::<_, 98>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_ordered(request: Request) -> Result<Page, u8> {
-    read(request, Shape::Ordered)
+fn fluent_ordered((request, counter): crate::transport::Measured<Request>) -> Result<Page, u8> {
+    read(request, Shape::Ordered, counter)
 }
 
 /// Page entries matching the fixture’s alternative predicates.
@@ -73,13 +73,13 @@ fn fluent_ordered(request: Request) -> Result<Page, u8> {
     runtime = ic_platform_runtime,
     name = "fluent_any",
     guard = crate::transport::admit::<123>,
-    decode = crate::transport::decode::<_, 123>,
+    decode = crate::transport::decode_measured::<_, 123>,
     encode = crate::transport::encode::<_, 123>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_any(request: Request) -> Result<Page, u8> {
-    read(request, Shape::Any)
+fn fluent_any((request, counter): crate::transport::Measured<Request>) -> Result<Page, u8> {
+    read(request, Shape::Any, counter)
 }
 
 /// Page entries matching the fixture’s membership filter.
@@ -87,13 +87,13 @@ fn fluent_any(request: Request) -> Result<Page, u8> {
     runtime = ic_platform_runtime,
     name = "fluent_membership",
     guard = crate::transport::admit::<124>,
-    decode = crate::transport::decode::<_, 124>,
+    decode = crate::transport::decode_measured::<_, 124>,
     encode = crate::transport::encode::<_, 124>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_membership(request: Request) -> Result<Page, u8> {
-    read(request, Shape::Membership)
+fn fluent_membership((request, counter): crate::transport::Measured<Request>) -> Result<Page, u8> {
+    read(request, Shape::Membership, counter)
 }
 
 type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
@@ -160,11 +160,7 @@ fn fluent_text_seek(
 ) -> Result<IdPage, u8> {
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| query_error(&error))?;
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Document>()
         .using_index("published,title", &[false.into()])
@@ -177,14 +173,10 @@ fn fluent_text_seek(
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
-    let page = query
+    query
         .fetch_as::<IdOnly>()
-        .map_err(|error| query_error(&error))?;
-    Ok((
-        page.rows.into_iter().map(|row| row.id).collect(),
-        page.next.map(|cursor| cursor.to_bytes()),
-        page.examined as u32,
-    ))
+        .map(id_page)
+        .map_err(|error| query_error(&error))
 }
 
 type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
@@ -232,11 +224,7 @@ fn range_read(
 ) -> Result<IdPage, u8> {
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| query_error(&error))?;
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Entry>()
         .gte(field, lower)
@@ -252,14 +240,10 @@ fn range_read(
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
-    let page = query
+    query
         .fetch_as::<IdOnly>()
-        .map_err(|error| query_error(&error))?;
-    Ok((
-        page.rows.into_iter().map(|row| row.id).collect(),
-        page.next.map(|cursor| cursor.to_bytes()),
-        page.examined as u32,
-    ))
+        .map(id_page)
+        .map_err(|error| query_error(&error))
 }
 
 /// Page the sparse-index fixture with the requested absence policy.
@@ -277,11 +261,7 @@ fn fluent_sparse_presence(
 ) -> Result<IdPage, u8> {
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| query_error(&error))?;
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<DecimalRow>()
         .filter_any(&[
@@ -305,14 +285,10 @@ fn fluent_sparse_presence(
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
-    let page = query
+    query
         .fetch_as::<IdOnly>()
-        .map_err(|error| query_error(&error))?;
-    Ok((
-        page.rows.into_iter().map(|row| row.id).collect(),
-        page.next.map(|cursor| cursor.to_bytes()),
-        page.examined as u32,
-    ))
+        .map(id_page)
+        .map_err(|error| query_error(&error))
 }
 
 /// Page rows under the selected list-presence predicate.
@@ -328,11 +304,7 @@ fn fluent_sparse_presence(
 fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, u8> {
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| query_error(&error))?;
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let query = db.query::<ListRow>().work_limit(1);
     let mut query = match mode {
         0 => query.filter_absent(ListRow::LABELS),
@@ -348,14 +320,10 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
-    let page = query
+    query
         .fetch_as::<IdOnly>()
-        .map_err(|error| query_error(&error))?;
-    Ok((
-        page.rows.into_iter().map(|row| row.id).collect(),
-        page.next.map(|cursor| cursor.to_bytes()),
-        page.examined as u32,
-    ))
+        .map(id_page)
+        .map_err(|error| query_error(&error))
 }
 
 fn text_match(
@@ -364,11 +332,7 @@ fn text_match(
 ) -> Result<TextPage, u8> {
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| query_error(&error))?;
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Document>()
         .filter(Document::NOTE, comparison, &needle)
@@ -392,15 +356,12 @@ fn text_match(
 fn read(
     (cursor, descending, category, minimum, limit, work, bytes): Request,
     shape: Shape,
+    counter: fn() -> u64,
 ) -> Result<Page, u8> {
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let host = runtime();
     let db = open(&host);
-    let cursor = cursor
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|_| 1_u8)?;
+    let cursor = decode_cursor(cursor.as_deref()).map_err(|_| 1_u8)?;
     let query = db.query::<Entry>();
     let mut query = match shape {
         Shape::Any => query.filter_any(&[
@@ -459,8 +420,20 @@ fn read(
         page.examined as u32,
         page.fetched as u32,
         page.output_bytes as u32,
-        crate::system::instruction_counter() - start,
+        counter() - start,
     ))
+}
+
+fn id_page(page: ic_db::QueryPage<IdOnly>) -> IdPage {
+    (
+        page.rows.into_iter().map(|row| row.id).collect(),
+        page.next.map(|cursor| cursor.to_bytes()),
+        page.examined as u32,
+    )
+}
+
+fn decode_cursor(bytes: Option<&[u8]>) -> Result<Option<QueryCursor>, ic_db::Error> {
+    bytes.map(QueryCursor::from_bytes).transpose()
 }
 
 fn query_error(error: &ic_db::Error) -> u8 {
@@ -478,15 +451,17 @@ fn query_error(error: &ic_db::Error) -> u8 {
     runtime = ic_platform_runtime,
     name = "fluent_binary_projection",
     guard = crate::transport::admit::<97>,
-    decode = crate::transport::decode::<_, 97>,
+    decode = crate::transport::decode_measured::<_, 97>,
     encode = crate::transport::encode::<_, 97>,
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
+fn fluent_binary_projection(
+    (projected, counter): crate::transport::Measured<bool>,
+) -> (Vec<u64>, u32, u64) {
     let host = runtime();
     let db = open(&host);
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let query = db.query::<BinaryObject>().eq(BinaryObject::ID, 1_u64);
     let (rows, bytes) = if projected {
         let page = query.fetch_as::<IdOnly>().unwrap();
@@ -501,11 +476,7 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
             page.output_bytes,
         )
     };
-    (
-        rows,
-        bytes as u32,
-        crate::system::instruction_counter() - start,
-    )
+    (rows, bytes as u32, counter() - start)
 }
 
 #[cfg(feature = "query-measurements")]
@@ -517,21 +488,22 @@ type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
 #[cfg(feature = "query-measurements")]
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime, name = "measured_listing",
-    guard = crate::transport::admit::<189>, decode = crate::transport::decode::<_, 189>,
+    guard = crate::transport::admit::<189>, decode = crate::transport::decode_measured::<_, 189>,
     encode = crate::transport::encode::<_, 189>, max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
 fn measured_listing(
-    (hinted, after, work, bytes): (bool, Option<Vec<u8>>, u32, u32),
+    ((hinted, after, work, bytes), counter): crate::transport::Measured<(
+        bool,
+        Option<Vec<u8>>,
+        u32,
+        u32,
+    )>,
 ) -> ListingSample {
-    let start = crate::system::instruction_counter();
+    let start = counter();
     let host = runtime();
     let db = open(&host);
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .unwrap();
+    let cursor = decode_cursor(after.as_deref()).unwrap();
     let mut q = db
         .query::<Document>()
         .eq(Document::ENTRY_ID, 1_u64)
@@ -553,6 +525,6 @@ fn measured_listing(
         page.next.map(|c| c.to_bytes()),
         page.examined as u32,
         page.fetched as u32,
-        crate::system::instruction_counter() - start,
+        counter() - start,
     )
 }

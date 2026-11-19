@@ -21,6 +21,17 @@ as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
+## Native and Wasm boundaries
+
+| Boundary | Why the target matters |
+| --- | --- |
+| Schema build and registration | The host build collects declarations through `ctor`. Generated entities use an empty registration macro in Wasm so target code needs neither the linker constructor nor the host registry. |
+| Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
+| ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
+| Fixture ingress, traps, time and measurements | Platform exports its ingress hooks, raw instruction meter and system calls on Wasm. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
+| Mixed-lifecycle endpoints | The pinned Canic mount and Platform's canister identity read require Wasm. Only the mount and its caller check are conditional. The native fixture test still compiles the inspection, query and mutation handlers. |
+| Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
+
 ## External simulator ownership (0.19)
 
 The native driver uses PocketIC 16.1.0 through Testkit 0.110.0 with default

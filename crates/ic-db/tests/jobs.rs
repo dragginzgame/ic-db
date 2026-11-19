@@ -1531,6 +1531,46 @@ fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save()
 }
 
 #[test]
+fn new_jobs_preserve_each_initial_checkpoint_encoding() {
+    use ic_storage::adapter::StableBTreeMap;
+
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create(&runtime, &[], 0);
+    let query = || db.query::<Row>();
+    query().start_count(&mut jobs, time(0), time(10)).unwrap();
+    query()
+        .start_sum::<Amount>(&mut jobs, time(0), time(10))
+        .unwrap();
+    query()
+        .start_min::<Amount>(&mut jobs, time(0), time(10))
+        .unwrap();
+    query()
+        .start_count_distinct::<Id>(&mut jobs, time(0), time(10))
+        .unwrap();
+    query()
+        .start_group_count::<Id>(&mut jobs, time(0), time(10))
+        .unwrap();
+    drop(jobs);
+
+    let key = StableKey::parse("test.jobs.v1").unwrap();
+    let raw: StableBTreeMap<u8, Vec<u8>, _> =
+        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
+    // Eight fixed-width numbers, the framed 32-byte binding, phase and empty cursor
+    // precede the state length. The last fixed-width number is the accumulator count.
+    let state_length_offset = 8 * 8 + (4 + 32) + 1 + 4;
+    for (slot, state_len) in [(1, 32_u32), (2, 32), (3, 0), (4, 1), (5, 1)] {
+        let record = raw.get(&slot).unwrap();
+        assert_eq!(
+            &record[state_length_offset - 8..state_length_offset],
+            &[0; 8]
+        );
+        let mut expected = state_len.to_le_bytes().to_vec();
+        expected.resize(4 + state_len as usize, 0);
+        assert_eq!(&record[state_length_offset..], expected, "slot {slot}");
+    }
+}
+
+#[test]
 fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
     use ic_storage::adapter::StableBTreeMap;
     for corruption in 0..4 {

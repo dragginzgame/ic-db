@@ -1,9 +1,7 @@
 //! Retained tuple DISTINCT counts using the existing exact key-set reducer.
 use super::{
-    super::{Accumulator, GroupCount, Query},
-    AggregateJobs, GroupPage, JobHandle, JobStep,
-    grouped::group_binding,
-    pages, prepare, start,
+    super::{Accumulator, GroupCount, Query, decode_group_count},
+    AggregateJobs, GroupPage, JobHandle, JobStep, prepare, start,
 };
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
@@ -24,7 +22,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        let (plan, _) = self.distinct_plan::<K>()?;
+        let (plan, mut reducer) = self.distinct_plan::<K>()?;
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
@@ -34,7 +32,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
-            vec![0],
+            &Accumulator::Scalar(&mut reducer),
         )
     }
 
@@ -57,7 +55,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let (plan, mut reducer) = self.distinct_plan::<K>()?;
         let mut record = jobs.load(handle)?;
         let bytes = self.request.bytes;
-        let step = prepare(
+        prepare(
             self.db,
             E::SCHEMA,
             self.request,
@@ -68,9 +66,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             sequence,
             now,
         )?
-        .finish(bytes, || Ok((reducer.finish()?.into_count()?, 8)))?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        .finish_and_save(jobs, handle, &record, bytes, || {
+            Ok((reducer.finish()?.into_count()?, 8))
+        })
     }
 
     /// Retain distinct R tuples separately in each K group, including absent tuples.
@@ -92,15 +90,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-        let groups = self.admit_groups(&plan, reducer)?;
-        start(
-            jobs,
-            group_binding(&plan, &groups, self.request.rows)?,
-            self.db.revision_by_id(E::SCHEMA.id)?,
-            now,
-            expires,
-            vec![0],
-        )
+        self.start_groups(jobs, now, expires, plan, reducer, None)
     }
 
     /// Advance grouped DISTINCT counts with grouped jobs' revision/retry/expiry rules.
@@ -121,28 +111,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-        let mut groups = self.admit_groups(&plan, reducer)?;
-        let expected = group_binding(&plan, &groups, self.request.rows)?;
-        let mut record = jobs.load(handle)?;
-        let page = self.request.groups.page;
-        pages::admit(page, handle, &record)?;
-        let (rows, bytes) = (self.request.rows, self.request.bytes);
-        let step = prepare(
-            self.db,
-            E::SCHEMA,
-            self.request,
-            &plan,
-            Accumulator::Groups(&mut groups),
-            &mut record,
-            expected,
-            sequence,
-            now,
-        )?
-        .finish(bytes, || {
-            pages::count_page(groups, rows, bytes, page, handle)
-        })?;
-        jobs.save(handle, &record)?;
-        Ok(step)
+        let job = self.retained_groups(plan, reducer, None)?;
+        self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 }
 

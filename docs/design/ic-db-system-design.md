@@ -516,6 +516,10 @@ generic widened runtime representation.
 Keep IC DB's sequential schema-selected rows: the compiled contract supplies
 type, field order and scalar width. IcyDB's per-slot null/value envelope, slot
 directory and generic value materialization are not required for this layout.
+Query admission and row inspection resolve a field name to its position in the
+same compiled field list. This retains the ownership rule from frozen IcyDB’s
+`6d421e3` `db/schema/info/mod.rs::field_slot_index`. IC DB scans at most 16
+field declarations and uses their positions directly.
 Optional fields retain explicit presence; variable fields need u32 byte lengths
 because this layout has no slot directory. Primary/index key ordering stays
 separate from little-endian row payloads. No IcyDB or Wire dependency is added.
@@ -3098,10 +3102,10 @@ inspect later rows after a match. The result occupies one logical byte. Output
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
 every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Both terminals check the remaining filters on each visited owner. Count must establish exhaustion within the candidate budget.
+prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
-residual predicates in `db/query/plan/planner/index_select/mod.rs`. A hit
-still fetches and validates its owner. An empty prefix range returns false
+residual predicates in `db/query/plan/planner/index_select/mod.rs`. An existence check on an index hit
+fetches and validates its owner. An empty prefix range returns false
 without fetching a row. The transient existence accumulator has no admitted job checkpoint.
 This retains frozen IcyDB `6d421e3`'s false-initial/true-on-match reducer semantics
 from `aggregate/contracts/state/reducer` and `grouped`; early completion is a
@@ -3115,7 +3119,7 @@ The first counting terminals are synchronous `count()` and
 `Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
 include every matching row; an absent group key is a group, not a discarded
 operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
-`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. Reaching the work limit refuses the whole count. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
+`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. If the final allowed visit reaches the inclusive terminal key, the count completes. If exhaustion is still unknown, the operation returns `Limit`. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
 
 `count_field("field")` counts present values of any top-level stored type,
 including present empty blobs/collections. It reads validated presence tags from
@@ -3718,9 +3722,11 @@ overflow without changing the previous value. Commit `4cedc33e` changed the
 generator to accept the write operation's timestamp; generated fields must use
 that same captured time rather than independent clock reads.
 
-The Wasm helper `Ulid::generate_prand()` owns a private heap-local stream
-and reads IC time, principal and version through Platform. Applications supply
-explicit time and randomness only on their own `UlidGenerator` instances.
+On Wasm, `Ulid::generate_prand()` owns a private heap-local stream
+and reads IC time, principal and version through Platform. Owned seeded generators also accept a captured operation timestamp through
+`next_at(timestamp)`, reusing the exact validation and monotonic increment of
+`UlidGenerator::generate`. This preserves the explicit write-time choice in
+frozen IcyDB commit `4cedc33e`.
 The helper keeps the heap-local
 monotonic increment from frozen IcyDB `6d421e3`,
 `icydb-core/src/types/ulid/generator.rs`. Legacy's time bits and local sequence
@@ -3733,6 +3739,11 @@ starts at this seed. Equal or earlier times increment the previous suffix.
 This requires no random source, stable allocation or network access. The
 system version changes on upgrade. The callback is evaluated only when the
 heap-local stream is first initialized. [IC canister version](https://legacy.internetcomputer.org/docs/references/ic-interface-spec#canister-version)
+
+Native callers use the same issuance methods and monotonic increment. Their
+seed inputs are a 32-byte OS seed per thread and the process ID, and their
+clock is Unix time. Fresh generator construction reads OS entropy once.
+This keeps OS entropy outside the canister dependency graph.
 
 Owned pseudo-random generators use the separate tag `ic-db:ulid-owned:v1`
 and append a checked heap-local 64-bit stream number to the seed input.
@@ -4382,11 +4393,10 @@ The [count decomposition](../../qualification/README.md#count-cost-decomposition
 separates opening from real query execution and fixed-fixture raw supplier
 controls. With 512 rows/129 category matches, indexed work is 7.38M instructions;
 raw index traversal is 1.08M and adding owner-row fetches raises it to 5.58M.
-Opening adds 0.46M. The main cost is population-dependent traversal and owner
-fetching, with row/index validation still required by current `count` semantics.
-Caching opening or raising work limits does not solve that scaling. Index-only
-counting would weaken corruption detection; supplier-specific storage redesign
-and a new statistics planner are not justified by this fixture.
+Opening added 0.46M. The 0.19 implementation fetched and validated each matching owner.
+Today `count_validated()` requests that guarantee explicitly. Ordinary `count()`
+can count a fully covered index range without fetching owners. The figures above
+measure the earlier implementation.
 
 The isolated [entity-count candidate](../../qualification/README.md#maintained-entity-count-candidate-019)
 adds eight bytes to the existing revision record, with final batch deltas and no
