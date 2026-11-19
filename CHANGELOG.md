@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.15] - Unreleased
+## [0.23.15] - 2026-11-19
 
 ### 🆔 ULIDs
 
