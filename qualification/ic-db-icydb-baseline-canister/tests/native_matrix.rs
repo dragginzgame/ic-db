@@ -587,6 +587,8 @@ fn compound_equality_lookup() {
     struct Route {}
     #[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
     struct RouteId {}
+    #[record(fields(field(name = "subject", value(item(prim = "Principal")))))]
+    struct RouteSubject {}
 
     icydb::db::provide_boot_entropy([41; 32]).unwrap();
     settle();
@@ -672,5 +674,78 @@ fn compound_equality_lookup() {
             );
             assert!(projected.examined <= 1 && projected.next.is_none());
         }
+    }
+
+    // A fixed issuer makes subjects unique. Legacy's public typed page returns
+    // whole routes. Compare its subjects directly, without client-side deduplication.
+    for (issuer, order, expected) in [
+        (1_u8, Route::SUBJECT, &[2_u8, 3][..]),
+        (2, Route::SUBJECT, &[2][..]),
+        (3, Route::SUBJECT, &[][..]),
+        (1, Route::ID, &[3, 2][..]),
+    ] {
+        let legacy = icydb::db::with_request_execution(|| {
+            let session = db().unwrap();
+            session
+                .query::<LegacyRoute>()
+                .unwrap()
+                .filter(FieldRef::new("issuer").eq(LegacyPrincipal::from_slice(&[issuer])))
+                .order_by(icydb::db::query::asc(order))
+                .limit(4)
+                .execute_live_page(None)
+        });
+        let expected: Vec<_> = expected.iter().map(std::slice::from_ref).collect();
+        if order == Route::ID {
+            assert!(
+                matches!(legacy, Err(icydb::db::TypedOperationError::Database(e)) if e.code().raw() == 174)
+            );
+        } else {
+            let page = legacy.unwrap();
+            assert!(page.continuation.is_none());
+            assert_eq!(
+                page.rows
+                    .iter()
+                    .map(|row| row.subject.as_slice())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let mut after = None;
+        let mut subjects = Vec::new();
+        let mut empty_continued = 0;
+        for _ in 0..=3 {
+            let mut query = ic
+                .query::<Route>()
+                .eq(Route::ISSUER, ic_db::Principal::from_slice(&[issuer]))
+                .order_asc(order)
+                .distinct()
+                .work_limit(1)
+                .limit(1);
+            if let Some(cursor) = &after {
+                query = query.after(cursor);
+            }
+            let page = query.fetch_as::<RouteSubject>().unwrap();
+            assert!(page.examined <= 1 && page.rows.len() <= 1);
+            if page.rows.is_empty() && page.next.is_some() {
+                empty_continued += 1;
+            }
+            subjects.extend(page.rows.into_iter().map(|row| row.subject));
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(after.is_none());
+        if order == Route::ID {
+            // ID 6 belongs to another issuer, between the two matching routes.
+            assert_eq!(empty_continued, 1);
+        }
+        assert_eq!(
+            subjects
+                .iter()
+                .map(|key| key.as_slice())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 }

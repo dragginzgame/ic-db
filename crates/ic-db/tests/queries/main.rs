@@ -1243,6 +1243,19 @@ fn text_prefix_seeks_cover_unicode_boundaries_and_empty_required_text() {
             .unwrap();
     }
     db.commit(batch).unwrap();
+    // A mandatory equality fixes the indexed UTF-8 bytes for all matching rows.
+    let fixed = || db.query::<WideRange>().eq(WideRange::TEXT, "é\u{10ffff}");
+    for (op, needle, expected) in [
+        (C::StartsWith, "é", 1),
+        (C::EndsWith, "\u{10ffff}", 1),
+        (C::Contains, "e\u{301}", 0),
+    ] {
+        let count = fixed().filter(WideRange::TEXT, op, needle).count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, expected as usize, 0)
+        );
+    }
     for needle in input.into_iter().chain(["a", "é", "missing"]) {
         let mut expected: Vec<_> = input
             .iter()
@@ -2762,18 +2775,32 @@ fn ordered_primary_equality_seeks_one_row_before_checking_secondary_predicates()
         for (id, category, expected, examined) in
             [(8_u64, 0_u8, Some(8), 1), (8, 1, None, 1), (9, 1, None, 0)]
         {
-            let mut query = db
-                .query::<Entry>()
-                .filter("category", C::Eq, category)
-                .filter("id", C::Eq, id)
-                .order_by(&["amount"])
-                .work_limit(1);
-            if descending {
-                query = query.descending();
-            }
-            let page = query.fetch().unwrap();
+            let query = || {
+                let query = db
+                    .query::<Entry>()
+                    .eq(Entry::CATEGORY, category)
+                    .eq(Entry::ID, id)
+                    .order_by(&[Entry::AMOUNT])
+                    .work_limit(1);
+                if descending {
+                    query.descending()
+                } else {
+                    query
+                }
+            };
+            let page = query().fetch().unwrap();
             assert_eq!(ids(&page.rows), expected.into_iter().collect::<Vec<_>>());
             assert_eq!((page.examined, page.fetched), (examined, examined));
+            let projected = query().distinct().fetch_as::<CategoryOnly>().unwrap();
+            assert_eq!(
+                projected.rows,
+                expected.map(|_| CategoryOnly { category }).as_slice()
+            );
+            assert_eq!(
+                (projected.examined, projected.fetched),
+                (examined, examined)
+            );
+            assert!(projected.next.is_none());
         }
     }
 }
@@ -5282,6 +5309,196 @@ fn distinct_filters_reject_or_emit_whole_classes_across_pages() {
 }
 
 #[test]
+fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
+    ///
+    /// Seat
+    /// Records an optional seat assignment within a section.
+    ///
+
+    #[entity(pk(field="id"), index(fields=["category","maybe"],unique,present_only), index(field="category"), index(field="maybe"), fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="category",value(item(prim="Nat8"))),
+        field(name="maybe",value(opt,item(prim="Nat64")))
+    ))]
+    struct Seat {}
+
+    ///
+    /// Assignment
+    /// Projects the complete compound seat key.
+    ///
+
+    #[ic_db::record(fields(
+        field(name = "category", value(item(prim = "Nat8"))),
+        field(name = "maybe", value(opt, item(prim = "Nat64")))
+    ))]
+    struct Assignment {}
+
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Seat::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut expected = Vec::new();
+    for id in 0..38 {
+        let category = if id < 2 { 0 } else { (id % 2) as u8 };
+        let maybe = (id >= 2).then_some(id / 2);
+        let mut batch = Batch::new();
+        batch
+            .insert(&Seat {
+                id,
+                category,
+                maybe,
+            })
+            .unwrap();
+        db.commit(batch).unwrap();
+        if maybe.is_some() {
+            expected.push(Assignment { category, maybe });
+        }
+    }
+
+    let distinct = || db.query::<Seat>().distinct();
+    // A complete unique lookup has one possible owner under any admitted order.
+    let exact = || {
+        distinct()
+            .eq(Seat::CATEGORY, 1_u8)
+            .eq(Seat::MAYBE, 18_u64)
+            .work_limit(1)
+    };
+    let hit = exact().fetch_as::<OptionalOnly>().unwrap();
+    assert_eq!(hit.rows, [OptionalOnly { maybe: Some(18) }]);
+    assert_eq!(hit.examined, 1);
+    assert!(hit.next.is_none());
+    let hinted = distinct()
+        .using_index("category,maybe", &[1_u8.into(), 18_u64.into()])
+        .order_desc(Seat::ID)
+        .work_limit(1)
+        .fetch_as::<OptionalOnly>()
+        .unwrap();
+    assert_eq!(hinted.rows, hit.rows);
+    assert_eq!(hinted.examined, 1);
+    assert!(hinted.next.is_none());
+    let rejected = exact()
+        .lt(Seat::ID, 37_u64)
+        .fetch_as::<OptionalOnly>()
+        .unwrap();
+    assert!(rejected.rows.is_empty() && rejected.next.is_none());
+    let missing = distinct()
+        .eq(Seat::CATEGORY, 1_u8)
+        .eq(Seat::MAYBE, 19_u64)
+        .work_limit(1)
+        .fetch_as::<OptionalOnly>()
+        .unwrap();
+    assert_eq!(missing.examined, 0);
+    assert!(missing.rows.is_empty() && missing.next.is_none());
+    let present = || distinct().filter_present(Seat::MAYBE);
+    let mut after = None;
+    let mut seen = Vec::new();
+    for _ in 0..=38 {
+        let mut query = present().limit(3).work_limit(4);
+        if let Some(cursor) = &after {
+            query = query.after(cursor);
+        }
+        let page = query.fetch_as::<Assignment>().unwrap();
+        assert!(page.rows.len() <= 3 && page.examined <= 4);
+        seen.extend(page.rows);
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    assert!(after.is_none());
+    assert_eq!(seen, expected);
+    // Fixing the section leaves the seat number unique on either traversal.
+    let section = [1_u8.into()];
+    for explicit in [false, true] {
+        let scoped = || {
+            if explicit {
+                present().using_index("category", &section)
+            } else {
+                present().eq(Seat::CATEGORY, 1_u8)
+            }
+        };
+        let query = || scoped().limit(3).work_limit(8);
+        let first = query().fetch_as::<OptionalOnly>().unwrap();
+        assert_eq!(
+            first.rows.iter().map(|row| row.maybe).collect::<Vec<_>>(),
+            [Some(1), Some(2), Some(3)]
+        );
+        let cursor = first.next.unwrap();
+        let next = query().after(&cursor).fetch_as::<OptionalOnly>().unwrap();
+        assert_eq!(
+            next.rows.iter().map(|row| row.maybe).collect::<Vec<_>>(),
+            [Some(4), Some(5), Some(6)]
+        );
+    }
+    assert!(matches!(
+        present()
+            .filter_in(Seat::CATEGORY, &[0_u8, 1])
+            .limit(3)
+            .fetch_as::<OptionalOnly>(),
+        Err(Error::Limit)
+    ));
+    // A present prefix on a different index also proves sparse membership.
+    let seat = [1_u64.into()];
+    let sections = || distinct().using_index("maybe", &seat).limit(1);
+    let first = sections().fetch_as::<CategoryOnly>().unwrap();
+    assert_eq!(first.rows[0].category, 0);
+    let second = sections()
+        .after(&first.next.unwrap())
+        .fetch_as::<CategoryOnly>()
+        .unwrap();
+    assert_eq!(second.rows[0].category, 1);
+    let absent = distinct()
+        .using_index("maybe", &[IndexValue::Absent])
+        .limit(1)
+        .fetch_as::<CategoryOnly>()
+        .unwrap();
+    assert_eq!(absent.rows, [CategoryOnly { category: 0 }]);
+    assert!(absent.next.is_none());
+    // Mixed directions require a complete sort. Uniqueness allows the ordinary top three.
+    let sorted = present()
+        .order_asc(Seat::MAYBE)
+        .order_desc(Seat::ID)
+        .limit(3)
+        .fetch_as::<Assignment>()
+        .unwrap();
+    assert_eq!(
+        sorted.rows,
+        [
+            expected[1].clone(),
+            expected[0].clone(),
+            expected[3].clone()
+        ]
+    );
+    assert!(sorted.next.is_none());
+    // The two absent rows have the same projection. The sparse index omits both.
+    assert!(matches!(
+        distinct().limit(3).fetch_as::<Assignment>(),
+        Err(Error::Limit)
+    ));
+    let unassigned = distinct()
+        .filter_absent(Seat::MAYBE)
+        .fetch_as::<Assignment>()
+        .unwrap();
+    assert_eq!(
+        unassigned.rows,
+        [Assignment {
+            category: 0,
+            maybe: None
+        }]
+    );
+    // The seat number alone repeats in different sections.
+    assert!(matches!(
+        present().limit(3).fetch_as::<OptionalOnly>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
 fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -6047,9 +6264,24 @@ fn grouping_bytes_are_bounded_separately_from_index_keys_and_output() {
         })
         .unwrap();
     db.commit(batch).unwrap();
+    // The single-owner projection fits the output budget without encoding the
+    // label as a comparison key. A range still needs that key to deduplicate.
+    let single = db
+        .query::<GroupText>()
+        .eq(GroupText::ID, 0_u64)
+        .distinct()
+        .fetch_as::<TextKey>()
+        .unwrap();
+    assert_eq!(
+        single.rows,
+        [TextKey {
+            label: "\0".repeat(2100)
+        }]
+    );
+    assert!(single.next.is_none());
     assert!(matches!(
         db.query::<GroupText>()
-            .filter("id", C::Eq, 0_u64)
+            .lt(GroupText::ID, 2_u64)
             .distinct()
             .fetch_as::<TextKey>(),
         Err(Error::Limit)

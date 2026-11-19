@@ -73,10 +73,9 @@ pub(super) fn select<'a>(
             return Err(Error::InvalidQuery);
         }
         let prefix = admit_index_prefix(entity, index, values)?;
-        let exact_owner = matches!(output, super::PlanOutput::Rows)
-            && !request.distinct
-            && index.is_unique_lookup(values.len());
-        if !complete_membership(entity, index, values, request)
+        let exact_owner =
+            matches!(output, super::PlanOutput::Rows) && index.is_unique_lookup(values.len());
+        if !complete_membership(entity, index, index.fields, values, request)
             || !(request.order.is_none() || exact_owner || fits_order(Some(index), values.len()))
         {
             return Err(Error::InvalidQuery);
@@ -87,17 +86,20 @@ pub(super) fn select<'a>(
             fixed: values.len(),
         }));
     }
+    // No secondary prefix can narrow a direct primary-key seek. Resumed DISTINCT
+    // pages may already be bound to a secondary traversal.
+    if single_row && (!request.distinct || request.cursor.is_none()) {
+        return Ok(Path::Primary);
+    }
     // Any valid order holds for zero or one owner. A resumed query keeps the
-    // physical path bound to its cursor; DISTINCT and aggregates own their paths.
+    // physical path bound to its cursor. Aggregates select their own paths.
     if matches!(output, super::PlanOutput::Rows)
-        && !request.distinct
         && request.cursor.is_none()
+        && !request.predicates.is_empty()
         && let Some(path) = unique_lookup(entity, request)?
     {
         return Ok(Path::Index(path));
     }
-    // A mandatory primary equality admits at most one row under any valid order.
-    // Projected DISTINCT retains its path-dependent continuation strategy.
     // Before 0.23.13 a default-order page could only resume on the primary
     // path. The cursor still has to pass the complete binding and key checks.
     let default_primary = request.order.is_none()
@@ -107,7 +109,7 @@ pub(super) fn select<'a>(
                 .cursor
                 .is_some_and(|c| c.position.first() == Some(&2))
             || literal_equalities(request).next().is_none());
-    if default_primary || (single_row && !request.distinct) {
+    if default_primary {
         return Ok(Path::Primary);
     }
     let primary_fits = fits_order(None, 0);
@@ -115,7 +117,7 @@ pub(super) fn select<'a>(
     for index in entity.indexes {
         let values = leading_equalities(request, index);
         if (primary_fits && values.is_empty())
-            || !complete_membership(entity, index, &values, request)
+            || !complete_membership(entity, index, index.fields, &values, request)
             || !fits_order(Some(index), values.len())
         {
             continue;
@@ -158,9 +160,6 @@ fn unique_lookup<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
 ) -> Result<Option<IndexPath<'a>>, Error> {
-    if request.predicates.is_empty() || equality(request, entity.primary_key).is_some() {
-        return Ok(None);
-    }
     for index in entity
         .indexes
         .iter()
@@ -221,7 +220,7 @@ pub(super) fn select_aggregate_path<'a>(
     let mut best = None;
     for index in entity.indexes {
         let values = leading_equalities(request, index);
-        if !complete_membership(entity, index, &values, request) {
+        if !complete_membership(entity, index, index.fields, &values, request) {
             continue;
         }
         let Some(path) = automatic_prefix(entity, index, &values)? else {
@@ -359,21 +358,23 @@ pub(super) fn requires_present_field(
 // Sparse traversal must cover every possible match. Each optional component needs
 // a present prefix operand or a mandatory clause whose alternatives all reject
 // absence on that same field. Presence alone never makes an ordering field fixed.
-fn complete_membership(
+pub(super) fn complete_membership(
     entity: &EntitySchema,
     index: &IndexSchema,
+    prefix_fields: &[&str],
     values: &[IndexValue<'_>],
     request: &Request<'_>,
 ) -> bool {
     !index.present_only
-        || index.fields.iter().enumerate().all(|(i, name)| {
+        || index.fields.iter().all(|name| {
             entity
                 .fields
                 .iter()
                 .find(|f| f.name == *name)
                 .is_some_and(|field| {
                     !field.optional
-                        || values.get(i).is_some_and(|v| *v != IndexValue::Absent)
+                        || prefix_value(prefix_fields, values, name)
+                            .is_some_and(|v| v != IndexValue::Absent)
                         || requires_present_field(entity, request, name)
                 })
         })
@@ -440,6 +441,16 @@ pub(super) fn literal_equalities<'r, 'a>(
     })
 }
 
+// Operands have already been type-checked. Text and Blob literals carry their
+// original bytes, before the durable key codec escapes embedded zeros.
+fn literal_bytes(value: IndexValue<'_>) -> Option<&[u8]> {
+    match value {
+        IndexValue::Text(text) => Some(text.as_bytes()),
+        IndexValue::Blob(bytes) => Some(bytes),
+        _ => None,
+    }
+}
+
 // The caller supplies either known query values or just the selected key prefix.
 fn fixed_comparison<'a>(
     predicate: &Predicate<'_>,
@@ -448,11 +459,10 @@ fn fixed_comparison<'a>(
     let left = lookup(predicate.field)?;
     let right = match predicate.operand {
         QueryOperand::Length(threshold) => {
-            let length = match left {
-                IndexValue::Text(text) => Some(u32::try_from(text.len()).ok()?),
-                IndexValue::Blob(bytes) => Some(u32::try_from(bytes.len()).ok()?),
-                IndexValue::Absent => None,
-                _ => return None,
+            let length = if left == IndexValue::Absent {
+                None
+            } else {
+                Some(u32::try_from(literal_bytes(left)?.len()).ok()?)
             };
 
             return Some(predicate.comparison.accepts_length(length, threshold));
@@ -464,6 +474,11 @@ fn fixed_comparison<'a>(
     match predicate.comparison {
         Comparison::Eq => Some(left == right),
         Comparison::Ne => Some(left != right),
+        Comparison::StartsWith => Some(literal_bytes(left)?.starts_with(literal_bytes(right)?)),
+        Comparison::EndsWith => Some(literal_bytes(left)?.ends_with(literal_bytes(right)?)),
+        Comparison::Contains => {
+            Some(memchr::memmem::find(literal_bytes(left)?, literal_bytes(right)?).is_some())
+        }
         _ => None,
     }
 }

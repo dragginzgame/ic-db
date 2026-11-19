@@ -88,9 +88,9 @@ pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use session::{DatabaseSession, UniqueKey};
 pub use store::{
-    Aggregate, Batch, Comparison, CopyStep, GroupCount, GroupCursor, GroupOrder, GroupPage,
-    GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage,
-    SchemaTransition, SortDirection,
+    Aggregate, Batch, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor, GroupOrder,
+    GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand,
+    QueryPage, SchemaTransition, SortDirection,
 };
 
 /// Admitted database owning an exclusive lease on a named IC Storage allocation.

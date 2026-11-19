@@ -1,8 +1,8 @@
 //! Private maintenance controls; production authorization/endpoints belong to Canic.
 use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
-use crate::{Entry, KEY, compiled, runtime, schema::ManagedRow};
+use crate::{Document, Entry, KEY, compiled, runtime, schema::ManagedRow};
 use ic_db::{Batch, Entity, EntitySchema, Error, QueryCursor, Schema, SchemaTransition, Timestamp};
-use ic_storage::StableKey;
+use ic_storage::{StableKey, adapter::StableCell};
 
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
@@ -15,6 +15,7 @@ const TRANSITION_VERSION: u32 = if cfg!(feature = "maintenance-v2") {
 
 pub const COPY_SOURCE: &str = "m1.copy.source.v1";
 pub const COPY_TARGET: &str = "m1.copy.target.v1";
+pub const COPY_ROUTE: &str = "m1.copy.route.v1";
 pub const COPY_NEXT: &str = "m1.copy.next.v1";
 
 #[ic_db::entity(name = "Entry", pk(field = "id"),
@@ -555,6 +556,11 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let source_memory = host
         .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
         .unwrap();
+    let route_memory = || {
+        host.open_memory(&StableKey::parse(COPY_ROUTE).unwrap())
+            .unwrap()
+    };
+    let load_route = || StableCell::<u8, _>::load(route_memory()).map_err(|_| Error::Corrupt);
     if operation == 0 {
         let mut db = Database::open(source_memory, source)?;
         let mut batch = Batch::new();
@@ -570,9 +576,15 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
         })?;
         batch.insert(&CopyMapping { id: 3, entry: 2 })?;
         db.commit(batch)?;
+        StableCell::create(route_memory(), 2_u8);
         return Ok((true, None, vec![]));
     }
-    if operation == 10 {
+    let selected = if operation == 13 {
+        Some(*load_route()?.get())
+    } else {
+        None
+    };
+    if operation == 10 || selected == Some(2) {
         let db = Database::open(source_memory, source)?;
         let rows = db
             .page::<EntryV2>(None, 32)?
@@ -582,7 +594,13 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
             .collect();
         return Ok((true, None, rows));
     }
-    let target = whole_schema(EntryV3::SCHEMA)?;
+    let target = Schema::new(&[
+        EntryV3::SCHEMA,
+        CopyMapping::SCHEMA,
+        CopyEmpty::SCHEMA,
+        ManagedRow::SCHEMA,
+        Document::SCHEMA,
+    ])?;
     let transition = SchemaTransition::new(
         &source,
         &target,
@@ -601,6 +619,19 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let target_memory = host
         .open_memory(&StableKey::parse(COPY_NEXT).unwrap())
         .unwrap();
+    if let Some(version) = selected {
+        if version != 3 {
+            return Err(Error::Corrupt);
+        }
+        let db = Database::open(target_memory, target)?;
+        let rows = db
+            .page::<EntryV3>(None, 32)?
+            .rows
+            .into_iter()
+            .map(|row| (row.id, row.category, row.amount))
+            .collect();
+        return Ok((true, None, rows));
+    }
     if operation == 2 {
         let copy = Maintenance::resume(source_memory, &transition)?.begin_copy(
             target_memory,
@@ -624,6 +655,35 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
                 .collect(),
         ));
     }
+    if matches!(operation, 11 | 12) {
+        let mut db = Database::open(target_memory, target)?;
+        let count = db.query::<ManagedRow>().count()?.value;
+        let mut batch = Batch::at(Timestamp::from_millis(30));
+        batch.insert_input(ManagedRow::insert().id(1).body("first".into()))?;
+        // Transfer Entry 2's only inbound reference from a copied mapping to a new document.
+        // Operation 12 points outside the copied rows to exercise refusal of the whole batch.
+        batch.delete::<CopyMapping>(3)?;
+        batch.insert(&Document {
+            id: 1,
+            entry_id: if operation == 12 { 99 } else { 2 },
+            title: "first".into(),
+            note: None,
+            published: true,
+            score: 1,
+            previous_score: None,
+            priority: None,
+        })?;
+        db.commit(batch)?;
+        let documents = db.index_prefix::<Document>("entry_id,score", &[2_u64.into()], 2)?;
+        return Ok((
+            count == 0
+                && db.get::<ManagedRow>(1)?.is_some()
+                && db.get::<CopyMapping>(3)?.is_none()
+                && matches!(documents.as_slice(), [doc] if doc.id == 1 && doc.entry_id == 2),
+            None,
+            vec![],
+        ));
+    }
     let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
     let complete = match operation {
         3 => match copy.next_entity() {
@@ -644,7 +704,12 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
         },
         4 => copy.validate_next(2)?,
         5 => {
+            let mut route = load_route()?;
+            if *route.get() != 2 {
+                return Err(Error::InvalidTransition);
+            }
             copy.publish()?;
+            route.set(3);
             return Ok((true, None, vec![]));
         }
         9 => copy.cancel_step(2)?,

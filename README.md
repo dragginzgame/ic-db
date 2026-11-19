@@ -60,10 +60,14 @@ changed transitions or source revisions; they are read positions, not copy check
 `begin_copy` now binds a fresh host-provided target allocation and returns
 `SchemaCopy`. Its `copy_next::<Source, Target>` transforms bounded pages, rebuilds
 indexes through batch commits and saves progress atomically with each chunk.
-Copy the whole database, preserving the named entity set and every primary key.
-Use `next_entity()` to select the next typed transform in schema-name order;
-`copy_unchanged::<E>` explicitly preserves an unchanged entity. Even empty entities
-must be visited. `CopyStep.complete` means every entity is copied. References,
+Copy every source entity, preserving its name and primary keys. Use
+`next_entity()` to select its typed transform in schema-name order, including
+empty source entities. Use `copy_unchanged::<E>` for an unchanged entity.
+An entity introduced by the target schema starts empty and needs no copy step.
+If an existing row gains an optional reference to it, set the field to `None`
+during copy. After publication, one batch can insert the referenced row and
+set the field to its key. A present reference, including key zero, must resolve.
+`CopyStep.complete` means every source entity is copied. References,
 including cycles, validate against the complete target before publication; ordinary
 writes retain their existing checks. Managed timestamps retain their values by
 role, including explicit field renames; adding/removing roles or changing their
@@ -72,6 +76,11 @@ values refuses. Both allocations stay closed to ordinary access.
 `validate_next` checks both collections in bounded passes; only after it completes
 can `publish` atomically open target and retire source. It returns the target
 database handle, and the host selects that allocation for subsequent opens.
+After an interruption, call `SchemaCopy::resume` with the same allocations,
+schemas and transition. Its read-only `status()` reports `Copying(entity)`,
+`Validating`, `ReadyToPublish`, or `Cancelling`. Continue with the matching
+bounded operation. Publication is an explicit host decision. A handle that
+completes cancellation reports `Cancelled`; drop it and reopen the source.
 Publication preserves source rows, indexes and revisions while closing its admission.
 Once host retention obligations permit deletion, `RetiredSource::resume` requires
 the exact transition and both incarnations; `cleanup_step` removes at most 32

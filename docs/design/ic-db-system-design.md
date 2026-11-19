@@ -1174,8 +1174,8 @@ cover byte retries, source decoder admission, cursor invalidation and paging
 across executable upgrades while ordinary access remains closed.
 
 **Whole-database copy (0.17).** `Maintenance::begin_copy` accepts fresh host-provided
-governed memory and a fresh nonzero target incarnation. Source and target preserve
-the same named entity set and primary-key declarations, producing exactly one
+governed memory and a fresh nonzero target incarnation. Each source entity keeps
+its name and primary-key declaration in the target, producing exactly one
 target row per source row with unchanged keys. This extends 0.16's one-entity
 mechanism without a planner or a second executor. Whole-database copying is the
 selected initial product contract; selective reuse is deferred, not prebuilt.
@@ -1184,9 +1184,14 @@ The caller selects the next typed operation using `next_entity()`, in canonical
 schema-name order. `copy_next::<Source, Target>` applies the explicitly versioned
 Rust transformation; `copy_unchanged::<E>` uses the same path and requires the
 entity's complete declaration to be admitted by both schemas. A changed declaration
-cannot use the unchanged shortcut. Empty entities must also be visited. Progress
+cannot use the unchanged shortcut. Empty source entities must also be visited. Progress
 records one entity ordinal plus its bounded cursor, not a persisted program or
-dependency graph. Every entity is copied and every target index rebuilt.
+dependency graph. Every source entity is copied and every target index rebuilt.
+After resume, `SchemaCopy::status()` reads the admitted checkpoint already in
+memory. The host sees one validation stage across both passes, can distinguish
+readiness for publication from cancellation, and decides when to publish.
+Frozen IcyDB `6d421e3` likewise reads phase from its migration record
+(`db/schema/migration_record/mod.rs`). Here the host needs no second progress record.
 `CopyStep.complete` means all entities are copied; a completed entity alone does
 not authorize validation or publication. Wrong entity order/pairing refuses intact.
 
@@ -1195,8 +1200,14 @@ Ordinary inserts/replacements/deletes still enforce final-batch references. Shar
 reference extraction and target decoding keep absence, zero keys and key-type
 semantics identical. Final validation checks references within each complete
 collection, allowing cycles and referencing rows copied before their targets.
-Missing targets prevent publication and leave cancellation available. Adding or
-removing entities, deleting source rows, changing keys and split/merge transforms
+Missing targets prevent publication and leave cancellation available. A compiled
+target may add empty entities. Target initialization creates their ordinary
+zero-count, zero-revision metadata. They have no source copy step. Target
+validation checks that metadata, rejects rows without source peers and verifies
+index owners. A copied row with a present reference into an added, empty entity
+fails target validation. After publication, a newly inserted row may reference
+a migrated owner and protects it from deletion under the ordinary batch rules.
+Removing entities, deleting source rows, changing keys and split/merge transforms
 remain explicitly unsupported; these need deliberate future contracts.
 
 **Managed timestamp preservation (0.17).** Source and target must retain the same
@@ -1262,7 +1273,9 @@ key coverage; neither source-only nor target-only traversal suffices. Existing
 row/index codecs and ownership checks remain authoritative. Each validated row
 has at most eight index and sixteen reference checks under the admitted schema.
 At each pass's start, all declared revisions (at most 32) are checked, including
-those of empty entities. No transform is rerun
+those of empty entities. A positive count at revision zero is corrupt even when
+both counts agree. A positive revision with zero rows is valid after deletion.
+No transform is rerun
 or arbitrary callback executed during validation.
 
 Only after both passes reach exhaustion does the target record ready.
@@ -1274,8 +1287,11 @@ allocation-routing catalog. Any durable host routing change must share the same
 synchronous message if it is to be atomic with publication. Source bytes stay
 preserved but every ordinary open, maintenance resume and cancellation path
 refuses retired source admission. Target writes do not revive a rollback path.
-Publication traps revert both roles. Retired-source cleanup follows the separate
-explicit host retention decision below.
+The successive-copy PocketIC fixture stores the host’s active allocation in a
+separate stable cell. A trap after updating the cell reverts both manifest changes
+and the selection. After upgrade, the same host read observes frozen B after the
+trap, live B after cancellation, or transformed C after successful publication.
+Retired-source cleanup follows the separate explicit host retention decision below.
 
 **Retired-source cleanup (0.17).** `RetiredSource::resume` requires the exact
 transition, source incarnation, target incarnation and retired source role before
@@ -1328,7 +1344,7 @@ these checks; the predecessor input is documented in qualification.
 
 **Successive migration witness (0.17).** The same Wasm host now runs A → B,
 ordinary B replacements/inserts, then B → C using a third fresh allocation. C adds
-a field and index while retaining the complete entity set. B → C resumes across
+a field and index. The 0.23.21 fixture also adds an empty entity in C. B → C resumes across
 upgrades; changed transformation versions and stale A → B operations refuse intact.
 Cancelling the second migration restores B with its intervening writes, never A.
 After publication, the new index returns transformed old and newly inserted rows,
@@ -2266,7 +2282,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
-| M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Same entity set and keys only; broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
+| M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter, native v1 inspection and one typed listing through signed HTTP | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
@@ -2861,6 +2877,11 @@ The same proof applies when a mandatory equality disagrees with an explicitly
 fixed index component. Pages finish without a continuation and counts return
 zero with no candidate visits. Unvisited owners receive no integrity check.
 A fixed value can also disprove an equality or inequality inside an OR clause.
+For Text and Blob, fixed operands also decide prefix, suffix and substring
+predicates using their original bytes. Frozen IcyDB `6d421e3` separates strict
+and case-folded text comparisons in `db/predicate/semantics/mod.rs`; IC DB
+uses exact UTF-8 or raw Blob bytes. An unfixed haystack still needs its usual
+access path and work budget.
 Skip traversal only if every alternative in that clause is false. This covers
 `filter_in` excluding a required value and `filter_not_in` forbidding it.
 For key-only counts, one alternative proven true by the selected index prefix
@@ -2883,8 +2904,9 @@ Ordering compares requested and physical field sequences after removing constant
 components, ending at the unique primary key. Presence proof does not fix a field
 to one value or create an equality prefix. For ordinary ordered pages a mandatory literal primary-key equality selects the
 primary range before comparing secondary indexes. The one possible row satisfies
-any admitted order and still passes all residual checks. Explicit index requests
-and DISTINCT retain their own traversal contracts. This reuses frozen IcyDB
+any admitted order and still passes all residual checks. Fresh DISTINCT projections
+also use this seek. Explicit index requests and resumed pages retain their traversal
+contracts. This reuses frozen IcyDB
 `6d421e3`’s primary-lookup preference (`db/query/plan/planner/mod.rs`) with the
 existing primary range scanner. Automatic selection considers only prefixes
 that can form a complete physical key within 512 bytes, including the owner
@@ -3096,7 +3118,19 @@ or computed projection is implied. An output type is not registered in the store
 schema and changing its Rust name alone does not change query meaning.
 
 Product `.distinct()` admits complete entities and projections
-containing the primary key as inherently unique. Other live projections must form the
+containing the primary key as inherently unique. A comparable projection containing
+the varying fields of a declared unique index also identifies at most one owner
+if every matching row participates. A mandatory literal equality or a fixed
+component of the selected index prefix can supply any omitted key field.
+When mandatory equalities fix the primary key or an entire unique index key,
+fresh DISTINCT row queries share the ordinary single-owner lookup. Every admitted ordering holds
+for the one possible owner. Its row still passes the normal residual checks.
+The projection must fit the output budget. The comparison-key byte cap applies
+when execution actually constructs a key for deduplication.
+An equality alternative inside an OR cannot supply that guarantee. For sparse unique indexes the planner reuses index
+membership admission. This works even when the requested order traverses another
+index or primary storage. These projections use the ordinary scanner and its live
+page limits. Other live projections must form the
 leading tuple of a selected index after fixed prefix components. Predicates may
 read only projected fields or fields fixed by that actual selected prefix.
 Ordering supplies the admitted prefix count for both automatic and explicit paths;

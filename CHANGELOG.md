@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.23.21] - Unreleased
+
+- After an interrupted migration, `SchemaCopy::resume(...)?` exposes
+  `.status()`. It identifies the entity to copy, validation, readiness for
+  explicit publication, or cancellation from the saved checkpoint.
+- Migration validation checks a managed row’s saved timestamps with one peer-row
+  lookup. For rows without managed timestamps it only checks peer-key existence.
+
+- Counts, writes and migration validation now reject entity metadata that reports
+  rows at revision zero. The first insertion always advances the revision.
+
+- An explicit schema migration can add an empty entity. Include it in the
+  compiled target schema and copy the existing entities as usual. The new
+  entity becomes writable at cutover. Cancelling before cutover reopens the
+  source schema with its existing rows and indexes. After publication, the new
+  entity can reference migrated rows through ordinary checked batches.
+
+- A DISTINCT projection containing a complete unique index key can page in
+  primary-key order using ordinary row and work limits. Sparse unique keys
+  qualify when all matching rows participate in the index. A required equality
+  filter or selected index prefix can supply omitted key fields. For example,
+  fixing the section lets callers project just the seat number when the
+  schema declares the section/seat pair unique.
+- When equality filters fix the primary key or every field of a unique index,
+  a fresh DISTINCT row query can use the same single-owner lookup as an ordinary projection.
+  A miss examines zero candidates and a hit still checks the remaining filters.
+- Counts can resolve prefix, suffix and substring filters directly when the
+  selected key fixes the Text or Blob value. A contradictory pattern finishes
+  with zero candidates examined.
+
 ## [0.23.20] - 2026-11-19
 
 - Update product dependencies to IC Platform Types 0.21.4, Runtime 0.23.22 and

@@ -1,7 +1,7 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
 use ic_db::{
-    AggregateJobs, Batch, Database, Entity, Error, JobOutcome, Maintenance, RetiredSource, Schema,
-    SchemaCopy, SchemaTransition, Timestamp, entity,
+    AggregateJobs, Batch, CopyStatus, Database, Entity, Error, JobOutcome, Maintenance,
+    RetiredSource, Schema, SchemaCopy, SchemaTransition, Timestamp, entity,
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -350,6 +350,7 @@ fn copy_rebuilds_indexes_and_resumes_from_its_own_checkpoint() {
     );
     let mut copy = resume(&runtime);
     assert!(!copy.cancel_step(1).unwrap());
+    assert_eq!(copy.status(), CopyStatus::Cancelling);
     assert!(matches!(
         copy.copy_next::<Source, Target>(1, 9, transform),
         Err(Error::InvalidTransition)
@@ -357,10 +358,12 @@ fn copy_rebuilds_indexes_and_resumes_from_its_own_checkpoint() {
     drop(copy);
     let mut copy = resume(&runtime);
     let mut calls = 0;
+    assert_eq!(copy.status(), CopyStatus::Cancelling);
     while !copy.cancel_step(2).unwrap() {
         calls += 1;
         assert!(calls < 10);
     }
+    assert_eq!(copy.status(), CopyStatus::Cancelled);
     drop(copy);
     assert_eq!(entries(&runtime, "copy.target.v1").len(), 1); // ownership tombstone only
     let db = Database::open(
@@ -489,16 +492,140 @@ fn ownership_refuses_wrong_pairs_versions_and_existing_target_allocations() {
 }
 
 #[test]
+fn added_entity_requires_pristine_state_before_cutover() {
+    for (revision, count) in [(1_u64, 0_u64), (0, 1)] {
+        let runtime = host(VectorMemory::default());
+        let source = source();
+        let target = Schema::new(&[Other::SCHEMA, Source::SCHEMA]).unwrap();
+        let transition = SchemaTransition::new(&source, &target, "add-other", 1, &[]).unwrap();
+        let source_memory = || runtime.open_memory(&key("copy.source.v1")).unwrap();
+        let target_memory = || runtime.open_memory(&key("copy.target.v1")).unwrap();
+        let mut copy = Database::create(source_memory(), source.clone(), [1; 16])
+            .unwrap()
+            .begin_maintenance(&transition)
+            .unwrap()
+            .begin_copy(target_memory(), source.clone(), target.clone(), [2; 16])
+            .unwrap();
+        assert!(copy.copy_unchanged::<Source>(1, 4096).unwrap().complete);
+        drop(copy);
+        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(target_memory());
+        let mut metadata_key = vec![1];
+        metadata_key.extend(Other::SCHEMA.id.to_be_bytes());
+        assert_eq!(raw.get(&metadata_key), Some(vec![0; 16]));
+        raw.insert(
+            metadata_key,
+            [revision.to_le_bytes(), count.to_le_bytes()].concat(),
+        );
+        drop(raw);
+        let mut copy = SchemaCopy::resume(
+            source_memory(),
+            target_memory(),
+            source,
+            target,
+            &transition,
+        )
+        .unwrap();
+        assert!(!copy.validate_next(32).unwrap()); // source pass
+        assert!(matches!(copy.validate_next(32), Err(Error::Corrupt)));
+        assert!(matches!(copy.publish(), Err(Error::InvalidTransition)));
+    }
+}
+
+#[test]
+fn migrated_row_can_link_to_a_new_entity_after_publication() {
+    #[entity(
+        name = "Other",
+        pk(field = "id"),
+        index(field = "thing"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(
+                name = "thing",
+                value(opt, item(prim = "Nat64")),
+                references(entity = "Source")
+            )
+        )
+    )]
+    struct LinkedOther {}
+
+    for premature_link in [false, true] {
+        let runtime = host(VectorMemory::default());
+        let source = Schema::new(&[Other::SCHEMA]).unwrap();
+        let target = Schema::new(&[LinkedOther::SCHEMA, Source::SCHEMA]).unwrap();
+        let transition = SchemaTransition::new(
+            &source,
+            &target,
+            "link-thing",
+            1,
+            &[u8::from(premature_link)],
+        )
+        .unwrap();
+        let source_memory = || runtime.open_memory(&key("copy.source.v1")).unwrap();
+        let mut db = Database::create(source_memory(), source.clone(), [1; 16]).unwrap();
+        let mut batch = Batch::new();
+        batch.insert(&Other { id: 7 }).unwrap();
+        db.commit(batch).unwrap();
+        let mut copy = db
+            .begin_maintenance(&transition)
+            .unwrap()
+            .begin_copy(
+                runtime.open_memory(&key("copy.target.v1")).unwrap(),
+                source.clone(),
+                target,
+                [2; 16],
+            )
+            .unwrap();
+        assert!(
+            copy.copy_next::<Other, LinkedOther>(2, 4096, |row, inputs| {
+                Ok(LinkedOther {
+                    id: row.id,
+                    thing: (inputs == [1]).then_some(0),
+                })
+            })
+            .unwrap()
+            .complete
+        );
+        assert!(!copy.validate_next(32).unwrap()); // source pass
+        if premature_link {
+            assert!(matches!(
+                copy.validate_next(32),
+                Err(Error::ReferenceViolation)
+            ));
+            assert!(copy.cancel_step(32).unwrap());
+            drop(copy);
+            let db = Database::open(source_memory(), source).unwrap();
+            assert!(db.get::<Other>(7).unwrap().is_some());
+            continue;
+        }
+
+        assert!(copy.validate_next(32).unwrap());
+        let mut db = copy.publish().unwrap();
+        let mut row = db.get::<LinkedOther>(7).unwrap().unwrap();
+        assert_eq!(row.thing, None);
+        row.thing = Some(0);
+        let mut batch = Batch::new();
+        batch.replace(&row).unwrap();
+        batch.insert(&Source { id: 0, value: 9 }).unwrap();
+        db.commit(batch).unwrap();
+        assert_eq!(
+            db.index_prefix::<LinkedOther>("thing", &[0_u64.into()], 2)
+                .unwrap(),
+            [row]
+        );
+        let mut batch = Batch::new();
+        batch.delete::<Source>(0).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    }
+}
+
+#[test]
 fn unsupported_shapes_refuse_before_target_initialization() {
     for (source_schema, target_schema) in [
         (
             Schema::new(&[Source::SCHEMA, Other::SCHEMA]).unwrap(),
             Schema::new(&[Target::SCHEMA]).unwrap(),
         ),
-        (
-            source(),
-            Schema::new(&[Target::SCHEMA, Other::SCHEMA]).unwrap(),
-        ),
+        (source(), Schema::new(&[Other::SCHEMA]).unwrap()),
         (Schema::new(&[ManagedSource::SCHEMA]).unwrap(), target()),
         (source(), Schema::new(&[ManagedSource::SCHEMA]).unwrap()),
     ] {
@@ -627,6 +754,7 @@ fn publication_requires_resumable_validation_and_keeps_source_retired() {
     let memory = VectorMemory::default();
     let runtime = host(memory.clone());
     let copy = begin(&runtime);
+    assert_eq!(copy.status(), CopyStatus::Copying("Thing"));
     let before = memory.borrow().clone();
     assert!(matches!(copy.publish(), Err(Error::InvalidTransition)));
     assert_eq!(*memory.borrow(), before);
@@ -642,6 +770,7 @@ fn publication_requires_resumable_validation_and_keeps_source_retired() {
     let source_entries = entries(&runtime, "copy.source.v1");
     for call in 0..32 {
         let mut copy = resume(&runtime);
+        assert_eq!(copy.status(), CopyStatus::Validating);
         let ready = copy.validate_next(2).unwrap();
         assert!(matches!(
             copy.copy_next::<Source, Target>(2, 18, transform),
@@ -660,7 +789,9 @@ fn publication_requires_resumable_validation_and_keeps_source_retired() {
         }
         assert!(call < 31, "validation must progress");
     }
-    let mut db = resume(&runtime).publish().unwrap();
+    let copy = resume(&runtime);
+    assert_eq!(copy.status(), CopyStatus::ReadyToPublish);
+    let mut db = copy.publish().unwrap();
     assert_eq!(db.incarnation(), [2; 16]);
     assert_eq!(db.get::<Target>(1).unwrap().unwrap().value, 8);
     assert_eq!(

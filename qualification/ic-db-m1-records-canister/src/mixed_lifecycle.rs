@@ -2,7 +2,8 @@
 use crate::handles::{AggregateJobs, Database, RetiredSource, SchemaCopy};
 use crate::{Backing, MemoryRuntime, runtime};
 use ic_db::{
-    Batch, Comparison, Entity, Error, JobHandle, JobOutcome, Schema, SchemaTransition, Timestamp,
+    Batch, Comparison, CopyStatus, Entity, Error, JobHandle, JobOutcome, Schema, SchemaTransition,
+    Timestamp,
 };
 use ic_db_qualification_transport::mixed::{
     Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
@@ -448,20 +449,22 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
     )?;
     match operation {
         1 => {
-            let step = match copy.next_entity() {
-                Some("Item") => copy.copy_next::<Item, TargetItem>(2, 4096, |row, _| {
-                    Ok(TargetItem {
-                        id: row.id,
-                        parent: row.parent,
-                        score: u128::from(row.score) + 1000,
-                    })
-                })?,
-                Some("Link") => copy.copy_unchanged::<Link>(2, 4096)?,
-                Some("Parent") => copy.copy_unchanged::<Parent>(2, 4096)?,
-                None => return Ok((0, true)),
-                other => panic!("unexpected entity: {other:?}"),
+            let step = match copy.status() {
+                CopyStatus::Copying("Item") => {
+                    copy.copy_next::<Item, TargetItem>(2, 4096, |row, _| {
+                        Ok(TargetItem {
+                            id: row.id,
+                            parent: row.parent,
+                            score: u128::from(row.score) + 1000,
+                        })
+                    })?
+                }
+                CopyStatus::Copying("Link") => copy.copy_unchanged::<Link>(2, 4096)?,
+                CopyStatus::Copying("Parent") => copy.copy_unchanged::<Parent>(2, 4096)?,
+                CopyStatus::Validating | CopyStatus::ReadyToPublish => return Ok((0, true)),
+                _ => return Err(Error::InvalidTransition),
             };
-            Ok((step.rows as u64, copy.next_entity().is_none()))
+            Ok((step.rows as u64, step.complete))
         }
         2 => Ok((0, copy.validate_next(2)?)),
         3 => {

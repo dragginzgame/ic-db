@@ -395,7 +395,7 @@ name = "canic"
 version = "0.223.1"
 source = "git+https://github.com/dragginzgame/canic?rev=bbc13c36afc88f8dcd09072c1cbfd4478943fffd#bbc13c36afc88f8dcd09072c1cbfd4478943fffd"
 dependencies = [
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-wire 0.25.2",
  "serde",
 ]
@@ -1414,7 +1414,7 @@ dependencies = [
  "ethnum",
  "getrandom 0.4.3",
  "ic-db-macros",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-platform-types 0.21.4",
  "ic-storage 0.78.7",
  "memchr",
@@ -1429,7 +1429,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "toko-tooling",
 ]
@@ -1441,7 +1441,7 @@ dependencies = [
  "ic-db",
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "icydb",
  "rusqlite",
@@ -1461,7 +1461,7 @@ name = "ic-db-m0-aggregation-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "toko-tooling",
 ]
@@ -1471,7 +1471,7 @@ name = "ic-db-m0-maintenance-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "toko-tooling",
 ]
@@ -1481,7 +1481,7 @@ name = "ic-db-m0-rollback-canister"
 version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "ic-wire 0.26.1",
  "toko-tooling",
@@ -1519,7 +1519,7 @@ dependencies = [
  "ic-db",
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "ic-wire 0.26.1",
  "toko-tooling",
@@ -1547,7 +1547,7 @@ name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-wire 0.26.1",
  "serde",
  "serde_json",
@@ -1560,7 +1560,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.7",
  "toko-tooling",
 ]
@@ -1642,9 +1642,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-macros"
-version = "0.23.22"
+version = "0.23.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b3b45edad46665abedb5cead2c9ff983de108e6e1faab588e8906f655d32167"
+checksum = "cdb5bb90ce8e9bfb8896cca41bda386799bfd5b189f0373027728f5a0e31b810"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1668,9 +1668,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime"
-version = "0.23.22"
+version = "0.23.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49ac0af0e78945df40f85dc34a65e47b2a9acd9716354169ecfc1911c6923f2a"
+checksum = "882feebba07b8aa72b36e16b097e7cf974237848c93716516c8927c85e601b7e"
 dependencies = [
  "ic-platform-macros",
  "ic-platform-protocol",
@@ -1680,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-runtime-guard"
-version = "0.23.22"
+version = "0.23.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18ad17c256b4079de3ea347710e6ee222a8481754641a748142c2c3a62b3ab12"
+checksum = "618ab93ebd31bc39ead315250d0983925898f96b0525c7f895722e43d6c576dd"
 
 [[package]]
 name = "ic-platform-types"
@@ -1737,7 +1737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfd78eb2becf9ae4a0a7d46ca4c742d0041eb19b364c50384e4cbc4e5aafdb11"
 dependencies = [
  "ic-platform",
- "ic-platform-runtime 0.23.22",
+ "ic-platform-runtime 0.23.23",
  "serde",
  "thiserror 2.0.18",
 ]

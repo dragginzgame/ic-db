@@ -136,12 +136,13 @@ fn admit(source: &Schema, target: &Schema, transition: &SchemaTransition) -> Res
     if source.fingerprint() != transition.source || target.fingerprint() != transition.target {
         return Err(Error::IncompatibleSchema);
     }
-    if source.entities().len() != target.entities().len() {
-        return Err(Error::InvalidTransition);
-    }
-    for (source, target) in source.entities().iter().zip(target.entities()) {
-        if source.name != target.name
-            || source.primary_key != target.primary_key
+    for source in source.entities() {
+        let target = target
+            .entities()
+            .iter()
+            .find(|entity| entity.name == source.name)
+            .ok_or(Error::InvalidTransition)?;
+        if source.primary_key != target.primary_key
             || source.key_type()? != target.key_type()?
             || managed_roles(source) != managed_roles(target)
         {
@@ -169,6 +170,21 @@ pub struct CopyStep {
     pub complete: bool,
 }
 
+/// Current stage of an admitted schema copy, derived from its saved checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyStatus {
+    /// Copy the next bounded chunk of this source entity.
+    Copying(&'static str),
+    /// All source entities are copied. Start or continue bounded validation.
+    Validating,
+    /// Validation finished. The host may explicitly publish or cancel.
+    ReadyToPublish,
+    /// Continue bounded cancellation until the source reopens.
+    Cancelling,
+    /// Cancellation finished on this handle. The source may reopen after drop.
+    Cancelled,
+}
+
 /// Exclusive source/target custody for a key-preserving whole-database transformation.
 /// Both allocations remain closed to ordinary access. Dropping preserves progress.
 /// Publication requires completed validation. Allocation reuse remains unsupported.
@@ -183,8 +199,8 @@ pub struct SchemaCopy<M: Memory> {
 impl<M: Memory> Maintenance<M> {
     /// Bind a fresh target allocation to this frozen source and initialize copying.
     /// The host supplies a fresh nonzero target incarnation, distinct from the source.
-    /// The schemas must contain the same named entities, each retaining its primary
-    /// key declaration and managed timestamp roles. References validate only after
+    /// Every source entity retains its name, primary key declaration and managed
+    /// timestamp roles. Additional target entities start empty. References validate only after
     /// all entities are copied, including unchanged entities. All values
     /// and target indexes use ordinary codecs and shared batch validation.
     /// # Errors
@@ -291,12 +307,31 @@ impl<M: Memory> SchemaCopy<M> {
         })
     }
 
+    /// Inspect the checkpoint already loaded by this handle. Inspection does no storage work.
+    #[must_use]
+    pub fn status(&self) -> CopyStatus {
+        match &self.phase {
+            Phase::Copying(entity, _) => {
+                CopyStatus::Copying(self.source_schema.entities()[usize::from(*entity)].name)
+            }
+            Phase::Copied | Phase::ValidatingSource(_) | Phase::ValidatingTarget(_) => {
+                CopyStatus::Validating
+            }
+            Phase::Ready => CopyStatus::ReadyToPublish,
+            Phase::Cancelling => CopyStatus::Cancelling,
+            Phase::Cancelled => CopyStatus::Cancelled,
+            Phase::Source | Phase::Retired => {
+                unreachable!("source-side checkpoint on a target copy handle")
+            }
+        }
+    }
+
     /// Name of the next entity to copy, in canonical schema-name order.
     /// Returns `None` after copying or once cancellation/validation has started.
     #[must_use]
     pub fn next_entity(&self) -> Option<&'static str> {
-        if let Phase::Copying(entity, _) = &self.phase {
-            Some(self.source_schema.entities()[usize::from(*entity)].name)
+        if let CopyStatus::Copying(entity) = self.status() {
+            Some(entity)
         } else {
             None
         }
@@ -587,9 +622,13 @@ fn validate_page<M: Memory>(
     // Frozen allocations cannot change mid-pass.
     if after.is_none() {
         for entity in schema.entities() {
-            if read_entity_state(map, entity.id)?.count
-                != read_entity_state(peer.0, entity.id)?.count
-            {
+            let state = read_entity_state(map, entity.id)?;
+            if peer.1.entities().iter().any(|other| other.id == entity.id) {
+                if state.count != read_entity_state(peer.0, entity.id)?.count {
+                    return Err(Error::Corrupt);
+                }
+            } else if state.count != 0 || state.revision != 0 {
+                // Only an added target entity can lack a peer. No copy operation owns its rows.
                 return Err(Error::Corrupt);
             }
         }
@@ -626,20 +665,19 @@ fn validate_page<M: Memory>(
                         .find(|entity| entity.id == id)
                         .ok_or(Error::Corrupt)?;
                     let info = entity.inspect_row(&bytes)?;
-                    let owner = RowKey::decode(&key[5..], entity.key_type()?)?;
-                    if info.key != owner || !peer.0.contains_key(&row_key(peer_entity.id, owner)) {
+                    let owner = info.key;
+                    if *key != row_key(entity.id, owner) {
                         return Err(Error::Corrupt);
                     }
                     if entity.has_managed() {
-                        let other = peer
-                            .0
-                            .get(&row_key(peer_entity.id, owner))
-                            .ok_or(Error::Corrupt)?;
+                        let other = peer.0.get(key).ok_or(Error::Corrupt)?;
                         if crate::managed::values(entity, &bytes)?
                             != crate::managed::values(peer_entity, &other)?
                         {
                             return Err(Error::ManagedField);
                         }
+                    } else if !peer.0.contains_key(key) {
+                        return Err(Error::Corrupt);
                     }
                     for (index, _) in index_entries(entity, &info)? {
                         let stored = map.get(&index).ok_or(Error::Corrupt)?;

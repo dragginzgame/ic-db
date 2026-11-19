@@ -87,6 +87,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
             maintenance::COPY_SOURCE,
             maintenance::COPY_TARGET,
             maintenance::COPY_NEXT,
+            maintenance::COPY_ROUTE,
         ],
         #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
         &[aggregate_store::KEY],

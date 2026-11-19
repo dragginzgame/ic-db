@@ -5,7 +5,7 @@ use crate::{
     Entity, Error, QueryCursor, QueryPage, Schema,
     codec::{Decoder, Encoder},
 };
-pub use copy::{CopyStep, RetiredSource, SchemaCopy};
+pub use copy::{CopyStatus, CopyStep, RetiredSource, SchemaCopy};
 use ic_storage::{Memory, RuntimeMemory};
 use sha2::{Digest, Sha256};
 

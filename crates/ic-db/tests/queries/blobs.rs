@@ -126,6 +126,24 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
     let impossible = by_length(3).count().unwrap();
     assert_eq!((impossible.value, impossible.examined), (0, 0));
 
+    // The two zero-only payloads have no literal FF, although both index keys do.
+    let zero = [IndexValue::Blob(&[0])];
+    for op in [C::StartsWith, C::EndsWith, C::Contains] {
+        for (needle, matches) in [(&[][..], 2), (&[0][..], 2), (&[255][..], 0)] {
+            let query = || {
+                db.query::<Binary>()
+                    .using_index("payload,id", &zero)
+                    .filter(Binary::PAYLOAD, op, needle)
+            };
+            let count = query().count().unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (matches, matches as usize, 0)
+            );
+            assert_eq!(query().count_validated().unwrap().value, matches);
+        }
+    }
+
     let mut expected = rows.clone();
     expected.sort_by(|a, b| (&a.payload, a.id).cmp(&(&b.payload, b.id)));
     let mut actual = Vec::new();

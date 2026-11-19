@@ -556,7 +556,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         };
         decode_next(next(0, false).await.unwrap()).unwrap(); // ordinary B writes
         assert_eq!(
-            decode_next(next(10, false).await.unwrap()).unwrap().2,
+            decode_next(next(13, false).await.unwrap()).unwrap().2,
             vec![(0, 1, 999), (1, 1, 110), (2, 1, 222)]
         );
         let before = pic.get_stable_memory(canister).await;
@@ -567,6 +567,10 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         assert!(next(2, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
         decode_next(next(2, false).await.unwrap()).unwrap();
+        assert_eq!(
+            decode_next(next(11, false).await.unwrap()),
+            Err("Maintenance".into())
+        );
         // Neither the first transition nor retired cleanup owns the new live source.
         let before = pic.get_stable_memory(canister).await;
         assert!(decode(call(2, false).await.unwrap()).is_err());
@@ -609,8 +613,9 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
                 }
             }
             assert!(cancelled);
+            assert!(decode_next(next(11, false).await.unwrap()).is_err());
             assert_eq!(
-                decode_next(next(10, false).await.unwrap()).unwrap().2,
+                decode_next(next(13, false).await.unwrap()).unwrap().2,
                 vec![(0, 1, 999), (1, 1, 110), (2, 1, 222)]
             );
             let before = pic.get_stable_memory(canister).await;
@@ -640,9 +645,25 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         let before = pic.get_stable_memory(canister).await;
         assert!(next(5, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
+        upgrade(&wasm).await;
+        assert_eq!(
+            decode_next(next(13, false).await.unwrap()),
+            Err("Maintenance".into())
+        );
         decode_next(next(5, false).await.unwrap()).unwrap();
         upgrade(&wasm).await;
+        let before = pic.get_stable_memory(canister).await;
+        assert_eq!(
+            decode_next(next(12, false).await.unwrap()),
+            Err("ReferenceViolation".into())
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        assert!(decode_next(next(11, false).await.unwrap()).unwrap().0);
         let expected = vec![(0, 1, 1999), (1, 1, 1110), (2, 1, 1222)];
+        assert_eq!(
+            decode_next(next(13, false).await.unwrap()).unwrap().2,
+            expected
+        );
         let (restricted, _, rows) = decode_next(next(6, false).await.unwrap()).unwrap();
         assert!(restricted);
         assert_eq!(rows, expected); // returned through the newly built note index
@@ -663,9 +684,12 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         }
         assert!(cleaned_b);
         assert_eq!(
-            decode_next(next(6, false).await.unwrap()).unwrap().2,
+            decode_next(next(13, false).await.unwrap()).unwrap().2,
             expected
         );
+        let (restricted, _, rows) = decode_next(next(6, false).await.unwrap()).unwrap();
+        assert!(restricted); // only the new Document still references the migrated Entry
+        assert_eq!(rows, expected);
         let before = pic.get_stable_memory(canister).await;
         assert!(decode_next(next(7, false).await.unwrap()).unwrap().0);
         assert!(decode_next(next(8, false).await.unwrap()).unwrap().0);

@@ -519,7 +519,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Remove duplicate output records. Proven leading index tuples use live
-    /// pages; identity projections need no duplicate tracking. Other projections scan to
+    /// pages. Projecting the primary key or the varying fields of a unique key covering every match
+    /// needs no duplicate tracking. Other projections scan to
     /// completion in one call, retaining at most 32 tuples within 128 KiB.
     /// That fallback preserves first-match traversal order, refuses cursors and
     /// returns `Limit` if work, result count or combined bytes cannot fit; it

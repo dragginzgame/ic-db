@@ -332,10 +332,11 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sparse ID listing | 128 rows, two categories, default-order IC DB and explicit-index control | Automatic IC DB used 51.7–55.1% fewer handler instructions than legacy after upgrade and readiness | Two-row pages on fixed input with last-ID boundaries. [0.23.13 comparison](#automatic-equality-listings-02313) |
+| DISTINCT with a fixed compound unique-key component | IC DB pages projected subjects in subject or ID order with one candidate per call | Legacy typed route reads agree in subject order and refuse ID order on this fixture | Result and admission comparison. [Route comparison](#compound-equality-lookup-02312) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Automatic whole-entity metadata, covered equality-prefix key scans, or row execution. Explicit owner validation remains available. | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | [Automatic count measurements](#automatic-prefix-counts-0235) cover the default fluent call. [Prefix comparison](#prefix-count-paths-0234), [adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
-| Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Same entity set/keys only; broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
+| Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Existing entities and keys must survive; added entities start empty. Broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Storage 0.78.0 rerun checks 153 attempted batches, sparse listing, jobs, six upgrades and interrupted maintenance on the same records. [Receipt](#application-workload-and-wasm-growth-on-storage-078) | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
 | Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Canic 0.220.0 witness has a separate [endpoint size comparison](#application-workload-and-wasm-growth-on-storage-078). Native inspection checked through HTTP on the committed inspection contract. The fixed application listing also preserves sparse pages and cursor refusal after upgrade; broader application support is not claimed. [Receipt](#canic-typed-application-integration-019) |
 
@@ -2798,6 +2799,29 @@ count advance, listings returned to their earlier cost range. This PocketIC samp
 mount and measures instructions inside handlers. The retained run log is
 `qualification/target/evidence/mixed-lifecycle/run.log`.
 
+### Mixed workload rerun (0.23.21 development)
+
+On November 19, `make m4-lifecycle` passed against `c5a8fc3` plus the
+unreleased DISTINCT changes with Storage 0.78.7. The mixed host Wasm SHA-256
+was `d3f3e8273c118c7c0087a021e9cbd1ec8dcca091467c044592bed2c30390a5b6`.
+The independent model checked 616 complete read observations, including
+grouped counts, over the write, upgrade and migration history.
+
+| Operation | Observed result | Handler instructions |
+| --- | --- | ---: |
+| Seeded indexed listing, eight candidates per call | 112 examined, nine matches, 15 calls, five empty pages with continuation | 18,489,254 total |
+| Source read-modify-replace, 13 samples | 8,206,365–8,562,925 cycles debited per update | 1,192,289–1,548,849 per update |
+| Move item during an unfinished count | Next advance reported invalidation | 2,101,295 for the move, 838,918 for the advance |
+| Fresh count across upgrade | 128 items in 65 advances | 62,718,929 across advances |
+
+The separate `make m2-contention` run covered grouped jobs. An input write
+invalidated unfinished groups for that entity. A completed grouped sum retained
+its answer through the write and upgrade. In the 96-row scalar sum fixture,
+the four fixed write schedules allowed zero completions at 12 candidates per
+advance and two at 48. These schedules exercise the tradeoff between work per
+message and opportunities for invalidation. They do not estimate a production
+completion rate. Neither workload measures a DISTINCT speedup.
+
 ### Compound equality lookup (0.23.12)
 
 The opt-in native test compares IC DB with frozen IcyDB at `6d421e3`.
@@ -2809,6 +2833,21 @@ or rejects the owner. IcyDB uses its typed query builder in
 `crates/icydb/src/db/query/typed.rs` with `.limit(1).execute_live_page(None)`.
 IC DB checks both `.first()` and an ID-only projection with a one-candidate
 work limit. This measures result agreement. IC instruction costs remain unmeasured.
+
+The 0.23.21 development run also fixes only the issuer and projects DISTINCT
+subjects in subject order. The two-match, one-match and missing issuers exercise
+continuation and exhaustion on the same records. Legacy's public typed page
+returns whole routes. The comparison reads their subjects directly because
+the declared unique pair already guarantees one occurrence per issuer.
+For issuer 1 the two orders deliberately disagree. Subject order returns
+subjects 2 then 3 on both engines. In ascending ID order IC DB returns subject
+3 from ID 3, advances past another issuer at ID 6 with an empty continued page,
+then returns subject 2 from ID 9. The same test checks that legacy refuses
+that order with `QUERY_READ_SORT_REQUIRES_MATERIALIZATION` (174).
+Frozen IcyDB tests adjacent and replay-based projected DISTINCT internally in
+`crates/icydb-core/src/db/session/write/mixed_relation_batch_tests/mod.rs`
+using `distinct_for_internal_execution()`. That internal entry point is outside
+the SQL-disabled public typed benchmark.
 
 ```sh
 cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-icydb-baseline-canister --features unique-lookup --test native_matrix compound_equality_lookup -- --ignored
@@ -3927,7 +3966,20 @@ before their targets, compare backing after chunk/validation/publication traps,
 reject changed code and a recorded 0.16 executable, then publish and enforce
 ordinary restricted deletion. A second journey constructs a dangling target
 reference, refuses publication and resumes bounded cancellation to the original
-source. Entity additions/removals and key remapping remain unsupported.
+source. The successive migration adds the empty ManagedRow and Document entities
+to C. Writes stay closed while copying, and cancellation restores B. After
+publication and upgrade, a batch transfers a copied Entry's sole incoming reference
+from its old mapping to the first Document. An attempted transfer to a missing
+Entry leaves the complete backing intact. The valid transfer is visible through
+the Document index, and the Entry remains protected from deletion across another
+upgrade and retired-source cleanup. The fixture also checks the initial ManagedRow
+count and reads its first insert. Native corruption checks reject a nonzero starting revision or
+count. A native schema-copy test checks the opposite direction: a copied row
+gains an optional reference to a newly declared entity. Copying `Some(0)`
+fails target validation and permits cancellation. Copying `None` permits
+publication, after which one batch inserts key zero and links the migrated row.
+The reverse index finds the row and restricts deletion of its target.
+Entity removal and key remapping remain unsupported.
 The managed-time witness renames timestamp fields and rebuilds their indexes,
 preserving distinct creation/update times. Native checks reject role changes,
 changed timestamps in a prepared chunk and validly encoded timestamp corruption
@@ -3976,7 +4028,11 @@ are covered. Neither probe claims physical shrink or allocation reuse.
 The successive whole-database journey runs A → B, replaces/inserts records and
 references in B, then runs B → C into a third fresh allocation. C adds a note field
 and index; expected results are checked through that new index after upgrade.
-Second-migration cancellation restores the exact B data, including intervening
+For B → C, the host selects its ordinary read allocation from a stable cell.
+The driver traps after updating that cell and both manifests, compares the full
+backing, then upgrades and checks that a routed read still refuses during
+maintenance. A successful retry routes reads to C after upgrade and after B
+cleanup. Cancellation instead restores the exact B data, including intervening
 writes. Stale A → B commands, changed transformation versions and cleanup of an
 active source refuse without changing backing. A cleanup runs safely while B is
 frozen; B cleanup after C publication preserves target queries and reference checks.

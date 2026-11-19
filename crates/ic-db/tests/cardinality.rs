@@ -117,7 +117,7 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
 
 #[test]
 fn metadata_refusal_is_before_persistent_mutation() {
-    for case in 0..4 {
+    for case in 0..5 {
         let m = VectorMemory::default();
         let h = host(m.clone());
         let mut db = create(&h);
@@ -142,6 +142,9 @@ fn metadata_refusal_is_before_persistent_mutation() {
                 v.extend(if case == 2 { u64::MAX } else { 0 }.to_le_bytes());
                 raw.insert(k, v);
             }
+            4 => {
+                raw.insert(k, [0_u64.to_le_bytes(), 1_u64.to_le_bytes()].concat());
+            }
             _ => unreachable!(),
         }
         drop(raw);
@@ -161,7 +164,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
             assert!(matches!(result, Err(Error::Corrupt)));
         }
         assert_eq!(*m.borrow(), before);
-        if case < 2 {
+        if matches!(case, 0 | 1 | 4) {
             assert!(matches!(db.cardinality::<Row>(), Err(Error::Corrupt)));
             assert!(matches!(db.cardinality_by_name("Row"), Err(Error::Corrupt)));
         }
@@ -210,15 +213,16 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
 
 #[test]
 fn copied_counts_resume_and_validate_before_publication() {
-    copy_counts(false);
+    copy_counts(None);
 }
 
 #[test]
-fn mismatched_copy_counts_refuse_publication() {
-    copy_counts(true);
+fn inconsistent_copy_metadata_refuses_publication() {
+    copy_counts(Some((3, 2))); // Count disagrees with the source.
+    copy_counts(Some((0, 3))); // Count agrees, but no write could have produced it.
 }
 
-fn copy_counts(corrupt_target: bool) {
+fn copy_counts(damaged_state: Option<(u64, u64)>) {
     let m = VectorMemory::default();
     let h = host(m.clone());
     let mut db = create(&h);
@@ -267,16 +271,14 @@ fn copy_counts(corrupt_target: bool) {
         .unwrap()
         .complete
     {}
-    if corrupt_target {
+    if let Some((revision, count)) = damaged_state {
         drop(copy);
         let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
             h.open_memory(&key("test.target.v1")).unwrap(),
         );
         let mut k = vec![1];
         k.extend(Wide::SCHEMA.id.to_be_bytes());
-        let mut value = raw.get(&k).unwrap();
-        value[8..].copy_from_slice(&2_u64.to_le_bytes());
-        raw.insert(k, value);
+        raw.insert(k, [revision.to_le_bytes(), count.to_le_bytes()].concat());
         drop(raw);
         let before = m.borrow().clone();
         let mut copy = SchemaCopy::resume(

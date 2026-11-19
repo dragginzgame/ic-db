@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod maintenance;
 mod query;
-pub use maintenance::{CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition};
+pub use maintenance::{
+    CopyStatus, CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition,
+};
 pub use query::{
     Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryOperand, QueryPage,
@@ -791,13 +793,14 @@ impl EntityState {
 }
 fn read_entity_state<M: Memory>(map: &Map<M>, entity: u32) -> Result<EntityState, Error> {
     let bytes = map.get(&entity_state_key(entity)).ok_or(Error::Corrupt)?;
-    if bytes.len() != 16 {
+    let (revision, count) = bytes.split_first_chunk::<8>().ok_or(Error::Corrupt)?;
+    let revision = u64::from_le_bytes(*revision);
+    let count = u64::from_le_bytes(count.try_into().map_err(|_| Error::Corrupt)?);
+    // The first insertion advances the revision in the same batch.
+    if revision == 0 && count != 0 {
         return Err(Error::Corrupt);
     }
-    Ok(EntityState {
-        revision: u64::from_le_bytes(bytes[..8].try_into().map_err(|_| Error::Corrupt)?),
-        count: u64::from_le_bytes(bytes[8..].try_into().map_err(|_| Error::Corrupt)?),
-    })
+    Ok(EntityState { revision, count })
 }
 
 fn row_key(entity: u32, id: RowKey) -> StoreKey {

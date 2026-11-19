@@ -33,17 +33,49 @@ pub(super) fn admit(
         return Ok(Strategy::Identity);
     };
     let position = |name: &str| entity.field_position(name).ok_or(Error::InvalidQuery);
-    if remaining & (1 << position(entity.primary_key)?) != 0 {
+    let primary = 1 << position(entity.primary_key)?;
+    if remaining & primary != 0 {
         return Ok(Strategy::Identity);
     }
     admit_ordered_fields(entity, remaining)?;
+    // Fixed fields and projected fields together can identify one matching owner.
+    let mut constants = 0_u16;
+    for (name, _) in super::order::literal_equalities(request) {
+        constants |= 1 << position(name)?;
+    }
+    let prefix_fields = index.map_or(&[][..], |selected| &selected.fields[..fixed]);
+    for name in prefix_fields {
+        constants |= 1 << position(name)?;
+    }
+    if constants & primary != 0 {
+        return Ok(Strategy::Identity);
+    }
+    let prefix_values = request
+        .index
+        .as_ref()
+        .map_or(&[][..], |(_, values)| values.as_slice());
+    let known = remaining | constants;
+    if entity.indexes.iter().any(|unique| {
+        unique.unique
+            && unique.fields.iter().all(|name| {
+                entity
+                    .field_position(name)
+                    .is_some_and(|i| known & (1 << i) != 0)
+            })
+            && (index.is_some_and(|selected| selected.id == unique.id)
+                || super::order::complete_membership(
+                    entity,
+                    unique,
+                    prefix_fields,
+                    prefix_values,
+                    request,
+                ))
+    }) {
+        return Ok(Strategy::Identity);
+    }
     if sorted {
         // Constant components cannot distinguish two matching rows. Stop the
         // key once it distinguishes every varying component of the projection.
-        let mut constants = 0_u16;
-        for (name, _) in super::order::literal_equalities(request) {
-            constants |= 1 << position(name)?;
-        }
         remaining &= !constants;
         let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
         let mut prefix_len = 0;
