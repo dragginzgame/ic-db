@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.21] - Unreleased
+## [0.23.21] - 2026-11-19
 
 - After an interrupted migration, `SchemaCopy::resume(...)?` exposes
   `.status()`. It identifies the entity to copy, validation, readiness for
