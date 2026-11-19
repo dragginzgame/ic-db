@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.13] - Unreleased
+## [0.23.13] - 2026-11-19
 
 ### Schema and queries
 
