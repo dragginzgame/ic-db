@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.24.0] - Unreleased
+## [0.24.0] - 2026-11-19
 
 ### Schema authoring
 
