@@ -63,6 +63,13 @@ def probe(root):
     assert baseline.startswith('["Entry", "User"]')
     artifact("baseline")
 
+    # The generated registration binding shares a spelling with this authored type.
+    hub.write_text(original.replace("struct User", "struct REGISTER")
+                   .replace("#[entity(", '#[entity(name = "User",')
+                   + "\npub use REGISTER as User;\n")
+    assert check_variant(root, native) == baseline
+    hub.write_text(original)
+
     # A generic host operation can constrain an entity to its own canister.
     example = root / "consumer/examples/membership.rs"
     consumer = example.read_text()

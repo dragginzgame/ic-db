@@ -87,7 +87,7 @@ pub use ulid::{
 };
 
 #[doc(hidden)]
-#[cfg(any(rust_analyzer, not(feature = "build"), target_arch = "wasm32"))]
+#[cfg(any(not(feature = "build"), target_arch = "wasm32"))]
 #[macro_export]
 macro_rules! __register_schema {
     ($($declaration:tt)*) => {};

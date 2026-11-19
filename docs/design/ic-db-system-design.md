@@ -387,9 +387,9 @@ compiler-resolved declaration path; typed reference spelling such as
 handle, independently of the target descriptor, so self/cyclic relationships do
 not create recursive constant evaluation. Numeric target IDs are no longer accepted. The optional native-only `ic-db/build` feature collects nodes
 using `ctor`. The registration helper expands to a constructor in a compiled
-host build. During rust-analyzer analysis it expands to nothing: linker startup
-is a build-time operation, and ctor’s internal target branches otherwise mark
-active entity declarations as inactive. Generated fields and codecs are shared.
+host build. Its private function pointer binds the authored type before the
+linker macro expands. This keeps ctor’s platform diagnostics on generated code
+with the editor’s default Cargo configuration. Generated fields and codecs are shared.
 The private generator selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler

@@ -15,26 +15,26 @@ use std::{fmt::Write, sync::Mutex};
 pub use ctor as __ctor;
 
 /// Emit the linker constructor for compiled host schema builds.
-/// Editor analysis only needs the schema types. Expanding the linker machinery
-/// there attributes ctor's inactive UEFI branch to the authored entity.
+/// Bind the typed function outside ctor so its platform branches carry only
+/// generated tokens. The authored identifier keeps its own editor diagnostics.
 #[doc(hidden)]
-#[cfg(not(rust_analyzer))]
 #[macro_export]
 macro_rules! __register_schema {
     ($entity:ident) => {
-        $crate::__register_schema!(@call $crate::__private::__entity::<$entity>());
+        $crate::__register_schema!(@call $crate::__private::__entity::<$entity>);
     };
     (store $name:ident) => {
-        $crate::__register_schema!(@call $crate::__private::__store::<$name>());
+        $crate::__register_schema!(@call $crate::__private::__store::<$name>);
     };
     (canister $name:ident) => {
-        $crate::__register_schema!(@call $crate::__private::__canister::<$name>());
+        $crate::__register_schema!(@call $crate::__private::__canister::<$name>);
     };
-    (@call $call:expr) => {
+    (@call $function:expr) => {
         const _: () = {
+            const REGISTER: fn() = $function;
             $crate::__private::__ctor::declarative::ctor! {
                 #[ctor(unsafe, anonymous)]
-                fn register() { $call; }
+                fn register() { REGISTER(); }
             }
         };
     };

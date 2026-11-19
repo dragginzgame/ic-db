@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.24.1] - Unreleased
+
+- Fixed rust-analyzer marking active entity, store and canister declarations
+  as inactive UEFI code with default Cargo settings.
+  [#17 — Keep ctor diagnostics off authored schema declarations](https://github.com/dragginzgame/ic-db/issues/17)
+
 ## [0.24.0] - 2026-11-19
 
 ### Schema authoring

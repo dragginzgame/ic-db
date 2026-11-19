@@ -32,3 +32,8 @@ cargo test --offline --locked --manifest-path qualification/Cargo.toml -p ic-db-
 python3 qualification/experiments/schema-owner/probe.py
 IC_DB_SCHEMA_OWNER_ARTIFACTS="$PWD/qualification/target/schema-owner" bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test schema_owner
 ```
+
+Run `python3 qualification/experiments/schema-owner/editor.py /path/to/rust-analyzer`
+with the VS Code extension’s server to check editor diagnostics. The isolated
+consumer uses default Cargo cfgs. The probe checks generated newtype hover,
+active entity/store/canister declarations, and a genuinely inactive control.
