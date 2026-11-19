@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.20] - Unreleased
+## [0.23.20] - 2026-11-19
 
 - Update product dependencies to IC Platform Types 0.21.4, Runtime 0.23.22 and
   Storage 0.78.7. Qualification uses Host Artifacts 0.80.6, Host Text 0.77.4,
