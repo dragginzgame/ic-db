@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.14] - Unreleased
+## [0.23.14] - 2026-11-19
 
 - Fix rust-analyzer marking active schema entities as inactive on non-UEFI
   hosts. Editor analysis skips the host linker constructor and resolves the
