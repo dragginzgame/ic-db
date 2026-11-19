@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.16] - Unreleased
+## [0.23.16] - 2026-11-19
 
 - IC DB’s qualification fixtures and local CLI use IC Wire 0.26.0. Calls to the
   pinned Canic inspection and witness endpoints retain their 0.25 protocol dependency.

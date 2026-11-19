@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.23.15"
+version = "0.23.16"
 dependencies = [
  "ctor",
  "ethnum",
@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.23.15"
+version = "0.23.16"
 dependencies = [
  "proc-macro2",
  "quote",
