@@ -1,5 +1,7 @@
 //! One frozen source and one exact executable-declared transformation identity.
+
 mod copy;
+
 use super::{Database, Map, live_manifest, manifest_key, query, read_revision};
 use crate::{
     Entity, Error, QueryCursor, QueryPage, Schema,
@@ -22,6 +24,7 @@ pub(super) fn admits_gate(bytes: &[u8]) -> Result<bool, Error> {
     } else {
         return Ok(false);
     }
+
     Ok(true)
 }
 
@@ -57,6 +60,7 @@ impl SchemaTransition {
         {
             return Err(Error::InvalidTransition);
         }
+
         Ok(Self {
             source: source.fingerprint(),
             target: target.fingerprint(),
@@ -107,6 +111,7 @@ impl SchemaTransition {
         bytes.extend(self.target);
         bytes.extend(incarnation);
         bytes.extend(payload.finish());
+
         Ok(bytes)
     }
 }
@@ -138,6 +143,7 @@ impl<M: Memory> Database<M> {
         let bytes = transition.freeze(self.incarnation)?;
         let transition = transition.clone();
         self.map.insert(manifest_key(), bytes);
+
         Ok(Maintenance {
             map: self.map,
             transition,
@@ -162,6 +168,7 @@ impl<M: Memory> Maintenance<M> {
         if transition != *expected {
             return Err(Error::InvalidTransition);
         }
+
         Ok(Self {
             map,
             transition,
@@ -209,6 +216,7 @@ impl<M: Memory> Maintenance<M> {
         hash.update(b"ic-db:maintenance-source:v1\0");
         hash.update(self.transition.freeze(self.incarnation)?);
         hash.update(revision.to_le_bytes());
+
         query::source_page(
             &self.map,
             E::SCHEMA,
@@ -255,6 +263,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(SchemaTransition, [u8; 16]), Error
     if source == target || incarnation == [0; 16] || version == 0 || name.is_empty() {
         return Err(Error::Corrupt);
     }
+
     Ok((
         SchemaTransition {
             source,

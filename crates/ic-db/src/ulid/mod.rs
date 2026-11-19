@@ -1,6 +1,5 @@
 //! Canonical ULID value, adapted from IcyDB's schema-owned atom.
 //! Issuers use host-supplied time; the value owns its byte and text formats.
-use std::{fmt, str::FromStr};
 
 #[cfg(target_arch = "wasm32")]
 mod canister;
@@ -10,10 +9,12 @@ mod native;
 mod pseudo;
 #[cfg(test)]
 mod tests;
+
 #[cfg(target_arch = "wasm32")]
 use canister as platform;
 #[cfg(not(target_arch = "wasm32"))]
 use native as platform;
+use std::{fmt, str::FromStr};
 
 pub use generator::{UlidGenerationError, UlidGenerator};
 pub use pseudo::SeededUlidGenerator;
@@ -76,6 +77,7 @@ impl Ulid {
         let mut bytes = [0; 16];
         bytes[..6].copy_from_slice(&millis.to_be_bytes()[2..]);
         bytes[6..].copy_from_slice(&suffix);
+
         Self(bytes)
     }
 
@@ -125,6 +127,7 @@ impl FromStr for Ulid {
         if value.to_string() != text {
             return Err(UlidParseError);
         }
+
         Ok(Self::from_bytes(value.to_bytes()))
     }
 }

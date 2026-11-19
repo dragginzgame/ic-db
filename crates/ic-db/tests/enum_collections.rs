@@ -1,4 +1,5 @@
 //! Enum order agrees across collections, row bytes and secondary keys.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, Value, entity, enum_, map, set};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -6,12 +7,23 @@ use ic_storage::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+///
+/// State
+/// Distinguishes the `Ready`, `Archived` and `Draft` variants.
+///
+
 #[enum_(
     variant(name = "Ready"),
     variant(name = "Archived"),
     variant(name = "Draft")
 )]
 struct State {}
+
+///
+/// Reordered
+/// Distinguishes the `Draft`, `Ready` and `Archived` variants.
+///
+
 #[enum_(
     name = "State",
     variant(name = "Draft"),
@@ -19,10 +31,28 @@ struct State {}
     variant(name = "Archived")
 )]
 struct Reordered {}
+
+///
+/// States
+/// Stores up to 3 distinct `State` values.
+///
+
 #[set(item(is = "State"), max_items = 3)]
 struct States {}
+
+///
+/// Counts
+/// Maps up to 3 `State` keys to optional `Nat16` values.
+///
+
 #[map(key(is = "State"), value(opt, item(prim = "Nat16")), max_items = 3)]
 struct Counts {}
+
+///
+/// Row
+/// Stores `counts` and `states` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -32,6 +62,12 @@ struct Counts {}
     )
 )]
 struct Row {}
+
+///
+/// Nested
+/// Stores `sets` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -40,16 +76,40 @@ struct Row {}
     )
 )]
 struct Nested {}
+
+///
+/// Payload
+/// Distinguishes the `Empty` and `Data` variants.
+///
+
 #[enum_(
     variant(name = "Empty"),
     variant(name = "Data", value(item(prim = "Nat8")))
 )]
 #[derive(PartialOrd, Ord)]
 struct Payload {}
+
+///
+/// InvalidSet
+/// Stores up to 3 distinct `Payload` values.
+///
+
 #[set(item(is = "Payload"), max_items = 3)]
 struct InvalidSet {}
+
+///
+/// InvalidMap
+/// Maps up to 3 `Payload` keys to `Bool` values.
+///
+
 #[map(key(is = "Payload"), value(item(prim = "Bool")), max_items = 3)]
 struct InvalidMap {}
+
+///
+/// BadSetRow
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -58,6 +118,12 @@ struct InvalidMap {}
     )
 )]
 struct BadSetRow {}
+
+///
+/// BadMapRow
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -76,6 +142,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -221,12 +288,35 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// Rank
+/// Gives `Nat16` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Nat16"))]
 struct Rank {}
+
+///
+/// Flags
+/// Maps up to 2 `Rank` keys to `Bool` values.
+///
+
 #[map(key(is = "Rank"), value(item(prim = "Bool")), max_items = 2)]
 struct Flags {}
+
+///
+/// Ranks
+/// Stores up to 2 distinct `Rank` values.
+///
+
 #[set(item(is = "Rank"), max_items = 2)]
 struct Ranks {}
+
+///
+/// Ranked
+/// Stores `flags` and `ranks` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(

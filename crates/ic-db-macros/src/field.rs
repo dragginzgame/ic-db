@@ -1,4 +1,5 @@
 //! Parse and project stored field types at the macro boundary.
+
 use super::{literal, meta_items, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -54,6 +55,26 @@ impl Management {
     }
 }
 impl Field {
+    pub(super) fn nested(name: &str, kind: Kind, optional: bool, many: Option<u32>) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            optional,
+            many,
+            reference: None,
+            default: None,
+            managed: None,
+        }
+    }
+
+    pub(super) fn resolve_self(&mut self, ident: &syn::Ident) {
+        if let Kind::Named(path, _) = &mut self.kind
+            && path.is_ident("Self")
+        {
+            *path = syn::parse_quote!(#ident);
+        }
+    }
+
     pub fn parse(meta: &Meta) -> syn::Result<Self> {
         if !meta.path().is_ident("field") {
             return Err(syn::Error::new_spanned(meta, "expected field(...)"));
@@ -133,6 +154,7 @@ impl Field {
                 "references currently require an integer, U256, Ulid, Principal, Account or Subaccount",
             ));
         }
+
         Ok(Self {
             managed,
             default: default
@@ -200,6 +222,7 @@ impl Field {
                 (false, false) => quote!(::ic_db::IndexValue::from(&row.#ident)),
             };
         }
+
         if optional {
             if matches!(self.kind, Kind::Text(_) | Kind::Blob(_)) {
                 quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
@@ -222,6 +245,7 @@ impl Field {
         } else {
             base
         };
+
         if self.optional {
             quote!(::std::option::Option<#base>)
         } else {
@@ -270,6 +294,7 @@ impl Field {
             || quote!(None),
             |value| {
                 let value = value.description();
+
                 quote!(Some(#value))
             },
         );
@@ -280,6 +305,7 @@ impl Field {
             || quote!(None),
             |value| {
                 let value = value.description();
+
                 quote!(Some(&#value))
             },
         );
@@ -287,6 +313,7 @@ impl Field {
             None => quote!(None),
             Some((entity, index)) => {
                 let index = index.as_ref().expect("reverse index was resolved");
+
                 quote!(Some(::ic_db::ReferenceSchema {
                     entity: ::ic_db::__private::handle(<#entity as ::ic_db::__private::ReferenceTarget>::NAME),
                     entity_name: <#entity as ::ic_db::__private::ReferenceTarget>::NAME,
@@ -294,6 +321,7 @@ impl Field {
                 }))
             }
         };
+
         quote!(::ic_db::FieldSchema { name:#name, value:#value, optional:#optional, reference:#reference, default:#default, managed:#managed })
     }
 
@@ -327,6 +355,7 @@ impl Field {
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
             Kind::Blob(max_bytes) => quote!(::ic_db::FieldType::Blob {max_bytes:#max_bytes}),
         };
+
         if let Some(max) = self.many {
             quote!(::ic_db::FieldType::List { item: &#item, max_items: #max })
         } else {
@@ -344,6 +373,7 @@ impl Field {
             } else {
                 quote!(self.#ident.coefficient_at_scale(#scale).is_none())
             };
+
             return quote!(if #invalid { return Err(::ic_db::Error::InvalidOperand); });
         }
         let (Kind::Text(max) | Kind::Blob(max)) = self.kind else {
@@ -354,6 +384,7 @@ impl Field {
         } else {
             quote!(self.#ident.len() > #max as usize)
         };
+
         quote!(if #invalid { return Err(::ic_db::Error::Limit); })
     }
 
@@ -404,6 +435,7 @@ impl Field {
         } else {
             write
         };
+
         if self.optional {
             quote!(match #value {
                 Some(value) => { writer.boolean(true)?; #write; }
@@ -416,6 +448,7 @@ impl Field {
 
     pub fn decode(&self, ident: &syn::Ident) -> TokenStream {
         let value = self.read_value();
+
         quote!(#ident: #value,)
     }
 
@@ -462,6 +495,7 @@ impl Field {
         } else {
             item
         };
+
         if self.optional {
             quote!(if reader.boolean()? { (#read).map(Some) } else { Ok(None) })
         } else {
@@ -471,6 +505,7 @@ impl Field {
 
     pub fn read_value(&self) -> TokenStream {
         let read = self.read_result();
+
         quote!((#read)?)
     }
 }
@@ -511,6 +546,7 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
             "many requires max_items; max_items requires many",
         ));
     }
+
     Ok((
         item.ok_or_else(|| syn::Error::new_spanned(meta, "value requires item(...)"))?,
         optional,
@@ -570,6 +606,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
                 "named types cannot also declare prim, max_bytes or scale",
             ));
         }
+
         return Ok(Kind::Named(path, indirect));
     }
     if indirect {
@@ -589,6 +626,7 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
             "scale is only supported for Decimal without max_bytes",
         ));
     }
+
     match (prim.as_deref(), max) {
         (Some("Nat8"), None) => Ok(Kind::Nat8),
         (Some("Nat16"), None) => Ok(Kind::Nat16),

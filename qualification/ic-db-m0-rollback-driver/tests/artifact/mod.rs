@@ -1,4 +1,5 @@
 //! Local benchmark evidence only; Artifacts owns bounded reads and byte identity.
+
 use ic_host_artifacts::{Identity, Length};
 use std::{collections::BTreeSet, error::Error, io::Read};
 use wasmparser::{Encoding, Parser, Payload, Validator};
@@ -25,6 +26,7 @@ pub fn read(reader: impl Read) -> Result<(Vec<u8>, Facts), Box<dyn Error>> {
                 return Err("benchmark Wasm exceeds 128 sections".into());
             }
         }
+
         match payload {
             Payload::Version { encoding, .. } if encoding != Encoding::Module => {
                 return Err("benchmark requires a core Wasm module".into());
@@ -57,6 +59,7 @@ pub fn read(reader: impl Read) -> Result<(Vec<u8>, Facts), Box<dyn Error>> {
         }
     }
     Validator::new().validate_all(&bytes)?;
+
     Ok((
         bytes,
         Facts {

@@ -1,4 +1,5 @@
 //! Same logical high-fan-out writes, with each engine's required completion work.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -66,6 +67,7 @@ async fn matched_high_fanout_writes() {
                 }
                 panic!("{label} settling exceeded 100 messages");
             }
+
             (0, 0, 0)
         };
         eprintln!("{label} startup={:?}", settle().await);

@@ -1,4 +1,7 @@
 //! Real Wasm envelope witness with independent row/index byte expectations.
+
+mod envelope_support;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -7,7 +10,6 @@ use std::collections::BTreeMap;
 
 type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
 type Read = (Vec<u64>, u64, u64);
-mod envelope_support;
 
 #[tokio::test]
 async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
@@ -42,6 +44,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
         let cycles = before
             .checked_sub(pic.cycle_balance(canister).await)
             .unwrap();
+
         (reply, cycles)
     };
     let decode = |bytes: Vec<u8>| {
@@ -73,6 +76,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Read>(
             &bytes,
             Encoding::Frame {

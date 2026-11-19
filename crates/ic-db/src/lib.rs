@@ -61,13 +61,6 @@ pub mod build;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 pub mod testing;
 
-#[doc(hidden)]
-#[cfg(any(rust_analyzer, not(feature = "build"), target_arch = "wasm32"))]
-#[macro_export]
-macro_rules! __register_schema {
-    ($entity:ident) => {};
-}
-
 pub use date::Date;
 pub use decimal::{Decimal, ParseDecimalError};
 pub use defaults::{InsertInput, LiteralDefault};
@@ -79,12 +72,6 @@ pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
 pub use primary::PrimaryKey;
-pub use time::{Duration, TimeParseError, Timestamp};
-pub use ulid::{
-    SeededUlidGenerator, Ulid, UlidEntropyError, UlidGenerationError, UlidGenerator, UlidParseError,
-};
-/// Owned binary bytes. The database codec enforces authored limits and row bounds.
-pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use session::{DatabaseSession, UniqueKey};
 pub use store::{
@@ -92,6 +79,22 @@ pub use store::{
     GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand,
     QueryPage, SchemaTransition, SortDirection,
 };
+pub use store_key::MAX_INDEX_KEY_BYTES;
+pub use time::{Duration, TimeParseError, Timestamp};
+pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
+pub use ulid::{
+    SeededUlidGenerator, Ulid, UlidEntropyError, UlidGenerationError, UlidGenerator, UlidParseError,
+};
+
+#[doc(hidden)]
+#[cfg(any(rust_analyzer, not(feature = "build"), target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! __register_schema {
+    ($entity:ident) => {};
+}
+
+/// Owned binary bytes. The database codec enforces authored limits and row bounds.
+pub type Blob = Vec<u8>;
 
 /// Admitted database owning an exclusive lease on a named IC Storage allocation.
 pub type Database = store::Database<ic_storage::DefaultMemoryImpl>;
@@ -114,7 +117,6 @@ pub mod qualification {
         AggregateJobs, Database, Maintenance, Query, RetiredSource, SchemaCopy,
     };
 }
-pub use store_key::MAX_INDEX_KEY_BYTES;
 
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
@@ -177,8 +179,6 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
-
-pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
 
 /// Schema authoring for application design modules.
 pub mod design {
@@ -294,7 +294,7 @@ pub mod __private {
     pub use crate::key::encode_index;
     pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
-    pub use crate::schema::handle;
+    pub use crate::schema::{check_schema_member, handle};
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
         pub key: RowKey,

@@ -1,4 +1,5 @@
 //! Console group selection uses the same typed semantics in both execution modes.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
@@ -577,6 +578,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             .await
             .unwrap();
         assert_eq!(pic.get_stable_memory(canister).await, before);
+
         ic_wire::decode::<Result<Page, String>>(
             &reply,
             Encoding::Frame {

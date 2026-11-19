@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Small attribute authoring boundary for the first persistent-record slice.
+//! Attribute macros for IC DB schema declarations.
 //! Generates typed records/codecs and metadata, never endpoints or executors.
 //! All declarations use empty, nongeneric struct bodies without `where` clauses;
 //! unsupported Rust constraints are rejected rather than discarded during expansion.
@@ -147,6 +147,7 @@ fn schema_attrs(attrs: &[syn::Attribute]) -> syn::Result<Tokens> {
     let de = deserialize.then(|| quote!(#[derive(::ic_db::__private::serde::Deserialize)]));
     let path = (supply_crate && (serialize || deserialize))
         .then(|| quote!(#[serde(crate = "::ic_db::__private::serde")]));
+
     Ok(quote!(#ser #de #(#attrs)* #path))
 }
 
@@ -170,6 +171,7 @@ fn literal(meta: &Meta) -> syn::Result<&Lit> {
     {
         return Ok(&value.lit);
     }
+
     Err(syn::Error::new_spanned(meta, "expected literal value"))
 }
 
@@ -177,6 +179,7 @@ fn text(meta: &Meta) -> syn::Result<String> {
     if let Lit::Str(value) = literal(meta)? {
         return Ok(value.value());
     }
+
     Err(syn::Error::new_spanned(meta, "expected a string"))
 }
 
@@ -184,6 +187,7 @@ fn once<T>(slot: &mut Option<T>, value: T, meta: &Meta) -> syn::Result<()> {
     if slot.replace(value).is_some() {
         return Err(syn::Error::new_spanned(meta, "duplicate attribute"));
     }
+
     Ok(())
 }
 
@@ -200,14 +204,28 @@ fn fields(meta: &Meta) -> syn::Result<Vec<String>> {
                 {
                     return Ok(value.value());
                 }
+
                 Err(syn::Error::new_spanned(value, "expected field name"))
             })
             .collect();
     }
+
     Err(syn::Error::new_spanned(
         meta,
         "expected an array of field names",
     ))
+}
+
+fn declaration_name(name: Option<String>, ident: &syn::Ident, kind: &str) -> syn::Result<String> {
+    let name = name.unwrap_or_else(|| ident.to_string());
+    if !(1..=64).contains(&name.len()) {
+        return Err(syn::Error::new_spanned(
+            ident,
+            format!("{kind} name must contain 1..64 UTF-8 bytes"),
+        ));
+    }
+
+    Ok(name)
 }
 
 fn declaration(item: Tokens, kind: &str) -> syn::Result<ItemStruct> {
@@ -221,6 +239,7 @@ fn declaration(item: Tokens, kind: &str) -> syn::Result<ItemStruct> {
             format!("{kind} requires an empty, nongeneric struct body without a where clause"),
         ));
     }
+
     Ok(item)
 }
 
@@ -291,10 +310,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         }
     }
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
-    let logical_name = logical_name.unwrap_or_else(|| item.ident.to_string());
-    if logical_name.is_empty() || logical_name.len() > 64 {
-        return Err(fail("entity name requires 1..64 UTF-8 bytes"));
-    }
+    let logical_name = declaration_name(logical_name, &item.ident, "entity")?;
     let primary = primary.ok_or_else(|| fail("entity requires pk"))?;
     let mut authored = authored.ok_or_else(|| fail("entity requires fields"))?;
     let names: BTreeSet<_> = authored.iter().map(|field| &field.name).collect();
@@ -416,6 +432,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                     .expect("admitted index field");
                 let value = field.index_value(ident);
                 let optional = field.optional;
+
                 quote!((#value, #optional))
             })
             .collect();
@@ -501,20 +518,21 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 .as_ref()
                 .map_or_else(|| quote!(None), |field| quote!(Some(#owner.#field)))
         });
+
         quote!(::ic_db::__private::validate_managed_order([#(#values),*])?;)
     };
     let validate_managed = managed_check(quote!(self));
     let decode_managed = managed_check(quote!(row));
+
     Ok(quote! {
         #insert_input
         #(#lookup_keys)*
         #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
+
         impl #name { #(#field_constants)* }
-        impl ::ic_db::__private::ReferenceTarget for #name {
-            const NAME: &'static str = #logical_name;
-        }
+
         impl ::ic_db::Entity for #name {
             type Key = #key_type;
             fn declaration_path() -> &'static str { concat!(module_path!(), "::", stringify!(#name)) }
@@ -526,6 +544,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
 
             fn __row_info(&self) -> ::ic_db::__private::RowInfo {
                 let row = self;
+
                 ::ic_db::__private::RowInfo {
                     key: ::ic_db::PrimaryKey::into_row_key(<Self as ::ic_db::Entity>::key(row)),
                     indexes: ::std::vec![#(#encoded_indexes),*]
@@ -536,6 +555,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 #validate_managed
                 #(#validations)*
                 #nested_validation
+
                 Ok(())
             }
 
@@ -543,6 +563,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 #validate_managed
                 let mut writer = ::ic_db::__private::Encoder::new();
                 #(#writes)*
+
                 Ok(writer.finish())
             }
 
@@ -551,9 +572,27 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 let row = Self { #(#reads)* };
                 reader.finish()?;
                 #decode_managed
+
                 Ok(row)
             }
         }
+
+        impl ::ic_db::__private::ReferenceTarget for #name {
+            const NAME: &'static str = #logical_name;
+        }
+
+        const _: () = {
+            if let ::std::option::Option::Some(root) = ::std::option_env!("IC_DB_SCHEMA_ROOT") {
+                const PATH: &str = ::std::concat!(::std::module_path!(), "::", ::std::stringify!(#name));
+                ::std::assert!(
+                    ::ic_db::__private::check_schema_member(
+                        PATH, root,
+                        ::std::option_env!(::std::concat!("IC_DB_SCHEMA_MEMBER_", ::std::stringify!(#name))),
+                    ),
+                    ::std::concat!("entity missing from host schema: ", ::std::module_path!(), "::", ::std::stringify!(#name)),
+                );
+            }
+        };
         ::ic_db::__register_schema!(#name);
     })
 }

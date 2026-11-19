@@ -1,4 +1,5 @@
 //! Typed omission at the construction boundary; no second mutation executor.
+
 use super::field::{Field, Kind};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
@@ -32,6 +33,7 @@ impl Literal {
                 let Expr::Lit(value) = value.expr.as_ref() else {
                     return Err(fail());
                 };
+
                 (&value.lit, true)
             }
             _ => return Err(fail()),
@@ -60,6 +62,7 @@ impl Literal {
             if negative {
                 return Err(fail());
             }
+
             (digits, true)
         } else {
             (digits, negative)
@@ -78,6 +81,7 @@ impl Literal {
             Kind::Int128 => (true, 128),
             _ => return Err(fail()),
         };
+
         if signed {
             let boundary = 1_u128 << (bits - 1);
             if magnitude > boundary - u128::from(!negative) {
@@ -92,11 +96,13 @@ impl Literal {
             } else {
                 magnitude as i128
             };
+
             Ok(Self::Int(value))
         } else {
             if negative || (bits < 128 && magnitude >= (1_u128 << bits)) {
                 return Err(fail());
             }
+
             Ok(Self::Nat(magnitude))
         }
     }
@@ -109,6 +115,7 @@ impl Literal {
             Self::Text(v) => quote!(::ic_db::LiteralDefault::Text(#v)),
             Self::Blob(v) => {
                 let bytes = syn::LitByteStr::new(v, proc_macro2::Span::call_site());
+
                 quote!(::ic_db::LiteralDefault::Blob(#bytes))
             }
         }
@@ -126,6 +133,7 @@ impl Literal {
             Self::Text(v) => quote!(::std::string::String::from(#v)),
             Self::Blob(v) => {
                 let bytes = syn::LitByteStr::new(v, proc_macro2::Span::call_site());
+
                 quote!(#bytes.to_vec())
             }
         }
@@ -157,12 +165,14 @@ pub(super) fn emit(item: &ItemStruct, fields: &[Field]) -> syn::Result<TokenStre
                 Kind::Named(path, true) => quote!(::std::boxed::Box::new(#path { 0: #time })),
                 _ => time,
             };
+
             return quote!(#id: #value);
         }
         let name = &field.name;
         let omitted = match &field.default {
             Some(default) => {
                 let value = default.value();
+
                 if field.optional {
                     quote!(Some(#value))
                 } else {
@@ -172,10 +182,16 @@ pub(super) fn emit(item: &ItemStruct, fields: &[Field]) -> syn::Result<TokenStre
             None if field.optional => quote!(None),
             None => quote!(return Err(::ic_db::Error::MissingField(#name))),
         };
+
         quote!(#id: match self.#id { Some(value) => value, None => #omitted })
     });
+
+    let input_doc = format!(
+        "\n{input}\nDistinguishes omitted fields from explicit values when inserting `{entity}`.\n"
+    );
+
     Ok(quote! {
-        #[doc = "Typed insert input: omitted fields differ from explicitly supplied values."]
+        #[doc = #input_doc]
         #visibility struct #input { #(#ids: Option<#types>,)* }
         impl #entity {
             #[doc = "Begin a typed insert input. Resolve it through Batch::insert_input."]

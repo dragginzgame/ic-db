@@ -1,4 +1,5 @@
 //! Failures inside the delivered commit path, using the real IC rollback boundary.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -35,6 +36,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Status>(
             &reply,
             Encoding::Frame {
@@ -63,6 +65,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Vec<(u64, u64)>>(
             &reply,
             Encoding::Frame {
@@ -111,6 +114,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Option<u64>>(
             &reply,
             Encoding::Frame {
@@ -204,6 +208,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
     for first in (100..100 + 256 * 32).step_by(32) {
         let before = pic.get_stable_memory(canister).await;
         let prior = status().await;
+
         match batch(first, 0, true, false).await {
             Ok(reply) => {
                 let (_, grows): (u64, u64) = ic_wire::decode(

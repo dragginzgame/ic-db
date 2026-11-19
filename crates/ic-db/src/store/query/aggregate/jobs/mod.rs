@@ -1,10 +1,12 @@
 //! Retained aggregates: exact input revision, atomic progress, explicit retry.
+
 mod checkpoint;
 mod distinct;
 mod extrema;
 mod grouped;
 pub(super) mod pages;
 mod storage;
+
 pub use pages::{GroupCursor, GroupPage};
 pub use storage::AggregateJobs;
 
@@ -35,6 +37,7 @@ impl JobHandle {
         let mut bytes = vec![1, self.slot];
         bytes.extend(self.incarnation);
         bytes.extend(self.generation.to_le_bytes());
+
         bytes
     }
 
@@ -50,6 +53,7 @@ impl JobHandle {
         if incarnation == [0; 16] || generation == 0 {
             return Err(Error::InvalidJob);
         }
+
         Ok(Self {
             incarnation,
             slot: bytes[1],
@@ -87,18 +91,17 @@ pub struct JobStep<T> {
     pub outcome: JobOutcome<T>,
 }
 
-impl JobStep<()> {
+impl Record {
     // Conversion and output refusal happen before saving the prepared checkpoint.
     // A refused result must leave the previous checkpoint available for retry.
     fn finish_and_save<T, M: Memory>(
-        self,
+        &self,
         jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
-        record: &Record,
         limit: usize,
         finish: impl FnOnce() -> Result<(T, usize), Error>,
     ) -> Result<JobStep<T>, Error> {
-        let (outcome, output_bytes) = match self.outcome {
+        let (outcome, output_bytes) = match self.phase {
             JobOutcome::Running => (JobOutcome::Running, 0),
             JobOutcome::Invalidated => (JobOutcome::Invalidated, 0),
             JobOutcome::Expired => (JobOutcome::Expired, 0),
@@ -107,13 +110,15 @@ impl JobStep<()> {
                 if bytes > limit {
                     return Err(Error::RowTooLarge);
                 }
+
                 (JobOutcome::Complete(value), bytes)
             }
         };
-        jobs.save(handle, record)?;
+        jobs.save(handle, self)?;
+
         Ok(JobStep {
             sequence: self.sequence,
-            source_revision: self.source_revision,
+            source_revision: self.revision,
             examined: self.examined,
             input_bytes: self.input_bytes,
             output_bytes,
@@ -169,6 +174,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
+
         start(
             jobs,
             field_binding(binding(&plan, &reducer)?, field),
@@ -240,8 +246,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             expected,
             sequence,
             now,
-        )?
-        .finish_and_save(jobs, handle, &record, bytes, || {
+        )?;
+
+        record.finish_and_save(jobs, handle, bytes, || {
             Ok((reducer.finish()?.into_count()?, 8))
         })
     }
@@ -323,6 +330,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         operation: Operation,
     ) -> Result<JobHandle, Error> {
         let (plan, mut reducer) = self.numeric_plan::<R>(None, operation)?;
+
         start(
             jobs,
             binding(&plan, &reducer)?,
@@ -342,6 +350,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         operation: Operation,
     ) -> Result<JobStep<Option<R>>, Error> {
         let (plan, reducer) = self.numeric_plan::<R>(None, operation)?;
+
         self.resume_value(jobs, handle, sequence, now, (plan, reducer))
     }
 
@@ -367,11 +376,13 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             expected,
             sequence,
             now,
-        )?
-        .finish_and_save(jobs, handle, &record, limit, || {
+        )?;
+
+        record.finish_and_save(jobs, handle, limit, || {
             let bytes = reducer.finish()?.into_value()?;
             let size = bytes.as_ref().map_or(0, Vec::len);
             let value = bytes.as_deref().map(decode_record).transpose()?;
+
             Ok((value, size))
         })
     }
@@ -383,6 +394,7 @@ fn field_binding(binding: [u8; 32], field: Option<&str>) -> [u8; 32] {
     hash.update(binding);
     hash.update((field.len() as u32).to_le_bytes());
     hash.update(field.as_bytes());
+
     hash.finalize().into()
 }
 
@@ -410,6 +422,7 @@ fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
         }
         _ => return Err(Error::InvalidQuery),
     }
+
     Ok(hash.finalize().into())
 }
 
@@ -429,6 +442,7 @@ fn start<M: Memory>(
         return Err(Error::Limit);
     }
     let (count, state) = accumulator.checkpoint()?;
+
     jobs.insert(Record {
         generation: 0,
         binding,
@@ -461,7 +475,7 @@ fn prepare<M: Memory>(
     expected: [u8; 32],
     sequence: u64,
     now: Timestamp,
-) -> Result<JobStep<()>, Error> {
+) -> Result<(), Error> {
     if record.binding != expected || sequence > record.sequence {
         return Err(Error::InvalidJob);
     }
@@ -485,6 +499,7 @@ fn prepare<M: Memory>(
                     return Err(Error::Corrupt);
                 }
                 plan.validate_position(entity, &cursor.position)?;
+
                 Some(cursor)
             };
             let request = Request {
@@ -519,18 +534,6 @@ fn prepare<M: Memory>(
         }
     }
     record.observed = now;
-    let outcome = match record.phase {
-        JobOutcome::Running => JobOutcome::Running,
-        JobOutcome::Invalidated => JobOutcome::Invalidated,
-        JobOutcome::Expired => JobOutcome::Expired,
-        JobOutcome::Complete(()) => JobOutcome::Complete(()),
-    };
-    Ok(JobStep {
-        sequence: record.sequence,
-        source_revision: record.revision,
-        examined: record.examined,
-        input_bytes: record.input_bytes,
-        output_bytes: 0,
-        outcome,
-    })
+
+    Ok(())
 }

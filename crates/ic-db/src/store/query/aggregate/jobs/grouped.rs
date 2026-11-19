@@ -1,4 +1,5 @@
 //! Retained grouped aggregates with bounded complete finalization.
+
 use super::{
     super::super::Plan,
     super::{
@@ -64,6 +65,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
+
         self.start_groups(jobs, now, expires, plan, self.count_reducer(field)?, field)
     }
 
@@ -115,6 +117,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
         let job = self.retained_groups(plan, self.count_reducer(field)?, field)?;
+
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 
@@ -193,6 +196,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         operation: Operation,
     ) -> Result<JobHandle, Error> {
         let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+
         self.start_group_value(jobs, now, expires, admitted)
     }
 
@@ -207,6 +211,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let (plan, reducer) = admitted;
+
         self.start_groups(jobs, now, expires, plan, reducer, None)
     }
 
@@ -220,6 +225,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         field: Option<&str>,
     ) -> Result<JobHandle, Error> {
         let mut job = self.retained_groups(plan, reducer, field)?;
+
         start(
             jobs,
             job.binding,
@@ -239,6 +245,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         operation: Operation,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
+
         self.resume_group_value(jobs, handle, sequence, now, admitted)
     }
 
@@ -252,6 +259,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = admitted;
         let job = self.retained_groups(plan, reducer, None)?;
+
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_value)
     }
 
@@ -283,8 +291,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             binding,
             sequence,
             now,
-        )?
-        .finish_and_save(jobs, handle, &record, bytes, || {
+        )?;
+
+        record.finish_and_save(jobs, handle, bytes, || {
             pages::group_page(groups, rows, bytes, page, handle, decode)
         })
     }
@@ -297,6 +306,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     ) -> Result<GroupJob<'p>, Error> {
         let groups = self.admit_groups(&plan, reducer)?;
         let binding = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
+
         Ok(GroupJob {
             plan,
             groups,
@@ -353,5 +363,6 @@ fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 3
         hash.update(b"group-or-clauses\0");
         hash.update([clauses]);
     }
+
     Ok(hash.finalize().into())
 }

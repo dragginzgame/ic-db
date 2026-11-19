@@ -1,6 +1,8 @@
 //! Installed fault probes specialize the same engine for instrumented stable memory.
+
 use crate::Backing;
 use ic_db::qualification;
+
 pub(crate) type Database = qualification::Database<Backing>;
 pub(crate) type Query<'a, E> = qualification::Query<'a, E, Backing>;
 #[cfg(any(

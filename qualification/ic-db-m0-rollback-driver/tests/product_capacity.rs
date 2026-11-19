@@ -1,5 +1,7 @@
 //! Real migration growth refusal with unchanged backing and independent bytes.
+
 mod envelope_support;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
@@ -64,12 +66,15 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     let initialized = match call(3, 0, 32, 131072, true, 0).await {
         Ok(reply) => {
             let (result, _, grows, _) = decode(reply);
+
             if result.is_ok() {
                 assert_eq!(grows, 0);
+
                 true
             } else {
                 assert!(matches!(result, Err(3 | 4)));
                 assert!(grows > 0);
+
                 false
             }
         }
@@ -107,14 +112,17 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
         let success = match reply {
             Ok(reply) => {
                 let (result, writes, grows, instructions) = decode(reply);
+
                 match result {
                     Ok(step) => {
                         assert_eq!(grows, 0);
+
                         Some((step, writes, grows, instructions))
                     }
                     Err(code) => {
                         assert_eq!(code, 3);
                         assert!(grows > 0);
+
                         None
                     }
                 }
@@ -145,6 +153,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                 step.0
             );
             growth_checked = true;
+
             (step, writes, grows, instructions)
         };
         max_copy_instructions = max_copy_instructions.max(instructions);

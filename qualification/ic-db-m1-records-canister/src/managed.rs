@@ -1,18 +1,12 @@
 //! Installed managed-time semantics through the real bounded batch.
+
 use crate::{open, runtime, schema::ManagedRow};
 use ic_db::{Batch, Error, Timestamp};
 
-type Row = (u64, String, i64, i64);
-fn view(row: ManagedRow) -> Row {
-    (
-        row.id,
-        row.body,
-        row.created.as_millis(),
-        row.updated.as_millis(),
-    )
-}
-
-/// Apply a managed-field mutation at the supplied operation time.
+// managed_write
+// Apply a managed-field mutation at the supplied operation time.
+// guard  : validates the request frame for method 82.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "managed_write",
@@ -44,6 +38,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
             if mode == 3 {
                 row.updated = time;
             }
+
             batch.replace(&row)
         }
         // Two insertions must share this one captured batch time.
@@ -51,6 +46,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
             batch
                 .insert_input(ManagedRow::insert().id(id).body(body))
                 .map_err(error)?;
+
             batch
                 .insert_input(ManagedRow::insert().id(id + 1).body("second".into()))
                 .map(|_| ())
@@ -62,24 +58,14 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
     if trap {
         crate::system::trap("after managed commit");
     }
+
     Ok(())
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Result::map_err consumes the error through this fixture callback."
-)]
-fn error(error: Error) -> u8 {
-    match error {
-        Error::MissingOperationTime => 1,
-        Error::ManagedField => 2,
-        Error::TimestampRegression => 3,
-        Error::UniqueViolation => 4,
-        _ => 5,
-    }
-}
-
-/// Read the managed rows and their timestamp index at the requested time.
+// managed_rows
+// Read the managed rows and their timestamp index at the requested time.
+// guard  : validates the request frame for method 83.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "managed_rows",
@@ -92,6 +78,7 @@ fn error(error: Error) -> u8 {
 fn managed_rows(millis: i64) -> (Vec<Row>, Vec<u64>, u64) {
     let host = runtime();
     let db = open(&host);
+
     (
         db.page::<ManagedRow>(None, 32)
             .unwrap()
@@ -106,4 +93,28 @@ fn managed_rows(millis: i64) -> (Vec<Row>, Vec<u64>, u64) {
             .collect(),
         db.revision::<ManagedRow>().unwrap(),
     )
+}
+
+type Row = (u64, String, i64, i64);
+fn view(row: ManagedRow) -> Row {
+    (
+        row.id,
+        row.body,
+        row.created.as_millis(),
+        row.updated.as_millis(),
+    )
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Result::map_err consumes the error through this fixture callback."
+)]
+fn error(error: Error) -> u8 {
+    match error {
+        Error::MissingOperationTime => 1,
+        Error::ManagedField => 2,
+        Error::TimestampRegression => 3,
+        Error::UniqueViolation => 4,
+        _ => 5,
+    }
 }

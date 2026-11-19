@@ -1,9 +1,28 @@
 //! Cutover witness over the unchanged mapping entity; no host routing authority.
+
 use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, Entry, EntryV2, whole_schema};
-use crate::handles::Database;
-use crate::{aggregate_store::open_jobs, runtime};
+use crate::{aggregate_store::open_jobs, handles::Database, runtime};
 use ic_db::{Entity, Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
 use ic_storage::StableKey;
+
+// maintenance_job
+// Exercise retained aggregate custody during schema maintenance.
+// guard  : validates the request frame for method 146.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "maintenance_job",
+    guard = crate::transport::admit::<146>,
+    decode = crate::transport::decode::<_, 146>,
+    encode = crate::transport::encode::<_, 146>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn maintenance_job(
+    (operation, target, bytes, sequence, work): (u8, bool, Vec<u8>, u64, u32),
+) -> Result<Reply, String> {
+    control(operation, target, &bytes, sequence, work).map_err(|error| format!("{error:?}"))
+}
 
 // Position bytes, sequence, source revision, examined rows, completed count.
 type Reply = (Vec<u8>, u64, u64, u64, Option<u64>);
@@ -37,6 +56,7 @@ fn control(
             Some(cursor) => query.after(cursor).fetch()?,
             None => query.fetch()?,
         };
+
         return Ok((
             page.next
                 .map(|cursor| cursor.to_bytes())
@@ -48,6 +68,7 @@ fn control(
         ));
     }
     let mut jobs = open_jobs(&host);
+
     match operation {
         0 => {
             let handle = query.start_count(
@@ -55,6 +76,7 @@ fn control(
                 Timestamp::from_millis(0),
                 Timestamp::from_millis(100),
             )?;
+
             Ok((handle.to_bytes(), 0, revision, 0, None))
         }
         1 => {
@@ -66,6 +88,7 @@ fn control(
                 JobOutcome::Running => None,
                 _ => return Err(Error::InvalidJob),
             };
+
             Ok((
                 vec![],
                 step.sequence,
@@ -76,20 +99,4 @@ fn control(
         }
         _ => Err(Error::InvalidQuery),
     }
-}
-
-/// Exercise retained aggregate custody during schema maintenance.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "maintenance_job",
-    guard = crate::transport::admit::<146>,
-    decode = crate::transport::decode::<_, 146>,
-    encode = crate::transport::encode::<_, 146>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn maintenance_job(
-    (operation, target, bytes, sequence, work): (u8, bool, Vec<u8>, u64, u32),
-) -> Result<Reply, String> {
-    control(operation, target, &bytes, sequence, work).map_err(|error| format!("{error:?}"))
 }

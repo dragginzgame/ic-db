@@ -647,9 +647,9 @@ tests independently frame owner/subaccount bytes and reject truncated, oversized
 trailing and wrong index owners. No transport bytes are used as durable keys.
 
 The first scalar slice uses the real `ic-db` library and `#[entity]` generator.
-Its [shared declarations](ic-db-m1-records-schema/src/lib.rs) are a private qualification
-crate used by both the [host build script](ic-db-m1-records-canister/build.rs) and Wasm
-target through ordinary Cargo dependencies. Host-only `ctor`
+Its [shared declarations](ic-db-m1-records-schema/src/model.rs) are a private qualification
+crate whose [own build script](ic-db-m1-records-schema/build.rs) generates the compiled
+schema imported by the Wasm canister. Host-only `ctor`
 registration collects full Rust paths; the second stage validates and seals the
 selected module's schema, then emits its typed assembly and expected fingerprint.
 Document's imported Entry type and OptionalLink's Self target exercise compiler

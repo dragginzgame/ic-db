@@ -1,9 +1,10 @@
 //! Exercise real host constructors and Rust name resolution, not manual registration.
 #![cfg(feature = "build")]
+
 use ic_db::{Entity, Schema};
 use schema::{cycle, destination, source};
 
-ic_db::build_schema!(src::schema);
+ic_db::build_schema!();
 
 #[test]
 fn constructors_collect_full_paths_and_compiler_resolved_references() {

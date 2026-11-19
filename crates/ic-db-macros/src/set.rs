@@ -1,4 +1,5 @@
 //! Named scalar/unit-enum sets; field parsing and codecs retain their existing owner.
+
 use super::{
     declaration,
     field::{Field, parse_value},
@@ -9,7 +10,6 @@ use quote::quote;
 
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let item = declaration(item, "set")?;
-    let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let mut name = None;
     let mut parts = Vec::new();
     for meta in metas(args)? {
@@ -25,20 +25,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         }
     }
     let (kind, optional, max) = parse_value(&syn::parse_quote!(value(many, #(#parts),*)))?;
-    let name = name.unwrap_or_else(|| item.ident.to_string());
-    if name.is_empty() || name.len() > 64 {
-        return Err(fail("set name must contain 1..64 UTF-8 bytes"));
-    }
+    let name = super::declaration_name(name, &item.ident, "set")?;
     let max = max.expect("many requires max_items");
-    let field = Field {
-        default: None,
-        managed: None,
-        name: "item".into(),
-        kind,
-        optional,
-        many: None,
-        reference: None,
-    };
+    let field = Field::nested("item", kind, optional, None);
     let ty = field.rust_type();
     let description = field.type_description();
     let write = field.encode_with(&quote!(value));
@@ -46,6 +35,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let ident = item.ident;
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs)?;
+
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]

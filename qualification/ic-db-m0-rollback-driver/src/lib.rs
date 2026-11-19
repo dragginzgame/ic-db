@@ -22,6 +22,7 @@ pub async fn upgrade_stopped(
     pic.stop_canister(canister, sender).await?;
     let result = pic.upgrade_canister(canister, wasm, args, sender).await;
     pic.start_canister(canister, sender).await?;
+
     result
 }
 
@@ -50,6 +51,7 @@ pub async fn instance() -> Result<PocketIc, String> {
     let url = endpoint
         .parse()
         .map_err(|_| "invalid PocketIC endpoint".to_owned())?;
+
     tokio::time::timeout(
         Duration::from_secs(30),
         PocketIcBuilder::new()

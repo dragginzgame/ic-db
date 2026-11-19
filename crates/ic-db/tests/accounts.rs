@@ -1,4 +1,5 @@
 //! Exact account/subaccount bytes and one identity for the default account.
+
 use ic_db::{
     Account, Batch, Database, Entity, Error, IndexValue, Principal, Schema, Subaccount, entity,
     map, set,
@@ -8,28 +9,52 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+///
+/// AccountRow
+/// Exercises indexed access by `zone`, `value`, `id`, `sub` and `maybe` on rows keyed by `id`.
+///
+
 #[entity(
-    pk(field="id"),
-    index(fields=["zone","value","id"]),
-    index(fields=["zone","sub","id"]),
-    index(field="maybe",unique,present_only),
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(fields = ["zone", "sub", "id"]),
+    index(field = "maybe", unique, present_only),
     fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="maybe",value(opt,item(prim="Account"))),
-        field(name="sub",value(item(prim="Subaccount"))),
-        field(name="value",value(item(prim="Account"))),
-        field(name="zone",value(item(prim="Bool")))
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Account"))),
+        field(name = "sub", value(item(prim = "Subaccount"))),
+        field(name = "value", value(item(prim = "Account"))),
+        field(name = "zone", value(item(prim = "Bool")))
     )
 )]
 struct AccountRow {}
+
+///
+/// Owners
+/// Stores up to 4 distinct `Account` values.
+///
+
 #[set(item(prim = "Account"), max_items = 4)]
 struct Owners {}
+
+///
+/// Allocations
+/// Maps up to 3 `Account` keys to optional `Subaccount` values.
+///
+
 #[map(
     key(prim = "Account"),
     value(opt, item(prim = "Subaccount")),
     max_items = 3
 )]
 struct Allocations {}
+
+///
+/// Collections
+/// Stores `list`, `map` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -69,6 +94,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -316,6 +342,11 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
     assert!(matches!(db.commit(b), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+///
+/// LargeAccounts
+/// Stores `values` under the `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),

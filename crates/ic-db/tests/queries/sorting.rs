@@ -1,4 +1,5 @@
 //! Complete sorting compared with independent Rust tuple/text order.
+
 use super::{C, DecimalSale, Entry, OptionalPrice, Summary, create, decimal_sales, host, ids, row};
 use ic_db::{
     Batch, Database, Entity, Error, Schema,
@@ -35,6 +36,7 @@ fn decimal_sort_and_distinct_agree_with_integer_cents_and_grouping() {
             let mut expected: Vec<_> = cents.iter().enumerate().collect();
             expected.sort_by(|(ai, a), (bi, b)| {
                 let order = if price_desc { b.cmp(a) } else { a.cmp(b) };
+
                 order.then_with(|| if id_desc { bi.cmp(ai) } else { ai.cmp(bi) })
             });
             let page = db
@@ -137,6 +139,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
                     .filter("amount", C::Ge, 10_u64)
                     .order_by(&["amount", "category"])
                     .limit(limit);
+
                 if descending {
                     query.descending()
                 } else {
@@ -333,6 +336,11 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     ));
 }
 
+///
+/// SortRow
+/// Stores `label` and `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -342,6 +350,11 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     )
 )]
 struct SortRow {}
+
+///
+/// LabelOnly
+/// Carries an optional `Text` value of `label`.
+///
 
 #[ic_db::record(fields(field(name = "label", value(opt, item(prim = "Text", max_bytes = 4096)))))]
 struct LabelOnly {}
@@ -401,6 +414,7 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
             let mut expected: Vec<_> = input.iter().enumerate().collect();
             expected.sort_by(|(ai, a), (bi, b)| {
                 let label = if label_desc { b.cmp(a) } else { a.cmp(b) };
+
                 label.then_with(|| if id_desc { bi.cmp(ai) } else { ai.cmp(bi) })
             });
             let page = db
@@ -523,6 +537,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
                 .query::<Entry>()
                 .order_by_each(&[("category", Asc), ("amount", Desc)])
                 .limit(3);
+
             if reverse { query.descending() } else { query }
         };
         let page = query().fetch().unwrap();
@@ -645,6 +660,11 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// CategoryAmount
+/// Groups `category` and `amount` into one record.
+///
+
 #[ic_db::record(fields(
     field(name = "category", value(item(prim = "Nat8"))),
     field(name = "amount", value(item(prim = "Nat64")))
@@ -662,6 +682,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
             let mut row = row(id);
             row.category = (id % 2) as u8;
             row.amount = if id <= 6 { 10 } else { 20 };
+
             row
         })
         .collect();

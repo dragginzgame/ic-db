@@ -21,6 +21,7 @@ fn decimal_key(value: Decimal) -> Result<[u8; 41], &'static str> {
     let mut key = [0; 41];
     if value.coefficient == 0 {
         key[0] = 1;
+
         return Ok(key);
     }
     let digits = value.coefficient.unsigned_abs().to_string();
@@ -33,6 +34,7 @@ fn decimal_key(value: Decimal) -> Result<[u8; 41], &'static str> {
             *byte = !*byte;
         }
     }
+
     Ok(key)
 }
 
@@ -48,11 +50,14 @@ fn exact_decimal_cmp(left: Decimal, right: Decimal) -> Ordering {
             digits[position] = (integer % 10) as u8;
             integer /= 10;
         }
+
         digits
     };
+
     match left.coefficient.signum().cmp(&right.coefficient.signum()) {
         Ordering::Equal => {
             let order = magnitude(left).cmp(&magnitude(right));
+
             if left.coefficient < 0 {
                 order.reverse()
             } else {
@@ -104,9 +109,11 @@ fn decimal_order_equality_uniqueness_and_grouping_agree() {
             .find(|(old, _)| exact_decimal_cmp(*old, value) == Ordering::Equal);
         let is_new = if let Some((_, count)) = duplicate {
             *count += 1;
+
             false
         } else {
             oracle.push((value, 1));
+
             true
         };
         let key = decimal_key(value).unwrap();
@@ -174,6 +181,7 @@ fn float_key(value: f64) -> Result<[u8; 8], &'static str> {
     } else {
         bits ^ (1_u64 << 63)
     };
+
     Ok(key.to_be_bytes())
 }
 
@@ -219,6 +227,7 @@ fn u256_key(limbs: [u64; 4]) -> [u8; 32] {
     for (slot, limb) in limbs.iter().rev().enumerate() {
         key[slot * 8..slot * 8 + 8].copy_from_slice(&limb.to_be_bytes());
     }
+
     key
 }
 
@@ -252,6 +261,7 @@ fn composite_key(value: Option<Decimal>, id: i64) -> Result<Vec<u8>, &'static st
         None => key.extend([0; 41]),
     }
     key.extend(((id as u64) ^ (1_u64 << 63)).to_be_bytes());
+
     Ok(key)
 }
 

@@ -1,4 +1,5 @@
 //! Issuance uses independent literal bytes and integer ordering as its oracle.
+
 use ic_db::{Timestamp, Ulid, UlidGenerationError, UlidGenerator};
 
 #[test]

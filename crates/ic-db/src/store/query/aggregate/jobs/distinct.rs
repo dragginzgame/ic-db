@@ -1,4 +1,5 @@
 //! Retained tuple DISTINCT counts using the existing exact key-set reducer.
+
 use super::{
     super::{Accumulator, GroupCount, Query, decode_group_count},
     AggregateJobs, GroupPage, JobHandle, JobStep, prepare, start,
@@ -26,6 +27,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
+
         start(
             jobs,
             binding(plan.binding),
@@ -65,8 +67,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             binding(plan.binding),
             sequence,
             now,
-        )?
-        .finish_and_save(jobs, handle, &record, bytes, || {
+        )?;
+
+        record.finish_and_save(jobs, handle, bytes, || {
             Ok((reducer.finish()?.into_count()?, 8))
         })
     }
@@ -90,6 +93,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             return Err(Error::InvalidQuery);
         }
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+
         self.start_groups(jobs, now, expires, plan, reducer, None)
     }
 
@@ -112,6 +116,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
         let job = self.retained_groups(plan, reducer, None)?;
+
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 }
@@ -120,5 +125,6 @@ fn binding(query: [u8; 32]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"ic-db:distinct-count-job:v1\0");
     hash.update(query);
+
     hash.finalize().into()
 }

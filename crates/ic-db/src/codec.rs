@@ -24,6 +24,7 @@ pub(crate) fn validated_length(span: &[u8], optional: bool) -> Option<u32> {
         return None;
     }
     let value = &span[usize::from(optional)..];
+
     Some(u32::from_le_bytes(
         *value.first_chunk::<4>().expect("validated length prefix"),
     ))
@@ -61,6 +62,7 @@ impl Encoder {
             return Err(Error::Limit);
         }
         self.bytes.extend_from_slice(bytes);
+
         Ok(())
     }
 
@@ -71,6 +73,7 @@ impl Encoder {
         self.budget.enter().map_err(|_| Error::Limit)?;
         let result = value.encode_into(self);
         self.budget.depth -= 1;
+
         result
     }
 
@@ -86,9 +89,11 @@ impl Encoder {
             for value in values {
                 write(self, value)?;
             }
+
             Ok(())
         })();
         self.budget.depth -= 1;
+
         result
     }
 
@@ -107,6 +112,7 @@ impl Encoder {
         for value in values {
             write(self, value)?;
         }
+
         Ok(())
     }
 
@@ -120,11 +126,13 @@ impl Encoder {
         for (key, value) in values {
             write(self, key, value)?;
         }
+
         Ok(())
     }
 
     fn collection_header(&mut self, count: usize, max: u32) -> Result<(), Error> {
         self.budget.items(count, max).map_err(|_| Error::Limit)?;
+
         self.nat32(count as u32)
     }
 
@@ -165,6 +173,7 @@ impl Encoder {
             .coefficient_at_scale(scale)
             .ok_or(Error::InvalidOperand)?;
         self.append(&coefficient.to_be_bytes())?;
+
         self.nat8(scale as u8)
     }
 
@@ -178,6 +187,7 @@ impl Encoder {
 
     pub fn account(&mut self, value: Account) -> Result<(), Error> {
         self.principal(&value.owner)?;
+
         self.subaccount(*value.effective_subaccount())
     }
 
@@ -219,6 +229,7 @@ impl Encoder {
         if value.as_slice().len() > MAX_PRINCIPAL_BYTES {
             return Err(Error::Limit);
         }
+
         self.bytes(value.as_slice())
     }
 
@@ -231,6 +242,7 @@ impl Encoder {
             return Err(Error::Limit);
         }
         self.append(&len.to_le_bytes())?;
+
         self.append(bytes)
     }
 
@@ -259,6 +271,7 @@ impl<'a> Decoder<'a> {
         if bytes.len() > byte_limit {
             return Err(Error::Corrupt);
         }
+
         Ok(Self {
             bytes,
             position: 0,
@@ -281,6 +294,7 @@ impl<'a> Decoder<'a> {
         self.budget.enter()?;
         let result = read(self);
         self.budget.depth -= 1;
+
         result
     }
     // Indexed unit enums still consume the ordinary structured-value budget.
@@ -294,18 +308,21 @@ impl<'a> Decoder<'a> {
             }
         });
         self.budget.depth -= 1;
+
         result
     }
 
     fn list_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = self.collection_count(max)?;
         self.budget.enter()?;
+
         Ok(count)
     }
 
     fn collection_count(&mut self, max: u32) -> Result<usize, Error> {
         let count = usize::try_from(self.nat32()?).map_err(|_| Error::Corrupt)?;
         self.budget.items(count, max)?;
+
         Ok(count)
     }
 
@@ -320,14 +337,17 @@ impl<'a> Decoder<'a> {
             for _ in 0..count {
                 values.push(read(self)?);
             }
+
             Ok(values)
         })();
         self.budget.depth -= 1;
+
         result
     }
 
     fn skip_named(&mut self, link: TypeLink) -> Result<(), Error> {
         let definition = (link.definition)();
+
         self.with_named(definition, |reader| {
             match &definition.body {
                 TypeBody::Wrapped(value) => reader.skip(*value)?,
@@ -357,6 +377,7 @@ impl<'a> Decoder<'a> {
                     }
                 }
             }
+
             Ok(())
         })
     }
@@ -365,6 +386,7 @@ impl<'a> Decoder<'a> {
         let end = self.position.checked_add(len).ok_or(Error::Corrupt)?;
         let bytes = self.bytes.get(self.position..end).ok_or(Error::Corrupt)?;
         self.position = end;
+
         Ok(bytes)
     }
 
@@ -383,6 +405,7 @@ impl<'a> Decoder<'a> {
                 values.insert(value);
             },
         )?;
+
         Ok(values)
     }
 
@@ -397,6 +420,7 @@ impl<'a> Decoder<'a> {
         self.ordered(count, read_key, read_value, |key, value| {
             values.insert(key, value);
         })?;
+
         Ok(values)
     }
 
@@ -423,6 +447,7 @@ impl<'a> Decoder<'a> {
         if let Some((key, value)) = previous {
             accept(key, value);
         }
+
         Ok(())
     }
 
@@ -439,8 +464,10 @@ impl<'a> Decoder<'a> {
             {
                 reader.skip(value.value)?;
             }
+
             Ok(())
         };
+
         match crate::key::operand_type(item) {
             FieldType::Nat8 => self.ordered(count, Self::nat8, read_value, |_, ()| {}),
             FieldType::Nat16 => self.ordered(count, Self::nat16, read_value, |_, ()| {}),
@@ -480,6 +507,7 @@ impl<'a> Decoder<'a> {
             ),
             FieldType::Named(link) => {
                 let count_variants = unit_enum_len((link.definition)()).ok_or(Error::Corrupt)?;
+
                 self.ordered(
                     count,
                     |r| r.unit_enum(count_variants),
@@ -539,6 +567,7 @@ impl<'a> Decoder<'a> {
         if scale > Decimal::MAX_SCALE || stored_scale != scale {
             return Err(Error::Corrupt);
         }
+
         Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)
     }
 
@@ -553,6 +582,7 @@ impl<'a> Decoder<'a> {
     pub fn account(&mut self) -> Result<Account, Error> {
         let owner = self.principal()?;
         let bytes = self.subaccount()?;
+
         Ok(Account {
             owner,
             subaccount: (bytes != [0; 32]).then_some(bytes),
@@ -600,6 +630,7 @@ impl<'a> Decoder<'a> {
         if len > max {
             return Err(Error::Corrupt);
         }
+
         self.take(len)
     }
 
@@ -635,6 +666,7 @@ impl<'a> Decoder<'a> {
                     for _ in 0..count {
                         self.skip(*item)?;
                     }
+
                     Ok(())
                 })();
                 self.budget.depth -= 1;
@@ -714,6 +746,7 @@ impl<'a> Decoder<'a> {
                 self.blob_ref(max_bytes as usize)?;
             }
         }
+
         Ok(())
     }
 
@@ -721,6 +754,7 @@ impl<'a> Decoder<'a> {
         if self.position != self.bytes.len() {
             return Err(Error::Corrupt);
         }
+
         Ok(())
     }
 }
@@ -741,6 +775,7 @@ impl Budget {
             return Err(Error::Corrupt);
         }
         self.collection_items += count;
+
         Ok(())
     }
 
@@ -750,6 +785,7 @@ impl Budget {
         }
         self.depth += 1;
         self.nodes += 1;
+
         Ok(())
     }
 }

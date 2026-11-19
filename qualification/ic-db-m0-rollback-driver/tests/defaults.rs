@@ -1,4 +1,5 @@
 //! Installed omission/default behavior, index maintenance, rollback and unchanged upgrade.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -62,6 +63,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<State>(
             &bytes,
             Encoding::Frame {

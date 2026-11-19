@@ -92,6 +92,7 @@ fn console_quotes_preserve_exact_fluent_operands() {
                 "{command} Document --select min:note --group-min {operand}\r\n"
             ))
             .unwrap();
+
             match cli.command.unwrap() {
                 Command::Query { group_min, .. } | Command::Aggregate { group_min, .. } => {
                     assert_eq!(group_min.as_deref(), Some(expected));

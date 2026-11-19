@@ -1,4 +1,5 @@
 //! Endpoint admission runs in isolated processes without altering shared test env.
+
 use ic_db_m0_rollback_driver::instance;
 use std::process::Command;
 
@@ -16,6 +17,7 @@ async fn endpoint_admission_never_falls_back_to_a_binary() {
     if let Ok(expected) = std::env::var("IC_DB_ENDPOINT_CHILD") {
         let error = instance().await.err().expect("endpoint must refuse");
         assert!(error.contains(&expected), "{error}");
+
         return;
     }
     for endpoint in [None, Some("not a URL")] {

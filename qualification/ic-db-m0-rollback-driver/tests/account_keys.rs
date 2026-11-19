@@ -1,4 +1,5 @@
 //! Canonical Account/Subaccount keys across cross-entity batches and IC messages.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -74,6 +75,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                 )
                 .await
                 .unwrap();
+
             ic_wire::decode::<Page>(
                 &bytes,
                 Encoding::Frame {

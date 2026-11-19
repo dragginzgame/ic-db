@@ -4,6 +4,7 @@ use ic_db_m0_rollback_driver as support;
 use ic_wire::{Direction, Encoding};
 
 use support::LIMITS;
+
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 

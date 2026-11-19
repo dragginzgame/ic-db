@@ -1,4 +1,5 @@
 //! Bounded aggregates over the shared scanner and exact reducers, without row history.
+
 pub(super) mod jobs;
 mod numeric;
 
@@ -56,6 +57,7 @@ impl GroupRequest<'_> {
             },
             Reducer::Extremum { position, .. } => {
                 let field = &entity.fields[*position];
+
                 ValueSchema {
                     value: field.value,
                     optional: field.optional,
@@ -85,11 +87,14 @@ impl GroupRequest<'_> {
                     if key.len() > MAX_COMPARISON_KEY {
                         return Err(Error::Limit);
                     }
+
                     Some(key)
                 };
+
                 Ok((comparison, key, or_next))
             })
             .collect::<Result<_, Error>>()?;
+
         Ok(Selection {
             predicates,
             order: self.order.unwrap_or_default(),
@@ -144,6 +149,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn group_page(mut self, size: usize, after: Option<&'a jobs::GroupCursor>) -> Self {
         self.request.groups.page = Some(jobs::pages::PageRequest { size, after });
+
         self
     }
 
@@ -167,6 +173,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 .predicates
                 .push((comparison, value.into(), false));
         }
+
         self
     }
 
@@ -189,6 +196,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                     .map(|(i, &(comparison, value))| (comparison, value, i + 1 != count)),
             );
         }
+
         self
     }
 
@@ -197,6 +205,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn order_groups(mut self, order: GroupOrder) -> Self {
         self.request.groups.order = Some(order);
+
         self
     }
 
@@ -228,6 +237,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn extremum<R: Value>(self, maximum: bool) -> Result<Aggregate<Option<R>>, Error> {
         let (plan, reducer) = self.extremum_plan::<R>(maximum)?;
+
         self.scalar_value(&plan, reducer)
     }
 
@@ -238,6 +248,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             plan.projection.ok_or(Error::InvalidQuery)?,
             maximum,
         )?;
+
         Ok((plan, reducer))
     }
 
@@ -259,9 +270,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .into_value()?
             .map(|bytes| {
                 admit_output(bytes.len(), self.request.bytes, &mut output_bytes)?;
+
                 decode_record(&bytes)
             })
             .transpose()?;
+
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -304,6 +317,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         maximum: bool,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (plan, initial) = self.group_extremum_plan::<K, R>(maximum)?;
+
         self.group_values(&plan, initial)
     }
 
@@ -315,6 +329,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let operand = admit_projection(E::SCHEMA, R::definition())?;
         let initial = Reducer::extremum(E::SCHEMA, operand, maximum)?;
         plan.selected |= operand;
+
         Ok((plan, initial))
     }
 
@@ -330,6 +345,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.request.bytes,
             decode_group_value,
         )?;
+
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -361,6 +377,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             &plan,
             Some(Accumulator::Exists(&mut found)),
         )?;
+
         Ok(Aggregate {
             value: found,
             examined: page.examined,
@@ -412,6 +429,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Ok(count);
         }
         let reducer = self.count_reducer(None)?;
+
         self.scalar_count_value(&plan, reducer)
     }
 
@@ -442,6 +460,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Err(Error::RowTooLarge);
         }
         let plan = self.aggregate_plan(None, false)?;
+
         self.count_keys(&plan)
     }
 
@@ -456,6 +475,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             let key = crate::store_key::StoreKey::new([plan.prefix.as_slice(), *member].concat())?;
             count += u64::from(db.map.contains_key(&key));
         }
+
         Ok(Some(Aggregate {
             value: count,
             examined: members.len(),
@@ -478,6 +498,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 }
             }
         }
+
         Ok(Aggregate {
             value: examined as u64,
             examined,
@@ -511,12 +532,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         }
         let (mut plan, reducer) = self.distinct_plan::<K>()?;
         self.select_aggregate_row_path(&mut plan)?;
+
         self.scalar_count_value(&plan, reducer)
     }
 
     fn distinct_plan<K: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
         let plan = self.aggregate_plan(Some(K::definition()), false)?;
         let reducer = Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?);
+
         Ok((plan, reducer))
     }
 
@@ -524,6 +547,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if plan.index.is_none() {
             super::order::select_aggregate_path(E::SCHEMA, &self.request, plan)?;
         }
+
         Ok(())
     }
 
@@ -534,6 +558,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let mut plan = self.aggregate_plan(None, false)?;
         self.select_aggregate_row_path(&mut plan)?;
         let reducer = self.count_reducer(field)?;
+
         self.scalar_count_value(&plan, reducer)
     }
 
@@ -549,6 +574,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             plan,
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
+
         Ok(Aggregate {
             value: reducer.finish()?.into_count()?,
             examined: page.examined,
@@ -608,6 +634,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+
         self.group_count_values(plan, reducer)
     }
 
@@ -616,6 +643,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let operand = admit_projection(E::SCHEMA, R::definition())?;
         admit_ordered_fields(E::SCHEMA, operand)?;
         plan.selected |= operand;
+
         Ok((plan, Reducer::distinct(operand)))
     }
 
@@ -625,6 +653,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
         let reducer = self.count_reducer(field)?;
+
         self.group_count_values(plan, reducer)
     }
 
@@ -641,6 +670,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.request.bytes,
             decode_group_count,
         )?;
+
         Ok(Aggregate {
             value,
             examined: page.examined,
@@ -655,6 +685,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             .map(|name| E::SCHEMA.field_position(name).ok_or(Error::InvalidQuery))
             .transpose()?
             .filter(|&i| E::SCHEMA.fields[i].optional);
+
         Ok(Reducer::Count { presence, total: 0 })
     }
 
@@ -674,6 +705,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             plan,
             Some(Accumulator::Groups(&mut groups)),
         )?;
+
         Ok((groups, page))
     }
 
@@ -715,6 +747,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             admit_ordered_fields(E::SCHEMA, mask)?;
             plan.selected |= mask;
         }
+
         Ok(plan)
     }
 }
@@ -732,9 +765,11 @@ fn group_output<T>(
         .take(rows)
         .map(|(key, result)| {
             admit_output(key.len() + result.encoded_len(), bytes, &mut output_bytes)?;
+
             decode(&key, result)
         })
         .collect::<Result<_, Error>>()?;
+
     Ok((value, output_bytes))
 }
 
@@ -750,6 +785,7 @@ fn decode_group_value<K: Value, R: Value>(
     result: Completed,
 ) -> Result<GroupValue<K, R>, Error> {
     let value = result.into_value()?;
+
     Ok(GroupValue {
         key: decode_record(key)?,
         value: value.as_deref().map(decode_record).transpose()?,
@@ -760,6 +796,7 @@ fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
     let mut reader = Decoder::new(bytes)?;
     let value = R::decode_from(&mut reader)?;
     reader.finish()?;
+
     Ok(value)
 }
 
@@ -793,6 +830,7 @@ impl Accumulator<'_> {
         match self {
             Self::Exists(found) => {
                 **found = true;
+
                 Ok(())
             }
             Self::Scalar(state) => state.push(entity, values, bytes, spans, MAX_STATE_BYTES),
@@ -834,6 +872,7 @@ impl Reducer {
         if !key::supports(entity.fields[position].value) {
             return Err(Error::InvalidQuery);
         }
+
         Ok(Self::Extremum {
             position,
             maximum,
@@ -917,6 +956,7 @@ impl Reducer {
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -938,6 +978,7 @@ impl Completed {
         match self {
             Self::Count(total) => {
                 *scratch = total.to_be_bytes();
+
                 Some(scratch)
             }
             Self::Value(selected) => selected.as_ref().map(|(key, _)| key.as_slice()),
@@ -990,12 +1031,14 @@ impl Groups {
                 if state_bytes > MAX_STATE_BYTES {
                     return Err(Error::Limit);
                 }
+
                 Ok((key, (record, result)))
             })
             .collect::<Result<Vec<_>, Error>>()?;
         rows.retain(|(_, (_, result))| {
             let mut scratch = [0; 8];
             let actual = result.result_key(&mut scratch);
+
             self.selection
                 .predicates
                 .split_inclusive(|(_, _, or_next)| !or_next)
@@ -1018,9 +1061,11 @@ impl Groups {
                 } else {
                     order
                 };
+
                 order.then_with(|| ka.cmp(kb))
             });
         }
+
         Ok(rows.into_iter().map(|(_, row)| row).collect())
     }
 
@@ -1043,6 +1088,7 @@ impl Groups {
                 MAX_STATE_BYTES - self.state_bytes + previous,
             )?;
             self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
+
             return Ok(());
         }
         let base = key.capacity() + size;
@@ -1061,6 +1107,7 @@ impl Groups {
         }
         self.state_bytes += retained;
         self.rows.insert(key, (output, reducer));
+
         Ok(())
     }
 }

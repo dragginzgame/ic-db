@@ -1,34 +1,70 @@
 //! Full-width U256 bytes, ordering, uniqueness and corruption boundaries.
+
 use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, U256, entity, map, set};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+///
+/// BigNumbers
+/// Exercises indexed access by `zone`, `value`, `id` and `maybe` on rows keyed by `id`.
+///
+
 #[entity(
-    pk(field="id"),
-    index(fields=["zone","value","id"]),
-    index(field="maybe",unique,present_only),
-    fields(field(name="id",value(item(prim="Nat64"))),
-    field(name="maybe",value(opt,item(prim="U256"))),
-    field(name="value",value(item(prim="U256"))),
-    field(name="zone",value(item(prim="Bool"))))
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "U256"))),
+        field(name = "value", value(item(prim = "U256"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
 )]
 struct BigNumbers {}
+
+///
+/// Narrower
+/// Exercises an alternate `BigNumbers` declaration under the same logical identity.
+///
+
 #[entity(
-    name="BigNumbers",pk(field="id"),
-    index(fields=["zone","value","id"]),
-    index(field="maybe",unique,present_only),
-    fields(field(name="id",value(item(prim="Nat64"))),
-    field(name="maybe",value(opt,item(prim="Nat128"))),
-    field(name="value",value(item(prim="Nat128"))),
-    field(name="zone",value(item(prim="Bool"))))
+    name = "BigNumbers",
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Nat128"))),
+        field(name = "value", value(item(prim = "Nat128"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
 )]
 struct Narrower {}
+
+///
+/// Values
+/// Stores up to 3 distinct `U256` values.
+///
+
 #[set(item(prim = "U256"), max_items = 3)]
 struct Values {}
+
+///
+/// Pairs
+/// Maps up to 3 `U256` keys to `U256` values.
+///
+
 #[map(key(prim = "U256"), value(item(prim = "U256")), max_items = 3)]
 struct Pairs {}
+
+///
+/// Collections
+/// Stores `list`, `pairs` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -48,6 +84,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -313,6 +350,11 @@ fn collections_keep_high_bits_and_validate_unindexed_payloads() {
     assert!(matches!(db.commit(b), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+///
+/// WideList
+/// Stores `values` under the `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),

@@ -12,11 +12,11 @@ ignored = ["toko-tooling"]
 [package.metadata.toko-tooling.loc]
 category = "tests"
 
-[features]
-build = ["ic-db/build"]
-
 [dependencies]
 ic-db.workspace = true
+
+[build-dependencies]
+ic-db = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
 toko-tooling.workspace = true

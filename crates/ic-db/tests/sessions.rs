@@ -1,13 +1,23 @@
 //! A host hands independent helpers sessions on the same attached database.
+
 use ic_db::{Batch, DatabaseSession, Entity, Error, Schema, entity, testing::Fixture};
 use std::cell::RefCell;
 
-#[entity(pk(field="id"), index(fields=["owner", "peer"], unique), fields(
-    field(name="id", value(item(prim="Nat64"))),
-    field(name="owner", value(item(prim="Nat64"))),
-    field(name="peer", value(item(prim="Nat64"))),
-    field(name="accepted", value(item(prim="Bool")))
-))]
+///
+/// Friendship
+/// Exercises indexed access by `owner` and `peer` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["owner", "peer"], unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "owner", value(item(prim = "Nat64"))),
+        field(name = "peer", value(item(prim = "Nat64"))),
+        field(name = "accepted", value(item(prim = "Bool")))
+    )
+)]
 struct Friendship {}
 
 thread_local! {
@@ -51,6 +61,7 @@ fn nested_helpers_share_one_attachment_and_commit_atomically() {
     let update = || {
         let mut batch = Batch::new();
         batch.replace(&row).unwrap();
+
         batch
     };
     let read = outer.read().unwrap();
@@ -84,6 +95,11 @@ fn nested_helpers_share_one_attachment_and_commit_atomically() {
     let db = owner.try_into_database().ok().unwrap();
     assert_eq!(db.cardinality::<Friendship>().unwrap(), 1);
 }
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -193,6 +209,12 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
         __private::{Decoder, Encoder},
         TypeSchema, Value, record,
     };
+
+    ///
+    /// Payload
+    /// Carries the `Nat8` value of `value`.
+    ///
+
     #[record(fields(field(name = "value", value(item(prim = "Nat8")))))]
     struct Payload {}
     #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -209,15 +231,24 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
                     Err(Error::BorrowConflict)
                 ));
             }
+
             Payload::definition()
         }
+
         fn encode_into(&self, writer: &mut Encoder) -> Result<(), Error> {
             self.0.encode_into(writer)
         }
+
         fn decode_from(reader: &mut Decoder<'_>) -> Result<Self, Error> {
             Payload::decode_from(reader).map(Self)
         }
     }
+
+    ///
+    /// Checked
+    /// Stores `probe` under the `id` primary key.
+    ///
+
     #[entity(
         pk(field = "id"),
         fields(
@@ -250,12 +281,23 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
 #[test]
 fn named_unique_keys_use_declared_order_types_and_sparse_membership() {
     use ic_db::Principal;
-    #[entity(pk(field="id"), index(name="account", fields=["issuer","subject"], unique),
-        index(field="alias", unique, present_only), fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="issuer",value(item(prim="Principal"))),
-        field(name="subject",value(item(prim="Principal"))),
-        field(name="alias",value(opt,item(prim="Text", max_bytes=8)))))]
+
+    ///
+    /// Route
+    /// Exercises indexed access by `alias` on rows keyed by `id`.
+    ///
+
+    #[entity(
+        pk(field = "id"),
+        index(name = "account", fields = ["issuer", "subject"], unique),
+        index(field = "alias", unique, present_only),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "issuer", value(item(prim = "Principal"))),
+            field(name = "subject", value(item(prim = "Principal"))),
+            field(name = "alias", value(opt, item(prim = "Text", max_bytes = 8)))
+        )
+    )]
     struct Route {}
     let db = DatabaseSession::new(
         Fixture::new("test.routes.v1")

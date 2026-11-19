@@ -1,5 +1,6 @@
 //! Tighten the selected traversal by mandatory leading-key predicates and continuation.
 //! Uses the admitted fixed prefix; this does not select new paths.
+
 use super::{Comparison, Plan, Request, Term, TermOperand};
 use crate::{EntitySchema, Error, IndexSchema, store_key::StoreKey};
 use std::{cmp::Ordering, ops::Bound};
@@ -21,6 +22,7 @@ fn successor(mut bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         bytes.pop();
     }
     *bytes.last_mut().ok_or(Error::InvalidQuery)? += 1;
+
     Ok(bytes)
 }
 
@@ -64,6 +66,7 @@ fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Opti
         }
         _ => return Ok(None),
     };
+
     Ok((prefix_len + operand.len() <= crate::MAX_INDEX_KEY_BYTES).then_some(operand))
 }
 
@@ -82,6 +85,7 @@ fn next_field<'a>(
             return None;
         }
     }
+
     Some((entity.primary_key, false))
 }
 
@@ -113,6 +117,7 @@ fn bounds_index_clause(
             path.prefix.len(),
         );
     }
+
     next_field(entity, Some(path.index), path.fixed).is_some_and(|(field, _)| {
         membership_interval(entity, field, clause, path.prefix.len()).is_some()
     })
@@ -150,6 +155,7 @@ fn membership_interval<'a>(
         low = low.min(key);
         high = high.max(key);
     }
+
     Some((low, high))
 }
 
@@ -209,6 +215,7 @@ pub(super) fn point_count_members<'a>(
             })
         });
     }
+
     (members.len() <= request.work).then_some(members)
 }
 
@@ -228,6 +235,7 @@ pub(super) fn preserves_primary_bounds(
                 membership_interval(entity, entity.primary_key, clause, plan.prefix.len()).is_some()
             }
         };
+
         !primary_bound || bounds_index_clause(entity, path, clause)
     })
 }
@@ -306,6 +314,7 @@ pub(super) fn bounds(
                 present.push(1);
                 lower.tighten(StoreKey::new(present)?, true, Ordering::Greater);
             }
+
             match term.comparison {
                 Comparison::Eq | Comparison::StartsWith => {
                     lower.tighten(key, true, Ordering::Greater);
@@ -321,6 +330,7 @@ pub(super) fn bounds(
     }
     if let Some(cursor) = request.cursor {
         let key = StoreKey::new(cursor.position.clone())?;
+
         // Old or caller-selected positions must never widen the predicate range.
         if plan.descending {
             upper.tighten(key, cursor.inclusive, Ordering::Less);
@@ -332,5 +342,6 @@ pub(super) fn bounds(
     if lower.key > upper.key || (lower.key == upper.key && !(lower.inclusive && upper.inclusive)) {
         return Ok(None);
     }
+
     Ok(Some((lower.into_bound(), upper.into_bound())))
 }

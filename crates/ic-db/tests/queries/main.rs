@@ -1,6 +1,8 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
+
 mod blobs;
 mod sorting;
+
 use ic_db::{
     Batch, Comparison as C, Database, Entity, Error, IndexValue, QueryCursor, Schema, entity,
 };
@@ -9,38 +11,102 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
-#[entity(pk(field="id"),index(fields=["category","amount","id"]),index(fields=["amount","id"]),
-index(field="category"),
-index(field="maybe",unique,present_only),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="category",value(item(prim="Nat8"))),
-    field(name="amount",value(item(prim="Nat64"))),
-    field(name="maybe",value(opt,item(prim="Nat64"))),
-    field(name="payload",value(item(prim="Blob",max_bytes=2048)))
-))]
+///
+/// Entry
+/// Exercises indexed access by `category`, `amount`, `id` and `maybe` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["category", "amount", "id"]),
+    index(fields = ["amount", "id"]),
+    index(field = "category"),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat8"))),
+        field(name = "amount", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Nat64"))),
+        field(name = "payload", value(item(prim = "Blob", max_bytes = 2048)))
+    )
+)]
 struct Entry {}
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
 struct Other {}
+
+///
+/// Summary
+/// Groups `id` and `amount` into one record.
+///
+
 #[ic_db::record(fields(
     field(name = "id", value(item(prim = "Nat64"))),
     field(name = "amount", value(item(prim = "Nat64")))
 ))]
 struct Summary {}
+
+///
+/// OptionalOnly
+/// Carries an optional `Nat64` value of `maybe`.
+///
+
 #[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Nat64")))))]
 struct OptionalOnly {}
+
+///
+/// PayloadOnly
+/// Carries the `Blob` value of `payload`.
+///
+
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 2048)))))]
 struct PayloadOnly {}
+
+///
+/// WrongWidth
+/// Carries the `Nat32` value of `id`.
+///
+
 #[ic_db::record(fields(field(name = "id", value(item(prim = "Nat32")))))]
 struct WrongWidth {}
+
+///
+/// WrongPresence
+/// Carries the `Nat64` value of `maybe`.
+///
+
 #[ic_db::record(fields(field(name = "maybe", value(item(prim = "Nat64")))))]
 struct WrongPresence {}
+
+///
+/// WrongBound
+/// Carries the `Blob` value of `payload`.
+///
+
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 struct WrongBound {}
+
+///
+/// Missing
+/// Carries the `Nat64` value of `missing`.
+///
+
 #[ic_db::record(fields(field(name = "missing", value(item(prim = "Nat64")))))]
 struct Missing {}
+
+///
+/// Empty
+/// Represents a record with no stored fields.
+///
+
 #[ic_db::record(fields())]
 struct Empty {}
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
@@ -52,6 +118,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -79,6 +146,7 @@ fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database {
         b.insert(&row(id)).unwrap();
     }
     db.commit(b).unwrap();
+
     db
 }
 
@@ -88,6 +156,11 @@ fn ids(rows: &[Entry]) -> Vec<u64> {
 
 #[test]
 fn entity_field_constants_keep_logical_names_separate_from_entity_metadata() {
+    ///
+    /// Contact
+    /// Exercises an alternate `Directory` declaration under the same logical identity.
+    ///
+
     #[entity(
         name = "Directory",
         pk(field = "id"),
@@ -361,11 +434,19 @@ fn fixed_non_unique_index_seeks_the_owner_key() {
 
 #[test]
 fn covered_count_prefers_the_exact_unique_key() {
-    #[entity(pk(field="id"),
-        index(name="by_code_and_id", fields=["code","id"]),
-        index(field="code",unique),
-        fields(field(name="id",value(item(prim="Nat64"))),
-               field(name="code",value(item(prim="Nat64"))))
+    ///
+    /// CodedRow
+    /// Exercises indexed access by `code` on rows keyed by `id`.
+    ///
+
+    #[entity(
+        pk(field = "id"),
+        index(name = "by_code_and_id", fields = ["code", "id"]),
+        index(field = "code", unique),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "code", value(item(prim = "Nat64")))
+        )
     )]
     struct CodedRow {}
 
@@ -961,6 +1042,7 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
     for explicit in [false, true] {
         let query = || {
             let q = db.query::<TextRow>().filter_present(TextRow::TEXT);
+
             if explicit {
                 q.using_index("text,id", &[])
             } else {
@@ -1049,6 +1131,11 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
         assert_eq!(retries, rows.len() - 1);
     }
 }
+
+///
+/// WideRange
+/// Exercises indexed access by `text` on rows keyed by `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -1494,11 +1581,22 @@ fn primary_range_pages_clamp_cursors_and_retry_byte_limited_rows() {
     }
 }
 
+///
+/// SignedRange
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Int64"))))
 )]
 struct SignedRange {}
+
+///
+/// PrincipalRange
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Principal"))))
@@ -1554,17 +1652,44 @@ fn primary_range_encoding_handles_signed_extremes_and_variable_width_keys() {
     }
 }
 
-#[entity(pk(field="id"), index(fields=["text", "id"]), fields(
-    field(name="id", value(item(prim="Nat64"))),
-    field(name="bucket", value(item(prim="Nat8"))),
-    field(name="required", value(item(prim="Text", max_bytes=4096))),
-    field(name="text", value(opt, item(prim="Text", max_bytes=64)))
-))]
+///
+/// TextRow
+/// Exercises indexed access by `text` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["text", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "bucket", value(item(prim = "Nat8"))),
+        field(name = "required", value(item(prim = "Text", max_bytes = 4096))),
+        field(name = "text", value(opt, item(prim = "Text", max_bytes = 64)))
+    )
+)]
 struct TextRow {}
+
+///
+/// TextOnly
+/// Carries an optional `Text` value of `text`.
+///
+
 #[ic_db::record(fields(field(name = "text", value(opt, item(prim = "Text", max_bytes = 64)))))]
 struct TextOnly {}
+
+///
+/// RequiredText
+/// Carries the `Text` value of `required`.
+///
+
 #[ic_db::record(fields(field(name = "required", value(item(prim = "Text", max_bytes = 4096)))))]
 struct RequiredText {}
+
+///
+/// TextBucket
+/// Carries the `Nat8` value of `bucket`.
+///
+
 #[ic_db::record(fields(field(name = "bucket", value(item(prim = "Nat8")))))]
 struct TextBucket {}
 
@@ -1616,6 +1741,7 @@ fn text_rows(runtime: &MemoryRuntime<VectorMemory>) -> (Database, Vec<TextRow>) 
         batch.insert(row).unwrap();
     }
     db.commit(batch).unwrap();
+
     (db, rows)
 }
 
@@ -1919,6 +2045,7 @@ fn text_groups_and_refusals_share_exact_admission() {
                 .into_iter()
                 .filter_map(|(key, values)| {
                     let value = values.into_iter().max().unwrap();
+
                     text_matches(comparison, value, needle).then_some((key, value.to_owned()))
                 })
                 .collect();
@@ -2522,11 +2649,21 @@ fn unique_membership_counts_probe_only_complete_physical_keys() {
 
 #[test]
 fn compound_unique_membership_counts_use_the_equality_prefix_selected_by_the_planner() {
-    #[entity(pk(field="id"), index(fields=["tenant","code"],unique), index(field="tenant"), fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="tenant",value(item(prim="Nat8"))),
-        field(name="code",value(item(prim="Nat64")))
-    ))]
+    ///
+    /// Booking
+    /// Exercises indexed access by `tenant` and `code` on rows keyed by `id`.
+    ///
+
+    #[entity(
+        pk(field = "id"),
+        index(fields = ["tenant", "code"], unique),
+        index(field = "tenant"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "tenant", value(item(prim = "Nat8"))),
+            field(name = "code", value(item(prim = "Nat64")))
+        )
+    )]
     struct Booking {}
     let runtime = host(VectorMemory::default());
     let mut db = Database::create(
@@ -2782,6 +2919,7 @@ fn ordered_primary_equality_seeks_one_row_before_checking_secondary_predicates()
                     .eq(Entry::ID, id)
                     .order_by(&[Entry::AMOUNT])
                     .work_limit(1);
+
                 if descending {
                     query.descending()
                 } else {
@@ -3772,6 +3910,11 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// Details
+/// Carries the `Text` value of `labels`.
+///
+
 #[ic_db::record(
     name = "Details",
     fields(field(
@@ -3780,6 +3923,12 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
     ))
 )]
 struct Details {}
+
+///
+/// OtherDetails
+/// Carries the `Text` value of `labels`.
+///
+
 #[ic_db::record(
     name = "Details",
     fields(field(
@@ -3788,6 +3937,12 @@ struct Details {}
     ))
 )]
 struct OtherDetails {}
+
+///
+/// Rich
+/// Stores `details` and `unused` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -3797,20 +3952,47 @@ struct OtherDetails {}
     )
 )]
 struct Rich {}
+
+///
+/// RichOutput
+/// Carries an optional `Details` value of `details`.
+///
+
 #[ic_db::record(fields(field(name = "details", value(opt, item(is = "Details")))))]
 struct RichOutput {}
+
+///
+/// IncompatibleOutput
+/// Carries an optional `OtherDetails` value of `details`.
+///
+
 #[ic_db::record(fields(field(name = "details", value(opt, item(is = "OtherDetails")))))]
 struct IncompatibleOutput {}
 
+///
+/// PresenceSet
+/// Stores up to 3 distinct `Nat8` values.
+///
+
 #[ic_db::set(item(prim = "Nat8"), max_items = 3)]
 struct PresenceSet {}
-#[entity(pk(field="id"), index(fields=["needle","id"],unique,present_only), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="needle",value(opt,item(prim="Nat8"))),
-    field(name="other",value(opt,item(prim="Nat8"))),
-    field(name="items",value(opt,many,max_items=3,item(prim="Nat8"))),
-    field(name="members",value(opt,item(is="PresenceSet")))
-))]
+
+///
+/// MemberRow
+/// Exercises indexed access by `needle` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["needle", "id"], unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "needle", value(opt, item(prim = "Nat8"))),
+        field(name = "other", value(opt, item(prim = "Nat8"))),
+        field(name = "items", value(opt, many, max_items = 3, item(prim = "Nat8"))),
+        field(name = "members", value(opt, item(is = "PresenceSet")))
+    )
+)]
 struct MemberRow {}
 
 #[test]
@@ -3886,13 +4068,31 @@ fn field_membership_checks_each_rows_needle_and_binds_the_continuation() {
         assert!(matches!(query("items").count(), Err(Error::InvalidQuery)));
     }
 }
+
+///
+/// PresenceMap
+/// Maps up to 3 `Nat8` keys to `Nat8` values.
+///
+
 #[ic_db::map(key(prim = "Nat8"), value(item(prim = "Nat8")), max_items = 3)]
 struct PresenceMap {}
+
+///
+/// PresenceEnum
+/// Distinguishes the `Idle` and `Data` variants.
+///
+
 #[ic_db::enum_(
     variant(name = "Idle"),
     variant(name = "Data", value(item(prim = "Nat8")))
 )]
 struct PresenceEnum {}
+
+///
+/// PresenceData
+/// Exercises stored representations across 6 fields sharing the primary key `id`.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -3906,6 +4106,12 @@ struct PresenceEnum {}
     )
 )]
 struct PresenceData {}
+
+///
+/// PresenceId
+/// Carries the `Nat64` value of `id`.
+///
+
 #[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct PresenceId {}
 
@@ -4119,6 +4325,7 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
             .query::<PresenceData>()
             .filter(field, C::Lt, IndexValue::Absent)
             .fetch();
+
         if field == "blob" {
             assert!(matches!(result, Err(Error::InvalidOperand)));
         } else {
@@ -4419,6 +4626,7 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
     for explicit in [false, true] {
         let fixed = || {
             let query = db.query::<Entry>();
+
             if explicit {
                 query.using_index("category", &[1_u8.into()])
             } else {
@@ -4699,12 +4907,21 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     assert_eq!(*backing.borrow(), before);
 }
 
-#[entity(pk(field="id"), index(fields=["left","right","id"],unique,present_only),
-index(fields=["id","right"],unique,present_only),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="left",value(opt,item(prim="Nat64"))),
-    field(name="right",value(opt,item(prim="Text",max_bytes=8)))
-))]
+///
+/// SparsePair
+/// Exercises indexed access by `left`, `right` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["left", "right", "id"], unique, present_only),
+    index(fields = ["id", "right"], unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "left", value(opt, item(prim = "Nat64"))),
+        field(name = "right", value(opt, item(prim = "Text", max_bytes = 8)))
+    )
+)]
 struct SparsePair {}
 
 #[test]
@@ -4974,6 +5191,11 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
     );
 }
 
+///
+/// OptionalOrdered
+/// Exercises indexed access by `value` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "value"),
@@ -4983,15 +5205,39 @@ fn ordering_refuses_incomplete_paths_and_binds_continuations() {
     )
 )]
 struct OptionalOrdered {}
+
+///
+/// CategoryOnly
+/// Carries the `Nat8` value of `category`.
+///
+
 #[ic_db::record(fields(field(name = "category", value(item(prim = "Nat8")))))]
 struct CategoryOnly {}
+
+///
+/// AmountOnly
+/// Carries the `Nat64` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct AmountOnly {}
+
+///
+/// CategoryAmount
+/// Groups `category` and `amount` into one record.
+///
+
 #[ic_db::record(fields(
     field(name = "category", value(item(prim = "Nat8"))),
     field(name = "amount", value(item(prim = "Nat64")))
 ))]
 struct CategoryAmount {}
+
+///
+/// OptionalValue
+/// Carries an optional `Nat64` value of `value`.
+///
+
 #[ic_db::record(fields(field(name = "value", value(opt, item(prim = "Nat64")))))]
 struct OptionalValue {}
 
@@ -5315,11 +5561,17 @@ fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
     /// Records an optional seat assignment within a section.
     ///
 
-    #[entity(pk(field="id"), index(fields=["category","maybe"],unique,present_only), index(field="category"), index(field="maybe"), fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="category",value(item(prim="Nat8"))),
-        field(name="maybe",value(opt,item(prim="Nat64")))
-    ))]
+    #[entity(
+        pk(field = "id"),
+        index(fields = ["category", "maybe"], unique, present_only),
+        index(field = "category"),
+        index(field = "maybe"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "category", value(item(prim = "Nat8"))),
+            field(name = "maybe", value(opt, item(prim = "Nat64")))
+        )
+    )]
     struct Seat {}
 
     ///
@@ -5942,6 +6194,11 @@ fn present_counts_and_distinct_tuple_counts_have_different_absence_semantics() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// CountInput
+/// Stores `category`, `maybe`, `payload` and `items` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -6195,6 +6452,11 @@ fn grouping_cardinality_is_bounded_independently_of_output_limit() {
     assert_eq!(db.query::<Entry>().limit(1).count().unwrap().value, 33);
 }
 
+///
+/// GroupText
+/// Stores `label` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -6203,6 +6465,12 @@ fn grouping_cardinality_is_bounded_independently_of_output_limit() {
     )
 )]
 struct GroupText {}
+
+///
+/// TextKey
+/// Carries the `Text` value of `label`.
+///
+
 #[ic_db::record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 3000)))))]
 struct TextKey {}
 
@@ -6294,6 +6562,11 @@ fn grouping_bytes_are_bounded_separately_from_index_keys_and_output() {
     ));
 }
 
+///
+/// Priced
+/// Exercises indexed access by `price` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "price"),
@@ -6303,6 +6576,12 @@ fn grouping_bytes_are_bounded_separately_from_index_keys_and_output() {
     )
 )]
 struct Priced {}
+
+///
+/// PriceKey
+/// Carries the `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 2)))))]
 struct PriceKey {}
 
@@ -6566,6 +6845,11 @@ fn extrema_own_text_winners_and_bound_comparison_and_final_output_separately() {
     ));
 }
 
+///
+/// GroupedOptional
+/// Stores `category` and `maybe` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -6575,8 +6859,20 @@ fn extrema_own_text_winners_and_bound_comparison_and_final_output_separately() {
     )
 )]
 struct GroupedOptional {}
+
+///
+/// OptionalCategory
+/// Carries an optional `Nat8` value of `category`.
+///
+
 #[ic_db::record(fields(field(name = "category", value(opt, item(prim = "Nat8")))))]
 struct OptionalCategory {}
+
+///
+/// OptionalGroupTuple
+/// Groups `category` and `maybe` into one record.
+///
+
 #[ic_db::record(fields(
     field(name = "category", value(opt, item(prim = "Nat8"))),
     field(name = "maybe", value(opt, item(prim = "Nat64")))
@@ -6787,6 +7083,11 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     ));
     assert_eq!(*backing.borrow(), before);
 }
+
+///
+/// GroupedText
+/// Stores `category` and `label` under the `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -7206,12 +7507,19 @@ fn group_modifiers_refuse_incompatible_terminals_and_bad_operands() {
 fn integer_sums_cover_each_width_without_float_conversion() {
     macro_rules! check {
         ($prim:literal) => {{
-            #[entity(pk(field="id"), fields(
-                                                        field(name="id",value(item(prim="Nat64"))),
-                                                        field(name="number",value(item(prim=$prim)))
-                                                    ))]
+            ///
+            /// Input
+            /// Stores a number of the scalar type selected by this query test.
+            ///
+
+            #[entity(pk(field = "id"), fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "number", value(item(prim = $prim)))))]
             struct Input {}
-            #[ic_db::record(fields(field(name="number",value(item(prim=$prim)))))]
+            ///
+            /// Output
+            /// Projects the selected numeric field for comparison with the input.
+            ///
+
+            #[ic_db::record(fields(field(name = "number", value(item(prim = $prim)))))]
             struct Output {}
             let runtime = host(VectorMemory::default());
             let mut db = Database::create(
@@ -7264,12 +7572,35 @@ fn integer_sums_cover_each_width_without_float_conversion() {
     check!("Int128");
 }
 
+///
+/// WideAmount
+/// Carries the `Nat128` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
 struct WideAmount {}
+
+///
+/// HugeAmount
+/// Carries the `U256` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "U256")))))]
 struct HugeAmount {}
+
+///
+/// NarrowAmount
+/// Carries the `Nat32` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat32")))))]
 struct NarrowAmount {}
+
+///
+/// SignedAmount
+/// Carries the `Int128` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(item(prim = "Int128")))))]
 struct SignedAmount {}
 #[test]
@@ -7420,6 +7751,11 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
     );
 }
 
+///
+/// SignedSum
+/// Stores `number` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -7428,8 +7764,20 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
     )
 )]
 struct SignedSum {}
+
+///
+/// SignedTotal
+/// Carries the `Int128` value of `number`.
+///
+
 #[ic_db::record(fields(field(name = "number", value(item(prim = "Int128")))))]
 struct SignedTotal {}
+
+///
+/// HugeSum
+/// Stores `number` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -7438,6 +7786,12 @@ struct SignedTotal {}
     )
 )]
 struct HugeSum {}
+
+///
+/// HugeTotal
+/// Carries the `U256` value of `number`.
+///
+
 #[ic_db::record(fields(field(name = "number", value(item(prim = "U256")))))]
 struct HugeTotal {}
 #[test]
@@ -7546,6 +7900,11 @@ fn sums_distinguish_final_range_overflow_from_cancelling_signed_prefixes() {
     ));
 }
 
+///
+/// Unsigned128Sum
+/// Stores `number` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -7554,6 +7913,12 @@ fn sums_distinguish_final_range_overflow_from_cancelling_signed_prefixes() {
     )
 )]
 struct Unsigned128Sum {}
+
+///
+/// Unsigned128Total
+/// Carries the `Nat128` value of `number`.
+///
+
 #[ic_db::record(fields(field(name = "number", value(item(prim = "Nat128")))))]
 struct Unsigned128Total {}
 #[test]
@@ -7682,6 +8047,11 @@ fn grouped_sums_finish_before_filter_sort_and_limit() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// WideOptional
+/// Carries an optional `Nat128` value of `maybe`.
+///
+
 #[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Nat128")))))]
 struct WideOptional {}
 #[test]
@@ -7761,6 +8131,11 @@ fn grouped_sums_keep_absence_and_zero_distinct() {
     assert_eq!(zero.value.len(), 1);
     assert_eq!(zero.value[0].key.category, Some(2));
 }
+
+///
+/// SignedGroups
+/// Stores `category` and `amount` under the `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -7857,6 +8232,11 @@ fn grouped_overflow_cannot_hide_behind_filter_or_limit() {
     }
 }
 
+///
+/// HugeId
+/// Carries the `U256` value of `id`.
+///
+
 #[ic_db::record(fields(field(name = "id", value(item(prim = "U256")))))]
 struct HugeId {}
 #[test]
@@ -7897,6 +8277,11 @@ fn sum_finalization_obeys_group_state_budget_before_selection() {
     ));
 }
 
+///
+/// DecimalSale
+/// Stores `category` and `price` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -7906,10 +8291,28 @@ fn sum_finalization_obeys_group_state_budget_before_selection() {
     )
 )]
 struct DecimalSale {}
+
+///
+/// OptionalPrice
+/// Carries an optional `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct OptionalPrice {}
+
+///
+/// RescaledPrice
+/// Carries an optional `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 3)))))]
 struct RescaledPrice {}
+
+///
+/// IntegerPrice
+/// Carries an optional `Int128` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Int128")))))]
 struct IntegerPrice {}
 
@@ -7934,6 +8337,7 @@ fn decimal_sales(coefficients: &[(u8, Option<i128>)]) -> Database {
             .unwrap();
     }
     db.commit(batch).unwrap();
+
     db
 }
 
@@ -8075,6 +8479,11 @@ fn decimal_sum_admission_refuses_rescaling_conversion_and_optionality_changes() 
     ));
 }
 
+///
+/// FinePriceRow
+/// Stores `price` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -8083,6 +8492,12 @@ fn decimal_sum_admission_refuses_rescaling_conversion_and_optionality_changes() 
     )
 )]
 struct FinePriceRow {}
+
+///
+/// FinePrice
+/// Carries the `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 28)))))]
 struct FinePrice {}
 
@@ -8118,10 +8533,27 @@ fn decimal_sums_preserve_all_twenty_eight_fractional_places() {
     assert_eq!(total.output_bytes, 17);
 }
 
+///
+/// WholePrice
+/// Carries an optional `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 0)))))]
 struct WholePrice {}
+
+///
+/// PrecisePrice
+/// Carries an optional `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 28)))))]
 struct PrecisePrice {}
+
+///
+/// WholeNumberAverage
+/// Carries the `Decimal` value of `number`.
+///
+
 #[ic_db::record(fields(field(name = "number", value(item(prim = "Decimal", scale = 0)))))]
 struct WholeNumberAverage {}
 
@@ -8322,7 +8754,12 @@ fn average_overflow_is_checked_after_division_without_reducing_result_scale() {
 fn every_integer_width_has_an_explicit_decimal_average() {
     macro_rules! check {
         ($prim:literal, $left:expr, $right:expr, $expected:literal) => {{
-            #[entity(pk(field="id"),fields(field(name="id",value(item(prim="Nat64"))),field(name="value",value(opt,item(prim=$prim)))))]
+            ///
+            /// Row
+            /// Stores an optional value using the selected numeric encoding.
+            ///
+
+            #[entity(pk(field = "id"), fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "value", value(opt, item(prim = $prim)))))]
             struct Row {}
             #[ic_db::record(fields(field(
                 name = "value",

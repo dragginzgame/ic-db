@@ -1,4 +1,5 @@
 //! Native CLI refusal against an independent HTTP peer; no fixture or credentials.
+
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -57,6 +58,7 @@ fn refuse(command: &str, reply: Reply, local_root: bool) -> (Output, Vec<String>
                     .unwrap()
                     .to_owned(),
             );
+
             match reply {
                 Reply::Busy(status) => write!(
                     socket, "HTTP/1.1 {status} Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -79,6 +81,7 @@ fn refuse(command: &str, reply: Reply, local_root: bool) -> (Output, Vec<String>
                 }
             }
         }
+
         requests
     });
     let mut process = Command::new(env!("CARGO_BIN_EXE_db"));
@@ -121,6 +124,7 @@ fn refuse(command: &str, reply: Reply, local_root: bool) -> (Output, Vec<String>
         output.stdout.is_empty(),
         "no partial JSON or fixture fallback"
     );
+
     (output, requests)
 }
 

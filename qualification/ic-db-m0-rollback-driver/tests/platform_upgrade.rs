@@ -1,5 +1,6 @@
 //! Cross-runtime reopen: the predecessor writes real identity records; the new
 //! Platform cohort must preserve bytes, decoding, uniqueness and message rollback.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{ByteBuf, Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};

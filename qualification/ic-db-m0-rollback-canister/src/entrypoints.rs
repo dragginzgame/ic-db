@@ -4,15 +4,10 @@
 use ic_platform_runtime::call::{Call, Outcome, Wait};
 use ic_wire::{ByteBuf, Direction, Encoding};
 
-fn write(id: u64) {
-    super::mutate((0, id, id + 100)).unwrap();
-}
-
-fn reply(oversized: bool) -> ByteBuf {
-    ByteBuf::from(vec![7; if oversized { 65_536 } else { 1 }])
-}
-
-/// Exercise synchronous writes with a normal or oversized reply.
+// endpoint_sync
+// Exercise synchronous writes with a normal or oversized reply.
+// guard  : validates the request frame for method 8.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "endpoint_sync",
@@ -25,10 +20,14 @@ fn reply(oversized: bool) -> ByteBuf {
 fn endpoint_sync(oversized: bool) -> ByteBuf {
     write(1);
     write(2);
+
     reply(oversized)
 }
 
-/// Acknowledge the self-call that separates two message executions.
+// endpoint_ack
+// Acknowledge the self-call that separates two message executions.
+// guard  : validates the request frame for method 9.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "endpoint_ack",
@@ -42,7 +41,10 @@ fn endpoint_ack((): ()) -> u8 {
     1
 }
 
-/// Write on each side of a self-call to test rollback at reply time.
+// endpoint_async
+// Write on each side of a self-call to test rollback at reply time.
+// guard  : validates the request frame for method 10.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "endpoint_async",
@@ -96,15 +98,14 @@ async fn endpoint_async(oversized: bool) -> ByteBuf {
         1
     );
     write(2);
+
     reply(oversized)
 }
 
-/// Reject every caller before the denial probe can mutate state.
-fn deny() -> Result<(), String> {
-    Err("M0 standalone guard refusal".to_owned())
-}
-
-/// Exercise rejection before the guarded handler runs.
+// endpoint_denied
+// Exercise rejection before the guarded handler runs.
+// guard  : denies every request before decoding.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "endpoint_denied",
@@ -116,5 +117,19 @@ fn deny() -> Result<(), String> {
 )]
 fn endpoint_denied((): ()) -> u8 {
     write(1);
+
     1
+}
+
+fn write(id: u64) {
+    super::mutate((0, id, id + 100)).unwrap();
+}
+
+fn reply(oversized: bool) -> ByteBuf {
+    ByteBuf::from(vec![7; if oversized { 65_536 } else { 1 }])
+}
+
+/// Reject every caller before the denial probe can mutate state.
+fn deny() -> Result<(), String> {
+    Err("M0 standalone guard refusal".to_owned())
 }

@@ -1,11 +1,22 @@
 //! Fixed Blob result shapes for the local console; the engine owns all query work.
+
 use super::{Page, display, display_groups, display_scalar, extremum, hex};
-use crate::handles::Query;
-use crate::schema::BinaryObject;
+use crate::{handles::Query, schema::BinaryObject};
 use ic_db::{Comparison, Entity, Error};
+
+///
+/// Payload
+/// Carries the `Blob` value of `payload`.
+///
 
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 pub(super) struct Payload {}
+
+///
+/// Optional
+/// Carries an optional `Blob` value of `optional`.
+///
+
 #[ic_db::record(fields(field(
     name = "optional",
     value(opt, item(prim = "Blob", max_bytes = 32))
@@ -21,6 +32,7 @@ pub(super) fn query(
     if minimum.is_some() || category.is_some() || entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to BinaryObject".into());
     }
+
     Ok(db.query::<BinaryObject>())
 }
 
@@ -34,6 +46,7 @@ pub(super) fn validate(entity: &str, filters: &Filters) -> Result<(), String> {
     if entity != "BinaryObject" && filters.iter().any(Option::is_some) {
         return Err("payload filters apply to BinaryObject".into());
     }
+
     Ok(())
 }
 
@@ -52,6 +65,7 @@ pub(super) fn filter<'a, E: Entity>(mut query: Query<'a, E>, filters: &'a Filter
             query = query.filter("payload", comparison, operand);
         }
     }
+
     query
 }
 

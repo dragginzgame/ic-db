@@ -1,4 +1,5 @@
 //! Private console adapter: fixed typed entities, fluent execution, display-only mapping.
+
 mod blob;
 #[cfg(feature = "retained-console")]
 pub(crate) mod migration;
@@ -6,8 +7,9 @@ pub(crate) mod migration;
 mod retained;
 #[cfg(all(test, feature = "retained-console"))]
 mod tests;
-use crate::handles::Query;
+
 use crate::{
+    handles::Query,
     open,
     queries::{IdOnly, Summary},
     runtime,
@@ -20,131 +22,10 @@ use ic_db::{
 };
 use std::fmt::Write;
 
-pub(super) fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(2 + bytes.len() * 2);
-    text.push_str("0x");
-    for byte in bytes {
-        write!(text, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    text
-}
-
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
-struct CategoryOnly {}
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
-struct AmountOnly {}
-#[ic_db::record(fields(field(name = "title", value(item(prim = "Text", max_bytes = 32)))))]
-struct TitleOnly {}
-#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
-pub(super) struct NoteOnly {}
-#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
-struct PriorityOnly {}
-#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
-struct EntryIdOnly {}
-
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
-struct TotalAmount {}
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
-struct AverageAmount {}
-#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat128")))))]
-struct TotalPriority {}
-#[ic_db::record(fields(field(name = "score", value(item(prim = "Int128")))))]
-struct TotalScore {}
-#[ic_db::record(fields(field(name = "value", value(item(prim = "Decimal", scale = 2)))))]
-struct TotalDecimal {}
-#[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2)))))]
-struct OptionalDecimal {}
-#[ic_db::record(fields(field(name = "zone", value(item(prim = "Bool")))))]
-struct ZoneOnly {}
-
-fn filter_rows<'a, E: Entity>(
-    query: Query<'a, E>,
-    filters: &'a RowFilters,
-) -> Result<Query<'a, E>, String> {
-    let RowFilters {
-        payload,
-        compare,
-        between_fields,
-        not_between_fields,
-        text,
-        boolean,
-        present,
-        absent,
-        length,
-    } = filters;
-    blob::validate(E::SCHEMA.name, payload)?;
-    let mut query = blob::filter(query, payload);
-    if let Some(field) = present {
-        query = query.filter_present(field);
-    }
-    if let Some(field) = absent {
-        query = query.filter_absent(field);
-    }
-    if let Some([left, op, right]) = compare {
-        query = query.filter_fields(left, comparison(op)?, right);
-    }
-    if let Some([field, lower, upper]) = between_fields {
-        query = query.filter_between_fields(field, lower, upper);
-    }
-    if let Some([field, lower, upper]) = not_between_fields {
-        query = query.filter_not_between_fields(field, lower, upper);
-    }
-    if let Some((field, value)) = boolean {
-        query = query.filter(field, Comparison::Eq, *value);
-    }
-    if let Some([field, op, value]) = text {
-        query = query.filter(field, comparison(op)?, value.as_str());
-    }
-    if let Some((field, op, n)) = length {
-        query = query.filter_length(field, comparison(op)?, *n);
-    }
-    Ok(query)
-}
-
-fn comparison(op: &str) -> Result<Comparison, String> {
-    Ok(match op {
-        "eq" => Comparison::Eq,
-        "ne" => Comparison::Ne,
-        "lt" => Comparison::Lt,
-        "le" => Comparison::Le,
-        "gt" => Comparison::Gt,
-        "ge" => Comparison::Ge,
-        "starts-with" => Comparison::StartsWith,
-        "ends-with" => Comparison::EndsWith,
-        "contains" => Comparison::Contains,
-        _ => return Err(format!("unknown comparison '{op}'")),
-    })
-}
-
-type Request = (
-    String,
-    Option<Vec<u8>>,
-    u32,
-    Option<u64>,
-    Option<u64>,
-    Option<u64>,
-    Vec<String>,
-    bool,
-    u32,
-    u32,
-    String,
-    (
-        bool,
-        (Option<String>, Option<String>),
-        Option<String>,
-        RowFilters,
-    ),
-);
-type Page = (
-    Vec<String>,
-    Vec<Vec<String>>,
-    Option<Vec<u8>>,
-    u32,
-    u32,
-    u32,
-);
-
-/// Read the maintained row count for the named entity.
+// cardinality
+// Read the maintained row count for the named entity.
+// guard  : validates the request frame for method 148.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "cardinality",
@@ -161,6 +42,7 @@ type Page = (
 fn cardinality(entity: String) -> Result<u64, String> {
     let host = runtime();
     let db = open(&host);
+
     db.cardinality_by_name(&entity)
         .map_err(|error| match error {
             Error::UnknownEntity => "Unknown entity. Use db entities to list entities.".into(),
@@ -171,8 +53,10 @@ fn cardinality(entity: String) -> Result<u64, String> {
 // Measure the exact console path, including open/admission/result formatting.
 // An update permits complete-call cycle accounting; the driver verifies that
 // both successful and refused reads preserve the backing bytes.
-
-/// Execute a console query and report its instruction count.
+// measured_query
+// Execute a console query and report its instruction count.
+// guard  : validates the request frame for method 147.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "query-measurements")]
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
@@ -188,10 +72,14 @@ fn measured_query(
 ) -> (Result<Page, String>, u64) {
     let start = counter();
     let result = query(request);
+
     (result, counter() - start)
 }
 
-/// Read the requested bounded result from the local fixture.
+// query
+// Read the requested bounded result from the local fixture.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "query",
@@ -232,14 +120,17 @@ fn query(
                 "desc" => SortDirection::Descending,
                 _ => return Err("order direction must be asc or desc".to_owned()),
             };
+
             Ok((name, direction))
         })
         .collect::<Result<_, String>>()?;
     let host = runtime();
     let db = open(&host);
+
     match entity.as_str() {
         "Entry" => {
             let query = filter_rows(entry_query(&db, minimum, category, entry_id)?, &filters)?;
+
             execute(
                 configure(
                     query,
@@ -268,6 +159,7 @@ fn query(
         }
         "Document" => {
             let query = filter_rows(document_query(&db, minimum, category, entry_id)?, &filters)?;
+
             execute(
                 configure(
                     query,
@@ -336,6 +228,7 @@ fn query(
         ),
         "BinaryObject" => {
             let query = filter_rows(blob::query(&db, minimum, category, entry_id)?, &filters)?;
+
             execute(
                 configure(
                     query,
@@ -368,6 +261,208 @@ fn query(
     }
 }
 
+pub(super) fn hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(2 + bytes.len() * 2);
+    text.push_str("0x");
+    for byte in bytes {
+        write!(text, "{byte:02x}").expect("writing to String cannot fail");
+    }
+
+    text
+}
+
+///
+/// CategoryOnly
+/// Carries the `Nat64` value of `category`.
+///
+
+#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+struct CategoryOnly {}
+
+///
+/// AmountOnly
+/// Carries the `Nat64` value of `amount`.
+///
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+struct AmountOnly {}
+
+///
+/// TitleOnly
+/// Carries the `Text` value of `title`.
+///
+
+#[ic_db::record(fields(field(name = "title", value(item(prim = "Text", max_bytes = 32)))))]
+struct TitleOnly {}
+
+///
+/// NoteOnly
+/// Carries an optional `Text` value of `note`.
+///
+
+#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
+pub(super) struct NoteOnly {}
+
+///
+/// PriorityOnly
+/// Carries an optional `Nat64` value of `priority`.
+///
+
+#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
+struct PriorityOnly {}
+
+///
+/// EntryIdOnly
+/// Carries the `Nat64` value of `entry_id`.
+///
+
+#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
+struct EntryIdOnly {}
+
+///
+/// TotalAmount
+/// Carries the `Nat128` value of `amount`.
+///
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
+struct TotalAmount {}
+
+///
+/// AverageAmount
+/// Carries the `Decimal` value of `amount`.
+///
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+struct AverageAmount {}
+
+///
+/// TotalPriority
+/// Carries an optional `Nat128` value of `priority`.
+///
+
+#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat128")))))]
+struct TotalPriority {}
+
+///
+/// TotalScore
+/// Carries the `Int128` value of `score`.
+///
+
+#[ic_db::record(fields(field(name = "score", value(item(prim = "Int128")))))]
+struct TotalScore {}
+
+///
+/// TotalDecimal
+/// Carries the `Decimal` value of `value`.
+///
+
+#[ic_db::record(fields(field(name = "value", value(item(prim = "Decimal", scale = 2)))))]
+struct TotalDecimal {}
+
+///
+/// OptionalDecimal
+/// Carries an optional `Decimal` value of `maybe`.
+///
+
+#[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2)))))]
+struct OptionalDecimal {}
+
+///
+/// ZoneOnly
+/// Carries the `Bool` value of `zone`.
+///
+
+#[ic_db::record(fields(field(name = "zone", value(item(prim = "Bool")))))]
+struct ZoneOnly {}
+
+fn filter_rows<'a, E: Entity>(
+    query: Query<'a, E>,
+    filters: &'a RowFilters,
+) -> Result<Query<'a, E>, String> {
+    let RowFilters {
+        payload,
+        compare,
+        between_fields,
+        not_between_fields,
+        text,
+        boolean,
+        present,
+        absent,
+        length,
+    } = filters;
+    blob::validate(E::SCHEMA.name, payload)?;
+    let mut query = blob::filter(query, payload);
+    if let Some(field) = present {
+        query = query.filter_present(field);
+    }
+    if let Some(field) = absent {
+        query = query.filter_absent(field);
+    }
+    if let Some([left, op, right]) = compare {
+        query = query.filter_fields(left, comparison(op)?, right);
+    }
+    if let Some([field, lower, upper]) = between_fields {
+        query = query.filter_between_fields(field, lower, upper);
+    }
+    if let Some([field, lower, upper]) = not_between_fields {
+        query = query.filter_not_between_fields(field, lower, upper);
+    }
+    if let Some((field, value)) = boolean {
+        query = query.filter(field, Comparison::Eq, *value);
+    }
+    if let Some([field, op, value]) = text {
+        query = query.filter(field, comparison(op)?, value.as_str());
+    }
+    if let Some((field, op, n)) = length {
+        query = query.filter_length(field, comparison(op)?, *n);
+    }
+
+    Ok(query)
+}
+
+fn comparison(op: &str) -> Result<Comparison, String> {
+    Ok(match op {
+        "eq" => Comparison::Eq,
+        "ne" => Comparison::Ne,
+        "lt" => Comparison::Lt,
+        "le" => Comparison::Le,
+        "gt" => Comparison::Gt,
+        "ge" => Comparison::Ge,
+        "starts-with" => Comparison::StartsWith,
+        "ends-with" => Comparison::EndsWith,
+        "contains" => Comparison::Contains,
+        _ => return Err(format!("unknown comparison '{op}'")),
+    })
+}
+
+type Request = (
+    String,
+    Option<Vec<u8>>,
+    u32,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Vec<String>,
+    bool,
+    u32,
+    u32,
+    String,
+    (
+        bool,
+        (Option<String>, Option<String>),
+        Option<String>,
+        RowFilters,
+    ),
+);
+type Page = (
+    Vec<String>,
+    Vec<Vec<String>>,
+    Option<Vec<u8>>,
+    u32,
+    u32,
+    u32,
+);
+
 fn configure<'a, E: Entity>(
     mut query: Query<'a, E>,
     cursor: Option<&'a QueryCursor>,
@@ -390,6 +485,7 @@ fn configure<'a, E: Entity>(
     if let Some(cursor) = cursor {
         query = query.after(cursor);
     }
+
     query
 }
 
@@ -420,6 +516,7 @@ fn entry_query(
     if let Some(value) = category {
         query = query.filter("category", Comparison::Eq, value);
     }
+
     Ok(query)
 }
 
@@ -436,6 +533,7 @@ fn document_query(
     if let Some(value) = entry_id {
         query = query.filter("entry_id", Comparison::Eq, value);
     }
+
     Ok(query)
 }
 
@@ -448,6 +546,7 @@ fn decimal_query(
     if minimum.is_some() || category.is_some() || entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
     }
+
     Ok(db.query::<DecimalRow>())
 }
 
@@ -503,6 +602,7 @@ fn select_groups<'a, E: Entity>(
     if let Some(order) = group_order {
         query = query.order_groups(order);
     }
+
     Ok(query)
 }
 
@@ -517,6 +617,7 @@ fn execute<'a, E: Entity>(
         query = query.distinct();
     }
     let query = select_groups(query, select, bounds, group_order)?;
+
     match select {
         "payload"
         | "optional"
@@ -548,6 +649,7 @@ fn execute<'a, E: Entity>(
                 "max:value" => query.max::<TotalDecimal>(),
                 _ => query.sum::<TotalDecimal>(),
             };
+
             result.map(|r| display_value(r, "value", |r| r.value.to_string()))
         }
         "sum:maybe" | "avg:maybe" | "min:maybe" | "max:maybe" => {
@@ -557,6 +659,7 @@ fn execute<'a, E: Entity>(
                 "max:maybe" => query.max::<OptionalDecimal>(),
                 _ => query.sum::<OptionalDecimal>(),
             };
+
             result.map(|r| display_value(r, "maybe", |r| optional(r.maybe)))
         }
         "zone,sum:value" | "zone,avg:value" | "zone,min:value" | "zone,max:value" => {
@@ -566,6 +669,7 @@ fn execute<'a, E: Entity>(
                 "zone,max:value" => query.group_max::<ZoneOnly, TotalDecimal>(),
                 _ => query.group_sum::<ZoneOnly, TotalDecimal>(),
             };
+
             result.map(|r| {
                 display_group_values(
                     r,
@@ -582,6 +686,7 @@ fn execute<'a, E: Entity>(
                 "zone,max:maybe" => query.group_max::<ZoneOnly, OptionalDecimal>(),
                 _ => query.group_sum::<ZoneOnly, OptionalDecimal>(),
             };
+
             result.map(|r| {
                 display_group_values(
                     r,
@@ -744,6 +849,7 @@ fn grouped_extremum<E: Entity, K: Value, R: Value>(
     } else {
         query.group_min::<K, R>()?
     };
+
     Ok(display_group_values(r, columns, key, render))
 }
 
@@ -777,6 +883,7 @@ fn extremum<E: Entity, R: Value>(
     } else {
         query.min::<R>()?
     };
+
     Ok(display_value(r, column, render))
 }
 

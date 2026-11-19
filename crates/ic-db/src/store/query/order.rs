@@ -1,4 +1,5 @@
 //! Select a proven ordered path or a bounded complete-sort fallback.
+
 use super::{Comparison, Predicate, QueryOperand, Request};
 use crate::{EntitySchema, Error, IndexSchema, IndexValue, key, store::admit_index_prefix};
 
@@ -20,6 +21,7 @@ fn automatic_prefix<'a>(
     if index.present_only && values.contains(&IndexValue::Absent) {
         return Ok(None);
     }
+
     match admit_index_prefix(entity, index, values) {
         Ok(prefix) => Ok(Some(IndexPath {
             index,
@@ -64,11 +66,7 @@ pub(super) fn select<'a>(
     let single_row = equality(request, entity.primary_key).is_some();
     let fits_order = |index, fixed| single_row || satisfies(entity, request, index, fixed);
     if let Some((name, values)) = &request.index {
-        let index = entity
-            .indexes
-            .iter()
-            .find(|i| i.name == *name)
-            .ok_or(Error::InvalidQuery)?;
+        let index = entity.index_by_name(name).ok_or(Error::InvalidQuery)?;
         if values.len() > index.fields.len() {
             return Err(Error::InvalidQuery);
         }
@@ -80,6 +78,7 @@ pub(super) fn select<'a>(
         {
             return Err(Error::InvalidQuery);
         }
+
         return Ok(Path::Index(IndexPath {
             index,
             prefix,
@@ -152,6 +151,7 @@ pub(super) fn select<'a>(
     if positions.last().map(|(position, _)| *position) != Some(primary) {
         positions.push((primary, false));
     }
+
     Ok(Path::Sort(positions))
 }
 
@@ -172,6 +172,7 @@ fn unique_lookup<'a>(
             return Ok(Some(path));
         }
     }
+
     Ok(None)
 }
 
@@ -239,6 +240,7 @@ pub(super) fn select_aggregate_path<'a>(
         // every predicate, no other candidate can improve the work bound.
         if single_owner && covered {
             plan.use_index(entity, path);
+
             return Ok(true);
         }
         if !covered
@@ -259,8 +261,10 @@ pub(super) fn select_aggregate_path<'a>(
     }
     if let Some((_, (path, covered))) = best {
         plan.use_index(entity, path);
+
         return Ok(covered);
     }
+
     Ok(false)
 }
 
@@ -276,6 +280,7 @@ fn covers_keys(
     let fields = index.map_or(std::slice::from_ref(&entity.primary_key), |index| {
         index.fields
     });
+
     request
         .clauses()
         .zip(plan.clauses())
@@ -288,6 +293,7 @@ fn covers_keys(
                     || fixed_comparison(p, &|field| prefix_value(fields, values, field))
                         == Some(true)
             });
+
             key_proves_clause
                 || match terms {
                     [term] => {
@@ -332,6 +338,7 @@ fn requires_presence(predicate: &Predicate<'_>, name: &str, entity: &EntitySchem
             } else {
                 return false;
             };
+
             !predicate.comparison.accepts_absent(false)
                 && (!predicate.comparison.accepts_absent(true)
                     || entity
@@ -367,16 +374,12 @@ pub(super) fn complete_membership(
 ) -> bool {
     !index.present_only
         || index.fields.iter().all(|name| {
-            entity
-                .fields
-                .iter()
-                .find(|f| f.name == *name)
-                .is_some_and(|field| {
-                    !field.optional
-                        || prefix_value(prefix_fields, values, name)
-                            .is_some_and(|v| v != IndexValue::Absent)
-                        || requires_present_field(entity, request, name)
-                })
+            entity.field_by_name(name).is_some_and(|field| {
+                !field.optional
+                    || prefix_value(prefix_fields, values, name)
+                        .is_some_and(|v| v != IndexValue::Absent)
+                    || requires_present_field(entity, request, name)
+            })
         })
 }
 
@@ -421,6 +424,7 @@ fn satisfies(
         .take_while(|name| *name != entity.primary_key)
         .filter(|name| !fixed(name))
         .chain(std::iter::once(entity.primary_key));
+
     wanted.eq(supplied)
 }
 

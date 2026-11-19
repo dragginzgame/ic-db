@@ -1,4 +1,5 @@
 //! Bounded pages over immutable completed groups; no additional durable state.
+
 use super::{
     super::{Completed, Groups, MAX_GROUPS, admit_output},
     JobHandle, JobOutcome,
@@ -30,6 +31,7 @@ impl GroupCursor {
         let mut bytes = vec![1];
         bytes.extend(self.handle.to_bytes());
         bytes.push(self.position);
+
         bytes
     }
 
@@ -37,12 +39,16 @@ impl GroupCursor {
     /// # Errors
     /// Refuses unsupported versions, malformed handles or positions outside 1..=32.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != 28 || bytes[0] != 1 || !(1..=MAX_GROUPS as u8).contains(&bytes[27]) {
+        let [1, handle @ .., position] = bytes else {
+            return Err(Error::InvalidCursor);
+        };
+        if !(1..=MAX_GROUPS as u8).contains(position) {
             return Err(Error::InvalidCursor);
         }
+
         Ok(Self {
-            handle: JobHandle::from_bytes(&bytes[1..27]).map_err(|_| Error::InvalidCursor)?,
-            position: bytes[27],
+            handle: JobHandle::from_bytes(handle).map_err(|_| Error::InvalidCursor)?,
+            position: *position,
         })
     }
 }
@@ -64,6 +70,7 @@ pub(super) fn admit(
     {
         return Err(Error::InvalidCursor);
     }
+
     Ok(())
 }
 
@@ -83,6 +90,7 @@ pub(super) fn group_page<T>(
         .drain(range)
         .map(|(key, value)| decode(&key, value))
         .collect::<Result<_, _>>()?;
+
     Ok((GroupPage { rows, next }, used))
 }
 
@@ -116,5 +124,6 @@ fn select(
         handle: handle.clone(),
         position: end as u8,
     });
+
     Ok((start..end, next, used))
 }

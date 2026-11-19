@@ -11,6 +11,52 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Verify producer-owned membership during constant evaluation. Entries are Rust
+/// paths relative to the crate, separated by a character forbidden in identifiers.
+/// Root entries end with `::` so sibling names sharing a prefix stay independent.
+#[doc(hidden)]
+#[must_use]
+pub const fn check_schema_member(path: &str, root: &str, members: Option<&str>) -> bool {
+    const fn listed(path: &[u8], list: &[u8]) -> bool {
+        let mut start = 0;
+        while start < list.len() {
+            let mut end = start;
+            let mut same = true;
+            while end < list.len() && list[end] != b'|' {
+                let i = end - start;
+                same = same && i < path.len() && path[i] == list[end];
+                end += 1;
+            }
+            if same && end - start == path.len() {
+                return true;
+            }
+            start = end + 1;
+        }
+
+        false
+    }
+    let path = path.as_bytes();
+    let mut first_separator = 0;
+    while first_separator < path.len() && path[first_separator] != b':' {
+        first_separator += 1;
+    }
+    let (_, relative) = path.split_at(first_separator);
+
+    let root = root.as_bytes();
+    let mut index = 0;
+    while index < root.len() {
+        if index == relative.len() || relative[index] != root[index] {
+            return true;
+        }
+        index += 1;
+    }
+
+    match members {
+        Some(paths) => listed(relative, paths.as_bytes()),
+        None => false,
+    }
+}
+
 pub(crate) const MAX_FIELDS: usize = 16;
 
 // FNV-1a is only a compact physical handle, never schema authority. Admission
@@ -25,6 +71,7 @@ pub const fn handle(name: &str) -> u32 {
         value = (value ^ bytes[position] as u32).wrapping_mul(16_777_619);
         position += 1;
     }
+
     value
 }
 
@@ -173,14 +220,22 @@ impl EntitySchema {
         self.fields.iter().position(|field| field.name == name)
     }
 
+    pub(crate) fn field_by_name(&self, name: &str) -> Option<&FieldSchema> {
+        self.field_position(name)
+            .map(|position| &self.fields[position])
+    }
+
+    pub(crate) fn index_by_name(&self, name: &str) -> Option<&IndexSchema> {
+        self.indexes.iter().find(|index| index.name == name)
+    }
+
     pub(crate) fn has_managed(&self) -> bool {
         self.fields.iter().any(|field| field.managed.is_some())
     }
 
     pub(crate) fn key_type(&self) -> Result<FieldType, Error> {
-        self.fields
-            .iter()
-            .find(|f| f.name == self.primary_key && !f.optional)
+        self.field_by_name(self.primary_key)
+            .filter(|field| !field.optional)
             .map(|f| f.value)
             .ok_or(Error::Corrupt)
     }
@@ -189,6 +244,7 @@ impl EntitySchema {
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
         let mut values = [IndexValue::Absent; MAX_FIELDS];
         self.inspect_values(bytes, self.key_fields(), &mut values)?;
+
         self.row_info(&values)
     }
 
@@ -249,6 +305,7 @@ impl EntitySchema {
         }
         reader.finish()?;
         crate::managed::validate_order(times)?;
+
         Ok(())
     }
 
@@ -266,6 +323,7 @@ impl EntitySchema {
                         return Err(Error::Corrupt);
                     }
                 }
+
                 Ok(key::encode_index(
                     &components[..index.fields.len()],
                     index.present_only,
@@ -273,6 +331,7 @@ impl EntitySchema {
             })
             .collect::<Result<_, Error>>()?;
         let key = RowKey::from_index(keys[position(self.primary_key)?])?;
+
         Ok(RowInfo { key, indexes })
     }
 }
@@ -283,7 +342,7 @@ impl EntitySchema {
 /// writes validate the affected counters when used, without caching them.
 #[derive(Clone)]
 pub struct Schema {
-    pub(crate) entities: Vec<&'static EntitySchema>,
+    entities: Vec<&'static EntitySchema>,
     pub(crate) fingerprint: [u8; 32],
     types: TypeGraph,
 }
@@ -293,6 +352,14 @@ impl Schema {
     /// # Errors
     /// Refuses duplicate/invalid identities, fields, keys, indexes or capacity.
     pub fn new(entities: &[&'static EntitySchema]) -> Result<Self, Error> {
+        Self::admit_schema(entities, |_, _, _, _| {})
+    }
+
+    // The host formats reference failures at the same check used by ordinary admission.
+    pub(crate) fn admit_schema(
+        entities: &[&'static EntitySchema],
+        report_reference: impl FnOnce(&str, &FieldSchema, &str, Option<(&str, FieldType)>),
+    ) -> Result<Self, Error> {
         if entities.is_empty() || entities.len() > 32 {
             return Err(Error::InvalidSchema);
         }
@@ -336,28 +403,35 @@ impl Schema {
                 )?;
                 types.include(field.value)?;
                 if let Some(reference) = field.reference {
-                    if !RowKey::supports(field.value)
-                        || !entities.iter().any(|target| {
-                            target.id == reference.entity
-                                && target.name == reference.entity_name
-                                && target.key_type().ok() == Some(field.value)
-                        })
-                        || !entity.indexes.iter().any(|index| {
+                    let Some(target) = entities.iter().find(|target| {
+                        target.id == reference.entity && target.name == reference.entity_name
+                    }) else {
+                        report_reference(entity.name, field, reference.entity_name, None);
+
+                        return Err(Error::InvalidSchema);
+                    };
+                    let key_type = target.key_type().map_err(|_| Error::InvalidSchema)?;
+                    if field.value != key_type {
+                        report_reference(
+                            entity.name,
+                            field,
+                            target.name,
+                            Some((target.primary_key, key_type)),
+                        );
+
+                        return Err(Error::InvalidSchema);
+                    }
+                    if !RowKey::supports(field.value) {
+                        return Err(Error::InvalidSchema);
+                    }
+                    let index = entity
+                        .indexes
+                        .iter()
+                        .find(|index| {
                             index.id == reference.index
                                 && !index.present_only
                                 && index.fields.first() == Some(&field.name)
                         })
-                    {
-                        return Err(Error::InvalidSchema);
-                    }
-                    let target = entities
-                        .iter()
-                        .find(|target| target.id == reference.entity)
-                        .ok_or(Error::InvalidSchema)?;
-                    let index = entity
-                        .indexes
-                        .iter()
-                        .find(|index| index.id == reference.index)
                         .ok_or(Error::InvalidSchema)?;
                     name(&mut bytes, target.name)?;
                     name(&mut bytes, index.name)?;
@@ -466,6 +540,7 @@ impl Schema {
         let mut hash = Sha256::new();
         hash.update(b"ic-db:schema:v1\0");
         hash.update(bytes);
+
         Ok(Self {
             entities,
             types,
@@ -485,6 +560,17 @@ impl Schema {
         &self.entities
     }
 
+    pub(crate) fn entity_by_id(&self, id: u32) -> Option<&'static EntitySchema> {
+        self.entities.iter().copied().find(|entity| entity.id == id)
+    }
+
+    pub(crate) fn entity_by_name(&self, name: &str) -> Option<&'static EntitySchema> {
+        self.entities
+            .iter()
+            .copied()
+            .find(|entity| entity.name == name)
+    }
+
     /// Reachable named definitions in logical-name order, without expanding cycles.
     pub fn types(&self) -> impl Iterator<Item = &'static crate::TypeSchema> + '_ {
         self.types.definitions()
@@ -494,11 +580,7 @@ impl Schema {
     // contract. Typed callers can use it without specializing execution around
     // their executable's descriptor address.
     pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<&'static EntitySchema, Error> {
-        let current = self
-            .entities
-            .iter()
-            .find(|entity| entity.id == proposed.id)
-            .ok_or(Error::UnknownEntity)?;
+        let current = self.entity_by_id(proposed.id).ok_or(Error::UnknownEntity)?;
         if current.name != proposed.name
             || current.fields != proposed.fields
             || current.primary_key != proposed.primary_key
@@ -515,7 +597,8 @@ impl Schema {
         if !self.types.contains(&proposed_types) {
             return Err(Error::UnknownEntity);
         }
-        Ok(*current)
+
+        Ok(current)
     }
 }
 
@@ -525,6 +608,7 @@ pub(crate) fn name(bytes: &mut Vec<u8>, value: &str) -> Result<(), Error> {
     }
     bytes.extend((value.len() as u32).to_le_bytes());
     bytes.extend(value.as_bytes());
+
     Ok(())
 }
 
@@ -595,5 +679,6 @@ pub(crate) fn encode_type(
         }
         _ => {}
     }
+
     Ok(())
 }

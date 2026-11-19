@@ -13,6 +13,7 @@ const INPUT_REQUEST: u8 = 5;
 pub(super) fn request_input() -> io::Result<()> {
     let mut output = io::stdout().lock();
     output.write_all(&[INPUT_REQUEST])?;
+
     output.flush()
 }
 
@@ -31,6 +32,7 @@ pub(super) fn readline(editor: &mut DefaultEditor) -> Result<Option<String>, Str
                         .add_history_entry(line.as_str())
                         .map_err(|e| e.to_string())?;
                 }
+
                 return Ok(Some(line));
             }
             Err(ReadlineError::Interrupted) => println!("^C"),
@@ -43,6 +45,7 @@ pub(super) fn readline(editor: &mut DefaultEditor) -> Result<Option<String>, Str
 pub(super) fn relay(child: &mut Child, editor: &mut DefaultEditor) -> Result<(), String> {
     let mut input = child.stdin.take().ok_or("missing console input pipe")?;
     let mut output = io::BufReader::new(child.stdout.take().ok_or("missing console output pipe")?);
+
     loop {
         let bytes = output.fill_buf().map_err(|e| e.to_string())?;
         if bytes.is_empty() {

@@ -7,21 +7,13 @@
 use super::{NAMES, open, runtime};
 use std::collections::{BTreeMap, BTreeSet};
 
-const MAX_COMMANDS: usize = 8;
-const MAPPING: u64 = 100;
-type Command = (u8, u64, u64, u64);
-
-fn fail_at(selected: u8, boundary: u8) {
-    if selected == boundary {
-        ic_platform_runtime::system::trap("M0 injected batch failure");
-    }
-}
-
 // Kinds: insert user, delete user, put mapping, delete mapping.
 // Errors: bounds=1, duplicate target=2, existence=3, uniqueness=4, reference=5.
 // Success reports examined reverse-index candidates, independently of row count.
-
-/// Apply a bounded command batch with the selected failure injection.
+// batch
+// Apply a bounded command batch with the selected failure injection.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "batch",
@@ -156,5 +148,16 @@ fn batch((commands, failure): (Vec<Command>, u8)) -> Result<u64, u8> {
             fail_at(failure, 5);
         }
     }
+
     Ok(examined)
+}
+
+const MAX_COMMANDS: usize = 8;
+const MAPPING: u64 = 100;
+type Command = (u8, u64, u64, u64);
+
+fn fail_at(selected: u8, boundary: u8) {
+    if selected == boundary {
+        ic_platform_runtime::system::trap("M0 injected batch failure");
+    }
 }

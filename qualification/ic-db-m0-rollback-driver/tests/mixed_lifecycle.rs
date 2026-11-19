@@ -1,6 +1,8 @@
 //! Independent map oracle across mixed writes, exact jobs, upgrade and maintenance.
 //! No product dependency, schema descriptors, codecs or query execution in the oracle.
+
 mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
@@ -38,6 +40,7 @@ impl Model {
             if operation != 0 && !present {
                 return Err(2);
             }
+
             match (entity, operation) {
                 (0, 2) => {
                     next.parents.remove(&id);
@@ -88,6 +91,7 @@ impl Model {
             next.revisions[entity] += u64::from(changed);
         }
         *self = next;
+
         Ok(())
     }
 
@@ -102,6 +106,7 @@ impl Model {
             .map(|(&id, &(_, score))| (score, id))
             .collect();
         ordered.sort_unstable();
+
         (
             self.parents.iter().map(|(&id, &code)| (id, code)).collect(),
             self.items
@@ -216,6 +221,7 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
                 )
                 .await
                 .unwrap();
+
             application_reply::<Reply>(241, &bytes)
         };
         for (_, commands) in seed_batches() {
@@ -230,6 +236,7 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
             else {
                 panic!("expected count reply")
             };
+
             (result.unwrap(), instructions)
         };
         let (CountReply::Started(handle), _) = count(CountAction::Start).await else {
@@ -342,6 +349,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         let QueryReply::Snapshot(result, instructions) = application_reply(242, &bytes) else {
             panic!("expected snapshot reply")
         };
+
         (result, instructions)
     };
     let items = async |target, minimum, work, after| {
@@ -360,6 +368,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         let QueryReply::Items(result, instructions) = application_reply(242, &bytes) else {
             panic!("expected items reply")
         };
+
         (result, instructions)
     };
     let upgrade = async || {
@@ -380,6 +389,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         let Reply::Batch(result, instructions) = application_reply(241, &bytes) else {
             panic!("expected batch reply")
         };
+
         (result, instructions)
     };
     let mut samples = BTreeMap::<&str, Vec<(u64, u128)>>::new();
@@ -427,6 +437,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         assert_eq!(page.ids, [4]);
         assert_eq!(page.examined, 1);
         println!("opening/indexed-page {phase}: handler_instructions={instructions}");
+
         page.next.expect("more items for this parent")
     };
     let measured_batch = async |phase: &str| {
@@ -470,6 +481,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         let Reply::Count(result, _) = application_reply(241, &bytes) else {
             panic!("expected count reply")
         };
+
         result
     };
     let start = async |target| {
@@ -479,6 +491,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         else {
             panic!("expected handle")
         };
+
         handle
     };
     let advance = async |target, handle: &[u8], sequence| {
@@ -490,6 +503,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         .unwrap() else {
             panic!("expected progress")
         };
+
         (next, outcome)
     };
     let finish_count = async |target, handle: &[u8], mut sequence, expected: u64| {
@@ -498,6 +512,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             match state {
                 CountOutcome::Complete(value) => {
                     assert_eq!(value, expected);
+
                     return next;
                 }
                 CountOutcome::Running => assert!(next > sequence),
@@ -965,6 +980,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             )
             .await
             .unwrap();
+
         application_reply::<Reply>(241, &bytes)
     };
     let write = async |model: &mut Model, commands: Vec<Command>| {
@@ -974,6 +990,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             panic!("expected batch reply")
         };
         result.unwrap();
+
         instructions
     };
     let mut model = Model::default();
@@ -1051,6 +1068,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
                     "skew/list phase={phase} work={work} peak_instructions={peak_instructions} pages={page_number} examined={examined} matched={} empty_continued={empty_continued} handler_instructions={instructions}",
                     found.len()
                 );
+
                 return;
             }
             assert_ne!(page.next, after);
@@ -1067,6 +1085,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         let Reply::Count(result, instructions) = update(Update::Count(request)).await else {
             panic!("expected count reply")
         };
+
         (result.unwrap(), instructions)
     };
     let start = async || {
@@ -1075,6 +1094,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         else {
             panic!("expected handle")
         };
+
         handle
     };
     let resume = async |handle: &[u8], sequence| {
@@ -1087,6 +1107,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             panic!("expected progress")
         };
         assert_eq!(next, sequence + 1);
+
         (outcome, cost)
     };
     compare_budgets("seeded", &model).await;
@@ -1132,6 +1153,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
                 CountReply::Cancelled
             );
             pic.drop().await;
+
             return;
         }
         assert_eq!(outcome, CountOutcome::Running);

@@ -78,6 +78,7 @@ pub(crate) fn operand_type(field: FieldType) -> FieldType {
     {
         return inner;
     }
+
     field
 }
 impl<'a> IndexValue<'a> {
@@ -89,6 +90,7 @@ impl<'a> IndexValue<'a> {
                 Err(Error::InvalidOperand)
             };
         }
+
         match (self, operand_type(field)) {
             (
                 Self::UnitEnum {
@@ -98,6 +100,7 @@ impl<'a> IndexValue<'a> {
                 FieldType::Named(link),
             ) => {
                 let expected = (link.definition)();
+
                 if unit_enum_len(definition).is_some_and(|len| usize::from(ordinal) < len)
                     && unit_enum_len(expected).is_some()
                     && link.name == definition.name
@@ -231,6 +234,7 @@ impl<'a> IndexValue<'a> {
                 let definition = (link.definition)();
                 let len = unit_enum_len(definition).ok_or(Error::Corrupt)?;
                 let ordinal = reader.unit_enum(len)?;
+
                 Self::UnitEnum {
                     definition,
                     ordinal,
@@ -300,6 +304,7 @@ pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Op
     for &(value, optional) in values {
         value.append_component(optional, &mut bytes);
     }
+
     Some(bytes)
 }
 
@@ -445,6 +450,7 @@ fn fixed_width(field: FieldType) -> Option<usize> {
 
 pub(crate) fn supports(field: FieldType) -> bool {
     let field = operand_type(field);
+
     fixed_width(field).is_some()
         || matches!(
             field,
@@ -454,6 +460,28 @@ pub(crate) fn supports(field: FieldType) -> bool {
                 | FieldType::Blob { .. }
                 | FieldType::Decimal { .. }
         )
+}
+
+// Stored entries and cursor positions share the same optional-component framing.
+pub(crate) fn consume_component(
+    bytes: &mut &[u8],
+    field: &crate::FieldSchema,
+    present_only: bool,
+    invalid_presence: Error,
+) -> Result<(), Error> {
+    if field.optional {
+        match *bytes {
+            [0, rest @ ..] if !present_only => {
+                *bytes = rest;
+
+                return Ok(());
+            }
+            [1, rest @ ..] => *bytes = rest,
+            _ => return Err(invalid_presence),
+        }
+    }
+
+    consume(bytes, field.value)
 }
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
@@ -466,16 +494,19 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
             return Err(Error::Corrupt);
         }
         *bytes = rest;
+
         return Ok(());
     }
     if let FieldType::Decimal { scale } = field {
         let (value, width) = Decimal::read_ordered(bytes).ok_or(Error::Corrupt)?;
         value.coefficient_at_scale(scale).ok_or(Error::Corrupt)?;
         *bytes = &bytes[width..];
+
         return Ok(());
     }
     if let FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } = field {
         let mut decoded = 0;
+
         loop {
             let end = bytes
                 .iter()
@@ -505,6 +536,7 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
         if usize::from(len) > crate::codec::MAX_PRINCIPAL_BYTES {
             return Err(Error::Corrupt);
         }
+
         usize::from(len) + 1 + if field == FieldType::Account { 32 } else { 0 }
     } else {
         fixed_width(field).ok_or(Error::Corrupt)?
@@ -527,6 +559,7 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
         _ => {}
     }
     *bytes = &bytes[width..];
+
     Ok(())
 }
 

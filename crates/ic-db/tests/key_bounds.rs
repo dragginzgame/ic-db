@@ -1,9 +1,15 @@
 //! Complete encoded-key admission, independent of row and field bounds.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// TextKey
+/// Exercises indexed access by `text` on rows keyed by `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -15,18 +21,45 @@ use ic_storage::{
     )
 )]
 struct TextKey {}
-#[entity(pk(field="id"),index(field="a"),index(fields=["a","b"]),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="a",value(item(prim="Text",max_bytes=4096))),
-    field(name="b",value(item(prim="Text",max_bytes=4096)))
-))]
+
+///
+/// Compound
+/// Exercises indexed access by `a` and `b` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "a"),
+    index(fields = ["a", "b"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "a", value(item(prim = "Text", max_bytes = 4096))),
+        field(name = "b", value(item(prim = "Text", max_bytes = 4096)))
+    )
+)]
 struct Compound {}
-#[entity(pk(field="id"),index(fields=["a","b"],unique,present_only),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="a",value(item(prim="Text",max_bytes=4096))),
-    field(name="b",value(opt,item(prim="Text",max_bytes=4096)))
-))]
+
+///
+/// Sparse
+/// Exercises indexed access by `a` and `b` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["a", "b"], unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "a", value(item(prim = "Text", max_bytes = 4096))),
+        field(name = "b", value(opt, item(prim = "Text", max_bytes = 4096)))
+    )
+)]
 struct Sparse {}
+
+///
+/// Wide
+/// Exercises indexed access by `text` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "text"),
@@ -49,6 +82,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
             &GenericAllocationPolicy,
         )
         .unwrap();
+
     runtime
 }
 

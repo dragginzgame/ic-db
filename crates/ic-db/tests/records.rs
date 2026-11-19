@@ -1,15 +1,32 @@
 //! First public journey: real generated records, governed storage and final-state batches.
+
+use enum_values::Lifecycle as State;
 use ic_db::{Batch, Blob, Database, Entity, Error, Schema, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
-#[entity( pk(field="id"), index(fields=["category", "id"]),
-    fields(field(name="id", value(item(prim="Nat64"))),
-        field(name="category", value(item(prim="Nat64"))),
-        field(name="amount", value(item(prim="Nat64")))))]
+///
+/// Entry
+/// Exercises indexed access by `category` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["category", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat64"))),
+        field(name = "amount", value(item(prim = "Nat64")))
+    )
+)]
 struct Entry {}
+
+///
+/// TokenRow
+/// Exercises indexed access by `token` on rows keyed by `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -21,15 +38,44 @@ struct Entry {}
 )]
 struct TokenRow {}
 
-#[entity(name="Entry",  pk(field="id"), index(fields=["category", "id"]),
-    fields(field(name="value", value(item(prim="Nat64"))), field(name="id", value(item(prim="Nat64"))),
-        field(name="category", value(item(prim="Nat64")))))]
+///
+/// Changed
+/// Exercises an alternate `Entry` declaration under the same logical identity.
+///
+
+#[entity(
+    name = "Entry",
+    pk(field = "id"),
+    index(fields = ["category", "id"]),
+    fields(
+        field(name = "value", value(item(prim = "Nat64"))),
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat64")))
+    )
+)]
 struct Changed {}
 
-#[entity(name="Entry",  pk(field="id"), index(fields=["category", "id"]),
-    fields(field(name="amount", value(item(prim="Nat64"))), field(name="category", value(item(prim="Nat64"))),
-        field(name="id", value(item(prim="Nat64")))))]
+///
+/// Reordered
+/// Exercises an alternate `Entry` declaration under the same logical identity.
+///
+
+#[entity(
+    name = "Entry",
+    pk(field = "id"),
+    index(fields = ["category", "id"]),
+    fields(
+        field(name = "amount", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat64"))),
+        field(name = "id", value(item(prim = "Nat64")))
+    )
+)]
 struct Reordered {}
+
+///
+/// Document
+/// Stores `title`, `note`, `published` and `priority` under the `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -43,6 +89,11 @@ struct Reordered {}
 )]
 struct Document {}
 
+///
+/// WideText
+/// Stores `enabled` and `text` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -53,6 +104,11 @@ struct Document {}
 )]
 struct WideText {}
 
+///
+/// SignedRow
+/// Stores `delta` and `previous` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -62,6 +118,12 @@ struct WideText {}
     )
 )]
 struct SignedRow {}
+
+///
+/// WideRow
+/// Stores `signed`, `unsigned`, `optional_signed` and `optional_unsigned` under the `id`
+/// primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -75,6 +137,11 @@ struct SignedRow {}
 )]
 struct WideRow {}
 
+///
+/// BinaryRow
+/// Stores `payload` and `optional` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -84,6 +151,12 @@ struct WideRow {}
     )
 )]
 struct BinaryRow {}
+
+///
+/// EmptyBlob
+/// Stores `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -92,6 +165,12 @@ struct BinaryRow {}
     )
 )]
 struct EmptyBlob {}
+
+///
+/// EmptyText
+/// Stores `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -100,6 +179,12 @@ struct EmptyBlob {}
     )
 )]
 struct EmptyText {}
+
+///
+/// WideBlob
+/// Stores `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -108,6 +193,11 @@ struct EmptyText {}
     )
 )]
 struct WideBlob {}
+
+///
+/// CodecNames
+/// Stores `writer` and `row` under the `reader` primary key.
+///
 
 #[entity(
     pk(field = "reader"),
@@ -118,6 +208,11 @@ struct WideBlob {}
     )
 )]
 struct CodecNames {}
+
+///
+/// NarrowRow
+/// Exercises stored representations across 12 fields sharing the primary key `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -139,32 +234,72 @@ struct CodecNames {}
 )]
 struct NarrowRow {}
 
-#[entity( pk(field="id"), index(fields=["category","id"]), fields(
-    field(name="a_blob",value(item(prim="Blob",max_bytes=2048))),
-    field(name="a_note",value(opt,item(prim="Text",max_bytes=64))),
-    field(name="category",value(item(prim="Nat64"))),
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="z_flag",value(item(prim="Bool"))),
-    field(name="z_text",value(item(prim="Text",max_bytes=64)))
-))]
+///
+/// InspectionRow
+/// Exercises indexed access by `category` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["category", "id"]),
+    fields(
+        field(name = "a_blob", value(item(prim = "Blob", max_bytes = 2048))),
+        field(name = "a_note", value(opt, item(prim = "Text", max_bytes = 64))),
+        field(name = "category", value(item(prim = "Nat64"))),
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "z_flag", value(item(prim = "Bool"))),
+        field(name = "z_text", value(item(prim = "Text", max_bytes = 64)))
+    )
+)]
 struct InspectionRow {}
 
-#[entity(pk(field="id"),index(fields=["parent_id","id"]),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="note",value(item(prim="Text",max_bytes=32))),
-    field(name="parent_id",value(item(prim="Nat64")),references(entity="InspectionRow",index="parent_id,id"))
-))]
+///
+/// InspectionDependent
+/// Exercises references to `InspectionRow` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["parent_id", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "note", value(item(prim = "Text", max_bytes = 32))),
+        field(name = "parent_id", value(item(prim = "Nat64")), references(entity = "InspectionRow", index = "parent_id,id"))
+    )
+)]
 struct InspectionDependent {}
+
+///
+/// Parent
+/// Exercises a row containing only its `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
 struct Parent {}
-#[entity( pk(field="id"), index(fields=["parent_id","id"]), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="parent_id",value(item(prim="Nat64")),references(entity="Parent",index="parent_id,id"))))]
+
+///
+/// Child
+/// Exercises references to `Parent` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["parent_id", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "parent_id", value(item(prim = "Nat64")), references(entity = "Parent", index = "parent_id,id"))
+    )
+)]
 struct Child {}
+
+///
+/// Node
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "next"),
@@ -179,11 +314,21 @@ struct Child {}
 )]
 struct Node {}
 
-#[entity( pk(field="id"),
-    index(fields=["next", "id"]), index(fields=["alternate", "id"]),
-    fields(field(name="id", value(item(prim="Nat64"))),
-        field(name="next", value(opt, item(prim="Nat64")), references(entity="Self",index="next,id")),
-        field(name="alternate", value(opt, item(prim="Nat64")), references(entity="Self",index="alternate,id"))))]
+///
+/// OptionalLink
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["next", "id"]),
+    index(fields = ["alternate", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "next", value(opt, item(prim = "Nat64")), references(entity = "Self", index = "next,id")),
+        field(name = "alternate", value(opt, item(prim = "Nat64")), references(entity = "Self", index = "alternate,id"))
+    )
+)]
 struct OptionalLink {}
 
 fn schema() -> Schema {
@@ -199,6 +344,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -1532,6 +1678,11 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
     assert_eq!(db.revision::<BinaryRow>().unwrap(), 2);
 }
 
+///
+/// PrincipalRow
+/// Stores `owner` and `optional` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -1676,10 +1827,12 @@ macro_rules! integer_index_case {
     ($test:ident, $prim:literal, $ty:ty, $values:expr) => {
         #[test]
         fn $test() {
-            #[entity( pk(field="id"), index(fields=["bucket","value"]),
-                                                fields(field(name="id",value(item(prim="Nat64"))),
-                                                    field(name="bucket",value(item(prim="Nat64"))),
-                                                    field(name="value",value(item(prim=$prim)))))]
+            ///
+            /// Indexed
+            /// Exercises compound index ordering for the selected numeric type.
+            ///
+
+            #[entity(pk(field = "id"), index(fields = ["bucket", "value"]), fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "bucket", value(item(prim = "Nat64"))), field(name = "value", value(item(prim = $prim)))))]
             struct Indexed {}
             let contract = || Schema::new(&[Indexed::SCHEMA]).unwrap();
             let backing = VectorMemory::default();
@@ -1705,7 +1858,8 @@ macro_rules! integer_index_case {
             db.commit(batch).unwrap();
             expected.sort_by_key(|row| (row.value, row.id));
             assert_eq!(
-                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32).unwrap(),
+                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32)
+                    .unwrap(),
                 expected
             );
             for row in &expected {
@@ -1720,7 +1874,8 @@ macro_rules! integer_index_case {
                 Err(Error::InvalidOperand)
             ));
             assert!(matches!(
-                db.index_prefix::<Indexed>("bucket,value",
+                db.index_prefix::<Indexed>(
+                    "bucket,value",
                     &[7_u64.into(), ic_db::Principal::anonymous().into()],
                     1
                 ),
@@ -1741,7 +1896,8 @@ macro_rules! integer_index_case {
             let runtime = host(backing);
             let db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
             assert_eq!(
-                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32).unwrap(),
+                db.index_prefix::<Indexed>("bucket,value", &[7_u64.into()], 32)
+                    .unwrap(),
                 expected
             );
             assert_eq!(db.revision::<Indexed>().unwrap(), 2);
@@ -1779,13 +1935,22 @@ integer_index_case!(
     [i128::MIN, -1, 0, 1, i128::MAX]
 );
 
-#[entity(pk(field="id"),
-    index(field="owner",unique),
-    index(fields=["parent","owner","rank"]),
-    fields(field(name="id",value(item(prim="Nat64"))),
-        field(name="parent",value(item(prim="Nat64")),references(entity="Entry",index="parent,owner,rank")),
-        field(name="owner",value(item(prim="Principal"))),
-        field(name="rank",value(item(prim="Int8")))))]
+///
+/// IndexedIdentity
+/// Exercises references to `Entry` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "owner", unique),
+    index(fields = ["parent", "owner", "rank"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "parent", value(item(prim = "Nat64")), references(entity = "Entry", index = "parent,owner,rank")),
+        field(name = "owner", value(item(prim = "Principal"))),
+        field(name = "rank", value(item(prim = "Int8")))
+    )
+)]
 struct IndexedIdentity {}
 
 #[test]
@@ -2040,13 +2205,22 @@ fn runtime_schema_admission_rejects_unsupported_index_shapes() {
     }
 }
 
-#[entity(pk(field="id"),
-    index(fields=["bucket","first","second"]),
-    index(fields=["first","second"],unique),
-    fields(field(name="id",value(item(prim="Nat64"))),
-        field(name="bucket",value(item(prim="Bool"))),
-        field(name="first",value(item(prim="Text",max_bytes=128))),
-        field(name="second",value(item(prim="Text",max_bytes=32)))))]
+///
+/// TextIndex
+/// Exercises indexed access by `bucket`, `first` and `second` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["bucket", "first", "second"]),
+    index(fields = ["first", "second"], unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "bucket", value(item(prim = "Bool"))),
+        field(name = "first", value(item(prim = "Text", max_bytes = 128))),
+        field(name = "second", value(item(prim = "Text", max_bytes = 32)))
+    )
+)]
 struct TextIndex {}
 
 #[test]
@@ -2296,6 +2470,11 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// LargeTextIndex
+/// Exercises indexed access by `text` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "text", unique),
@@ -2367,16 +2546,25 @@ fn indexed_text_obeys_complete_key_bound_while_retaining_row_bounds() {
     assert_eq!(db.revision::<LargeTextIndex>().unwrap(), 2);
 }
 
-#[entity(pk(field="id"),
-    index(fields=["parent","alias","code"]),
-    index(fields=["alias","code"],unique,present_only),
-    index(fields=["active","principal"]),
-    fields(field(name="id",value(item(prim="Nat64"))),
-        field(name="parent",value(item(prim="Nat64")),references(entity="Entry",index="parent,alias,code")),
-        field(name="alias",value(opt,item(prim="Text",max_bytes=32))),
-        field(name="code",value(opt,item(prim="Int64"))),
-        field(name="active",value(opt,item(prim="Bool"))),
-        field(name="principal",value(opt,item(prim="Principal")))))]
+///
+/// OptionalIndex
+/// Exercises references to `Entry` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["parent", "alias", "code"]),
+    index(fields = ["alias", "code"], unique, present_only),
+    index(fields = ["active", "principal"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "parent", value(item(prim = "Nat64")), references(entity = "Entry", index = "parent,alias,code")),
+        field(name = "alias", value(opt, item(prim = "Text", max_bytes = 32))),
+        field(name = "code", value(opt, item(prim = "Int64"))),
+        field(name = "active", value(opt, item(prim = "Bool"))),
+        field(name = "principal", value(opt, item(prim = "Principal")))
+    )
+)]
 struct OptionalIndex {}
 
 #[test]
@@ -2621,6 +2809,7 @@ fn optional_membership_admission_and_corrupt_presence_fail_closed() {
                 },
             })
             .collect();
+
         Box::leak(Box::new(ic_db::EntitySchema {
             indexes: Box::leak(indexes.into_boxed_slice()),
             ..*OptionalIndex::SCHEMA
@@ -2889,24 +3078,47 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
 
 #[test]
 fn logical_names_remain_authoritative_when_compact_handles_collide() {
+    ///
+    /// First
+    /// Exercises an alternate `costarring` declaration under the same logical identity.
+    ///
+
     #[entity(
         name = "costarring",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
     )]
     struct First {}
+
+    ///
+    /// Second
+    /// Exercises an alternate `liquid` declaration under the same logical identity.
+    ///
+
     #[entity(
         name = "liquid",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
     )]
     struct Second {}
+
+    ///
+    /// Renamed
+    /// Exercises an alternate `costarring` declaration under the same logical identity.
+    ///
+
     #[entity(
         name = "costarring",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
     )]
     struct Renamed {}
+
+    ///
+    /// CollidingIndexes
+    /// Exercises a row containing only its `id` primary key.
+    ///
+
     #[entity(
         pk(field = "id"),
         index(name = "costarring", field = "id"),
@@ -2914,6 +3126,12 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
         fields(field(name = "id", value(item(prim = "Nat64"))))
     )]
     struct CollidingIndexes {}
+
+    ///
+    /// Dependent
+    /// Exercises references to `Second` on rows keyed by `id`.
+    ///
+
     #[entity(
         pk(field = "id"),
         index(field = "target"),
@@ -2988,12 +3206,24 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
 
 mod enum_values {
     use ic_db::enum_;
+
+    ///
+    /// Lifecycle
+    /// Distinguishes the `Ready`, `Archived` and `Draft` variants.
+    ///
+
     #[enum_(
         variant(name = "Ready"),
         variant(name = "Archived"),
         variant(name = "Draft")
     )]
     pub struct Lifecycle {}
+
+    ///
+    /// Reordered
+    /// Distinguishes the `Draft`, `Ready` and `Archived` variants.
+    ///
+
     #[enum_(
         name = "Lifecycle",
         variant(name = "Draft"),
@@ -3001,6 +3231,12 @@ mod enum_values {
         variant(name = "Archived")
     )]
     pub struct Reordered {}
+
+    ///
+    /// Changed
+    /// Distinguishes the `Ready`, `Archived` and `Editing` variants.
+    ///
+
     #[enum_(
         name = "Lifecycle",
         variant(name = "Ready"),
@@ -3009,7 +3245,12 @@ mod enum_values {
     )]
     pub struct Changed {}
 }
-use enum_values::Lifecycle as State;
+
+///
+/// EnumRow
+/// Stores `state` and `previous` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -3019,6 +3260,12 @@ use enum_values::Lifecycle as State;
     )
 )]
 struct EnumRow {}
+
+///
+/// EnumReordered
+/// Exercises an alternate `EnumRow` declaration under the same logical identity.
+///
+
 #[entity(
     name = "EnumRow",
     pk(field = "id"),
@@ -3029,6 +3276,12 @@ struct EnumRow {}
     )
 )]
 struct EnumReordered {}
+
+///
+/// EnumChanged
+/// Exercises an alternate `EnumRow` declaration under the same logical identity.
+///
+
 #[entity(
     name = "EnumRow",
     pk(field = "id"),

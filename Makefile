@@ -18,6 +18,7 @@ DB_INSTALL_PREFIX ?= $(HOME)/.local
 help:
 	@printf '%s\n' \
 	  'make check / test / clippy / doc  Check the runtime and schema macro' \
+	  'make schema-build-check        Check schema producer and consumer ownership' \
 	  'make docs-check                  Check local documentation links' \
 	  'make m0-setup                    Explicitly prepare M0 PocketIC server' \
 	  'make m0-contracts                Check native numeric/schema/row/query contracts' \
@@ -78,6 +79,10 @@ doc:
 
 docs-check:
 	perl vendor/toko-tooling/scripts/ci/check-documentation-links.pl --root . README.md AGENTS.md CHANGELOG.md docs/design/ic-db-system-design.md qualification/README.md
+
+.PHONY: schema-build-check
+schema-build-check:
+	perl scripts/check-schema-builds.pl
 
 .PHONY: qualification-tooling-check
 toko-tooling-check: qualification-tooling-check
@@ -366,7 +371,7 @@ release-setup:
 	$(MAKE) release-tools
 	$(MAKE) m0-setup
 
-ci: fmt-check clippy test doc docs-check release-adapter-test
+ci: fmt-check clippy test doc docs-check schema-build-check release-adapter-test
 
 .PHONY: release-version release-preflight release-verify release-prepare-version release-prepared-check release-files release-commit-check release-committed-check release-tagged-check release-push-check release-lint release-tools
 release-version release-preflight release-verify release-prepare-version release-prepared-check release-files release-commit-check release-committed-check release-tagged-check release-push-check:

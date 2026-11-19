@@ -15,6 +15,7 @@ fn prompt(
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let mut bytes = Vec::new();
+
     loop {
         let chunk = output
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -150,6 +151,7 @@ fn terminal_session(idle: bool) {
             if expected == "Enter one command at a time." && response.contains("query call") {
                 return Err("multiline paste executed a command".into());
             }
+
             if expected.starts_with('|') {
                 if !response.contains(&format!(
                     "{expected}\n+-------+\nquery call (cardinality): "
@@ -165,6 +167,7 @@ fn terminal_session(idle: bool) {
         }
         input.write_all(b"quit\n").map_err(|e| e.to_string())?;
         let deadline = Instant::now() + Duration::from_secs(5);
+
         loop {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 return if status.success() {

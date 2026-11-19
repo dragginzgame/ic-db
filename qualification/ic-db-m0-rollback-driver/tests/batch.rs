@@ -35,6 +35,7 @@ async fn final_state_batches() {
             )
             .await
             .unwrap();
+
         ic_wire::decode(
             &reply,
             Encoding::Frame {

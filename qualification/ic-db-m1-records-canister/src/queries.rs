@@ -1,4 +1,5 @@
 //! Private fluent-query witness; production query endpoints belong to Canic.
+
 use crate::{
     console::NoteOnly,
     open, runtime,
@@ -6,27 +7,10 @@ use crate::{
 };
 use ic_db::{Comparison, IndexValue, QueryCursor};
 
-#[ic_db::record(fields(
-    field(name = "id", value(item(prim = "Nat64"))),
-    field(name = "amount", value(item(prim = "Nat64")))
-))]
-pub(super) struct Summary {}
-#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
-pub(super) struct IdOnly {}
-
-type Request = (Option<Vec<u8>>, bool, Option<u64>, u64, u32, u32, u32);
-type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
-
-#[derive(Clone, Copy)]
-enum Shape {
-    Entity,
-    Projection,
-    Ordered,
-    Any,
-    Membership,
-}
-
-/// Return a bounded page of matching fixture entities.
+// fluent_query
+// Return a bounded page of matching fixture entities.
+// guard  : validates the request frame for method 95.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_query",
@@ -40,7 +24,10 @@ fn fluent_query((request, counter): crate::transport::Measured<Request>) -> Resu
     read(request, Shape::Entity, counter)
 }
 
-/// Project matching entries into the fixture result record.
+// fluent_projection
+// Project matching entries into the fixture result record.
+// guard  : validates the request frame for method 96.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_projection",
@@ -54,7 +41,10 @@ fn fluent_projection((request, counter): crate::transport::Measured<Request>) ->
     read(request, Shape::Projection, counter)
 }
 
-/// Page matching entries in the requested order.
+// fluent_ordered
+// Page matching entries in the requested order.
+// guard  : validates the request frame for method 98.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_ordered",
@@ -68,7 +58,10 @@ fn fluent_ordered((request, counter): crate::transport::Measured<Request>) -> Re
     read(request, Shape::Ordered, counter)
 }
 
-/// Page entries matching the fixture’s alternative predicates.
+// fluent_any
+// Page entries matching the fixture’s alternative predicates.
+// guard  : validates the request frame for method 123.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_any",
@@ -82,7 +75,10 @@ fn fluent_any((request, counter): crate::transport::Measured<Request>) -> Result
     read(request, Shape::Any, counter)
 }
 
-/// Page entries matching the fixture’s membership filter.
+// fluent_membership
+// Page entries matching the fixture’s membership filter.
+// guard  : validates the request frame for method 124.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_membership",
@@ -96,10 +92,10 @@ fn fluent_membership((request, counter): crate::transport::Measured<Request>) ->
     read(request, Shape::Membership, counter)
 }
 
-type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
-type TextRequest = (String, Option<Vec<u8>>, u32, u32);
-
-/// Page matching text prefixes.
+// fluent_text_prefix
+// Page matching text prefixes.
+// guard  : validates the request frame for method 125.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_prefix",
@@ -113,7 +109,10 @@ fn fluent_text_prefix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::StartsWith)
 }
 
-/// Page matching text suffixes.
+// fluent_text_suffix
+// Page matching text suffixes.
+// guard  : validates the request frame for method 126.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_suffix",
@@ -127,7 +126,10 @@ fn fluent_text_suffix(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::EndsWith)
 }
 
-/// Page rows containing the supplied text.
+// fluent_text_contains
+// Page rows containing the supplied text.
+// guard  : validates the request frame for method 127.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_contains",
@@ -141,11 +143,10 @@ fn fluent_text_contains(request: TextRequest) -> Result<TextPage, u8> {
     text_match(request, Comparison::Contains)
 }
 
-type SparseRequest = (bool, bool, Option<Vec<u8>>, u32);
-type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
-type TextSeekRequest = (String, bool, Option<Vec<u8>>, u32, u32);
-
-/// Seek document titles by prefix and continue in the requested direction.
+// fluent_text_seek
+// Seek document titles by prefix and continue in the requested direction.
+// guard  : validates the request frame for method 132.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_text_seek",
@@ -173,15 +174,17 @@ fn fluent_text_seek(
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
+
     query
         .fetch_as::<IdOnly>()
         .map(id_page)
         .map_err(|error| query_error(&error))
 }
 
-type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
-
-/// Page IDs in the requested primary-key range.
+// fluent_primary_range
+// Page IDs in the requested primary-key range.
+// guard  : validates the request frame for method 130.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_primary_range",
@@ -195,9 +198,10 @@ fn fluent_primary_range(request: PrimaryRangeRequest) -> Result<IdPage, u8> {
     range_read(request, None, Entry::ID)
 }
 
-type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
-
-/// Page IDs in the selected index range, optionally within one category.
+// fluent_index_range
+// Page IDs in the selected index range, optionally within one category.
+// guard  : validates the request frame for method 131.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_index_range",
@@ -211,42 +215,17 @@ fn fluent_index_range(
     (after, descending, category, lower, upper, work, bytes): IndexRangeRequest,
 ) -> Result<IdPage, u8> {
     let request = (after, descending, lower, upper, work, bytes);
+
     match category {
         Some(category) => range_read(request, Some(&[category.into()]), Entry::ID),
         None => range_read(request, Some(&[]), Entry::CATEGORY),
     }
 }
 
-fn range_read(
-    (after, descending, lower, upper, work, bytes): PrimaryRangeRequest,
-    index_prefix: Option<&[IndexValue<'_>]>,
-    field: &str,
-) -> Result<IdPage, u8> {
-    let host = runtime();
-    let db = open(&host);
-    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
-    let mut query = db
-        .query::<Entry>()
-        .gte(field, lower)
-        .lte(field, upper)
-        .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-    if let Some(prefix) = index_prefix {
-        query = query.using_index("category,id", prefix);
-    }
-    if descending {
-        query = query.descending();
-    }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-    query
-        .fetch_as::<IdOnly>()
-        .map(id_page)
-        .map_err(|error| query_error(&error))
-}
-
-/// Page the sparse-index fixture with the requested absence policy.
+// fluent_sparse_presence
+// Page the sparse-index fixture with the requested absence policy.
+// guard  : validates the request frame for method 128.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_sparse_presence",
@@ -285,13 +264,17 @@ fn fluent_sparse_presence(
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
+
     query
         .fetch_as::<IdOnly>()
         .map(id_page)
         .map_err(|error| query_error(&error))
 }
 
-/// Page rows under the selected list-presence predicate.
+// fluent_list_presence
+// Page rows under the selected list-presence predicate.
+// guard  : validates the request frame for method 129.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "fluent_list_presence",
@@ -320,6 +303,172 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
     if let Some(cursor) = &cursor {
         query = query.after(cursor);
     }
+
+    query
+        .fetch_as::<IdOnly>()
+        .map(id_page)
+        .map_err(|error| query_error(&error))
+}
+
+// Same source, predicate, result and warm open; only materialization differs.
+// fluent_binary_projection
+// Measure entity and ID-only reads of the binary fixture.
+// guard  : validates the request frame for method 97.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "fluent_binary_projection",
+    guard = crate::transport::admit::<97>,
+    decode = crate::transport::decode_measured::<_, 97>,
+    encode = crate::transport::encode::<_, 97>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn fluent_binary_projection(
+    (projected, counter): crate::transport::Measured<bool>,
+) -> (Vec<u64>, u32, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let start = counter();
+    let query = db.query::<BinaryObject>().eq(BinaryObject::ID, 1_u64);
+    let (rows, bytes) = if projected {
+        let page = query.fetch_as::<IdOnly>().unwrap();
+
+        (
+            page.rows.into_iter().map(|row| row.id).collect(),
+            page.output_bytes,
+        )
+    } else {
+        let page = query.fetch().unwrap();
+
+        (
+            page.rows.into_iter().map(|row| row.id).collect(),
+            page.output_bytes,
+        )
+    };
+
+    (rows, bytes as u32, counter() - start)
+}
+
+// Both measurements use the same admitted query. Only the optional hint varies.
+// measured_listing
+// Compare bounded listings with and without the explicit index hint.
+// guard  : validates the request frame for method 189.
+// limits : 64 KiB request, 64 KiB reply.
+#[cfg(feature = "query-measurements")]
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "measured_listing",
+    guard = crate::transport::admit::<189>,
+    decode = crate::transport::decode_measured::<_, 189>,
+    encode = crate::transport::encode::<_, 189>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_listing(
+    ((hinted, after, work, bytes), counter): crate::transport::Measured<(
+        bool,
+        Option<Vec<u8>>,
+        u32,
+        u32,
+    )>,
+) -> ListingSample {
+    let start = counter();
+    let host = runtime();
+    let db = open(&host);
+    let cursor = decode_cursor(after.as_deref()).unwrap();
+    let mut q = db
+        .query::<Document>()
+        .eq(Document::ENTRY_ID, 1_u64)
+        .eq(Document::PUBLISHED, true)
+        .order_by(&[Document::SCORE, Document::ID])
+        .descending()
+        .limit(20)
+        .work_limit(work as usize)
+        .test_output_limit(bytes as usize);
+    if hinted {
+        q = q.using_index("entry_id,score", &[1_u64.into()]);
+    }
+    if let Some(cursor) = &cursor {
+        q = q.after(cursor);
+    }
+    let page = q.fetch_as::<IdOnly>().unwrap();
+
+    (
+        page.rows.into_iter().map(|r| r.id).collect(),
+        page.next.map(|c| c.to_bytes()),
+        page.examined as u32,
+        page.fetched as u32,
+        counter() - start,
+    )
+}
+
+///
+/// Summary
+/// Groups `id` and `amount` into one record.
+///
+
+#[ic_db::record(fields(
+    field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "amount", value(item(prim = "Nat64")))
+))]
+pub(super) struct Summary {}
+
+///
+/// IdOnly
+/// Carries the `Nat64` value of `id`.
+///
+
+#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+pub(super) struct IdOnly {}
+
+type Request = (Option<Vec<u8>>, bool, Option<u64>, u64, u32, u32, u32);
+type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
+
+#[derive(Clone, Copy)]
+enum Shape {
+    Entity,
+    Projection,
+    Ordered,
+    Any,
+    Membership,
+}
+
+type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
+type TextRequest = (String, Option<Vec<u8>>, u32, u32);
+
+type SparseRequest = (bool, bool, Option<Vec<u8>>, u32);
+type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
+type TextSeekRequest = (String, bool, Option<Vec<u8>>, u32, u32);
+
+type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
+
+type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
+
+fn range_read(
+    (after, descending, lower, upper, work, bytes): PrimaryRangeRequest,
+    index_prefix: Option<&[IndexValue<'_>]>,
+    field: &str,
+) -> Result<IdPage, u8> {
+    let host = runtime();
+    let db = open(&host);
+    let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
+    let mut query = db
+        .query::<Entry>()
+        .gte(field, lower)
+        .lte(field, upper)
+        .work_limit(work as usize)
+        .test_output_limit(bytes as usize);
+    if let Some(prefix) = index_prefix {
+        query = query.using_index("category,id", prefix);
+    }
+    if descending {
+        query = query.descending();
+    }
+    if let Some(cursor) = &cursor {
+        query = query.after(cursor);
+    }
+
     query
         .fetch_as::<IdOnly>()
         .map(id_page)
@@ -345,6 +494,7 @@ fn text_match(
     let page = query
         .fetch_as::<NoteOnly>()
         .map_err(|error| query_error(&error))?;
+
     Ok((
         page.rows.into_iter().map(|r| r.note).collect(),
         page.next.map(|c| c.to_bytes()),
@@ -414,6 +564,7 @@ fn read(
         .into_iter()
         .map(|row| (row.id, row.amount))
         .collect();
+
     Ok((
         rows,
         page.next.map(|c| c.to_bytes()),
@@ -444,87 +595,5 @@ fn query_error(error: &ic_db::Error) -> u8 {
     }
 }
 
-// Same source, predicate, result and warm open; only materialization differs.
-
-/// Measure entity and ID-only reads of the binary fixture.
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "fluent_binary_projection",
-    guard = crate::transport::admit::<97>,
-    decode = crate::transport::decode_measured::<_, 97>,
-    encode = crate::transport::encode::<_, 97>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn fluent_binary_projection(
-    (projected, counter): crate::transport::Measured<bool>,
-) -> (Vec<u64>, u32, u64) {
-    let host = runtime();
-    let db = open(&host);
-    let start = counter();
-    let query = db.query::<BinaryObject>().eq(BinaryObject::ID, 1_u64);
-    let (rows, bytes) = if projected {
-        let page = query.fetch_as::<IdOnly>().unwrap();
-        (
-            page.rows.into_iter().map(|row| row.id).collect(),
-            page.output_bytes,
-        )
-    } else {
-        let page = query.fetch().unwrap();
-        (
-            page.rows.into_iter().map(|row| row.id).collect(),
-            page.output_bytes,
-        )
-    };
-    (rows, bytes as u32, counter() - start)
-}
-
 #[cfg(feature = "query-measurements")]
 type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
-
-// Both measurements use the same admitted query. Only the optional hint varies.
-
-/// Compare bounded listings with and without the explicit index hint.
-#[cfg(feature = "query-measurements")]
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime, name = "measured_listing",
-    guard = crate::transport::admit::<189>, decode = crate::transport::decode_measured::<_, 189>,
-    encode = crate::transport::encode::<_, 189>, max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn measured_listing(
-    ((hinted, after, work, bytes), counter): crate::transport::Measured<(
-        bool,
-        Option<Vec<u8>>,
-        u32,
-        u32,
-    )>,
-) -> ListingSample {
-    let start = counter();
-    let host = runtime();
-    let db = open(&host);
-    let cursor = decode_cursor(after.as_deref()).unwrap();
-    let mut q = db
-        .query::<Document>()
-        .eq(Document::ENTRY_ID, 1_u64)
-        .eq(Document::PUBLISHED, true)
-        .order_by(&[Document::SCORE, Document::ID])
-        .descending()
-        .limit(20)
-        .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-    if hinted {
-        q = q.using_index("entry_id,score", &[1_u64.into()]);
-    }
-    if let Some(cursor) = &cursor {
-        q = q.after(cursor);
-    }
-    let page = q.fetch_as::<IdOnly>().unwrap();
-    (
-        page.rows.into_iter().map(|r| r.id).collect(),
-        page.next.map(|c| c.to_bytes()),
-        page.examined as u32,
-        page.fetched as u32,
-        counter() - start,
-    )
-}

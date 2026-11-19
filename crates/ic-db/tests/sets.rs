@@ -1,14 +1,33 @@
 //! Canonical scalar sets: logical order, strict corruption refusal, shared limits.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity, set};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 use std::collections::BTreeSet;
+
+///
+/// Scores
+/// Stores up to 3 distinct `Int16` values.
+///
+
 #[set(item(prim = "Int16"), max_items = 3)]
 struct Scores {}
+
+///
+/// WiderScores
+/// Stores up to 4 distinct `Int16` values.
+///
+
 #[set(name = "Scores", item(prim = "Int16"), max_items = 4)]
 struct WiderScores {}
+
+///
+/// SetRow
+/// Stores `scores` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -17,6 +36,12 @@ struct WiderScores {}
     )
 )]
 struct SetRow {}
+
+///
+/// WiderRow
+/// Exercises an alternate `SetRow` declaration under the same logical identity.
+///
+
 #[entity(
     name = "SetRow",
     pk(field = "id"),
@@ -26,12 +51,36 @@ struct SetRow {}
     )
 )]
 struct WiderRow {}
+
+///
+/// Large
+/// Stores up to 256 distinct `Nat16` values.
+///
+
 #[set(item(prim = "Nat16"), max_items = 256)]
 struct Large {}
+
+///
+/// Blobs
+/// Stores up to 2 distinct `Blob` values.
+///
+
 #[set(item(prim = "Blob", max_bytes = 4096), max_items = 2)]
 struct Blobs {}
+
+///
+/// Empty
+/// Stores up to 0 distinct `Bool` values.
+///
+
 #[set(item(prim = "Bool"), max_items = 0)]
 struct Empty {}
+
+///
+/// Mixed
+/// Stores `a`, `b` and `empty` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -42,6 +91,12 @@ struct Empty {}
     )
 )]
 struct Mixed {}
+
+///
+/// BlobRow
+/// Stores `items` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -59,6 +114,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -193,34 +249,124 @@ fn stored_duplicates_refuse_mutation_and_schema_changes_refuse_reopen() {
         assert_eq!(*backing.borrow(), before);
     }
 }
+
+///
+/// Nat8Set
+/// Stores up to 2 distinct `Nat8` values.
+///
+
 #[set(item(prim = "Nat8"), max_items = 2)]
 struct Nat8Set {}
+
+///
+/// Nat16Set
+/// Stores up to 2 distinct `Nat16` values.
+///
+
 #[set(item(prim = "Nat16"), max_items = 2)]
 struct Nat16Set {}
+
+///
+/// Nat32Set
+/// Stores up to 2 distinct `Nat32` values.
+///
+
 #[set(item(prim = "Nat32"), max_items = 2)]
 struct Nat32Set {}
+
+///
+/// Nat64Set
+/// Stores up to 2 distinct `Nat64` values.
+///
+
 #[set(item(prim = "Nat64"), max_items = 2)]
 struct Nat64Set {}
+
+///
+/// Nat128Set
+/// Stores up to 2 distinct `Nat128` values.
+///
+
 #[set(item(prim = "Nat128"), max_items = 2)]
 struct Nat128Set {}
+
+///
+/// Int8Set
+/// Stores up to 2 distinct `Int8` values.
+///
+
 #[set(item(prim = "Int8"), max_items = 2)]
 struct Int8Set {}
+
+///
+/// Int16Set
+/// Stores up to 2 distinct `Int16` values.
+///
+
 #[set(item(prim = "Int16"), max_items = 2)]
 struct Int16Set {}
+
+///
+/// Int32Set
+/// Stores up to 2 distinct `Int32` values.
+///
+
 #[set(item(prim = "Int32"), max_items = 2)]
 struct Int32Set {}
+
+///
+/// Int64Set
+/// Stores up to 2 distinct `Int64` values.
+///
+
 #[set(item(prim = "Int64"), max_items = 2)]
 struct Int64Set {}
+
+///
+/// Int128Set
+/// Stores up to 2 distinct `Int128` values.
+///
+
 #[set(item(prim = "Int128"), max_items = 2)]
 struct Int128Set {}
+
+///
+/// BoolSet
+/// Stores up to 2 distinct `Bool` values.
+///
+
 #[set(item(prim = "Bool"), max_items = 2)]
 struct BoolSet {}
+
+///
+/// PrincipalSet
+/// Stores up to 2 distinct `Principal` values.
+///
+
 #[set(item(prim = "Principal"), max_items = 2)]
 struct PrincipalSet {}
+
+///
+/// TextSet
+/// Stores up to 2 distinct `Text` values.
+///
+
 #[set(item(prim = "Text", max_bytes = 4), max_items = 2)]
 struct TextSet {}
+
+///
+/// BlobSet
+/// Stores up to 2 distinct `Blob` values.
+///
+
 #[set(item(prim = "Blob", max_bytes = 4), max_items = 2)]
 struct BlobSet {}
+
+///
+/// AllSets
+/// Exercises stored representations across 14 fields sharing the primary key `id`.
+///
+
 #[entity(
     pk(field = "id"),
     fields(

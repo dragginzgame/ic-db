@@ -11,45 +11,6 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
 };
 
-type Map = StableBTreeMap<u64, u64, DefaultMemoryImpl>;
-// Phase, job ID, sequence, captured revision, current revision, completed output.
-type Response = (u64, u64, u64, u64, u64, Vec<(u64, u64)>);
-const NAMES: [&str; 2] = ["aggregate.rows.v1", "aggregate.state.v1"];
-const REVISION: u64 = 0;
-const JOB: u64 = 1;
-const SOURCE: u64 = 2;
-const CURSOR: u64 = 3;
-const SEQUENCE: u64 = 4;
-const PHASE: u64 = 5;
-const CONTRACT: u64 = 6;
-const SUM: u64 = 7;
-const COUNT: u64 = 10;
-const RUNNING: u64 = 1;
-const COMPLETE: u64 = 2;
-const INVALIDATED: u64 = 3;
-
-fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
-    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
-    let declarations = SealedDeclarationSnapshot::new(
-        NAMES
-            .iter()
-            .map(|name| MemoryRequest::new("aggregate", name).unwrap())
-            .collect(),
-    )
-    .unwrap();
-    let grants = AllocationGrants::new(vec![
-        MemoryAuthority::new("aggregate", "aggregate.").unwrap(),
-    ])
-    .unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-    host
-}
-
-fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
-    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
-}
-
 /// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
@@ -77,42 +38,12 @@ fn initialize((): ()) {
     state.insert(CONTRACT, 1);
 }
 
-fn get(state: &Map, key: u64) -> u64 {
-    state.get(&key).unwrap()
-}
-
-fn fail_at(selected: u8, boundary: u8) {
-    if selected == boundary {
-        ic_platform_runtime::system::trap("M0 injected aggregation failure");
-    }
-}
-
-fn response(state: &Map) -> Response {
-    let mut output = Vec::new();
-    if get(state, PHASE) == COMPLETE {
-        // Finalization visits at most three groups. HAVING and ORDER BY see full sums.
-        for group in 0..3 {
-            let sum = get(state, SUM + group);
-            if get(state, COUNT + group) > 0 && sum > 150 {
-                output.push((group, sum));
-            }
-        }
-        output.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    }
-    (
-        get(state, PHASE),
-        get(state, JOB),
-        get(state, SEQUENCE),
-        get(state, SOURCE),
-        get(state, REVISION),
-        output,
-    )
-}
-
 // Commands: start, advance(job, sequence), put(id, value), cancel(job), delete(id).
 // Errors: input bound, wrong job, future sequence, not running, capacity, contract.
-
-/// Advance the selected operation and return the resulting fixture state.
+// command
+// Advance the selected operation and return the resulting fixture state.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "command",
@@ -167,6 +98,7 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
             }
             if get(&state, SOURCE) != get(&state, REVISION) {
                 state.insert(PHASE, INVALIDATED);
+
                 return Ok(response(&state));
             }
             // Replaying an acknowledged or lost-response request cannot advance twice.
@@ -241,10 +173,14 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
         }
         _ => return Err(1),
     }
+
     Ok(response(&state))
 }
 
-/// Read the fixture’s persisted state for comparison across calls.
+// inspect
+// Read the fixture’s persisted state for comparison across calls.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",
@@ -256,5 +192,79 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Response, u
 )]
 fn inspect((): ()) -> Response {
     let host = runtime();
+
     response(&open(&host, NAMES[1]))
+}
+
+type Map = StableBTreeMap<u64, u64, DefaultMemoryImpl>;
+// Phase, job ID, sequence, captured revision, current revision, completed output.
+type Response = (u64, u64, u64, u64, u64, Vec<(u64, u64)>);
+const NAMES: [&str; 2] = ["aggregate.rows.v1", "aggregate.state.v1"];
+const REVISION: u64 = 0;
+const JOB: u64 = 1;
+const SOURCE: u64 = 2;
+const CURSOR: u64 = 3;
+const SEQUENCE: u64 = 4;
+const PHASE: u64 = 5;
+const CONTRACT: u64 = 6;
+const SUM: u64 = 7;
+const COUNT: u64 = 10;
+const RUNNING: u64 = 1;
+const COMPLETE: u64 = 2;
+const INVALIDATED: u64 = 3;
+
+fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
+    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
+    let declarations = SealedDeclarationSnapshot::new(
+        NAMES
+            .iter()
+            .map(|name| MemoryRequest::new("aggregate", name).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let grants = AllocationGrants::new(vec![
+        MemoryAuthority::new("aggregate", "aggregate.").unwrap(),
+    ])
+    .unwrap();
+    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
+        .unwrap();
+
+    host
+}
+
+fn open(host: &MemoryRuntime<DefaultMemoryImpl>, name: &str) -> Map {
+    Map::load(host.open_memory(&StableKey::parse(name).unwrap()).unwrap())
+}
+
+fn get(state: &Map, key: u64) -> u64 {
+    state.get(&key).unwrap()
+}
+
+fn fail_at(selected: u8, boundary: u8) {
+    if selected == boundary {
+        ic_platform_runtime::system::trap("M0 injected aggregation failure");
+    }
+}
+
+fn response(state: &Map) -> Response {
+    let mut output = Vec::new();
+    if get(state, PHASE) == COMPLETE {
+        // Finalization visits at most three groups. HAVING and ORDER BY see full sums.
+        for group in 0..3 {
+            let sum = get(state, SUM + group);
+            if get(state, COUNT + group) > 0 && sum > 150 {
+                output.push((group, sum));
+            }
+        }
+        output.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    }
+
+    (
+        get(state, PHASE),
+        get(state, JOB),
+        get(state, SEQUENCE),
+        get(state, SOURCE),
+        get(state, REVISION),
+        output,
+    )
 }

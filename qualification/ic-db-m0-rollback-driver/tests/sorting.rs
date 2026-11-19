@@ -1,5 +1,7 @@
 //! Complete unindexed sorting through the same console/fluent boundary in Wasm.
+
 mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
@@ -106,6 +108,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, String>>(
             &reply,
             Encoding::Frame {
@@ -269,6 +272,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                     .as_ref()
                     .map(|page| (page.1.len(), page.3, page.4, page.5))
             );
+
             return result;
         }
         let reply = pic
@@ -288,6 +292,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, String>>(
             &reply,
             Encoding::Frame {

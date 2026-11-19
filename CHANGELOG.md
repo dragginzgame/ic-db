@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.23.22] - Unreleased
+
+- Document schema fixture types and generated insert and unique-key types.
+  Qualification endpoints now identify their frame guards and byte limits.
+
+- Removed the public `ic_db::build::write_schema(source, target)` function.
+  A shared schema crate can call `ic_db::build_schema!(model)` in its own
+  package-root build script and export one `compiled()` for the whole subtree.
+  The records qualification canister now imports that function. CI checks shared
+  schema build ownership with `make schema-build-check`. Local
+  `build_schema!()` is preserved. Scripts beside their declarations can use
+  `build_schema!(self::schema)` for the previous colocated layout.
+
+- Schema builds identify the referencing field and missing target, or show both
+  fields and their types when a reference disagrees with the target primary key.
+
+- All schema declaration macros now report the same 1–64 UTF-8 byte rule for
+  an invalid logical name, identifying the declaration that failed.
+
+- Resuming a retained aggregate now constructs its progress report directly from
+  the saved checkpoint. Group page cursors reuse the job handle decoder for length validation.
+
+- Adopt Toko Tooling 0.45.22 in the product and qualification workspaces.
+- Centralize entity, field and named index lookup in the compiled schema. Stored index entries,
+  pagination cursors and DISTINCT now share optional-component decoding.
+
 ## [0.23.21] - 2026-11-19
 
 - After an interrupted migration, `SchemaCopy::resume(...)?` exposes

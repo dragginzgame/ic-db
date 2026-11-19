@@ -1,4 +1,5 @@
 //! Maintenance gates aggregate reads; independent job custody still permits cleanup.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -98,6 +99,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<u64, String>>(
             &reply,
             Encoding::Frame {
@@ -264,6 +266,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 .unwrap(),
             )
             .await?;
+
         Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
             ic_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
                 &reply,
@@ -294,6 +297,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(
             &reply,
             Encoding::Frame {
@@ -322,6 +326,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<u64, String>>(
             &reply,
             Encoding::Frame {

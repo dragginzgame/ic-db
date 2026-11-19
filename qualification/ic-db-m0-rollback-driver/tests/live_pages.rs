@@ -1,5 +1,6 @@
 //! Live index positions across writes and upgrades; a tuple oracle is independent
 //! of the engine's key codec and cursor decoder.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_wire::{Direction, Encoding};
 
@@ -87,6 +88,7 @@ async fn live_order_and_filter_changes_resume_from_the_old_position_after_upgrad
                 )
                 .await
                 .unwrap();
+
             response::<Result<Page, u8>>(98, &reply)
         };
         let first = query(None, 50, 16).await.unwrap();
@@ -209,6 +211,7 @@ async fn deleted_and_reinserted_cursor_rows_do_not_restart_the_range() {
                 )
                 .await
                 .unwrap();
+
             response::<Result<Page, u8>>(98, &reply).unwrap()
         };
         // Place the referenced row first in either direction. Deleting it and

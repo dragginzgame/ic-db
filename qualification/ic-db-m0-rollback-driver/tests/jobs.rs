@@ -1,4 +1,5 @@
 //! Product retained jobs: real Wasm rollback, retry, upgrade and explicit expiry.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -106,6 +107,7 @@ async fn check_job_binding_across_upgrade(operation: u8, changed: u8, expected: 
             assert_eq!(step.2, 6);
             assert_eq!(step.5.as_deref(), Some(expected));
             owned.drop().await;
+
             return;
         }
         assert_eq!(step.4, 0);
@@ -421,6 +423,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
                 .await
                 .unwrap(),
         );
+
         if sequence < 3 {
             assert_eq!((c.4, s.4, a.4, g.4), (0, 0, 0, 0));
             assert_eq!((gs.4, ga.4, d.4, gd.4), (0, 0, 0, 0));
@@ -604,6 +607,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Vec<u8>, String>>(
             &response,
             Encoding::Frame {
@@ -770,6 +774,7 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Vec<u8>, String>>(
             &bytes,
             Encoding::Frame {
@@ -830,6 +835,7 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
     let mut completed = Vec::new();
     for (handle, op, expected) in [(&min, 10, "11"), (&max, 11, "60")] {
         let mut sequence = 1;
+
         loop {
             let step = decode(advance(handle, op, sequence, 0, false).await.unwrap());
             sequence = step.0;
@@ -914,6 +920,7 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Vec<u8>, String>>(
             &bytes,
             Encoding::Frame {
@@ -982,6 +989,7 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
     let mut completed = Vec::new();
     for (handle, op, first, second) in [(&min, 12, 20, 11), (&max, 13, 60, 51)] {
         let mut sequence = 1;
+
         loop {
             let step = decode(
                 advance(handle, op, sequence, None, 2, 0, false)

@@ -25,6 +25,7 @@ pub fn validate_order(values: [Option<Timestamp>; 2]) -> Result<(), Error> {
     if matches!(values, [Some(created), Some(updated)] if created > updated) {
         return Err(Error::Corrupt);
     }
+
     Ok(())
 }
 
@@ -40,6 +41,7 @@ fn positions(
         if field.optional && !reader.boolean()? {
             continue;
         }
+
         if let Some(managed) = field.managed {
             let offset = reader.position();
             values[managed.slot()] = Some((offset, reader.timestamp()?));
@@ -48,6 +50,7 @@ fn positions(
         }
     }
     reader.finish()?;
+
     Ok(values)
 }
 
@@ -68,6 +71,7 @@ pub(crate) fn validate_insert(
     {
         return Err(Error::ManagedField);
     }
+
     Ok(())
 }
 
@@ -97,5 +101,6 @@ pub(crate) fn replace(
             .ok_or(Error::Corrupt)?
             .copy_from_slice(&now.as_millis().to_le_bytes());
     }
+
     Ok(true)
 }

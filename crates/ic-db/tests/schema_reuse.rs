@@ -1,12 +1,24 @@
 //! Reused executable metadata never stands in for current durable admission.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity, record};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
+///
+/// Payload
+/// Carries the `Nat64` value of `amount`.
+///
+
 #[record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct Payload {}
+
+///
+/// Entry
+/// Stores `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -15,6 +27,12 @@ struct Payload {}
     )
 )]
 struct Entry {}
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))

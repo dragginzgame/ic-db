@@ -1,10 +1,9 @@
 //! Attribute-owned enums with unit or typed payload variants.
+
 use super::{
     declaration,
     field::{Field, parse_value},
-    meta_items, metas, once,
-    record::resolve_self,
-    text,
+    meta_items, metas, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -33,16 +32,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
                 }
             }
             let payload = payload.map(|(kind, optional, many)| {
-                let mut f = Field {
-                    default: None,
-                    managed: None,
-                    name: "payload".into(),
-                    kind,
-                    optional,
-                    many,
-                    reference: None,
-                };
-                resolve_self(&mut f, &item.ident);
+                let mut f = Field::nested("payload", kind, optional, many);
+                f.resolve_self(&item.ident);
+
                 f
             });
             variants.push((
@@ -53,17 +45,15 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             return Err(syn::Error::new_spanned(meta, "expected name or variant"));
         }
     }
-    let name = name.unwrap_or_else(|| item.ident.to_string());
+    let name = super::declaration_name(name, &item.ident, "enum")?;
     variants.sort_by(|a, b| a.0.cmp(&b.0));
-    if name.is_empty()
-        || name.len() > 64
-        || variants.is_empty()
+    if variants.is_empty()
         || variants.len() > 64
         || variants.iter().any(|(n, _)| n.is_empty() || n.len() > 64)
         || variants.windows(2).any(|w| w[0].0 == w[1].0)
     {
         return Err(fail(
-            "enum requires a 1..64 byte name and 1..64 distinct named variants",
+            "enum requires 1..64 distinct variants with names of 1..64 UTF-8 bytes",
         ));
     }
     let mut declarations = Vec::new();
@@ -73,6 +63,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     for (ordinal, (name, payload)) in variants.iter().enumerate() {
         let id: syn::Ident = syn::parse_str(name)?;
         let ordinal = ordinal as u8;
+
         if let Some(field) = payload {
             let ty = field.rust_type();
             let value = field.type_description();
@@ -100,6 +91,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         let arms = variants.iter().enumerate().map(|(ordinal, (name, _))| {
             let variant: syn::Ident = syn::parse_str(name).expect("validated variant");
             let ordinal = ordinal as u8;
+
             quote!(#ident::#variant => #ordinal)
         });
         quote! {
@@ -117,6 +109,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     };
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs)?;
+
     Ok(quote! {
         #attrs #copy #[derive(Clone,Debug,PartialEq,Eq)]
         #visibility enum #ident { #(#declarations,)* }

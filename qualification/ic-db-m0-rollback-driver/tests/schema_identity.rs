@@ -144,6 +144,7 @@ fn canonical(contract: &Contract) -> Result<Vec<u8>, &'static str> {
             bytes.push(direction);
         }
     }
+
     Ok(bytes)
 }
 
@@ -152,6 +153,7 @@ fn fingerprint(contract: &Contract) -> Result<[u8; 32], &'static str> {
     let mut hash = Sha256::new();
     hash.update(FINGERPRINT_DOMAIN);
     hash.update(canonical);
+
     Ok(hash.finalize().into())
 }
 

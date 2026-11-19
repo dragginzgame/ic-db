@@ -1,17 +1,40 @@
 //! Frozen IcyDB time-policy regressions on the single typed commit path.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, Timestamp, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
+///
+/// CreatedAt
+/// Gives `Timestamp` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Timestamp"))]
 struct CreatedAt {}
+
+///
+/// UpdatedAt
+/// Gives `Timestamp` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Timestamp"))]
 struct UpdatedAt {}
 type Changed = UpdatedAt;
+
+///
+/// Counter
+/// Gives `Int64` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Int64"))]
 struct Counter {}
+
+///
+/// Entry
+/// Exercises indexed access by `body` and `changed` on rows keyed by `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -34,6 +57,11 @@ struct Counter {}
 )]
 struct Entry {}
 
+///
+/// CreationOnly
+/// Stores `value` and `time` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -43,6 +71,12 @@ struct Entry {}
     )
 )]
 struct CreationOnly {}
+
+///
+/// UpdateOnly
+/// Stores `value` and `time` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -100,6 +134,7 @@ fn runtime(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
             &GenericAllocationPolicy,
         )
         .unwrap();
+
     runtime
 }
 

@@ -1,4 +1,5 @@
 //! Cross-chunk migration integrity; literal row/index bytes remain independent.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
@@ -42,11 +43,13 @@ fn expected(target: bool, ids: impl Iterator<Item = u64>, fan_in: bool) -> Entri
             result.insert(key, id.to_be_bytes().to_vec());
         }
     }
+
     result
 }
 
 fn data(mut entries: Entries) -> Entries {
     entries.retain(|key, _| matches!(key.first(), Some(2 | 3)));
+
     entries
 }
 

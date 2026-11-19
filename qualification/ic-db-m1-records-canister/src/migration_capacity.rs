@@ -1,14 +1,84 @@
 //! Bounded migration envelope and real supplier growth refusal, fixture-only.
-use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
+
 use crate::{
     faults,
+    handles::{Database, Maintenance, RetiredSource, SchemaCopy},
     maintenance::{COPY_SOURCE, COPY_TARGET},
     runtime,
 };
 use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
-use ic_db_m1_records_schema::EnvelopeRow;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
+use records_schema::EnvelopeRow;
 use std::ops::Bound;
+
+// Counts include host reopen/allocation admission, product work and supplier calls.
+// Typed refusal is returned normally; it must not be turned into a trap by the probe.
+// migration_capacity
+// Run a bounded migration operation under the selected supplier limits.
+// guard  : validates the request frame for method 140.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "migration_capacity",
+    guard = crate::transport::admit::<140>,
+    decode = crate::transport::decode_measured::<_, 140>,
+    encode = crate::transport::encode::<_, 140>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn migration_capacity(
+    ((operation, first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<(u8, u16, u8, u32, bool, u64)>,
+) -> (Result<(u64, bool), u8>, u64, u64, u64) {
+    let start = counter();
+    faults::arm(stop_after, deny_growth, false);
+    let result = control(operation, first, limit, bytes).map_err(|error| match error {
+        Failure::Database(Error::Limit) => 1,
+        Failure::Database(Error::RowTooLarge) => 2,
+        Failure::Database(Error::Exists) => 3,
+        Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
+        Failure::Runtime => 4,
+    });
+    let (writes, grows) = faults::finish();
+
+    (result, writes, grows, counter() - start)
+}
+
+// migration_capacity_raw
+// Page physical entries to check migration capacity and preservation.
+// guard  : validates the request frame for method 141.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "migration_capacity_raw",
+    guard = crate::transport::admit::<141>,
+    decode = crate::transport::decode::<_, 141>,
+    encode = crate::transport::encode::<_, 141>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
+    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
+    let host = runtime();
+    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+        host.open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+            .unwrap(),
+    );
+    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
+    // Match the existing write-envelope inspector: two maximal rows fit Wire.
+    let rows: Vec<_> = raw
+        .range((lower, Bound::Unbounded))
+        .take(2)
+        .map(|entry| (entry.key().clone(), entry.value()))
+        .collect();
+    let next = (rows.len() == 2).then(|| rows.last().unwrap().0.clone());
+
+    (rows, next)
+}
+
+///
+/// Source
+/// Exercises an alternate `EnvelopeRow` declaration under the same logical identity.
+///
 
 #[ic_db::entity(
     name = "EnvelopeRow",
@@ -44,6 +114,7 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
         .map_err(|_| Failure::Runtime)?;
     if operation == 0 {
         Database::create(source_memory, source, [10; 16])?;
+
         return Ok((0, false));
     }
     if operation == 1 {
@@ -62,14 +133,17 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
             })?;
         }
         db.commit(batch)?;
+
         return Ok((32, false));
     }
     if operation == 2 {
         Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+
         return Ok((0, false));
     }
     if operation == 7 {
         let mut retired = RetiredSource::resume(source_memory, &transition, [10; 16], [11; 16])?;
+
         return Ok((0, retired.cleanup_step(usize::from(limit))?));
     }
     let target_memory = host
@@ -82,9 +156,11 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
             target,
             [11; 16],
         )?;
+
         return Ok((0, false));
     }
     let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+
     match operation {
         4 => {
             let step = copy.copy_next::<Source, EnvelopeRow>(
@@ -101,72 +177,17 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
                     })
                 },
             )?;
+
             Ok((step.rows as u64, step.complete))
         }
         5 => Ok((0, copy.validate_next(usize::from(limit))?)),
         6 => {
             copy.publish()?;
+
             Ok((0, true))
         }
         _ => panic!("unsupported capacity control"),
     }
 }
 
-// Counts include host reopen/allocation admission, product work and supplier calls.
-// Typed refusal is returned normally; it must not be turned into a trap by the probe.
-
-/// Run a bounded migration operation under the selected supplier limits.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "migration_capacity",
-    guard = crate::transport::admit::<140>,
-    decode = crate::transport::decode_measured::<_, 140>,
-    encode = crate::transport::encode::<_, 140>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn migration_capacity(
-    ((operation, first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<(u8, u16, u8, u32, bool, u64)>,
-) -> (Result<(u64, bool), u8>, u64, u64, u64) {
-    let start = counter();
-    faults::arm(stop_after, deny_growth, false);
-    let result = control(operation, first, limit, bytes).map_err(|error| match error {
-        Failure::Database(Error::Limit) => 1,
-        Failure::Database(Error::RowTooLarge) => 2,
-        Failure::Database(Error::Exists) => 3,
-        Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
-        Failure::Runtime => 4,
-    });
-    let (writes, grows) = faults::finish();
-    (result, writes, grows, counter() - start)
-}
-
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
-
-/// Page physical entries to check migration capacity and preservation.
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "migration_capacity_raw",
-    guard = crate::transport::admit::<141>,
-    decode = crate::transport::decode::<_, 141>,
-    encode = crate::transport::encode::<_, 141>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
-    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
-    let host = runtime();
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-            .unwrap(),
-    );
-    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
-    // Match the existing write-envelope inspector: two maximal rows fit Wire.
-    let rows: Vec<_> = raw
-        .range((lower, Bound::Unbounded))
-        .take(2)
-        .map(|entry| (entry.key().clone(), entry.value()))
-        .collect();
-    let next = (rows.len() == 2).then(|| rows.last().unwrap().0.clone());
-    (rows, next)
-}

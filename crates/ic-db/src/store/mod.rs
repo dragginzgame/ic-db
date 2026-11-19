@@ -1,6 +1,9 @@
 //! Shared commit and traversal over one supplier-owned collection.
 //! Typed codecs stay at the boundary; no executor is generated per entity.
 
+mod maintenance;
+mod query;
+
 use crate::{
     __private::RowInfo, Entity, EntitySchema, Error, FieldType, IndexValue, PrimaryKey, Schema,
     key, primary::RowKey, store_key::StoreKey,
@@ -9,10 +12,6 @@ use ic_storage::{
     Memory, RuntimeMemory,
     adapter::{MapIter, StableBTreeMap},
 };
-use std::collections::{BTreeMap, BTreeSet};
-
-mod maintenance;
-mod query;
 pub use maintenance::{
     CopyStatus, CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition,
 };
@@ -21,6 +20,7 @@ pub use query::{
     GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryOperand, QueryPage,
     SortDirection,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 const MANIFEST: &[u8] = b"ICDBMF02";
 const MAX_BATCH: usize = 32;
@@ -41,7 +41,8 @@ fn next_primary<M: Memory>(
     if !entry.key().starts_with(prefix) {
         return Ok(None);
     }
-    let id = RowKey::decode(&entry.key()[5..], key_type)?;
+    let id = RowKey::decode(&entry.key()[ENTITY_PREFIX_BYTES..], key_type)?;
+
     Ok(Some((id, entry.value())))
 }
 
@@ -62,6 +63,7 @@ fn next_index<M: Memory>(
     }
     let id = RowKey::decode(&entry.value(), key_type)?;
     let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
+
     Ok(Some((entry.key().clone(), id, bytes)))
 }
 
@@ -72,14 +74,11 @@ fn index_prefix_key(
     values: &[IndexValue<'_>],
     limit: usize,
 ) -> Result<StoreKey, Error> {
-    let index = entity
-        .indexes
-        .iter()
-        .find(|value| value.name == index)
-        .ok_or(Error::InvalidSchema)?;
-    if values.is_empty() || values.len() > index.fields.len() || !(1..=32).contains(&limit) {
+    let index = entity.index_by_name(index).ok_or(Error::InvalidSchema)?;
+    if values.is_empty() || !(1..=32).contains(&limit) {
         return Err(Error::Limit);
     }
+
     StoreKey::new(admit_index_prefix(entity, index, values)?)
 }
 
@@ -117,6 +116,7 @@ fn collect_references(
             required.insert((reference.entity, target));
         }
     }
+
     Ok(())
 }
 
@@ -129,14 +129,11 @@ fn validate_reference_target<M: Memory>(
     let bytes = map
         .get(&row_key(entity, id))
         .ok_or(Error::ReferenceViolation)?;
-    let entity = schema
-        .entities()
-        .iter()
-        .find(|value| value.id == entity)
-        .ok_or(Error::Corrupt)?;
+    let entity = schema.entity_by_id(entity).ok_or(Error::Corrupt)?;
     if entity.inspect_row(&bytes)?.key != id {
         return Err(Error::Corrupt);
     }
+
     Ok(())
 }
 
@@ -148,6 +145,7 @@ fn live_manifest(schema: [u8; 32], incarnation: [u8; 16]) -> Vec<u8> {
     let mut bytes = MANIFEST.to_vec();
     bytes.extend(schema);
     bytes.extend(incarnation);
+
     bytes
 }
 
@@ -195,6 +193,7 @@ impl Batch {
         if E::SCHEMA.has_managed() {
             return Err(Error::ManagedField);
         }
+
         self.put(row, Kind::Insert)
     }
 
@@ -208,6 +207,7 @@ impl Batch {
     pub fn insert_input<I: crate::InsertInput>(&mut self, input: I) -> Result<I::Entity, Error> {
         let row = input.__into_entity(self.operation_time)?;
         self.put(&row, Kind::Insert)?;
+
         Ok(row)
     }
 
@@ -255,6 +255,7 @@ impl Batch {
         {
             return Err(Error::MissingOperationTime);
         }
+
         self.push(
             Mutation {
                 entity: E::SCHEMA,
@@ -271,6 +272,7 @@ impl Batch {
         }
         self.bytes += bytes;
         self.mutations.push(mutation);
+
         Ok(())
     }
 }
@@ -312,9 +314,10 @@ impl<M: Memory> Database<M> {
             manifest_key(),
             live_manifest(schema.fingerprint, incarnation),
         );
-        for entity in &schema.entities {
+        for entity in schema.entities() {
             map.insert(entity_state_key(entity.id), EntityState::default().encode());
         }
+
         Ok(Self {
             map,
             schema,
@@ -348,6 +351,7 @@ impl<M: Memory> Database<M> {
         if incarnation == [0; 16] {
             return Err(Error::Corrupt);
         }
+
         Ok(Self {
             map,
             schema,
@@ -372,6 +376,7 @@ impl<M: Memory> Database<M> {
     /// Refuses unknown entities and malformed revision metadata.
     pub fn revision<E: Entity>(&self) -> Result<u64, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+
         read_revision(&self.map, entity.id)
     }
 
@@ -384,6 +389,7 @@ impl<M: Memory> Database<M> {
     /// Supplier corruption may trap; this operation never repairs storage.
     pub fn cardinality<E: Entity>(&self) -> Result<u64, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
 
@@ -396,17 +402,17 @@ impl<M: Memory> Database<M> {
     pub fn cardinality_by_name(&self, name: &str) -> Result<u64, Error> {
         let entity = self
             .schema
-            .entities
-            .iter()
-            .find(|entity| entity.name == name)
+            .entity_by_name(name)
             .ok_or(Error::UnknownEntity)?;
+
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
 
     fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
-        if !self.schema.entities.iter().any(|value| value.id == entity) {
+        if self.schema.entity_by_id(entity).is_none() {
             return Err(Error::UnknownEntity);
         }
+
         read_revision(&self.map, entity)
     }
 
@@ -416,6 +422,7 @@ impl<M: Memory> Database<M> {
     #[inline]
     pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+
         self.get_typed::<E>(entity, key)
     }
 
@@ -428,6 +435,7 @@ impl<M: Memory> Database<M> {
             return Err(Error::Limit);
         }
         let entity = self.schema.admits(E::SCHEMA)?;
+
         keys.iter()
             .map(|&key| self.get_typed::<E>(entity, key))
             .collect()
@@ -444,6 +452,7 @@ impl<M: Memory> Database<M> {
                 if row.key() != key {
                     return Err(Error::Corrupt);
                 }
+
                 Ok(row)
             })
             .transpose()
@@ -457,6 +466,7 @@ impl<M: Memory> Database<M> {
     #[inline]
     pub fn page<E: Entity>(&self, after: Option<E::Key>, limit: usize) -> Result<Page<E>, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+
         self.page_typed::<E>(entity, after, limit)
     }
 
@@ -496,6 +506,7 @@ impl<M: Memory> Database<M> {
             rows.push(row);
             last = Some(id);
         }
+
         Ok(Page {
             next_after: if rows.len() == limit { last } else { None },
             rows,
@@ -517,6 +528,7 @@ impl<M: Memory> Database<M> {
         limit: usize,
     ) -> Result<Vec<E>, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
+
         self.index_prefix_typed::<E>(entity, index, values, limit)
     }
 
@@ -542,6 +554,7 @@ impl<M: Memory> Database<M> {
             validate_index_entry(entity, &row.__row_info(), id, &key)?;
             rows.push(row);
         }
+
         Ok(rows)
     }
 
@@ -631,6 +644,7 @@ impl<M: Memory> Database<M> {
                     if self.map.get(&key).as_deref() != Some(owner.as_slice()) {
                         return Err(Error::Corrupt);
                     }
+
                     // Same physical key and owner: leave the verified entry in place.
                     // Its unique value remains occupied during final-state admission.
                     if let Some(position) =
@@ -651,6 +665,7 @@ impl<M: Memory> Database<M> {
             // Private migration inserts may precede their targets. The frozen
             // complete target validates references before it can be published.
             let copy_insert = matches!(&mutation.kind, Kind::CopyInsert(..));
+
             match mutation.kind {
                 Kind::Delete => {
                     deleted.push((mutation.entity.id, mutation.key));
@@ -700,6 +715,7 @@ impl<M: Memory> Database<M> {
         for (key, value) in writes {
             self.map.insert(key, value);
         }
+
         Ok(())
     }
 
@@ -723,7 +739,7 @@ impl<M: Memory> Database<M> {
             validate_reference_target(&self.map, &self.schema, entity, id)?;
         }
         for &(target, id) in deleted {
-            for entity in &self.schema.entities {
+            for entity in self.schema.entities() {
                 for field in entity.fields {
                     let Some(reference) = field.reference.filter(|value| value.entity == target)
                     else {
@@ -755,18 +771,25 @@ impl<M: Memory> Database<M> {
                             .ok_or(Error::Corrupt)?;
                         let info = entity.inspect_row(&bytes)?;
                         validate_index_entry(entity, &info, owner, entry.key())?;
+
                         return Err(Error::ReferenceViolation);
                     }
                 }
             }
         }
+
         Ok(())
     }
 }
 
+// Physical key headers contain a namespace tag and fixed-width schema handles.
+const ENTITY_PREFIX_BYTES: usize = 1 + size_of::<u32>();
+const INDEX_PREFIX_BYTES: usize = ENTITY_PREFIX_BYTES + size_of::<u32>();
+
 fn prefix(tag: u8, entity: u32) -> Vec<u8> {
     let mut key = vec![tag];
     key.extend(entity.to_be_bytes());
+
     key
 }
 
@@ -788,6 +811,7 @@ impl EntityState {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = self.revision.to_le_bytes().to_vec();
         bytes.extend(self.count.to_le_bytes());
+
         bytes
     }
 }
@@ -800,18 +824,21 @@ fn read_entity_state<M: Memory>(map: &Map<M>, entity: u32) -> Result<EntityState
     if revision == 0 && count != 0 {
         return Err(Error::Corrupt);
     }
+
     Ok(EntityState { revision, count })
 }
 
 fn row_key(entity: u32, id: RowKey) -> StoreKey {
     let mut key = prefix(2, entity);
     id.append_to(&mut key);
+
     StoreKey::new(key).expect("bounded primary key fits")
 }
-const INDEX_PREFIX_BYTES: usize = 9; // namespace tag, entity handle and index handle
+
 fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
     let mut key = prefix(3, entity);
     key.extend(index.to_be_bytes());
+
     key
 }
 // Direct lookups and fluent reads share exact prefix admission and completion bounds.
@@ -825,11 +852,7 @@ fn admit_index_prefix(
     }
     let mut prefix = index_prefix(entity.id, index.id);
     for (value, name) in values.iter().zip(index.fields) {
-        let field = entity
-            .fields
-            .iter()
-            .find(|field| field.name == *name)
-            .ok_or(Error::InvalidSchema)?;
+        let field = entity.field_by_name(name).ok_or(Error::InvalidSchema)?;
         value.admit(field.value, field.optional)?;
         if index.present_only && *value == IndexValue::Absent {
             return Err(Error::InvalidOperand);
@@ -845,11 +868,7 @@ fn admit_index_prefix(
         key::minimum_bytes(entity.key_type()?)?
     };
     for name in &index.fields[values.len()..] {
-        let field = entity
-            .fields
-            .iter()
-            .find(|field| field.name == *name)
-            .ok_or(Error::InvalidSchema)?;
+        let field = entity.field_by_name(name).ok_or(Error::InvalidSchema)?;
         completion += if field.optional && !index.present_only {
             1
         } else {
@@ -859,6 +878,7 @@ fn admit_index_prefix(
     if prefix.len() + completion > crate::MAX_INDEX_KEY_BYTES {
         return Err(Error::Limit);
     }
+
     Ok(prefix)
 }
 // RowInfo may come from a generated entity or the shared stored-row decoder.
@@ -875,31 +895,20 @@ fn visit_index_components(
             if index.present_only {
                 continue;
             }
+
             return Err(Error::Corrupt);
         };
         let mut remaining = values.as_slice();
         for name in index.fields {
-            let field = entity
-                .fields
-                .iter()
-                .find(|field| field.name == *name)
-                .ok_or(Error::Corrupt)?;
-            if field.optional {
-                let (&presence, rest) = remaining.split_first().ok_or(Error::Corrupt)?;
-                remaining = rest;
-                match presence {
-                    0 if !index.present_only => continue,
-                    1 => {}
-                    _ => return Err(Error::Corrupt),
-                }
-            }
-            key::consume(&mut remaining, field.value)?;
+            let field = entity.field_by_name(name).ok_or(Error::Corrupt)?;
+            key::consume_component(&mut remaining, field, index.present_only, Error::Corrupt)?;
         }
         if !remaining.is_empty() {
             return Err(Error::Corrupt);
         }
         visit(index, values)?;
     }
+
     Ok(())
 }
 
@@ -912,8 +921,10 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey,
             info.key.append_to(&mut key);
         }
         entries.push((StoreKey::new(key)?, index.unique));
+
         Ok(())
     })?;
+
     Ok(entries)
 }
 
@@ -931,7 +942,7 @@ fn validate_index_entry(
     let (header, payload) = key
         .split_at_checked(INDEX_PREFIX_BYTES)
         .ok_or(Error::Corrupt)?;
-    if header[0] != 3 || header[1..5] != entity.id.to_be_bytes() {
+    if header[0] != 3 || header[1..ENTITY_PREFIX_BYTES] != entity.id.to_be_bytes() {
         return Err(Error::Corrupt);
     }
     let mut matches = false;
@@ -945,13 +956,15 @@ fn validate_index_entry(
         if INDEX_PREFIX_BYTES + values.len() + suffix.len() > crate::MAX_INDEX_KEY_BYTES {
             return Err(Error::Limit);
         }
-        if header[5..] == index.id.to_be_bytes() {
+        if header[ENTITY_PREFIX_BYTES..] == index.id.to_be_bytes() {
             matches = payload.strip_prefix(values) == Some(suffix);
         }
+
         Ok(())
     })?;
     if !matches {
         return Err(Error::Corrupt);
     }
+
     Ok(())
 }

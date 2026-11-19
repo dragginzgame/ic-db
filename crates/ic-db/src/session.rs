@@ -1,4 +1,5 @@
 //! Synchronous access to a database attached by the host.
+
 use crate::{Batch, Database, Entity, Error, IndexValue, Query};
 use std::{
     cell::{Ref, RefCell},
@@ -136,12 +137,12 @@ impl DatabaseSession {
         let components = key.components();
         let values = components.as_ref();
         if !K::Entity::SCHEMA
-            .indexes
-            .iter()
-            .any(|index| index.name == K::INDEX && index.is_unique_lookup(values.len()))
+            .index_by_name(K::INDEX)
+            .is_some_and(|index| index.is_unique_lookup(values.len()))
         {
             return Err(Error::InvalidQuery);
         }
+
         self.read()?
             .query::<K::Entity>()
             .using_index(K::INDEX, values)
@@ -155,6 +156,7 @@ impl DatabaseSession {
     pub fn insert<E: Entity>(&self, row: &E) -> Result<(), Error> {
         let mut batch = Batch::new();
         batch.insert(row)?;
+
         self.commit(batch)
     }
 
@@ -164,6 +166,7 @@ impl DatabaseSession {
     pub fn replace<E: Entity>(&self, row: &E) -> Result<(), Error> {
         let mut batch = Batch::new();
         batch.replace(row)?;
+
         self.commit(batch)
     }
 
@@ -173,6 +176,7 @@ impl DatabaseSession {
     pub fn delete<E: Entity>(&self, key: E::Key) -> Result<(), Error> {
         let mut batch = Batch::new();
         batch.delete::<E>(key)?;
+
         self.commit(batch)
     }
 

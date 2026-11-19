@@ -1,4 +1,5 @@
 //! Managed field/index/revision behavior across real IC execution and upgrades.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -61,6 +62,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<State>(
             &bytes,
             Encoding::Frame {

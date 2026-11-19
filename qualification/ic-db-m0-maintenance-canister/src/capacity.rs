@@ -4,27 +4,12 @@
 use super::{FORMAT, KEYS, Map, PHASE, RETIRED, SCHEMA, fail_at, field, map, runtime, target};
 use ic_storage::{DefaultMemoryImpl, StableKey, adapter::StableBTreeMap};
 
-type Candidate = StableBTreeMap<u64, Vec<u8>, DefaultMemoryImpl>;
-// Separate fixed probe state: absent/idle, copying, complete. No generic job state.
-const STATE: u64 = 6;
-const POSITION: u64 = 7;
-const WIDTH: u64 = 8;
-type Inspection = ([u64; 5], Vec<u8>, Vec<(u64, u64)>);
-
-fn eligible(control: &Map) -> Result<(), u8> {
-    if SCHEMA != 2 || field(control, FORMAT)? != 2 || field(control, PHASE)? != 0 {
-        return Err(3);
-    }
-    if field(control, RETIRED)? != 0 {
-        return Err(3);
-    }
-    Ok(())
-}
-
 // Start/reset or copy at most two rows. Width is an explicit fixed probe input.
 // Errors reuse the fixture's closed-phase=3 and invalid-bounds=5 codes.
-
-/// Advance the allocation probe with the selected size and failure point.
+// capacity_step
+// Advance the allocation probe with the selected size and failure point.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "capacity_step",
@@ -55,6 +40,7 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
         control.insert(STATE, 1);
         control.insert(POSITION, 0);
         control.insert(WIDTH, width);
+
         return Ok(());
     }
     if state != 1 {
@@ -79,12 +65,15 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
     if field(&control, POSITION)? == 6 {
         control.insert(STATE, 2);
     }
+
     Ok(())
 }
 
 // Full row bytes are independently checked in <=8 KiB pieces by the driver.
-
-/// Inspect the allocation state and bytes at the requested offset.
+// capacity_inspect
+// Inspect the allocation state and bytes at the requested offset.
+// guard  : validates the request frame for method 6.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "capacity_inspect",
@@ -113,10 +102,12 @@ fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
         if offset as usize > bytes.len() {
             return Err(5);
         }
+
         bytes[offset as usize..bytes.len().min(offset as usize + 8192)].to_vec()
     };
     let count = candidate.len();
     let (_, pages) = candidate.allocated_pages();
+
     Ok((
         [
             ic_storage::Memory::size(&ic_storage::DefaultMemoryImpl::default()),
@@ -131,4 +122,22 @@ fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
             .map(|entry| (*entry.key(), entry.value()))
             .collect(),
     ))
+}
+
+type Candidate = StableBTreeMap<u64, Vec<u8>, DefaultMemoryImpl>;
+// Separate fixed probe state: absent/idle, copying, complete. No generic job state.
+const STATE: u64 = 6;
+const POSITION: u64 = 7;
+const WIDTH: u64 = 8;
+type Inspection = ([u64; 5], Vec<u8>, Vec<(u64, u64)>);
+
+fn eligible(control: &Map) -> Result<(), u8> {
+    if SCHEMA != 2 || field(control, FORMAT)? != 2 || field(control, PHASE)? != 0 {
+        return Err(3);
+    }
+    if field(control, RETIRED)? != 0 {
+        return Err(3);
+    }
+
+    Ok(())
 }

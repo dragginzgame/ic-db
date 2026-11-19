@@ -1,4 +1,5 @@
 //! Shared declarations used by the host build and target.
+
 use ic_db::entity;
 
 pub(crate) mod destination {
@@ -30,11 +31,7 @@ pub(crate) mod source {
         index(field = "target"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
-            field(
-                name = "target",
-                value(opt, item(prim = "Nat64")),
-                references(entity = "ImportedTarget")
-            )
+            field(name = "target", value(opt, item(prim = "Nat64")), references(entity = "ImportedTarget"))
         )
     )]
     pub struct Link {}
@@ -53,11 +50,7 @@ pub(crate) mod cycle {
         index(field = "next"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
-            field(
-                name = "next",
-                value(opt, item(prim = "Nat64")),
-                references(entity = "Self")
-            )
+            field(name = "next", value(opt, item(prim = "Nat64")), references(entity = "Self"))
         )
     )]
     pub struct Link {}

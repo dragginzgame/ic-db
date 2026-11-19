@@ -1,4 +1,5 @@
 //! One complete-key bound for the shared map, enforced when constructing or decoding a key.
+
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +17,7 @@ impl StoreKey {
         if bytes.len() > MAX_INDEX_KEY_BYTES {
             return Err(Error::Limit);
         }
+
         Ok(Self(bytes))
     }
 }

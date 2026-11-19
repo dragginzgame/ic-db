@@ -1,5 +1,6 @@
 //! Finite scalar boundary adapted from IcyDB's schema/atom at 6d421e3.
 //! One canonical zero makes equality, hashing, collections and keys agree.
+
 use std::{
     cmp::Ordering,
     fmt,

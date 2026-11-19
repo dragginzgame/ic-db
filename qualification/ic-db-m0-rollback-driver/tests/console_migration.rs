@@ -1,4 +1,5 @@
 //! Local demo uses actual maintenance gates and survives a real executable upgrade.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::{
@@ -39,6 +40,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Reply, String>>(
             &reply,
             Encoding::Frame {
@@ -113,6 +115,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
         .into_iter()
         .map(|mut row| {
             row.push("migrated".into());
+
             row
         })
         .collect();
@@ -234,6 +237,7 @@ fn installed_demo_prints_migrated_rows_and_keeps_the_query_fixture() {
         let (seconds, charge) = stats.split_once(" sec, ").unwrap();
         assert_eq!(seconds.split_once('.').unwrap().1.len(), 2);
         assert!(seconds.parse::<f64>().unwrap().is_finite());
+
         if line.starts_with("query call") {
             assert_eq!(charge, "0 cycles charged");
         } else {

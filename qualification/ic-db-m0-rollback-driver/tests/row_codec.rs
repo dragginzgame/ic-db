@@ -27,6 +27,7 @@ fn validate(row: &Row) -> Result<(), Refusal> {
     if row.2.as_ref().is_some_and(|note| note.len() > 8) {
         return Err(Refusal::FieldBound);
     }
+
     Ok(())
 }
 
@@ -36,6 +37,7 @@ fn encode(row: &Row) -> Result<Vec<u8>, Refusal> {
     let mut frame = MAGIC.to_vec();
     frame.extend((payload.len() as u32).to_le_bytes());
     frame.extend(payload);
+
     Ok(frame)
 }
 
@@ -55,6 +57,7 @@ fn decode(stored_contract: &[u8; 32], bytes: &[u8], limits: Limits) -> Result<Ro
     let row =
         ic_wire::decode(&bytes[HEADER..], Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
     validate(&row)?;
+
     Ok(row)
 }
 

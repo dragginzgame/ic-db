@@ -1,4 +1,5 @@
 //! Whole-database copy with private target admission and message-atomic checkpoints.
+
 use super::{Maintenance, SchemaTransition, decode as decode_source};
 use crate::{
     Batch, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
@@ -62,6 +63,7 @@ impl Identity {
         }
         let mut bytes = MAGIC.to_vec();
         bytes.extend(writer.finish());
+
         Ok(bytes)
     }
 }
@@ -89,9 +91,11 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
                 if !(1..32).contains(&entity) {
                     return Err(Error::Corrupt);
                 }
+
                 entity
             };
             let cursor = reader.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?;
+
             Phase::Copying(
                 entity,
                 if cursor.is_empty() {
@@ -111,6 +115,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
             } else {
                 Some(StoreKey::new(bytes.to_vec())?)
             };
+
             if tag == 5 {
                 Phase::ValidatingSource(cursor)
             } else {
@@ -122,6 +127,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
         _ => return Err(Error::IncompatibleSchema),
     };
     reader.finish()?;
+
     Ok((
         Identity {
             transition,
@@ -138,9 +144,7 @@ fn admit(source: &Schema, target: &Schema, transition: &SchemaTransition) -> Res
     }
     for source in source.entities() {
         let target = target
-            .entities()
-            .iter()
-            .find(|entity| entity.name == source.name)
+            .entity_by_name(source.name)
             .ok_or(Error::InvalidTransition)?;
         if source.primary_key != target.primary_key
             || source.key_type()? != target.key_type()?
@@ -149,6 +153,7 @@ fn admit(source: &Schema, target: &Schema, transition: &SchemaTransition) -> Res
             return Err(Error::InvalidTransition);
         }
     }
+
     Ok(())
 }
 
@@ -157,6 +162,7 @@ fn managed_roles(entity: &EntitySchema) -> [bool; 2] {
     for policy in entity.fields.iter().filter_map(|field| field.managed) {
         roles[policy.slot()] = true;
     }
+
     roles
 }
 
@@ -241,6 +247,7 @@ impl<M: Memory> Maintenance<M> {
             map.insert(key, EntityState::default().encode());
         }
         self.map.insert(manifest_key(), source_gate);
+
         Ok(SchemaCopy {
             source: self,
             source_schema: source,
@@ -290,6 +297,7 @@ impl<M: Memory> SchemaCopy<M> {
         {
             return Err(Error::Corrupt);
         }
+
         Ok(Self {
             source: Maintenance {
                 map: source,
@@ -425,6 +433,7 @@ impl<M: Memory> SchemaCopy<M> {
         // No recoverable refusal after commit begins. The IC message owns rollback.
         self.target.map.insert(manifest_key(), checkpoint);
         self.phase = phase;
+
         Ok(CopyStep { rows, complete })
     }
 
@@ -456,6 +465,7 @@ impl<M: Memory> SchemaCopy<M> {
             self.source.map.insert(manifest_key(), live);
         }
         self.phase = phase;
+
         Ok(complete)
     }
 
@@ -489,6 +499,7 @@ impl<M: Memory> SchemaCopy<M> {
                     cursor,
                     limit,
                 )?;
+
                 match next {
                     Some(key) => Phase::ValidatingSource(Some(key)),
                     None => Phase::ValidatingTarget(None),
@@ -502,6 +513,7 @@ impl<M: Memory> SchemaCopy<M> {
                     cursor.as_ref(),
                     limit,
                 )?;
+
                 match next {
                     Some(key) => Phase::ValidatingTarget(Some(key)),
                     None => Phase::Ready,
@@ -514,6 +526,7 @@ impl<M: Memory> SchemaCopy<M> {
         let complete = matches!(phase, Phase::Ready);
         self.target.map.insert(manifest_key(), checkpoint);
         self.phase = phase;
+
         Ok(complete)
     }
 
@@ -533,6 +546,7 @@ impl<M: Memory> SchemaCopy<M> {
         let live = live_manifest(self.identity.transition.target, self.identity.target);
         self.source.map.insert(manifest_key(), retired);
         self.target.map.insert(manifest_key(), live);
+
         Ok(self.target)
     }
 }
@@ -569,6 +583,7 @@ impl<M: Memory> RetiredSource<M> {
         {
             return Err(Error::InvalidTransition);
         }
+
         Ok(Self { map })
     }
 
@@ -585,6 +600,7 @@ impl<M: Memory> RetiredSource<M> {
         for key in &keys {
             self.map.remove(key);
         }
+
         Ok(complete)
     }
 }
@@ -605,6 +621,7 @@ fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> Result<(Vec<StoreKey>,
     if !complete {
         keys.pop();
     }
+
     Ok((keys, complete))
 }
 
@@ -623,7 +640,8 @@ fn validate_page<M: Memory>(
     if after.is_none() {
         for entity in schema.entities() {
             let state = read_entity_state(map, entity.id)?;
-            if peer.1.entities().iter().any(|other| other.id == entity.id) {
+
+            if peer.1.entity_by_id(entity.id).is_some() {
                 if state.count != read_entity_state(peer.0, entity.id)?.count {
                     return Err(Error::Corrupt);
                 }
@@ -641,16 +659,13 @@ fn validate_page<M: Memory>(
         if *key != manifest_key() {
             let bytes = entry.value();
             let id = u32::from_be_bytes(
-                key.get(1..5)
+                key.get(1..crate::store::ENTITY_PREFIX_BYTES)
                     .ok_or(Error::Corrupt)?
                     .try_into()
                     .map_err(|_| Error::Corrupt)?,
             );
-            let entity = schema
-                .entities()
-                .iter()
-                .find(|entity| entity.id == id)
-                .ok_or(Error::Corrupt)?;
+            let entity = schema.entity_by_id(id).ok_or(Error::Corrupt)?;
+
             match key.first() {
                 Some(1) if *key == entity_state_key(entity.id) => {
                     if bytes.len() != 16 {
@@ -658,12 +673,7 @@ fn validate_page<M: Memory>(
                     }
                 }
                 Some(2) => {
-                    let peer_entity = peer
-                        .1
-                        .entities()
-                        .iter()
-                        .find(|entity| entity.id == id)
-                        .ok_or(Error::Corrupt)?;
+                    let peer_entity = peer.1.entity_by_id(id).ok_or(Error::Corrupt)?;
                     let info = entity.inspect_row(&bytes)?;
                     let owner = info.key;
                     if *key != row_key(entity.id, owner) {
@@ -702,5 +712,6 @@ fn validate_page<M: Memory>(
         last = Some(key.clone());
         examined += 1;
     }
+
     Ok(if examined == limit { last } else { None })
 }

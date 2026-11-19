@@ -49,6 +49,7 @@ impl LiteralDefault {
             }
             _ => return Err(Error::InvalidSchema),
         }
+
         Ok(writer.finish())
     }
 }

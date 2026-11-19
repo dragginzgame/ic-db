@@ -1,18 +1,41 @@
 //! Raw-byte ordering shares one contract across index, filter and aggregate paths.
+
 use super::{C, host};
 use ic_db::{Batch, Database, Entity, Error, GroupOrder, IndexValue, Schema, entity};
 use ic_storage::{StableKey, VectorMemory, adapter::StableBTreeMap};
 
-#[entity(pk(field="id"), index(fields=["payload","id"]),
-    index(fields=["optional","id"]), index(field="unique", unique, present_only), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="payload",value(item(prim="Blob",max_bytes=1024))),
-    field(name="optional",value(opt,item(prim="Blob",max_bytes=1024))),
-    field(name="unique",value(opt,item(prim="Blob",max_bytes=1024)))
-))]
+///
+/// Binary
+/// Exercises indexed access by `payload`, `id`, `optional` and `unique` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["payload", "id"]),
+    index(fields = ["optional", "id"]),
+    index(field = "unique", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "payload", value(item(prim = "Blob", max_bytes = 1024))),
+        field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 1024))),
+        field(name = "unique", value(opt, item(prim = "Blob", max_bytes = 1024)))
+    )
+)]
 struct Binary {}
+
+///
+/// Payload
+/// Carries the `Blob` value of `payload`.
+///
+
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 struct Payload {}
+
+///
+/// Optional
+/// Carries an optional `Blob` value of `optional`.
+///
+
 #[ic_db::record(fields(field(
     name = "optional",
     value(opt, item(prim = "Blob", max_bytes = 1024))
@@ -180,6 +203,7 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
                 let mut query = db.query::<Binary>().filter("payload", comparison, operand);
                 let source = if indexed {
                     query = query.using_index("payload,id", &[]);
+
                     &expected
                 } else {
                     &rows
@@ -593,6 +617,7 @@ fn blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages() {
                         if descending {
                             q = q.descending();
                         }
+
                         q
                     };
                     if !descending {
@@ -639,6 +664,7 @@ fn blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages() {
                 let q = db
                     .query::<Binary>()
                     .filter("optional", C::StartsWith, prefix);
+
                 if indexed {
                     q.using_index("optional,id", &[])
                 } else {

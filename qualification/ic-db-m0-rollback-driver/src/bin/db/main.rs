@@ -35,6 +35,7 @@ fn charged_cycles(before: u128, after: u128) -> String {
         Some(cycles) if cycles >= 1_000_000 => {
             // Round to one decimal without converting the exact balance to f64.
             let tenths = cycles / 100_000 + u128::from(cycles % 100_000 >= 50_000);
+
             format!(
                 "{}.{:01}M cycles charged ({cycles})",
                 tenths / 10,
@@ -73,6 +74,7 @@ async fn measured_call(
         elapsed.as_secs_f64(),
         charged_cycles(before, after)
     );
+
     (result, statistics)
 }
 
@@ -91,6 +93,7 @@ struct Cli {
 
 fn help_styles() -> clap::builder::Styles {
     use clap::builder::styling::AnsiColor;
+
     clap::builder::Styles::styled()
         .header(AnsiColor::Cyan.on_default().bold())
         .usage(AnsiColor::Cyan.on_default().bold())
@@ -118,6 +121,7 @@ fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
             "unterminated quote or trailing escape",
         )
     })?;
+
     Cli::try_parse_from(std::iter::once("db".to_owned()).chain(words))
 }
 
@@ -338,6 +342,7 @@ impl FilterArgs {
             if args.is_empty() {
                 return Ok(None);
             }
+
             args.try_into()
                 .map(Some)
                 .map_err(|_| format!("expected {N} filter arguments"))
@@ -360,6 +365,7 @@ impl FilterArgs {
                     .map_err(|_| "--bool requires true or false")?,
             )),
         };
+
         Ok(RowFilters {
             payload: [
                 self.payload_min,
@@ -392,6 +398,7 @@ fn parse_blob(text: &str) -> Result<BlobArg, String> {
     {
         return Err("expected 0x followed by 0–1024 complete hexadecimal byte pairs".into());
     }
+
     (0..digits.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|e| e.to_string()))
@@ -406,6 +413,7 @@ fn parse_cursor(text: &str) -> Result<CursorArg, String> {
     {
         return Err("expected a hexadecimal query cursor (70–1092 digits), not a row ID".into());
     }
+
     (0..text.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|e| e.to_string()))
@@ -448,6 +456,7 @@ fn print_schema_json(
                     "present_only": present_only})
                 })
                 .collect();
+
             json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
         })
         .collect();
@@ -457,6 +466,7 @@ fn print_schema_json(
             let members: Vec<_> = members.iter().map(|(name, kind, optional, info)| {
             json!({"name": name, "type": kind, "optional": optional, "info": info})
         }).collect();
+
             json!({"name": name, "kind": kind, "members": members})
         })
         .collect();
@@ -468,6 +478,7 @@ fn print_schema_json(
     });
     let mut output = io::stdout().lock();
     serde_json::to_writer_pretty(&mut output, &document).map_err(|e| e.to_string())?;
+
     writeln!(output).map_err(|e| e.to_string())
 }
 
@@ -508,6 +519,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                         None => ["-".into(), "-".into()],
                     });
                 }
+
                 row
             })
             .collect();
@@ -516,6 +528,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             columns.extend(["References", "Reference index"]);
         }
         println!("{}", bordered_table(&columns, &rows));
+
         if indexes.is_empty() {
             println!("Indexes: none\n");
         } else {
@@ -612,6 +625,7 @@ fn main() -> Result<(), String> {
     }
     if matches!(cli.command, Some(Command::Help)) {
         help();
+
         return Ok(());
     }
     if matches!(cli.command, Some(Command::Quit)) {
@@ -653,12 +667,14 @@ fn main() -> Result<(), String> {
             .wait()
             .map_err(|e| format!("cannot wait for simulator launcher: {e}"))?;
         input_result?;
+
         return if status.success() {
             Ok(())
         } else {
             Err(format!("db session failed: {status}"))
         };
     }
+
     tokio::runtime::Runtime::new()
         .map_err(|e| e.to_string())?
         .block_on(run(cli))
@@ -676,6 +692,7 @@ async fn run(cli: Cli) -> Result<(), String> {
     let owned = instance().await?;
     let outcome = session(cli, &owned, wasm).await;
     owned.drop().await;
+
     outcome
 }
 
@@ -740,6 +757,7 @@ async fn session(
         let invoke = async |kind, method: &str, payload| {
             let (result, line) = measured_call(pic, canister, kind, method, payload).await;
             statistics.borrow_mut().push(line);
+
             result
         };
         let outcome = async {
@@ -765,6 +783,7 @@ async fn session(
                     )
                     .await
                     .map_err(|e| format!("{e:?}"))?;
+
                     ic_wire::decode(
                         &reply,
                         Encoding::Frame {
@@ -888,6 +907,7 @@ async fn session(
                         let (saved, phase, examined, input_bytes, output_bytes, (columns, rows, next)) = result?;
                         println!("Call {call}: {phase}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
                         sequence = saved;
+
                         match phase.as_str() {
                             "Running" => {},
                             "Complete" => {
@@ -899,6 +919,7 @@ async fn session(
                             _ => return Err("unsupported aggregate progress".into()),
                         }
                     }
+
                     Err("aggregate exceeded the fixture's 32-call bound".into())
                 }.await;
                 // Cleanup also runs after an output/resource refusal. No automatic
@@ -919,6 +940,7 @@ async fn session(
                     )
                     .await
                     .map_err(|e| format!("{e:?}"))?;
+
                     ic_wire::decode::<Result<(), String>>(
                         &reply,
                         Encoding::Frame {
@@ -930,6 +952,7 @@ async fn session(
                     .map_err(|e| e.to_string())?
                 }
                 .await;
+
                 match (run, cleanup) {
                     (Ok(()), Ok(())) => {}
                     (Err(error), Ok(())) | (Ok(()), Err(error)) => return Err(error),
@@ -999,6 +1022,7 @@ async fn session(
                 let reply = invoke(CallKind::Query, endpoint, request)
                     .await
                     .map_err(|e| format!("{e:?}"))?;
+
                 if id == 2 {
                     let (status, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
                         ic_wire::decode(
@@ -1018,10 +1042,12 @@ async fn session(
                             escape(&name)
                         ));
                     }
+
                     if entity_summary {
                         let mut summaries: Vec<_> = entities.into_iter()
                             .map(|entity| (entity.0, entity.3.len())).collect();
                         summaries.sort_by(|a, b| a.0.cmp(&b.0));
+
                         if json {
                             let rows: Vec<_> = summaries.into_iter()
                                 .map(|(name, columns)| serde_json::json!({"name": name, "columns": columns})).collect();
@@ -1129,6 +1155,7 @@ async fn session(
                 );
             }
         }
+
         Ok(())
         }.await;
         for line in statistics.into_inner() {
@@ -1138,8 +1165,10 @@ async fn session(
                 println!("{line}");
             }
         }
+
         outcome
     };
+
     if let Some(command) = cli.command {
         execute(command).await
     } else {
@@ -1149,11 +1178,13 @@ async fn session(
             .transpose()
             .map_err(|e| e.to_string())?;
         let mut input = io::stdin().lock();
+
         loop {
             let line = if let Some(editor) = editor.as_mut() {
                 let Some(line) = terminal::readline(editor)? else {
                     break Ok(());
                 };
+
                 line
             } else {
                 if interactive {
@@ -1167,6 +1198,7 @@ async fn session(
                 {
                     break Ok(());
                 }
+
                 line
             };
             if line.len() > 4096 {
@@ -1175,6 +1207,7 @@ async fn session(
             if line.trim().is_empty() {
                 continue;
             }
+
             // Clap owns the same grammar and validation as argv.
             match parse_console_line(&line) {
                 Ok(Cli {

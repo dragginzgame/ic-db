@@ -1,4 +1,5 @@
 //! Integer/decimal sums and averages over one exact total, without numeric coercion.
+
 use super::{super::Plan, Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
@@ -27,6 +28,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn sum<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
         let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Sum)?;
+
         self.scalar_value(&plan, reducer)
     }
 
@@ -43,6 +45,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn group_sum<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
+
         self.group_values(&plan, reducer)
     }
 
@@ -61,6 +64,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn avg<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
         let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Average)?;
+
         self.scalar_value(&plan, reducer)
     }
 
@@ -74,6 +78,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Supplier corruption traps without repair.
     pub fn group_avg<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
+
         self.group_values(&plan, reducer)
     }
 
@@ -86,6 +91,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut plan = self.aggregate_plan(group, group.is_some())?;
         let state = NumericAggregate::admit(E::SCHEMA, R::definition(), operation)?;
         plan.selected |= 1 << state.position;
+
         Ok((plan, Reducer::Numeric(state)))
     }
 }
@@ -142,6 +148,7 @@ impl NumericAggregate {
             if !matches!(result_type, FieldType::Decimal { scale: 0..=28 }) {
                 return Err(Error::InvalidQuery);
             }
+
             match input {
                 FieldType::Decimal { .. } => true,
                 value => integer(value).ok_or(Error::InvalidQuery)?.0,
@@ -160,10 +167,12 @@ impl NumericAggregate {
                     if signed != result_signed || bits > result_bits {
                         return Err(Error::InvalidQuery);
                     }
+
                     signed
                 }
             }
         };
+
         Ok(Self {
             position,
             source_scale,
@@ -219,6 +228,7 @@ impl NumericAggregate {
             }
         }
         self.count = self.count.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+
         Ok(())
     }
 
@@ -316,6 +326,7 @@ impl NumericAggregate {
             }
             _ => return Err(Error::Corrupt),
         }
+
         Ok(Completed::Value(Some((key, output.finish()))))
     }
 }
@@ -343,6 +354,7 @@ fn rounded_average(
     let twice_remainder = (numerator % denominator).abs() * 2;
     let round = twice_remainder > denominator
         || (twice_remainder == denominator && quotient % 2 != I256::ZERO);
+
     Ok(if round {
         quotient
             + if numerator < I256::ZERO {

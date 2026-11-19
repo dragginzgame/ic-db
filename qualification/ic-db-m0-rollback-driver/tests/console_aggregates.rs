@@ -1,4 +1,5 @@
 //! Retained filters, Decimal rounding and Blob results through the console across upgrades.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_db_qualification_transport::RowFilters;
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
@@ -43,6 +44,7 @@ async fn call<T: DeserializeOwned>(
         .update_call(canister, canister, name, bytes)
         .await
         .unwrap();
+
     ic_wire::decode(
         &reply,
         Encoding::Frame {
@@ -1002,6 +1004,7 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
                 "sparse" => a.0.is_empty() && a.1.is_some() && a.2 == work,
                 "byte" if a.0.len() == 2 && a.1.is_some() => {
                     let wider = page(false, &auto, work, 160).await;
+
                     wider
                         .0
                         .get(2)

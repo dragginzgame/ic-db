@@ -1,20 +1,38 @@
 //! Nested values use a finite compiled graph and one shared bounded row traversal.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, Value, entity, enum_, record};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
+///
+/// Meta
+/// Groups `x` and `label` into one record.
+///
+
 #[record(fields(
     field(name = "x", value(item(prim = "Nat16"))),
     field(name = "label", value(item(prim = "Text", max_bytes = 8)))
 ))]
 struct Meta {}
+
+///
+/// Pair
+/// Groups `right` and `left` into one record.
+///
+
 #[record(fields(
     field(name = "right", value(item(indirect, is = "Event"))),
     field(name = "left", value(item(indirect, is = "Event")))
 ))]
 struct Pair {}
+
+///
+/// Event
+/// Distinguishes the `Maybe`, `Idle`, `Loop`, `Data` and `Pair` variants.
+///
+
 #[enum_(
     variant(name = "Maybe", value(opt, item(prim = "Nat64"))),
     variant(name = "Idle"),
@@ -23,6 +41,12 @@ struct Pair {}
     variant(name = "Pair", value(item(is = "Pair")))
 )]
 struct Event {}
+
+///
+/// Asset
+/// Stores `payload` and `meta` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -32,8 +56,20 @@ struct Event {}
     )
 )]
 struct Asset {}
+
+///
+/// Node
+/// Carries an optional `Self` value of `next`.
+///
+
 #[record(fields(field(name = "next", value(opt, item(indirect, is = "Self")))))]
 struct Node {}
+
+///
+/// NodeRow
+/// Stores `node` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -42,8 +78,20 @@ struct Node {}
     )
 )]
 struct NodeRow {}
+
+///
+/// Infinite
+/// Carries the `Self` value of `next`.
+///
+
 #[record(fields(field(name = "next", value(item(indirect, is = "Self")))))]
 struct Infinite {}
+
+///
+/// ImpossibleRow
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -52,8 +100,20 @@ struct Infinite {}
     )
 )]
 struct ImpossibleRow {}
+
+///
+/// NoBase
+/// Distinguishes the `Again` variants.
+///
+
 #[enum_(variant(name = "Again", value(item(indirect, is = "Self"))))]
 struct NoBase {}
+
+///
+/// ImpossibleEnumRow
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -72,6 +132,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -251,6 +312,11 @@ fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_m
 }
 
 // Same source-independent names, with a changed leaf hidden behind a record link.
+///
+/// ChangedMeta
+/// Groups `label` and `x` into one record.
+///
+
 #[record(
     name = "Meta",
     fields(
@@ -259,13 +325,31 @@ fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_m
     )
 )]
 struct ChangedMeta {}
+
+///
+/// Container
+/// Carries the `Meta` value of `meta`.
+///
+
 #[record(fields(field(name = "meta", value(item(is = "Meta")))))]
 struct Container {}
+
+///
+/// ChangedContainer
+/// Carries the `ChangedMeta` value of `meta`.
+///
+
 #[record(
     name = "Container",
     fields(field(name = "meta", value(item(is = "ChangedMeta"))))
 )]
 struct ChangedContainer {}
+
+///
+/// Wrapped
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -274,6 +358,12 @@ struct ChangedContainer {}
     )
 )]
 struct Wrapped {}
+
+///
+/// ChangedWrapped
+/// Exercises an alternate `Wrapped` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Wrapped",
     pk(field = "id"),
@@ -326,8 +416,20 @@ fn node_budget_is_shared_across_sibling_entity_fields() {
     over.splice(8..9, [1, 0, 0, 0, 0, 0, 0]);
     assert!(matches!(Asset::decode(&over), Err(Error::Corrupt)));
 }
+
+///
+/// BytesPayload
+/// Distinguishes the `Bytes` variants.
+///
+
 #[enum_(variant(name = "Bytes", value(item(prim = "Blob", max_bytes = 4096))))]
 struct BytesPayload {}
+
+///
+/// ByteRow
+/// Stores `payload` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -354,6 +456,12 @@ fn payloads_share_the_whole_row_byte_envelope() {
     over.push(255);
     assert!(matches!(ByteRow::decode(&over), Err(Error::Corrupt)));
 }
+
+///
+/// ReorderedMeta
+/// Groups `label` and `x` into one record.
+///
+
 #[record(
     name = "Meta",
     fields(
@@ -362,11 +470,23 @@ fn payloads_share_the_whole_row_byte_envelope() {
     )
 )]
 struct ReorderedMeta {}
+
+///
+/// ReorderedContainer
+/// Carries the `ReorderedMeta` value of `meta`.
+///
+
 #[record(
     name = "Container",
     fields(field(name = "meta", value(item(is = "ReorderedMeta"))))
 )]
 struct ReorderedContainer {}
+
+///
+/// ReorderedWrapped
+/// Exercises an alternate `Wrapped` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Wrapped",
     pk(field = "id"),
@@ -407,8 +527,19 @@ fn source_renames_and_record_field_reordering_preserve_the_admitted_contract() {
     );
 }
 
+///
+/// Empty
+/// Represents a record with no stored fields.
+///
+
 #[record(fields())]
 struct Empty {}
+
+///
+/// EmptyRow
+/// Stores `empty` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(

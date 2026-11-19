@@ -1,5 +1,7 @@
 //! Hold host/transport fixed while varying reachable fluent shapes and mapping sites.
+
 mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -45,6 +47,7 @@ fn expected(input: &[Row], mode: u8, args: Row) -> Vec<Row> {
             _ => {}
         }
     }
+
     rows
 }
 
@@ -121,6 +124,7 @@ async fn fluent_shapes_and_mapping_growth() {
                 LIMITS,
             )
             .unwrap();
+
             (observation, opening, work, cycles)
         };
         let inputs: Vec<Vec<Row>> = (0..count)

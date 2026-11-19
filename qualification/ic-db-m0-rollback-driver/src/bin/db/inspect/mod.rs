@@ -1,4 +1,5 @@
 //! Read-only Canic inspection. Applications retain query/write and exposure policy.
+
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +56,7 @@ fn decode(bytes: &[u8], request: &protocol::Request) -> Result<protocol::Respons
             );
         }
     }
+
     Ok(response)
 }
 
@@ -72,6 +74,7 @@ async fn call(
         RPC_LIMITS,
     )
     .map_err(|e| e.to_string())?;
+
     decode(
         &connection.query("db_inspect", payload, statistics).await?,
         request,
@@ -92,6 +95,7 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
     let mut statistics = Vec::new();
     let outcome = async {
         let catalogue = call(&connection, &protocol::Request::Catalogue, &mut statistics).await?;
+
         if let Some(name) = name {
             let protocol::Selection::Catalogue(names) = &catalogue.selection else { unreachable!() };
             if !names.as_slice().contains(&name) { return Err("entity is not in the exposed catalogue".into()); }
@@ -99,6 +103,7 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
             if selected.admission != catalogue.admission {
                 return Err("database admission or incarnation changed during inspection; repeat the command".into());
             }
+
             Ok(selected)
         } else { Ok(catalogue) }
     }.await;
@@ -117,11 +122,13 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
         }
     }
     super::remote::report(statistics, options.json || outcome.is_err());
+
     outcome.map(|_| ())
 }
 
 fn kind(kind: &protocol::Kind) -> (String, String) {
     use protocol::Kind as K;
+
     match kind {
         K::Unsigned(bits) => (format!("Nat{bits}"), String::new()),
         K::Signed(bits) => (format!("Int{bits}"), String::new()),
@@ -132,6 +139,7 @@ fn kind(kind: &protocol::Kind) -> (String, String) {
         K::Named(name) => (escape(name.as_str()).into_owned(), String::new()),
         K::List { item, max_items } => {
             let (name, info) = self::kind(item);
+
             (
                 format!("List<{name}>"),
                 format!("max {max_items} items; {info}"),
@@ -162,6 +170,7 @@ fn fields(fields: &[protocol::Field]) -> String {
             .iter()
             .map(|f| {
                 let (name, info) = kind(&f.value.kind);
+
                 vec![
                     escape(f.name.as_str()).into_owned(),
                     name,
@@ -255,6 +264,7 @@ fn render(response: &protocol::Response) -> String {
                     "\n{}\n",
                     escape(definition.name.as_str()).into_owned()
                 ));
+
                 match &definition.body {
                     protocol::Body::Record(items) => out.push_str(&fields(items.as_slice())),
                     protocol::Body::Enum(items) => out.push_str(&bordered_table(
@@ -267,6 +277,7 @@ fn render(response: &protocol::Response) -> String {
                                     .payload
                                     .as_ref()
                                     .map_or_else(|| ("—".into(), String::new()), |p| kind(&p.kind));
+
                                 vec![
                                     escape(v.name.as_str()).into_owned(),
                                     name,
@@ -306,5 +317,6 @@ fn render(response: &protocol::Response) -> String {
         }
     }
     out.push('\n');
+
     out
 }

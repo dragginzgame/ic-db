@@ -1,4 +1,5 @@
 //! Exact decimal invariants, with independent widened-integer and byte oracles.
+
 use ic_db::{Batch, Database, Decimal, Entity, Error, IndexValue, Schema, entity, map, set};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -8,21 +9,50 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     str::FromStr,
 };
-#[entity(pk(field="id"),index(fields=["zone","value","id"]),index(field="maybe",unique,present_only),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="maybe",value(opt,item(prim="Decimal",scale=2))),
-    field(name="value",value(item(prim="Decimal",scale=2))),
-    field(name="zone",value(item(prim="Bool")))
-))]
+
+///
+/// DecimalRow
+/// Exercises indexed access by `zone`, `value`, `id` and `maybe` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2))),
+        field(name = "value", value(item(prim = "Decimal", scale = 2))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 pub(crate) struct DecimalRow {}
+
+///
+/// Prices
+/// Stores up to 3 distinct `Decimal` values.
+///
+
 #[set(item(prim = "Decimal", scale = 2), max_items = 3)]
 struct Prices {}
+
+///
+/// Flags
+/// Maps up to 3 `Decimal` keys to `Bool` values.
+///
+
 #[map(
     key(prim = "Decimal", scale = 2),
     value(item(prim = "Bool")),
     max_items = 3
 )]
 struct Flags {}
+
+///
+/// Collections
+/// Stores `list`, `map` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -49,6 +79,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -70,6 +101,7 @@ fn bytes(row: &DecimalRow) -> Vec<u8> {
     }
     b.extend(row.value.coefficient_at_scale(2).unwrap().to_be_bytes());
     b.extend([2, 1]);
+
     b
 }
 

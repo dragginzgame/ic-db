@@ -1,4 +1,5 @@
 //! Feature-selected product-job witness, sharing the ordinary records and supplier.
+
 mod values;
 
 use super::{
@@ -9,77 +10,10 @@ use super::{
 use crate::handles::{Database, Query};
 use ic_db::{Batch, Comparison, GroupOrder, JobHandle, JobOutcome, JobStep, Timestamp};
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
-struct Amount {}
-#[ic_db::record(fields(
-    field(name = "id", value(item(prim = "Nat64"))),
-    field(name = "amount", value(item(prim = "Nat64")))
-))]
-struct IdAmount {}
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
-struct AverageAmount {}
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
-struct Category {}
-#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
-struct EntryId {}
-
-fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
-    let query = db.query::<Entry>();
-    if operation == 3 {
-        query
-            .filter_groups_any(&[(Comparison::Ge, 2_u64.into())])
-            .order_groups(GroupOrder::AggregateDescending)
-    } else if operation == 14 {
-        query.filter_groups_any(&[
-            (Comparison::Eq, 0_u64.into()),
-            (Comparison::Eq, 3_u64.into()),
-        ])
-    } else if operation == 15 {
-        query
-            .filter_groups(Comparison::Eq, 0_u64)
-            .filter_groups(Comparison::Eq, 3_u64)
-    } else if operation == 18 {
-        query.filter_fields("id", Comparison::Gt, "category")
-    } else if operation == 19 {
-        query.filter_fields("id", Comparison::Gt, "amount")
-    } else if operation == 20 {
-        use ic_db::QueryOperand::{Field, Literal};
-        query.filter_any_operands(&[
-            ("id", Comparison::Eq, Field("category")),
-            ("category", Comparison::Eq, Literal(0_u64.into())),
-        ])
-    } else if operation == 21 {
-        query
-            .filter_fields("id", Comparison::Eq, "category")
-            .filter("category", Comparison::Eq, 0_u64)
-    } else if matches!(operation, 12 | 13) {
-        query.order_groups(GroupOrder::AggregateDescending)
-    } else {
-        query
-    }
-}
-
-type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
-type AdvanceRequest = (Vec<u8>, u8, u64, u32, i64, u64, bool);
-type Progress = (u64, u64, u64, u64, u8, Option<String>);
-fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
-    let (phase, value) = match step.outcome {
-        JobOutcome::Running => (0, None),
-        JobOutcome::Complete(value) => (1, display(value)),
-        JobOutcome::Invalidated => (2, None),
-        JobOutcome::Expired => (3, None),
-    };
-    (
-        step.sequence,
-        step.source_revision,
-        step.examined,
-        step.input_bytes,
-        phase,
-        value,
-    )
-}
-
-/// Start a retained aggregate with the supplied observation time and expiry.
+// job_start
+// Start a retained aggregate with the supplied observation time and expiry.
+// guard  : validates the request frame for method 110.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_start",
@@ -181,12 +115,16 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
         _ => Err(ic_db::Error::InvalidQuery),
     };
     faults::finish_job_write();
+
     result
         .map(|handle| handle.to_bytes())
         .map_err(|e| e.to_string())
 }
 
-/// Advance a retained job with a sequence and work budget.
+// job_advance
+// Advance a retained job with a sequence and work budget.
+// guard  : validates the request frame for method 111.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_advance",
@@ -358,6 +296,7 @@ fn job_advance(
     if trap_after {
         crate::system::trap("after successful aggregate advance");
     }
+
     result
         .map(|(sequence, revision, examined, bytes, phase, value)| {
             (sequence, revision, examined, bytes, phase, value, writes)
@@ -368,8 +307,10 @@ fn job_advance(
 // Measurements wrap the same fixture operations, including reopen and refusals.
 // Transport decoding/encoding is outside the instruction interval; balance
 // deltas in the driver include the whole update. No product telemetry is added.
-
-/// Measure one retained job advancement.
+// job_advance_cost
+// Measure one retained job advancement.
+// guard  : validates the request frame for method 115.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_advance_cost",
@@ -384,10 +325,14 @@ fn job_advance_cost(
 ) -> (Result<Response, String>, u64) {
     let start = counter();
     let result = job_advance(request);
+
     (result, counter() - start)
 }
 
-/// Measure a page read from completed group output.
+// job_page_cost
+// Measure a page read from completed group output.
+// guard  : validates the request frame for method 116.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_page_cost",
@@ -402,13 +347,14 @@ fn job_page_cost(
 ) -> (Result<PageResponse, String>, u64) {
     let start = counter();
     let result = job_page(request);
+
     (result, counter() - start)
 }
-// operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
-// 4 unrelated entity mutation; 5 mutate source then trap.
-type ControlRequest = (u8, Vec<u8>, i64, u32);
 
-/// Apply the selected cleanup or lifecycle operation to retained jobs.
+// job_control
+// Apply the selected cleanup or lifecycle operation to retained jobs.
+// guard  : validates the request frame for method 112.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_control",
@@ -421,6 +367,7 @@ type ControlRequest = (u8, Vec<u8>, i64, u32);
 fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, String> {
     let host = runtime();
     let mut jobs = open_jobs(&host);
+
     match operation {
         0 => jobs
             .cancel(&JobHandle::from_bytes(&bytes).map_err(|e| e.to_string())?)
@@ -446,6 +393,7 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
             if operation == 5 {
                 crate::system::trap("after source mutation");
             }
+
             result
         }
         _ => return Err("invalid operation".into()),
@@ -455,8 +403,10 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
 
 // Observe the existing lifecycle operations and inject rollback faults only in
 // this qualification host. Cleanup policy stays in AggregateJobs.
-
-/// Measure the selected retained-job control operation under fault injection.
+// job_control_cost
+// Measure the selected retained-job control operation under fault injection.
+// guard  : validates the request frame for method 117.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_control_cost",
@@ -480,14 +430,14 @@ fn job_control_cost(
     if trap_after {
         crate::system::trap("after aggregate lifecycle operation");
     }
+
     (result, counter() - start, writes)
 }
 
-// Private qualification endpoint; product endpoints remain adapter-owned.
-type PageRequest = (Vec<u8>, u64, Option<Vec<u8>>, u32, u32, i64, u64, bool);
-type PageResponse = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
-
-/// Read a bounded page of completed group output.
+// job_page
+// Read a bounded page of completed group output.
+// guard  : validates the request frame for method 113.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_page",
@@ -532,14 +482,14 @@ fn job_page(
         JobOutcome::Invalidated => (2, vec![], None),
         JobOutcome::Expired => (3, vec![], None),
     };
+
     Ok((step.sequence, phase, rows, next, step.source_revision))
 }
 
-// Grouped extrema use the same query/result page boundary, with optional winners.
-type ExtremumRequest = (Vec<u8>, u8, u64, u32, Option<Vec<u8>>, u32, i64, u64, bool);
-type ExtremumResponse = (u64, u8, Vec<(u64, Option<u64>)>, Option<Vec<u8>>, u64, u64);
-
-/// Run the selected retained grouped minimum or maximum operation.
+// job_group_extremum
+// Run the selected retained grouped minimum or maximum operation.
+// guard  : validates the request frame for method 114.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_group_extremum",
@@ -598,6 +548,7 @@ fn job_group_extremum(
         JobOutcome::Invalidated => (2, vec![], None),
         JobOutcome::Expired => (3, vec![], None),
     };
+
     Ok((
         step.sequence,
         phase,
@@ -607,3 +558,117 @@ fn job_group_extremum(
         step.examined,
     ))
 }
+
+///
+/// Amount
+/// Carries the `Nat64` value of `amount`.
+///
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+struct Amount {}
+
+///
+/// IdAmount
+/// Groups `id` and `amount` into one record.
+///
+
+#[ic_db::record(fields(
+    field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "amount", value(item(prim = "Nat64")))
+))]
+struct IdAmount {}
+
+///
+/// AverageAmount
+/// Carries the `Decimal` value of `amount`.
+///
+
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+struct AverageAmount {}
+
+///
+/// Category
+/// Carries the `Nat64` value of `category`.
+///
+
+#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+struct Category {}
+
+///
+/// EntryId
+/// Carries the `Nat64` value of `entry_id`.
+///
+
+#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
+struct EntryId {}
+
+fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
+    let query = db.query::<Entry>();
+
+    if operation == 3 {
+        query
+            .filter_groups_any(&[(Comparison::Ge, 2_u64.into())])
+            .order_groups(GroupOrder::AggregateDescending)
+    } else if operation == 14 {
+        query.filter_groups_any(&[
+            (Comparison::Eq, 0_u64.into()),
+            (Comparison::Eq, 3_u64.into()),
+        ])
+    } else if operation == 15 {
+        query
+            .filter_groups(Comparison::Eq, 0_u64)
+            .filter_groups(Comparison::Eq, 3_u64)
+    } else if operation == 18 {
+        query.filter_fields("id", Comparison::Gt, "category")
+    } else if operation == 19 {
+        query.filter_fields("id", Comparison::Gt, "amount")
+    } else if operation == 20 {
+        use ic_db::QueryOperand::{Field, Literal};
+
+        query.filter_any_operands(&[
+            ("id", Comparison::Eq, Field("category")),
+            ("category", Comparison::Eq, Literal(0_u64.into())),
+        ])
+    } else if operation == 21 {
+        query
+            .filter_fields("id", Comparison::Eq, "category")
+            .filter("category", Comparison::Eq, 0_u64)
+    } else if matches!(operation, 12 | 13) {
+        query.order_groups(GroupOrder::AggregateDescending)
+    } else {
+        query
+    }
+}
+
+type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
+type AdvanceRequest = (Vec<u8>, u8, u64, u32, i64, u64, bool);
+type Progress = (u64, u64, u64, u64, u8, Option<String>);
+fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
+    let (phase, value) = match step.outcome {
+        JobOutcome::Running => (0, None),
+        JobOutcome::Complete(value) => (1, display(value)),
+        JobOutcome::Invalidated => (2, None),
+        JobOutcome::Expired => (3, None),
+    };
+
+    (
+        step.sequence,
+        step.source_revision,
+        step.examined,
+        step.input_bytes,
+        phase,
+        value,
+    )
+}
+
+// operation: 0 cancel; 1 cleanup; 2 mutate source; 3 same-value replacement;
+// 4 unrelated entity mutation; 5 mutate source then trap.
+type ControlRequest = (u8, Vec<u8>, i64, u32);
+
+// Private qualification endpoint; product endpoints remain adapter-owned.
+type PageRequest = (Vec<u8>, u64, Option<Vec<u8>>, u32, u32, i64, u64, bool);
+type PageResponse = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
+
+// Grouped extrema use the same query/result page boundary, with optional winners.
+type ExtremumRequest = (Vec<u8>, u8, u64, u32, Option<Vec<u8>>, u32, i64, u64, bool);
+type ExtremumResponse = (u64, u8, Vec<(u64, Option<u64>)>, Option<Vec<u8>>, u64, u64);

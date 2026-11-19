@@ -1,5 +1,7 @@
 //! Consumer metrics and refusal checks independent of producer implementation.
+
 mod artifact;
+
 use sha2::{Digest, Sha256};
 use std::io::{Read, repeat};
 

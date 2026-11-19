@@ -1,5 +1,6 @@
 //! Canonical decimal values adapted from frozen IcyDB 6d421e3.
 //! Exact comparison and text parsing; aggregate arithmetic is a separate contract.
+
 use std::{cmp::Ordering, fmt, str::FromStr};
 
 /// Exact base-ten value with a signed 128-bit mantissa and scale 0–28.
@@ -39,6 +40,7 @@ impl Decimal {
             mantissa /= 10;
             scale -= 1;
         }
+
         if scale > Self::MAX_SCALE {
             None
         } else {
@@ -134,6 +136,7 @@ impl FromStr for Decimal {
             .try_fold(0_i128, |value, digit| {
                 let value = value.checked_mul(10)?;
                 let digit = i128::from(digit - b'0');
+
                 if negative {
                     value.checked_sub(digit)
                 } else {
@@ -141,6 +144,7 @@ impl FromStr for Decimal {
                 }
             })
             .ok_or(ParseDecimalError)?;
+
         Self::try_new(mantissa, scale).ok_or(ParseDecimalError)
     }
 }
@@ -154,14 +158,17 @@ impl fmt::Display for Decimal {
         if scale == 0 {
             return f.write_str(&digits);
         }
+
         if digits.len() <= scale {
             f.write_str("0.")?;
             for _ in digits.len()..scale {
                 f.write_str("0")?;
             }
+
             f.write_str(&digits)
         } else {
             let fractional = digits.split_off(digits.len() - scale);
+
             write!(f, "{digits}.{fractional}")
         }
     }
@@ -175,6 +182,7 @@ impl Decimal {
         if scale > Self::MAX_SCALE || scale < self.scale {
             return None;
         }
+
         self.mantissa.checked_mul(10_i128.pow(scale - self.scale))
     }
 
@@ -183,6 +191,7 @@ impl Decimal {
     pub(crate) fn append_ordered(self, out: &mut Vec<u8>) {
         if self.mantissa == 0 {
             out.push(1);
+
             return;
         }
         let mut digits = [0_u8; 39];
@@ -235,6 +244,7 @@ impl Decimal {
                 if value.scale != scale {
                     return None;
                 }
+
                 return Some((value, 6 + n));
             }
             if !digit.is_ascii_digit() || (n == 0 && digit == b'0') || n == 39 {
@@ -248,6 +258,7 @@ impl Decimal {
                 mantissa.checked_add(digit)?
             };
         }
+
         None
     }
 }

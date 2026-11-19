@@ -26,6 +26,7 @@ fn page<T: Clone>(output: &[T], after: usize, limit: usize) -> Result<Page<T>, &
         return Err("output bound");
     }
     let end = (after + limit).min(output.len());
+
     Ok(Page {
         rows: output[after..end].to_vec(),
         next: (end < output.len()).then_some(end),
@@ -60,6 +61,7 @@ impl Distinct {
         }
         self.keys = keys;
         self.position = end;
+
         Ok(if end == INPUT.len() {
             Progress::Complete(self.keys.iter().copied().collect())
         } else {
@@ -110,6 +112,7 @@ impl Grouped {
             .map(|(&category, &sum)| (category, sum))
             .collect();
         output.sort_unstable_by_key(|&(category, sum)| (Reverse(sum), category));
+
         Ok(Progress::Complete(output))
     }
 }
@@ -138,6 +141,7 @@ fn distinct_uses_the_selected_projection_before_count_or_output_limit() {
             loop {
                 let result = page(&output, after, 1).unwrap();
                 combined.extend(result.rows);
+
                 match result.next {
                     Some(next) => after = next,
                     None => break,
@@ -268,6 +272,7 @@ impl<'a> OptionalAggregate<'a> {
         if input.len() > 6 {
             return Err("input bound");
         }
+
         Ok(Self {
             input,
             position: 0,
@@ -292,6 +297,7 @@ impl<'a> OptionalAggregate<'a> {
         if end != self.input.len() {
             return Ok(Progress::Incomplete);
         }
+
         Ok(Progress::Complete(OptionalSummary {
             rows: self.position,
             values: self.values,

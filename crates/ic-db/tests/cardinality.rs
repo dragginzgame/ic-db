@@ -1,9 +1,16 @@
 //! Maintained counts share the batch rollback and copy-publication boundaries.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, SchemaCopy, SchemaTransition, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// Row
+/// Stores `value` under the `id` primary key.
+///
+
 #[entity(
     name = "Row",
     pk(field = "id"),
@@ -13,6 +20,12 @@ use ic_storage::{
     )
 )]
 struct Row {}
+
+///
+/// Wide
+/// Exercises an alternate `Row` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Row",
     pk(field = "id"),
@@ -22,6 +35,12 @@ struct Row {}
     )
 )]
 struct Wide {}
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -47,6 +66,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
         &GenericAllocationPolicy,
     )
     .unwrap();
+
     h
 }
 
@@ -293,6 +313,7 @@ fn copy_counts(damaged_state: Option<(u64, u64)>) {
         assert_eq!(*m.borrow(), before);
         assert!(copy.publish().is_err());
         assert_eq!(*m.borrow(), before);
+
         return;
     }
     let mut ready = false;

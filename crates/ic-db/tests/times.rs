@@ -1,4 +1,5 @@
 //! Exact millisecond values across storage, indexes, collections and reopen.
+
 use ic_db::{
     Batch, Database, Duration, Entity, Error, IndexValue, Schema, Timestamp, entity, map, set,
 };
@@ -7,30 +8,55 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+///
+/// TimeRow
+/// Exercises indexed access by `zone`, `duration`, `id`, `timestamp`, `delay` and `maybe` on
+/// rows keyed by `id`.
+///
+
 #[entity(
-    pk(field="id"),
-    index(fields=["zone","duration","id"]),
-    index(fields=["zone","timestamp","id"]),
-    index(field="delay",unique,present_only),
-    index(field="maybe",unique,present_only),
+    pk(field = "id"),
+    index(fields = ["zone", "duration", "id"]),
+    index(fields = ["zone", "timestamp", "id"]),
+    index(field = "delay", unique, present_only),
+    index(field = "maybe", unique, present_only),
     fields(
-        field(name="delay",value(opt,item(prim="Duration"))),
-        field(name="duration",value(item(prim="Duration"))),
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="maybe",value(opt,item(prim="Timestamp"))),
-        field(name="timestamp",value(item(prim="Timestamp"))),
-        field(name="zone",value(item(prim="Bool")))
+        field(name = "delay", value(opt, item(prim = "Duration"))),
+        field(name = "duration", value(item(prim = "Duration"))),
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Timestamp"))),
+        field(name = "timestamp", value(item(prim = "Timestamp"))),
+        field(name = "zone", value(item(prim = "Bool")))
     )
 )]
 pub(crate) struct TimeRow {}
+
+///
+/// Moments
+/// Stores up to 3 distinct `Timestamp` values.
+///
+
 #[set(item(prim = "Timestamp"), max_items = 3)]
 struct Moments {}
+
+///
+/// Deadlines
+/// Maps up to 3 `Duration` keys to optional `Timestamp` values.
+///
+
 #[map(
     key(prim = "Duration"),
     value(opt, item(prim = "Timestamp")),
     max_items = 3
 )]
 struct Deadlines {}
+
+///
+/// Collections
+/// Stores `list`, `map` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -50,6 +76,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -80,6 +107,7 @@ fn rows() -> Vec<TimeRow> {
         maybe: None,
         timestamp: Timestamp::EPOCH,
     });
+
     rows
 }
 

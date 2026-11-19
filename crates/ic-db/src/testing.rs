@@ -47,12 +47,14 @@ impl Fixture {
         ])
         .unwrap();
         let backing = VectorMemory::default();
+
         Self::with_allocation(move || {
             let mut runtime = MemoryRuntime::new(backing.clone())
                 .expect("drop the previous database before reopening its backing");
             runtime
                 .bootstrap(&declarations, &grants, &GenericAllocationPolicy)
                 .expect("fixture storage bootstrap");
+
             runtime.open_memory(&key).expect("fixture allocation")
         })
     }
@@ -65,6 +67,7 @@ impl Fixture {
     #[must_use]
     pub fn with_allocation(allocation: impl Fn() -> RuntimeMemory<VectorMemory> + 'static) -> Self {
         drop(allocation());
+
         Self {
             allocation: Box::new(allocation),
         }

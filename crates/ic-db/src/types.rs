@@ -1,4 +1,5 @@
 //! Finite compiled named-type graph. No persisted catalog or materialized value tree.
+
 use crate::{
     Error, FieldSchema, FieldType,
     codec::{Decoder, Encoder},
@@ -74,6 +75,7 @@ pub(crate) fn unit_enum_len(definition: &TypeSchema) -> Option<usize> {
     let TypeBody::Enum(variants) = &definition.body else {
         return None;
     };
+
     (!definition.name.is_empty()
         && definition.name.len() <= 64
         && !variants.is_empty()
@@ -125,6 +127,7 @@ impl TypeGraph {
             if max_items > MAX_COLLECTION_ITEMS as u32 || matches!(item, FieldType::List { .. }) {
                 return Err(Error::InvalidSchema);
             }
+
             *item
         } else {
             value
@@ -194,6 +197,7 @@ impl TypeGraph {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -205,6 +209,7 @@ impl TypeGraph {
             }
             _ => {}
         }
+
         self.include(value)
     }
 
@@ -238,6 +243,7 @@ impl TypeGraph {
             bytes.push(kind);
             name(bytes, definition.name)?;
             bytes.extend((count as u32).to_le_bytes());
+
             match &definition.body {
                 TypeBody::Wrapped(value) => encode_type(bytes, *value, false, false)?,
                 TypeBody::Map {
@@ -317,6 +323,7 @@ impl TypeGraph {
             return Err(Error::InvalidSchema);
         }
         self.visited = Vec::new();
+
         Ok(())
     }
 }

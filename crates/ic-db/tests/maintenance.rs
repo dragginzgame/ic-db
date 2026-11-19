@@ -1,4 +1,5 @@
 //! Durable source freezing, exact identity admission and pre-copy cancellation.
+
 use ic_db::{
     Batch, Database, Entity, Error, Maintenance, QueryCursor, Schema, SchemaTransition, entity,
 };
@@ -6,6 +7,11 @@ use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// Source
+/// Exercises an alternate `Thing` declaration under the same logical identity.
+///
 
 #[entity(
     name = "Thing",
@@ -17,6 +23,12 @@ use ic_storage::{
     )
 )]
 struct Source {}
+
+///
+/// Target
+/// Exercises an alternate `Thing` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Thing",
     pk(field = "id"),
@@ -56,6 +68,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
             &GenericAllocationPolicy,
         )
         .unwrap();
+
     runtime
 }
 
@@ -64,11 +77,13 @@ fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database {
     let mut batch = Batch::new();
     batch.insert(&Source { id: 1, value: 42 }).unwrap();
     db.commit(batch).unwrap();
+
     db
 }
 
 fn entries(runtime: &MemoryRuntime<VectorMemory>) -> Vec<(Vec<u8>, Vec<u8>)> {
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
+
     raw.iter()
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect()

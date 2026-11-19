@@ -1,5 +1,7 @@
 //! Broad matched queries over deterministic tuples, with no product-code oracle.
+
 mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
@@ -52,14 +54,17 @@ fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
     match id {
         3 => {
             let (v, n) = decode(id, bytes);
+
             (Answer::Row(v), n)
         }
         5 => {
             let (v, n) = decode(id, bytes);
+
             (Answer::Rows(v), n)
         }
         6 => {
             let (v, n): (Result<Vec<Row>, u16>, u64) = decode(id, bytes);
+
             (
                 match v {
                     Ok(v) => Answer::Rows(v),
@@ -70,18 +75,22 @@ fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
         }
         7 => {
             let (v, n) = decode(id, bytes);
+
             (Answer::Groups(v), n)
         }
         8 => {
             let (v, n) = decode(id, bytes);
+
             (Answer::Count(v), n)
         }
         9 => {
             let (value, open, execution): (Option<u64>, u64, u64) = decode(id, bytes);
+
             (Answer::Count(value), open + execution)
         }
         10 => {
             let (value, work) = decode(id, bytes);
+
             (Answer::Exists(value), work)
         }
         _ => unreachable!(),
@@ -111,6 +120,7 @@ fn prefix_counts(source: &[Row], legacy: bool) -> Vec<Case> {
             });
         }
     }
+
     cases
 }
 
@@ -263,6 +273,7 @@ fn cases(source: &[Row], paths: bool) -> Vec<Case> {
     if paths {
         cases.retain(|case| case.id == 7);
     }
+
     cases
 }
 struct Sample {
@@ -386,6 +397,7 @@ async fn matched_query_matrix() {
                         .into_iter()
                         .map(|category| {
                             let found = source.iter().any(|row| row.1 == category);
+
                             Case {
                                 name: format!("exists-{category}"),
                                 family: if found { "exists-hit" } else { "exists-miss" },

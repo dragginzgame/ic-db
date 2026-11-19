@@ -71,6 +71,7 @@ fn encode_node(node: &Node, depth: usize, remaining: &mut usize) -> Result<Store
         return Err(Refusal::Bound);
     }
     *remaining -= 1;
+
     Ok(StoredNode {
         children: node
             .children
@@ -95,6 +96,7 @@ fn decode_node(node: StoredNode, depth: usize, remaining: &mut usize) -> Result<
         (1, Some(value)) => State::Weighted(value),
         _ => return Err(Refusal::Variant),
     };
+
     Ok(Node {
         children: node
             .children
@@ -124,6 +126,7 @@ fn row_bounds(
     {
         return Err(Refusal::CollectionOrder);
     }
+
     Ok(())
 }
 
@@ -148,6 +151,7 @@ fn encode(row: &Row) -> Result<Vec<u8>, Refusal> {
     let tags = row.tags.iter().cloned().collect::<Vec<_>>();
     row_bounds(&counters, row.note.as_deref(), &tags)?;
     let root = encode_node(&row.root, 1, &mut 8)?;
+
     ic_wire::encode(
         &(counters, row.id, row.note.clone(), root, tags),
         Encoding::Payload,
@@ -160,6 +164,7 @@ fn decode(bytes: &[u8], limits: Limits) -> Result<Row, Refusal> {
     let (counters, id, note, root, tags): StoredRow =
         ic_wire::decode(bytes, Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
     row_bounds(&counters, note.as_deref(), &tags)?;
+
     Ok(Row {
         id,
         note,

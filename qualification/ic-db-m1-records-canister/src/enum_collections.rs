@@ -1,11 +1,15 @@
 //! Private persistence/rollback witness for enum-keyed collections.
+
 use crate::{
     open, runtime,
     schema::{EnumCollectionsRow, Lifecycle},
 };
 use ic_db::{Batch, Comparison, Entity};
 
-/// Exercise stored enum collections with the selected operation and bytes.
+// enum_collections
+// Exercise stored enum collections with the selected operation and bytes.
+// guard  : validates the request frame for method 94.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "enum_collections",
@@ -42,6 +46,7 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
             crate::system::trap("after enum collection replacement");
         }
     }
+
     Ok((
         db.get::<EnumCollectionsRow>(1)
             .unwrap()
@@ -51,7 +56,10 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
     ))
 }
 
-/// Check the fixture’s three enum set membership cases.
+// enum_set_membership
+// Check the fixture’s three enum set membership cases.
+// guard  : validates the request frame for method 150.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "enum_set_membership",
@@ -64,6 +72,7 @@ fn enum_collections((mode, bytes): (u8, Vec<u8>)) -> Result<(Vec<u8>, u64), u8> 
 fn enum_set_membership((): ()) -> [bool; 3] {
     let host = runtime();
     let db = open(&host);
+
     [Lifecycle::Archived, Lifecycle::Draft, Lifecycle::Ready].map(|state| {
         db.query::<EnumCollectionsRow>()
             .filter("states", Comparison::Contains, &state)

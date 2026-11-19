@@ -1,4 +1,5 @@
 //! Seeded issuance and heap-local stream allocation.
+
 use super::{Ulid, UlidEntropyError, UlidGenerationError, UlidGenerator, platform};
 use crate::Timestamp;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,7 @@ pub struct SeededUlidGenerator {
 impl SeededUlidGenerator {
     fn new(mut seed: [u8; 10]) -> Self {
         seed[0] &= 0x7f;
+
         Self {
             issuer: UlidGenerator::new(),
             seed,
@@ -64,6 +66,7 @@ fn stream((owner, version): (impl AsRef<[u8]>, u64), number: Option<u64>) -> See
         hash.update(number.to_be_bytes());
     }
     let digest = hash.finalize();
+
     SeededUlidGenerator::new(std::array::from_fn(|i| digest[i]))
 }
 
@@ -81,8 +84,10 @@ pub(super) fn owned(identity: (impl AsRef<[u8]>, u64)) -> SeededUlidGenerator {
             .checked_add(1)
             .expect("ULID stream numbers exhausted");
         slot.set(next);
+
         next
     });
+
     stream(identity, Some(number))
 }
 

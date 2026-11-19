@@ -1,4 +1,5 @@
 //! Literal enum collection frames survive message rollback and upgrade.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -46,6 +47,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
             .query_call(canister, canister, "enum_set_membership", request)
             .await
             .unwrap();
+
         ic_wire::decode::<[bool; 3]>(
             &reply,
             Encoding::Frame {

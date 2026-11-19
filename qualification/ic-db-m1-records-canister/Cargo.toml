@@ -30,14 +30,11 @@ canic = { workspace = true, optional = true }
 
 [dependencies]
 ic-db = { workspace = true, features = ["test-support"] }
-ic-db-m1-records-schema.workspace = true
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-storage.workspace = true
 ic-wire.workspace = true
-
-[build-dependencies]
-ic-db-m1-records-schema = { workspace = true, features = ["build"] }
+records-schema.workspace = true
 
 [dev-dependencies]
 toko-tooling.workspace = true

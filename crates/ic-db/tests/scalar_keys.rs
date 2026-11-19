@@ -1,4 +1,5 @@
 //! Scalar primary keys share ordering, references and corruption checks.
+
 use ic_db::{Account, Batch, Database, Entity, Error, Principal, Schema, U256, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -15,6 +16,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 // Keep the independent oracle outside the generated declarations: raw literal
@@ -169,7 +171,18 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
 macro_rules! unsigned_case {
     ($module:ident,$prim:literal,$ty:ty,$width:literal)=>{mod $module {
         use super::*;
-        #[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(field(name="id",value(item(prim=$prim))),field(name="next",value(opt,item(prim=$prim)),references(entity="Self")),field(name="rank",value(item(prim="Nat64"))),field(name="zone",value(item(prim="Bool")))))]
+        #[entity(
+            pk(field = "id"),
+            index(field = "rank", unique),
+            index(fields = ["zone", "id"]),
+            index(fields = ["next", "id"]),
+            fields(
+                field(name = "id", value(item(prim = $prim))),
+                field(name = "next", value(opt, item(prim = $prim)), references(entity = "Self")),
+                field(name = "rank", value(item(prim = "Nat64"))),
+                field(name = "zone", value(item(prim = "Bool")))
+            )
+        )]
         struct Row {}
         #[test] fn full_unsigned_domain(){let mut one=vec![0;$width];one[$width-1]=1;let mut penultimate=vec![255;$width];penultimate[$width-1]=254;
             exercise(&[0,1,<$ty>::MAX-1,<$ty>::MAX],&[vec![0;$width],one,penultimate,vec![255;$width]],|id,next,rank|Row{id,next,rank,zone:true});}
@@ -178,7 +191,18 @@ macro_rules! unsigned_case {
 macro_rules! signed_case {
     ($module:ident,$prim:literal,$ty:ty,$width:literal)=>{mod $module {
         use super::*;
-        #[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(field(name="id",value(item(prim=$prim))),field(name="next",value(opt,item(prim=$prim)),references(entity="Self")),field(name="rank",value(item(prim="Nat64"))),field(name="zone",value(item(prim="Bool")))))]
+        #[entity(
+            pk(field = "id"),
+            index(field = "rank", unique),
+            index(fields = ["zone", "id"]),
+            index(fields = ["next", "id"]),
+            fields(
+                field(name = "id", value(item(prim = $prim))),
+                field(name = "next", value(opt, item(prim = $prim)), references(entity = "Self")),
+                field(name = "rank", value(item(prim = "Nat64"))),
+                field(name = "zone", value(item(prim = "Bool")))
+            )
+        )]
         struct Row {}
         #[test] fn full_signed_domain(){let mut negative=vec![255;$width];negative[0]=127;let mut zero=vec![0;$width];zero[0]=128;let mut one=zero.clone();one[$width-1]+=1;
             exercise(&[<$ty>::MIN,-1,0,1,<$ty>::MAX],&[vec![0;$width],negative,zero,one,vec![255;$width]],|id,next,rank|Row{id,next,rank,zone:true});}
@@ -194,31 +218,81 @@ signed_case!(int16, "Int16", i16, 2);
 signed_case!(int32, "Int32", i32, 4);
 signed_case!(int64, "Int64", i64, 8);
 signed_case!(int128, "Int128", i128, 16);
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(field(name="id",value(item(prim="U256"))),field(name="next",value(opt,item(prim="U256")),references(entity="Self")),field(name="rank",value(item(prim="Nat64"))),field(name="zone",value(item(prim="Bool")))))]
+
+///
+/// U256Row
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["zone", "id"]),
+    index(fields = ["next", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "U256"))),
+        field(name = "next", value(opt, item(prim = "U256")), references(entity = "Self")),
+        field(name = "rank", value(item(prim = "Nat64"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 struct U256Row {}
 
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
-    field(name="id",value(item(prim="Principal"))),
-    field(name="next",value(opt,item(prim="Principal")),references(entity="Self")),
-    field(name="rank",value(item(prim="Nat64"))),
-    field(name="zone",value(item(prim="Bool")))
-))]
+///
+/// PrincipalRow
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["zone", "id"]),
+    index(fields = ["next", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Principal"))),
+        field(name = "next", value(opt, item(prim = "Principal")), references(entity = "Self")),
+        field(name = "rank", value(item(prim = "Nat64"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 struct PrincipalRow {}
 
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
-    field(name="id",value(item(prim="Subaccount"))),
-    field(name="next",value(opt,item(prim="Subaccount")),references(entity="Self")),
-    field(name="rank",value(item(prim="Nat64"))),
-    field(name="zone",value(item(prim="Bool")))
-))]
+///
+/// SubaccountRow
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["zone", "id"]),
+    index(fields = ["next", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Subaccount"))),
+        field(name = "next", value(opt, item(prim = "Subaccount")), references(entity = "Self")),
+        field(name = "rank", value(item(prim = "Nat64"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 struct SubaccountRow {}
 
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["zone","id"]),index(fields=["next","id"]),fields(
-    field(name="id",value(item(prim="Account"))),
-    field(name="next",value(opt,item(prim="Account")),references(entity="Self")),
-    field(name="rank",value(item(prim="Nat64"))),
-    field(name="zone",value(item(prim="Bool")))
-))]
+///
+/// AccountRow
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["zone", "id"]),
+    index(fields = ["next", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Account"))),
+        field(name = "next", value(opt, item(prim = "Account")), references(entity = "Self")),
+        field(name = "rank", value(item(prim = "Nat64"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 struct AccountRow {}
 
 #[test]
@@ -262,6 +336,7 @@ fn account_keys_order_owner_then_effective_subaccount() {
             let mut b = vec![len];
             b.extend(owner);
             b.extend(sub.unwrap_or([0; 32]));
+
             b
         })
         .collect();
@@ -452,18 +527,45 @@ fn u256_keeps_high_half() {
     );
 }
 
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
-    field(name="id",value(item(prim="Int128"))),
-    field(name="peer",value(opt,item(prim="U256")),references(entity="WideKey")),
-    field(name="rank",value(item(prim="Nat64")))
-))]
+///
+/// SignedKey
+/// Exercises references to `WideKey` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["peer", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Int128"))),
+        field(name = "peer", value(opt, item(prim = "U256")), references(entity = "WideKey")),
+        field(name = "rank", value(item(prim = "Nat64")))
+    )
+)]
 pub(crate) struct SignedKey {}
-#[entity(pk(field="id"),index(field="rank",unique),index(fields=["peer","id"]),fields(
-    field(name="id",value(item(prim="U256"))),
-    field(name="peer",value(opt,item(prim="Int128")),references(entity="SignedKey")),
-    field(name="rank",value(item(prim="Nat64")))
-))]
+
+///
+/// WideKey
+/// Exercises references to `SignedKey` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "rank", unique),
+    index(fields = ["peer", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "U256"))),
+        field(name = "peer", value(opt, item(prim = "Int128")), references(entity = "SignedKey")),
+        field(name = "rank", value(item(prim = "Nat64")))
+    )
+)]
 pub(crate) struct WideKey {}
+
+///
+/// WrongSignedness
+/// Exercises references to `SignedKey` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "target"),
@@ -477,6 +579,12 @@ pub(crate) struct WideKey {}
     )
 )]
 struct WrongSignedness {}
+
+///
+/// WrongWidth
+/// Exercises references to `SignedKey` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "target"),

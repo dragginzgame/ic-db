@@ -1,9 +1,6 @@
 //! Named record boundary; field codecs and type rules stay in `field`.
-use super::{
-    declaration,
-    field::{Field, Kind},
-    meta_items, metas, once, text,
-};
+
+use super::{declaration, field::Field, meta_items, metas, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -31,7 +28,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             ));
         }
     }
-    let name = name.unwrap_or_else(|| item.ident.to_string());
+    let name = super::declaration_name(name, &item.ident, "record")?;
     let mut fields = fields.ok_or_else(|| fail("record requires fields"))?;
     if fields
         .iter()
@@ -42,9 +39,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         ));
     }
     fields.sort_by(|a, b| a.name.cmp(&b.name));
-    if name.is_empty()
-        || name.len() > 64
-        || fields.len() > 16
+    if fields.len() > 16
         || fields.windows(2).any(|w| w[0].name == w[1].name)
         || fields
             .iter()
@@ -55,7 +50,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         ));
     }
     for f in &mut fields {
-        resolve_self(f, &item.ident);
+        f.resolve_self(&item.ident);
     }
     let ids = fields
         .iter()
@@ -86,6 +81,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let ident = item.ident;
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs)?;
+
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,12 +98,4 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             fn decode_from(#reader:&mut ::ic_db::__private::Decoder<'_>) -> Result<Self,::ic_db::Error> { Ok(Self { #(#reads)* }) }
         }
     })
-}
-
-pub(super) fn resolve_self(field: &mut Field, ident: &syn::Ident) {
-    if let Kind::Named(path, _) = &mut field.kind
-        && path.is_ident("Self")
-    {
-        *path = syn::parse_quote!(#ident);
-    }
 }

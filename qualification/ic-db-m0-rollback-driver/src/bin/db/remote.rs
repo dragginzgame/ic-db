@@ -1,4 +1,5 @@
 //! Shared native target, identity and verified query calls; no database semantics.
+
 use clap::Args;
 use ic_agent::{
     Agent, Identity,
@@ -11,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+
 #[derive(Args)]
 pub(super) struct Target {
     /// Explicit HTTP(S) replica or boundary-node URL; never falls back to a fixture.
@@ -55,6 +57,7 @@ pub(super) fn provider(value: &str, local_root_key: bool) -> Result<reqwest::Url
     if local_root_key && !local {
         return Err("--local-root-key requires a loopback provider".into());
     }
+
     Ok(url)
 }
 
@@ -72,6 +75,7 @@ impl Connection {
             Principal::from_text(&target.canister).map_err(|_| "invalid canister principal")?;
         let identity: Box<dyn Identity> = if let Some(path) = &target.identity {
             let pem = std::fs::read(path).map_err(|e| format!("cannot read identity: {e}"))?;
+
             if let Ok(identity) = BasicIdentity::from_pem(&pem) {
                 Box::new(identity)
             } else {
@@ -151,6 +155,7 @@ impl Connection {
             "query call ({method}): {:.2} sec, cycles unavailable",
             start.elapsed().as_secs_f64()
         ));
+
         result
             .map_err(|_| {
                 format!(

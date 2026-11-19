@@ -1,4 +1,5 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
+
 use ic_db::{
     AggregateJobs, Batch, CopyStatus, Database, Entity, Error, JobOutcome, Maintenance,
     RetiredSource, Schema, SchemaCopy, SchemaTransition, Timestamp, entity,
@@ -7,6 +8,11 @@ use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// Source
+/// Exercises an alternate `Thing` declaration under the same logical identity.
+///
 
 #[entity(
     name = "Thing",
@@ -17,6 +23,12 @@ use ic_storage::{
     )
 )]
 struct Source {}
+
+///
+/// Target
+/// Exercises an alternate `Thing` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Thing",
     pk(field = "id"),
@@ -27,6 +39,11 @@ struct Source {}
     )
 )]
 struct Target {}
+
+///
+/// ManagedSource
+/// Exercises an alternate `Thing` declaration under the same logical identity.
+///
 
 #[entity(
     name = "Thing",
@@ -41,6 +58,11 @@ struct Target {}
     )
 )]
 struct ManagedSource {}
+
+///
+/// TimedSource
+/// Exercises an alternate `Timed` declaration under the same logical identity.
+///
 
 #[entity(
     name = "Timed",
@@ -62,6 +84,11 @@ struct ManagedSource {}
 )]
 struct TimedSource {}
 
+///
+/// TimedTarget
+/// Exercises an alternate `Timed` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Timed",
     pk(field = "id"),
@@ -78,6 +105,11 @@ struct TimedSource {}
     )
 )]
 struct TimedTarget {}
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
 
 #[entity(
     pk(field = "id"),
@@ -115,6 +147,7 @@ fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
         &GenericAllocationPolicy,
     )
     .unwrap();
+
     host
 }
 
@@ -135,6 +168,7 @@ fn create(host: &MemoryRuntime<VectorMemory>) -> Maintenance {
             .unwrap();
     }
     db.commit(batch).unwrap();
+
     db.begin_maintenance(&transition(1)).unwrap()
 }
 
@@ -170,6 +204,7 @@ fn transform(row: Source, inputs: &[u8]) -> Result<Target, Error> {
 
 fn entries(host: &MemoryRuntime<VectorMemory>, name: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(host.open_memory(&key(name)).unwrap());
+
     raw.iter()
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect()
@@ -533,6 +568,11 @@ fn added_entity_requires_pristine_state_before_cutover() {
 
 #[test]
 fn migrated_row_can_link_to_a_new_entity_after_publication() {
+    ///
+    /// LinkedOther
+    /// Exercises references to `Source` on rows keyed by `id`.
+    ///
+
     #[entity(
         name = "Other",
         pk(field = "id"),
@@ -908,6 +948,7 @@ fn incomplete_or_inconsistent_collections_never_validate_or_publish() {
         let mut copy = resume(&runtime);
         for call in 0..32 {
             let before = memory.borrow().clone();
+
             match copy.validate_next(2) {
                 Err(_) => {
                     assert_eq!(*memory.borrow(), before);
@@ -1093,6 +1134,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
                 if result.id == 2 {
                     result.born = Timestamp::from_millis(0);
                 }
+
                 Ok(result)
             }
         } else {
@@ -1101,6 +1143,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
                 if result.id == 2 {
                     result.changed = Timestamp::from_millis(21);
                 }
+
                 Ok(result)
             }
         };
@@ -1209,6 +1252,11 @@ fn timed_transform(row: TimedSource, _: &[u8]) -> Result<TimedTarget, Error> {
     })
 }
 
+///
+/// Link
+/// Exercises references to `UserOld` and `Self` on rows keyed by `id`.
+///
+
 #[entity(
     name = "A_Link",
     pk(field = "id"),
@@ -1229,6 +1277,12 @@ fn timed_transform(row: TimedSource, _: &[u8]) -> Result<TimedTarget, Error> {
     )
 )]
 struct Link {}
+
+///
+/// UserOld
+/// Exercises references to `Link` on rows keyed by `id`.
+///
+
 #[entity(
     name = "Z_User",
     pk(field = "id"),
@@ -1244,6 +1298,12 @@ struct Link {}
     )
 )]
 struct UserOld {}
+
+///
+/// UserNew
+/// Exercises references to `Link` on rows keyed by `id`.
+///
+
 #[entity(
     name = "Z_User",
     pk(field = "id"),
@@ -1266,6 +1326,7 @@ fn multi_schemas() -> (Schema, Schema, SchemaTransition) {
     let source = Schema::new(&[UserOld::SCHEMA, Link::SCHEMA, Other::SCHEMA]).unwrap();
     let target = Schema::new(&[Other::SCHEMA, Link::SCHEMA, UserNew::SCHEMA]).unwrap();
     let transition = SchemaTransition::new(&source, &target, "whole-db", 1, &[]).unwrap();
+
     (source, target, transition)
 }
 
@@ -1293,6 +1354,7 @@ fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
         })
         .unwrap();
     db.commit(batch).unwrap(); // final-state cycle, with zero as a real target key
+
     db.begin_maintenance(&transition)
         .unwrap()
         .begin_copy(
@@ -1306,6 +1368,7 @@ fn multi_begin(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
 
 fn multi_resume(runtime: &MemoryRuntime<VectorMemory>) -> SchemaCopy {
     let (source, target, transition) = multi_schemas();
+
     SchemaCopy::resume(
         runtime.open_memory(&key("copy.source.v1")).unwrap(),
         runtime.open_memory(&key("copy.target.v1")).unwrap(),
@@ -1440,6 +1503,7 @@ fn invalid_completed_reference_refuses_publication_and_cancels_to_original_sourc
     copy.copy_next::<UserOld, UserNew>(2, 4096, |row, inputs| {
         let mut row = widen_user(row, inputs)?;
         row.link = Some(999);
+
         Ok(row)
     })
     .unwrap();

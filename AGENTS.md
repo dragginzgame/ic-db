@@ -62,6 +62,19 @@ This overlay owns local authority, product boundaries and qualification choices.
   [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4), then migrate
   and remove this exception. It grants no advisory exemption, live deployment,
   product-engine dependency or sibling implementation authority.
+- The crate declaring a shared schema owns its package-root `build.rs`, the
+  `ic-db/build` build dependency and the generated assembly. Use
+  `ic_db::build_schema!(model);` for the complete module tree and export
+  `compiled()` from the library. A consuming canister imports that library
+  normally and calls its `compiled()`. When extracting declarations from a
+  canister, remove its schema build dependencies, generated include and any
+  build script whose only job was schema generation in the same patch.
+- A canister that actually declares its own local schema may use
+  `build_schema!()`. The frozen IcyDB baseline canister retains its legacy
+  actor generator for comparison. When adding an import-only qualification
+  fixture, record its consumer/owner pair in [the ownership check](scripts/check-schema-builds.pl).
+  Run `make schema-build-check` after changing build scripts or their dependencies. The [shared schema example](README.md#build-a-shared-schema-in-its-owning-crate)
+  shows the producer and consumer files.
 - Keep two-stage schema expansion: Rust resolves paths, host-only registration
   collects declarations, then validation seals the graph and emits target data.
   Emit target-independent schema Rust. A generated `cfg` or `cfg_attr` needs a

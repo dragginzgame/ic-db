@@ -1,11 +1,12 @@
 //! Cardinality, retained-byte and completed-output boundaries in the real engine.
+
+mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
-
-mod artifact;
 
 type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
 type Page = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
@@ -34,6 +35,7 @@ async fn call<T: DeserializeOwned>(
         )
         .await
         .unwrap();
+
     ic_wire::decode(
         &reply,
         Encoding::Frame {
@@ -70,6 +72,7 @@ async fn advance(
         result.as_ref().map(|s| (s.0, s.2, s.4))
     );
     assert!(instructions > 0 && cycles > 0);
+
     result
 }
 
@@ -160,6 +163,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
             after.is_some()
         );
         assert!(instructions > 0 && cycles > 0);
+
         result
     };
 
@@ -187,6 +191,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
                     format!("{key}:{}", sums[key])
                 } else {
                     assert_eq!(sums[key] % count, 0);
+
                     format!("{key}:{}", sums[key] / count)
                 }
             })
@@ -372,6 +377,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let mut examined = 0;
     loop {
         let before = pic.get_stable_memory(bytes_canister).await;
+
         match advance(pic, bytes_canister, &handle, 17, sequence, 16).await {
             Ok(step) => {
                 assert_eq!(
@@ -401,6 +407,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     // unchanged input refuses even at minimum work; this is a state bound.
     loop {
         let before = pic.get_stable_memory(bytes_canister).await;
+
         match advance(pic, bytes_canister, &handle, 17, sequence, 1).await {
             Ok(step) => {
                 assert_eq!((step.2, step.4), (examined + 1, 0));
@@ -513,6 +520,7 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
             "job-lifecycle op={operation} now={now} limit={limit} result={result:?} instructions={instructions} cycles={cycles} writes={writes}"
         );
         assert!(instructions > 0 && cycles > 0);
+
         Ok::<_, ic_testkit::pocket_ic::RejectResponse>((result, writes))
     };
     let fill = async |handle: &[u8]| {
@@ -528,6 +536,7 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
         .await
         .unwrap();
         assert_eq!((full.2, full.4, full.5), (retained_rows, 0, None));
+
         full.0
     };
     let mut handles = Vec::new();
@@ -696,6 +705,7 @@ async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
             result.as_ref().map(|s| (s.0, s.1, s.4))
         );
         assert!(instructions > 0 && cycles > 0);
+
         result
     };
     let upgrade = async || {
@@ -758,6 +768,7 @@ async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
                 } else {
                     present.max()
                 };
+
                 (i as u64 + 1, value.map(|s| s.as_bytes().to_vec()))
             })
             .collect();

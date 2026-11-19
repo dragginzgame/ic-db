@@ -1,9 +1,16 @@
 //! Bounded ordered lists: independent count framing and shared row limits.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity, enum_, record};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// ListRow
+/// Stores `labels` and `numbers` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -16,6 +23,12 @@ use ic_storage::{
     )
 )]
 struct ListRow {}
+
+///
+/// WiderListRow
+/// Exercises an alternate `ListRow` declaration under the same logical identity.
+///
+
 #[entity(
     name = "ListRow",
     pk(field = "id"),
@@ -29,13 +42,31 @@ struct ListRow {}
     )
 )]
 struct WiderListRow {}
+
+///
+/// Tree
+/// Carries the `Self` value of `children`.
+///
+
 #[record(fields(field(name = "children", value(many, max_items = 4, item(is = "Self")))))]
 struct Tree {}
+
+///
+/// Forest
+/// Distinguishes the `Empty` and `Forest` variants.
+///
+
 #[enum_(
     variant(name = "Empty"),
     variant(name = "Forest", value(many, max_items = 4, item(is = "Tree")))
 )]
 struct Forest {}
+
+///
+/// ForestRow
+/// Stores `trees` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -44,6 +75,12 @@ struct Forest {}
     )
 )]
 struct ForestRow {}
+
+///
+/// Siblings
+/// Stores `a` and `b` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -53,8 +90,20 @@ struct ForestRow {}
     )
 )]
 struct Siblings {}
+
+///
+/// Empty
+/// Represents a record with no stored fields.
+///
+
 #[record(fields())]
 struct Empty {}
+
+///
+/// EmptyItems
+/// Stores `items` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -63,6 +112,12 @@ struct Empty {}
     )
 )]
 struct EmptyItems {}
+
+///
+/// EmptyOnly
+/// Stores `items` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -71,6 +126,12 @@ struct EmptyItems {}
     )
 )]
 struct EmptyOnly {}
+
+///
+/// BlobList
+/// Stores `items` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -91,6 +152,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -331,12 +393,35 @@ fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// StartedAt
+/// Gives `Timestamp` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Timestamp"))]
 struct StartedAt {}
+
+///
+/// ExpiresAt
+/// Gives `Timestamp` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Timestamp"))]
 struct ExpiresAt {}
+
+///
+/// Starts
+/// Stores up to 2 ordered `StartedAt` values.
+///
+
 #[ic_db::list(item(is = "StartedAt"), max_items = 2)]
 struct Starts {}
+
+///
+/// Event
+/// Exercises indexed access by `started` on rows keyed by `id`.
+///
+
 #[ic_db::entity(
     pk(field = "id"),
     index(field = "started", unique),
@@ -350,8 +435,18 @@ struct Starts {}
 )]
 struct Event {}
 
+///
+/// WrongClock
+/// Carries the `ExpiresAt` value of `started`.
+///
+
 #[record(fields(field(name = "started", value(item(is = "ExpiresAt")))))]
 struct WrongClock {}
+
+///
+/// StartOnly
+/// Carries the `StartedAt` value of `started`.
+///
 
 #[record(fields(field(name = "started", value(item(is = "StartedAt")))))]
 struct StartOnly {}
@@ -452,8 +547,20 @@ fn named_list_reuses_its_bound_and_scalar_wrappers_keep_identity_after_reopen() 
 
 mod changed_bound {
     use super::{ExpiresAt, StartedAt};
+
+    ///
+    /// Starts
+    /// Stores up to 3 ordered `StartedAt` values.
+    ///
+
     #[ic_db::list(item(is = "StartedAt"), max_items = 3)]
     struct Starts {}
+
+    ///
+    /// Event
+    /// Exercises indexed access by `started` on rows keyed by `id`.
+    ///
+
     #[ic_db::entity(
         pk(field = "id"),
         index(field = "started", unique),

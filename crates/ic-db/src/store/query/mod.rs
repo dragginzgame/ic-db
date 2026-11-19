@@ -1,15 +1,19 @@
 //! Bounded fluent traversal. Typed result construction stays outside shared execution.
+
 mod aggregate;
 mod distinct;
 mod order;
 mod range;
 mod sort;
+
 pub use aggregate::{
     Aggregate, GroupCount, GroupOrder, GroupValue,
     jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep},
 };
 
-use super::{Database, Map, prefix, row_key, validate_index_entry};
+use super::{
+    Database, ENTITY_PREFIX_BYTES, INDEX_PREFIX_BYTES, Map, prefix, row_key, validate_index_entry,
+};
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
     codec::Decoder, key, primary::RowKey, types::TypeGraph,
@@ -92,6 +96,7 @@ impl Comparison {
         if value == IndexValue::Absent && !matches!(self, Self::Eq | Self::Ne) {
             return Err(Error::InvalidOperand);
         }
+
         Ok(())
     }
 
@@ -99,6 +104,7 @@ impl Comparison {
         if actual.is_none() {
             return self.accepts_absent(operand.is_none());
         }
+
         match self {
             Self::Eq => actual == operand,
             Self::Ne => actual != operand,
@@ -108,6 +114,7 @@ impl Comparison {
                 fn content(key: &[u8], optional: bool) -> Option<&[u8]> {
                     key.get(usize::from(optional)..)?.strip_suffix(&[0, 0])
                 }
+
                 actual
                     .and_then(|key| content(key, optional))
                     .zip(operand.and_then(|key| content(key, optional)))
@@ -173,8 +180,10 @@ fn contains_component(actual: &[u8], needle: &[u8]) -> bool {
                 encoded.next();
             }
         }
+
         bytes
     }
+
     memchr::memmem::find(&raw(actual), &raw(needle)).is_some()
 }
 
@@ -196,6 +205,7 @@ impl QueryCursor {
         let mut bytes = vec![1, u8::from(self.inclusive)];
         bytes.extend(self.binding);
         bytes.extend(&self.position);
+
         bytes
     }
 
@@ -206,6 +216,7 @@ impl QueryCursor {
         if !(35..=Self::MAX_ENCODED_BYTES).contains(&bytes.len()) || bytes[0] != 1 || bytes[1] > 1 {
             return Err(Error::InvalidCursor);
         }
+
         Ok(Self {
             binding: bytes[2..34].try_into().map_err(|_| Error::InvalidCursor)?,
             position: bytes[34..].to_vec(),
@@ -257,6 +268,7 @@ impl QueryPage<Vec<u8>> {
                     // Output records replace the entity root, not an extra nested value.
                     let row = R::decode_from(&mut reader)?;
                     reader.finish()?;
+
                     Ok(row)
                 })
                 .collect::<Result<_, Error>>()?,
@@ -347,6 +359,7 @@ impl<'a> Request<'a> {
         alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, QueryOperand<'a>)>,
     ) {
         let count = alternatives.len();
+
         if count == 0 || count > MAX_TERMS - self.predicates.len() {
             self.over_limit = true;
         } else {
@@ -369,6 +382,7 @@ impl<'a> Request<'a> {
     ) {
         if values.len() == 0 || values.len() > MAX_TERMS - self.predicates.len() {
             self.over_limit = true;
+
             return;
         }
         for value in values {
@@ -388,6 +402,7 @@ impl<'a> Request<'a> {
     #[inline(never)]
     fn order_by(&mut self, fields: &[&'a str]) {
         self.order_descending = 0;
+
         if fields.len() > 4 {
             self.over_limit = true;
         } else {
@@ -399,6 +414,7 @@ impl<'a> Request<'a> {
     fn order_by_each(&mut self, fields: &[(&'a str, SortDirection)]) {
         if fields.len() > 4 {
             self.over_limit = true;
+
             return;
         }
         self.order = Some(Vec::with_capacity(fields.len()));
@@ -412,6 +428,7 @@ impl<'a> Request<'a> {
         let fields = self.order.get_or_insert_with(Vec::new);
         if fields.len() == 4 {
             self.over_limit = true;
+
             return;
         }
         if direction == SortDirection::Descending {
@@ -454,6 +471,7 @@ pub(super) fn source_page<M: Memory>(
         None,
         PlanOutput::Rows,
     )?;
+
     execute(map, entity, &request, &plan, None)
 }
 
@@ -532,6 +550,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn distinct(mut self) -> Self {
         self.request.distinct = true;
+
         self
     }
 
@@ -553,6 +572,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Self {
         self.request
             .filter(field, comparison, QueryOperand::Literal(value.into()));
+
         self
     }
 
@@ -601,6 +621,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn filter_fields(mut self, left: &'a str, comparison: Comparison, right: &'a str) -> Self {
         self.request
             .filter(left, comparison, QueryOperand::Field(right));
+
         self
     }
 
@@ -611,6 +632,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn filter_length(mut self, field: &'a str, comparison: Comparison, length: u32) -> Self {
         self.request
             .filter(field, comparison, QueryOperand::Length(length));
+
         self
     }
 
@@ -700,6 +722,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 .iter()
                 .map(|&(field, op, value)| (field, op, QueryOperand::Literal(value))),
         );
+
         self
     }
 
@@ -713,6 +736,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         alternatives: &[(&'a str, Comparison, QueryOperand<'a>)],
     ) -> Self {
         self.request.or_clause(alternatives.iter().copied());
+
         self
     }
 
@@ -737,6 +761,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 .copied()
                 .map(|value| (field, Comparison::Eq, QueryOperand::Literal(value.into()))),
         );
+
         self
     }
 
@@ -755,6 +780,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Self {
         self.request
             .filter_not_in(field, values.iter().copied().map(Into::into));
+
         self
     }
 
@@ -765,6 +791,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn using_index(mut self, name: &'a str, values: &[IndexValue<'a>]) -> Self {
         self.request.using_index(name, values);
+
         self
     }
 
@@ -773,6 +800,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn order_asc(mut self, field: &'a str) -> Self {
         self.request.append_order(field, SortDirection::Ascending);
+
         self
     }
 
@@ -781,6 +809,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn order_desc(mut self, field: &'a str) -> Self {
         self.request.append_order(field, SortDirection::Descending);
+
         self
     }
 
@@ -796,6 +825,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn order_by(mut self, fields: &[&'a str]) -> Self {
         self.request.order_by(fields);
+
         self
     }
 
@@ -806,6 +836,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn order_by_each(mut self, fields: &[(&'a str, SortDirection)]) -> Self {
         self.request.order_by_each(fields);
+
         self
     }
 
@@ -813,6 +844,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn descending(mut self) -> Self {
         self.request.descending = true;
+
         self
     }
 
@@ -825,6 +857,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn limit(mut self, rows: usize) -> Self {
         self.request.rows = rows;
+
         self
     }
 
@@ -832,6 +865,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn work_limit(mut self, candidates: usize) -> Self {
         self.request.work = candidates;
+
         self
     }
 
@@ -841,6 +875,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn test_output_limit(mut self, bytes: usize) -> Self {
         self.request.bytes = bytes;
+
         self
     }
 
@@ -848,6 +883,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn after(mut self, cursor: &'a QueryCursor) -> Self {
         self.request.cursor = Some(cursor);
+
         self
     }
 
@@ -868,6 +904,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// if the work budget ends before a match or exhaustion is established.
     pub fn first(self) -> Result<Option<E>, Error> {
         let mut page = self.probe_matches(1)?;
+
         match page.rows.pop() {
             None if page.next.is_some() => Err(Error::Limit),
             result => Ok(result),
@@ -891,6 +928,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if page.next.is_some() {
             return Err(Error::Limit);
         }
+
         Ok(page.rows.pop())
     }
 
@@ -898,6 +936,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if !(1..=32).contains(&self.request.rows) {
             return Err(Error::Limit);
         }
+
         self.limit(rows).fetch()
     }
 
@@ -917,6 +956,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.request,
             Some(R::definition()),
         )?;
+
         raw.decode_projection()
     }
 }
@@ -956,6 +996,7 @@ fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u16, E
     if !source.contains(&target) {
         return Err(Error::InvalidQuery);
     }
+
     Ok(mask)
 }
 
@@ -1014,6 +1055,7 @@ fn contains_member(
             return Ok(true);
         }
     }
+
     Ok(false)
 }
 
@@ -1023,6 +1065,7 @@ fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
             return Err(Error::InvalidQuery);
         }
     }
+
     Ok(())
 }
 
@@ -1041,6 +1084,7 @@ fn comparison_key(
             }
         }
     }
+
     Ok(key)
 }
 
@@ -1052,6 +1096,7 @@ fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error
         return Err(Error::Limit);
     }
     *used += size;
+
     Ok(())
 }
 
@@ -1072,6 +1117,7 @@ fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -
             output.extend_from_slice(&bytes[usize::from(start)..usize::from(end)]);
         }
     }
+
     output
 }
 #[derive(Clone, Copy)]
@@ -1190,6 +1236,7 @@ impl<'a> Plan<'a> {
                         return Err(Error::InvalidQuery);
                     }
                     plan.span_fields |= 1 << position;
+
                     TermOperand::Length(length)
                 }
                 QueryOperand::Field(name) => {
@@ -1209,14 +1256,17 @@ impl<'a> Plan<'a> {
                         return Err(Error::InvalidQuery);
                     }
                     plan.selected |= 1 << right;
+
                     if let Some(item) = member {
                         plan.span_fields |= 1 << position;
+
                         TermOperand::Member {
                             item,
                             needle: MemberNeedle::Field(right),
                         }
                     } else {
                         plan.selected |= 1 << position;
+
                         TermOperand::Field(right)
                     }
                 }
@@ -1229,6 +1279,7 @@ impl<'a> Plan<'a> {
                         let mut bytes = Vec::new();
                         value.append_component(false, &mut bytes);
                         plan.span_fields |= 1 << position;
+
                         TermOperand::Member {
                             item,
                             needle: MemberNeedle::Literal(bytes),
@@ -1249,6 +1300,7 @@ impl<'a> Plan<'a> {
                             .admit(field.value, field.optional, value)?;
                         let mut bytes = Vec::new();
                         value.append_component(field.optional, &mut bytes);
+
                         TermOperand::Literal { bytes, absent }
                     }
                 }
@@ -1294,6 +1346,7 @@ impl<'a> Plan<'a> {
         hash.update(&plan.prefix);
         for term in &plan.terms {
             hash.update([term.position as u8, term.comparison as u8]);
+
             match &term.operand {
                 TermOperand::Literal { bytes, .. }
                 | TermOperand::Member {
@@ -1358,6 +1411,7 @@ impl<'a> Plan<'a> {
             plan.validate_position(entity, &cursor.position)
                 .map_err(|_| Error::InvalidCursor)?;
         }
+
         Ok(plan)
     }
 
@@ -1366,7 +1420,9 @@ impl<'a> Plan<'a> {
             return Err(Error::InvalidCursor);
         }
         if let Some(index) = self.index {
-            let mut remaining = bytes.get(9..).ok_or(Error::InvalidCursor)?;
+            let mut remaining = bytes
+                .get(INDEX_PREFIX_BYTES..)
+                .ok_or(Error::InvalidCursor)?;
             for name in index.fields {
                 consume_index_component(entity, index, name, &mut remaining)?;
             }
@@ -1378,10 +1434,13 @@ impl<'a> Plan<'a> {
             }
         } else {
             RowKey::decode(
-                bytes.get(5..).ok_or(Error::InvalidCursor)?,
+                bytes
+                    .get(ENTITY_PREFIX_BYTES..)
+                    .ok_or(Error::InvalidCursor)?,
                 entity.key_type()?,
             )?;
         }
+
         Ok(())
     }
 
@@ -1401,21 +1460,9 @@ fn consume_index_component(
     name: &str,
     remaining: &mut &[u8],
 ) -> Result<(), Error> {
-    let field = entity
-        .fields
-        .iter()
-        .find(|f| f.name == name)
-        .ok_or(Error::InvalidQuery)?;
-    if field.optional {
-        let (&presence, rest) = remaining.split_first().ok_or(Error::InvalidCursor)?;
-        *remaining = rest;
-        match presence {
-            0 if !index.present_only => return Ok(()),
-            1 => {}
-            _ => return Err(Error::InvalidCursor),
-        }
-    }
-    key::consume(remaining, field.value)
+    let field = entity.field_by_name(name).ok_or(Error::InvalidQuery)?;
+
+    key::consume_component(remaining, field, index.present_only, Error::InvalidCursor)
 }
 
 // Admission, execution and request cleanup share one entity-independent boundary.
@@ -1440,6 +1487,7 @@ fn fetch_rows<M: Memory>(
         projection,
         PlanOutput::Rows,
     )?;
+
     execute(&db.map, entity, &request, &plan, None)
 }
 
@@ -1518,10 +1566,11 @@ fn execute_inner<M: Memory>(
             read_bytes += owner_bytes.len();
             let owner = RowKey::decode(&owner_bytes, primary_type)?;
             let bytes = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
+
             (owner, bytes)
         } else {
             (
-                RowKey::decode(&stored_key[5..], primary_type)?,
+                RowKey::decode(&stored_key[ENTITY_PREFIX_BYTES..], primary_type)?,
                 entry.value(),
             )
         };
@@ -1558,6 +1607,7 @@ fn execute_inner<M: Memory>(
                     if plan.span_fields & (1 << term.position) != 0 =>
                 {
                     let absent = bytes[usize::from(spans[term.position].0)] == 0;
+
                     return Ok(term.comparison.accepts_absent(absent));
                 }
                 TermOperand::Member { item, needle } => {
@@ -1570,10 +1620,12 @@ fn execute_inner<M: Memory>(
                             }
                             right_component.clear();
                             value.append_component(false, &mut right_component);
+
                             &right_component
                         }
                     };
                     let (start, end) = spans[term.position];
+
                     return contains_member(
                         &bytes[usize::from(start)..usize::from(end)],
                         entity.fields[term.position].optional,
@@ -1598,6 +1650,7 @@ fn execute_inner<M: Memory>(
                     let rhs = values[*right];
                     right_component.clear();
                     rhs.append_component(false, &mut right_component);
+
                     (
                         (rhs != IndexValue::Absent).then_some(right_component.as_slice()),
                         false,
@@ -1605,6 +1658,7 @@ fn execute_inner<M: Memory>(
                 }
             };
             value.append_component(optional, &mut component);
+
             Ok(term.comparison.accepts(
                 (value != IndexValue::Absent).then_some(component.as_slice()),
                 operand,
@@ -1620,6 +1674,7 @@ fn execute_inner<M: Memory>(
                 }
                 break 'matches false;
             }
+
             true
         };
         let boundary = distinct::boundary(entity, plan.index, plan.distinct, stored_key)?;
@@ -1643,6 +1698,7 @@ fn execute_inner<M: Memory>(
             }
             if size > request.bytes - page.output_bytes {
                 page.next = Some(plan.cursor(stored_key, true));
+
                 return Ok(page);
             }
             page.output_bytes += size;
@@ -1673,6 +1729,7 @@ fn execute_inner<M: Memory>(
                 return Err(Error::Limit);
             }
             page.next = Some(plan.cursor(stored_key, false));
+
             return Ok(page);
         }
     }
@@ -1683,5 +1740,6 @@ fn execute_inner<M: Memory>(
     if let Some(collection) = sorted {
         collection.finish(request.bytes, &mut page)?;
     }
+
     Ok(page)
 }

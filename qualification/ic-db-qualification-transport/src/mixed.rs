@@ -1,4 +1,5 @@
 //! Application protocol for the three-entity workload.
+
 use serde::{Deserialize, Serialize};
 
 /// Entity, operation, key and two operands in a fixture batch.

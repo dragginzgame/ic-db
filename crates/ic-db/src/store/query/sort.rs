@@ -1,4 +1,5 @@
 //! Complete bounded sorting; no prefix answers, cursor state or generic sorter.
+
 use super::{
     MAX_COMPARISON_KEY, MAX_STATE_BYTES, Plan, QueryPage, Request, admit_output, copy_projection,
     projection_size,
@@ -108,6 +109,7 @@ impl Collection {
         }
         self.state_bytes += charge;
         self.rows.push(Row { key, bytes: row });
+
         Ok(())
     }
 
@@ -129,6 +131,7 @@ impl Collection {
             admit_output(row.bytes.len(), byte_limit, &mut page.output_bytes)?;
             page.rows.push(row.bytes);
         }
+
         Ok(())
     }
 }

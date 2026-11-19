@@ -176,6 +176,7 @@ pub async fn run(
             LIMITS,
         )
         .unwrap();
+
         (accepted, instructions, cycles)
     };
     let replace = async |replacement: Row| {
@@ -209,6 +210,7 @@ pub async fn run(
             LIMITS,
         )
         .unwrap();
+
         (value, instructions, cycles)
     };
     let lookup = async |id: u64| {
@@ -229,6 +231,7 @@ pub async fn run(
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Option<Row>, u64)>(
             &reply,
             Encoding::Frame {
@@ -257,6 +260,7 @@ pub async fn run(
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<Row>, u64)>(
             &reply,
             Encoding::Frame {
@@ -283,6 +287,7 @@ pub async fn run(
             let value = (id, category, amount);
             assert!(insert(value).await.0);
             settle().await;
+
             if category == 1 && amount >= 10 {
                 expected.push(value);
             } else if category == 2 && amount >= 10 {
@@ -299,6 +304,7 @@ pub async fn run(
                 ic_wire::encode(&(after, category, hinted), encoding, LIMITS)
             } else {
                 assert!(!hinted);
+
                 ic_wire::encode(&(after, category), encoding, LIMITS)
             }
             .unwrap();
@@ -315,6 +321,7 @@ pub async fn run(
                 LIMITS,
             )
             .unwrap();
+
             (rows, instructions)
         };
         let traverse =
@@ -332,6 +339,7 @@ pub async fn run(
                     costs.push(instructions);
                 }
                 assert_eq!(pic.get_stable_memory(canister).await, before);
+
                 costs
             };
         for phase in ["seeded", "after-upgrade-settled"] {
@@ -393,6 +401,7 @@ pub async fn run(
             "{label} keyset edited first={first_cost} writes={write_cost} settling={settle_cost} readiness={reopen_cost} resumed={resumed:?} fresh={fresh:?}"
         );
         owned.drop().await;
+
         return;
     }
     let mut source = Vec::new();
@@ -577,6 +586,7 @@ pub async fn run(
                             3 => *values.iter().max().unwrap(),
                             _ => unreachable!(),
                         };
+
                         (key, result)
                     })
                     .collect();
@@ -636,6 +646,7 @@ pub async fn run(
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Option<u64>, u64, u64)>(
             &reply,
             Encoding::Frame {

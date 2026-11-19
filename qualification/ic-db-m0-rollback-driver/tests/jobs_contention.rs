@@ -1,4 +1,5 @@
 //! Controlled write schedules and shared retained-job capacity, without hidden retries.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -48,6 +49,7 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
             )
             .await
             .unwrap();
+
         response::<Result<Vec<u8>, String>>(110, &bytes)
     };
     let advance = async |handle: &[u8], operation: u8, sequence: u64, work: u32| {
@@ -63,6 +65,7 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
             )
             .await
             .unwrap();
+
         response::<Result<Step, String>>(111, &bytes)
     };
     let control = async |operation: u8, handle: &[u8], now: i64, limit: u32| {
@@ -75,6 +78,7 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
             )
             .await
             .unwrap();
+
         response::<Result<u64, String>>(112, &bytes)
     };
     let upgrade = async || {
@@ -232,6 +236,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
@@ -260,6 +265,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Vec<u8>, String>>(
             &reply,
             Encoding::Frame {
@@ -289,6 +295,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Step, String>>(
             &reply,
             Encoding::Frame {
@@ -356,6 +363,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 break;
             }
             assert_eq!((step.4, step.5), (0, None));
+
             match operation {
                 0 => {}
                 5 | 6 => {
@@ -462,6 +470,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         let step = advance(&handle, sequence, 12).await.unwrap();
         sequence = step.0;
         captured_revision = step.1;
+
         if call == 9 {
             assert_eq!(
                 (step.2, step.4, step.5),

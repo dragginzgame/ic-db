@@ -1,4 +1,5 @@
 //! Platform dispatch and Wire frame handling for private Wasm fixtures.
+
 use super::REQUEST_LIMITS;
 use ic_platform_runtime::{
     entrypoints::{AdmissionError, EndpointError, UpdateError},
@@ -20,6 +21,7 @@ pub fn decode_measured<T: serde::de::DeserializeOwned, const ID: u64>(
     bytes: &[u8],
 ) -> Result<super::Measured<T>, String> {
     let request = super::decode::<T, ID>(bytes).map_err(|error| error.to_string())?;
+
     Ok((request, METER.ok_or("IC instruction meter unavailable")?))
 }
 
@@ -38,6 +40,7 @@ pub fn decode_timed<T: serde::de::DeserializeOwned, const ID: u64>(
 pub fn admit<const ID: u64>() -> Result<(), String> {
     install_panic_hook();
     admit_frame(ID);
+
     Ok(())
 }
 
@@ -75,6 +78,7 @@ pub fn endpoint_error(
 #[must_use]
 pub fn allow() -> Result<(), std::convert::Infallible> {
     install_panic_hook();
+
     Ok(())
 }
 

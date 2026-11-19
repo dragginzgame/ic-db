@@ -1,5 +1,7 @@
 //! Entity growth with independently checked reachability, isolation and upgrade.
+
 mod artifact;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -86,6 +88,7 @@ async fn typed_entity_growth() {
                 LIMITS,
             )
             .unwrap();
+
             (observed, (opening, work, cycles))
         };
         // Reuse the same primary key across every entity, with distinct values.

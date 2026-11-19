@@ -4,11 +4,10 @@ use crate::{open, runtime, schema::KeyRow};
 use ic_db::{Batch, Timestamp, Ulid, UlidGenerationError, UlidGenerator};
 use std::cell::RefCell;
 
-thread_local! {
-    static ISSUER: RefCell<UlidGenerator> = const { RefCell::new(UlidGenerator::new()) };
-}
-
-/// Issue a ULID using the supplied time and randomness.
+// issue_key
+// Issue a ULID using the supplied time and randomness.
+// guard  : validates the request frame for method 77.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "issue_key",
@@ -38,6 +37,7 @@ async fn issue_key(
             if previous >> 80 == current >> 80 {
                 assert_eq!(current, previous + 1);
             }
+
             second
         }
         _ => ISSUER
@@ -68,10 +68,14 @@ async fn issue_key(
     if mode == 1 {
         crate::system::trap("after generated-key commit");
     }
+
     Ok(id.to_bytes())
 }
 
-/// Read the issuer checkpoint for the next restore.
+// last_issued_key
+// Read the issuer checkpoint for the next restore.
+// guard  : validates the request frame for method 78.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "last_issued_key",
@@ -85,7 +89,10 @@ fn last_issued_key((): ()) -> Option<[u8; 16]> {
     ISSUER.with(|issuer| issuer.borrow().last().map(Ulid::to_bytes))
 }
 
-/// Restore the supplied last-issued ULID for subsequent issuance.
+// restore_issuer
+// Restore the supplied last-issued ULID for subsequent issuance.
+// guard  : validates the request frame for method 79.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "restore_issuer",
@@ -98,5 +105,10 @@ fn last_issued_key((): ()) -> Option<[u8; 16]> {
 fn restore_issuer(last: [u8; 16]) -> bool {
     ISSUER
         .with(|issuer| *issuer.borrow_mut() = UlidGenerator::resume_after(Ulid::from_bytes(last)));
+
     true
+}
+
+thread_local! {
+    static ISSUER: RefCell<UlidGenerator> = const { RefCell::new(UlidGenerator::new()) };
 }

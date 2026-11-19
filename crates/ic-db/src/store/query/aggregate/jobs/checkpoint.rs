@@ -1,4 +1,5 @@
 //! Query-bound checkpoint payloads; the store owns only the enclosing bounded frame.
+
 use super::{
     super::{
         Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_GROUPS, MAX_STATE_BYTES,
@@ -27,6 +28,7 @@ impl Accumulator<'_> {
                 if seen.len() as u64 != record.count {
                     return Err(Error::Corrupt);
                 }
+
                 reader.finish()
             }
             Self::Scalar(reducer) => {
@@ -35,6 +37,7 @@ impl Accumulator<'_> {
                     .as_slice()
                     .try_into()
                     .map_err(|_| Error::Corrupt)?;
+
                 reducer.restore_job(record.count, total)
             }
         }
@@ -50,10 +53,12 @@ impl Accumulator<'_> {
             Self::Scalar(Reducer::Distinct { seen, .. }) => {
                 let mut writer = Encoder::with_byte_limit(MAX_JOB_BYTES);
                 write_distinct(&mut writer, seen)?;
+
                 (seen.len() as u64, writer.finish())
             }
             Self::Scalar(reducer) => {
                 let (count, total) = reducer.job_state()?;
+
                 (count, total.to_vec())
             }
         })
@@ -87,10 +92,12 @@ impl Reducer {
                 if key.len() > MAX_COMPARISON_KEY {
                     return Err(Error::Corrupt);
                 }
+
                 Some((key, bytes.to_vec()))
             }
             _ => return Err(Error::Corrupt),
         };
+
         Ok(())
     }
 
@@ -116,6 +123,7 @@ impl Reducer {
             Self::Numeric(state) => state.restore(count, total),
             _ => return Err(Error::InvalidQuery),
         }
+
         Ok(())
     }
 }
@@ -130,12 +138,14 @@ impl Groups {
             writer.bytes(bytes)?;
             let present = if let Reducer::Distinct { seen, .. } = reducer {
                 write_distinct(&mut writer, seen)?;
+
                 seen.len() as u64
             } else if let Reducer::Extremum { selected, .. } = reducer {
                 writer.boolean(selected.is_some())?;
                 if let Some((_, bytes)) = selected {
                     writer.bytes(bytes)?;
                 }
+
                 u64::from(selected.is_some())
             } else {
                 let (present, total) = reducer.job_state()?;
@@ -143,10 +153,12 @@ impl Groups {
                 if matches!(reducer, Reducer::Numeric(_)) {
                     writer.bytes(&total)?;
                 }
+
                 present
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
         }
+
         Ok((count, writer.finish()))
     }
 
@@ -165,6 +177,7 @@ impl Groups {
                 if seen.is_empty() {
                     return Err(Error::Corrupt);
                 }
+
                 seen.len() as u64
             } else if let Reducer::Extremum { position, .. } = &reducer {
                 let present = reader.boolean()?;
@@ -177,6 +190,7 @@ impl Groups {
                     Vec::new()
                 };
                 reducer.restore_extremum(entity, u64::from(present), &winner)?;
+
                 u64::from(present)
             } else {
                 let present = reader.nat64()?;
@@ -186,9 +200,11 @@ impl Groups {
                     if present == 0 && matches!(reducer, Reducer::Count { presence: None, .. }) {
                         return Err(Error::Corrupt);
                     }
+
                     [0; 32]
                 };
                 reducer.restore_job(present, total)?;
+
                 present
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
@@ -218,6 +234,7 @@ impl Groups {
         if count != record.count {
             return Err(Error::Corrupt);
         }
+
         Ok(())
     }
 }
@@ -227,6 +244,7 @@ fn write_distinct(writer: &mut Encoder, seen: &BTreeSet<Vec<u8>>) -> Result<(), 
     for bytes in seen {
         writer.bytes(bytes)?;
     }
+
     Ok(())
 }
 
@@ -250,6 +268,7 @@ fn read_distinct(
             if field.optional {
                 let (&tag, rest) = remaining.split_first().ok_or(Error::Corrupt)?;
                 remaining = rest;
+
                 match tag {
                     0 => continue,
                     1 => {}
@@ -263,5 +282,6 @@ fn read_distinct(
         }
         seen.insert(bytes);
     }
+
     Ok(seen)
 }

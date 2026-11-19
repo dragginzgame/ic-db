@@ -1,4 +1,5 @@
 //! Real product records in Wasm, with stable backing bytes as the rollback oracle.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -51,6 +52,7 @@ fn run_console(binary: &std::path::Path, commands: &str) -> String {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -166,6 +168,7 @@ fn console_schema_json_is_complete_selected_and_pipeable() {
         assert_eq!(stats.lines().count(), 1, "{stats}");
         assert!(stats.starts_with("query call (schema): "), "{stats}");
         assert!(stats.ends_with("sec, 0 cycles charged\n"), "{stats}");
+
         serde_json::from_slice(&output.stdout).unwrap()
     };
     let all = inspect(&["schema", "--json"]);
@@ -1308,6 +1311,7 @@ async fn references_follow_final_batch_state_in_wasm() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Option<u64>>(
             &reply,
             Encoding::Frame {
@@ -1336,6 +1340,7 @@ async fn references_follow_final_batch_state_in_wasm() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
@@ -1420,6 +1425,7 @@ async fn product_records_and_message_boundary() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Status>(
             &reply,
             Encoding::Frame {
@@ -1448,6 +1454,7 @@ async fn product_records_and_message_boundary() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -1476,6 +1483,7 @@ async fn product_records_and_message_boundary() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Vec<(u64, u64)>>(
             &reply,
             Encoding::Frame {
@@ -1865,6 +1873,7 @@ async fn product_records_and_message_boundary() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(DocumentValue, u64)>(
             &reply,
             Encoding::Frame {
@@ -1893,6 +1902,7 @@ async fn product_records_and_message_boundary() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
@@ -2003,6 +2013,7 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Value, u64)>(
             &reply,
             Encoding::Frame {
@@ -2100,6 +2111,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<bool>(
             &reply,
             Encoding::Frame {
@@ -2143,6 +2155,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Value, u64)>(
             &reply,
             Encoding::Frame {
@@ -2280,6 +2293,7 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Value, u64)>(
             &reply,
             Encoding::Frame {
@@ -2380,6 +2394,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Value, u64)>(
             &reply,
             Encoding::Frame {
@@ -2425,6 +2440,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<bool>(
             &reply,
             Encoding::Frame {
@@ -2562,6 +2578,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Read, u8>>(
             &reply,
             Encoding::Frame {
@@ -2699,6 +2716,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Rows, u8>>(
             &reply,
             Encoding::Frame {
@@ -2846,6 +2864,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Read>(
             &reply,
             Encoding::Frame {
@@ -2983,6 +3002,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Links>(
             &reply,
             Encoding::Frame {
@@ -3011,6 +3031,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
@@ -3755,6 +3776,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -3785,6 +3807,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
     let expected = |rows: &[Row]| {
         let mut rows = rows.to_vec();
         rows.sort_by_key(|(id, _, value)| (*value, *id));
+
         rows.into_iter()
             .map(|(id, maybe, value)| {
                 let mut bytes = id.to_le_bytes().to_vec();
@@ -3794,6 +3817,7 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
                 }
                 bytes.extend(value);
                 bytes.push(1);
+
                 (id, bytes)
             })
             .collect::<Vec<_>>()
@@ -3962,6 +3986,7 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -4012,6 +4037,7 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
                 bytes.extend(small.to_le_bytes());
                 bytes.extend(value.to_le_bytes());
                 bytes.push(1);
+
                 (id, bytes)
             })
             .collect::<Vec<_>>()
@@ -4239,6 +4265,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -4269,6 +4296,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
         let mut bytes = (value.0.len() as u32).to_le_bytes().to_vec();
         bytes.extend(&value.0);
         bytes.extend(value.1.unwrap_or([0; 32]));
+
         bytes
     };
     let expected = |rows: &[Row]| {
@@ -4282,6 +4310,7 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
                 bytes.extend(sub);
                 bytes.extend(account_bytes(value));
                 bytes.push(1);
+
                 (*id, bytes)
             })
             .collect::<Vec<_>>()
@@ -4477,6 +4506,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
             LIMITS,
         )
         .unwrap();
+
         if accepted {
             assert_eq!(
                 result,
@@ -4538,6 +4568,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -4568,6 +4599,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
     let expected = |rows: &[Row]| {
         let mut rows = rows.to_vec();
         rows.sort_by_key(|(id, _, value)| (*value, *id));
+
         rows.into_iter()
             .map(|(id, maybe, value)| {
                 let mut bytes = id.to_le_bytes().to_vec();
@@ -4577,6 +4609,7 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
                 }
                 bytes.extend(value);
                 bytes.push(1);
+
                 (id, bytes)
             })
             .collect::<Vec<_>>()
@@ -4745,6 +4778,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -4770,6 +4804,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
     let expected = |rows: &[Row]| {
         let mut rows = rows.to_vec();
         rows.sort_by_key(|(id, _, value)| (*value, *id));
+
         rows.into_iter()
             .map(|(id, maybe, value)| {
                 let mut bytes = id.to_le_bytes().to_vec();
@@ -4779,6 +4814,7 @@ async fn dates_preserve_domain_order_and_message_rollback() {
                 }
                 bytes.extend(value.to_le_bytes());
                 bytes.push(1);
+
                 (id, bytes)
             })
             .collect::<Vec<_>>()
@@ -4955,6 +4991,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -4984,6 +5021,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
         } else {
             rows.sort_by_key(|r| (r.4, r.0));
         }
+
         rows.into_iter()
             .map(|(id, delay, duration, maybe, timestamp)| {
                 let mut bytes = vec![u8::from(delay.is_some())];
@@ -4998,6 +5036,7 @@ async fn time_values_preserve_units_order_and_message_rollback() {
                 }
                 bytes.extend(timestamp.to_le_bytes());
                 bytes.push(1);
+
                 (id, bytes)
             })
             .collect::<Vec<_>>()
@@ -5221,6 +5260,7 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
             &reply,
             Encoding::Frame {
@@ -5266,6 +5306,7 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
                 b.push(2);
                 b.extend(coefficient.to_be_bytes());
                 b.extend([2, 1]);
+
                 (id, b)
             })
             .collect::<Vec<_>>()
@@ -5431,6 +5472,7 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<Row>, Option<[u8; 16]>, u64)>(
             &reply,
             Encoding::Frame {
@@ -5459,6 +5501,7 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Option<Row>, Vec<Row>)>(
             &reply,
             Encoding::Frame {
@@ -5629,6 +5672,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<Signed>, Option<i128>, u64)>(
             &reply,
             Encoding::Frame {
@@ -5657,6 +5701,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<Wide>, Option<[u8; 32]>, u64)>(
             &reply,
             Encoding::Frame {
@@ -5685,6 +5730,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<Signed>, Vec<Wide>)>(
             &reply,
             Encoding::Frame {

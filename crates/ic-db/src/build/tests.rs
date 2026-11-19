@@ -98,10 +98,13 @@ fn duplicates_and_missing_targets_refuse_before_emission() {
     registry.register("host::schema::Child", &CHILD);
     // A similarly prefixed module does not supply a missing target.
     registry.register("host::schema_extra::Parent", &PARENT);
-    assert!(matches!(
-        registry.generate("host::schema", "crate::schema"),
-        Err(Error::Schema(crate::Error::InvalidSchema))
-    ));
+    let error = registry
+        .generate("host::schema", "crate::schema")
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Child.parent references Parent, which is missing from the selected schema module host::schema"
+    );
     assert!(matches!(
         registry.generate("host::missing", "crate::schema"),
         Err(Error::EmptyModule)
@@ -114,5 +117,30 @@ fn duplicates_and_missing_targets_refuse_before_emission() {
     assert!(matches!(
         registry.generate("host::schema", "crate::schema"),
         Err(Error::Schema(crate::Error::InvalidSchema))
+    ));
+}
+
+#[test]
+fn mismatched_reference_identifies_both_fields_and_key_types() {
+    static ULID_PARENT: EntitySchema = EntitySchema {
+        fields: &[FieldSchema {
+            value: FieldType::Ulid,
+            ..PARENT.fields[0]
+        }],
+        ..PARENT
+    };
+    let mut registry = Registry::default();
+    registry.register("host::schema::Child", &CHILD);
+    registry.register("host::schema::Parent", &ULID_PARENT);
+    let error = registry
+        .generate("host::schema", "crate::schema")
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Child.parent has type Nat64 but references Parent.id, which requires Ulid"
+    );
+    assert!(matches!(
+        crate::Schema::new(&[&CHILD, &ULID_PARENT]),
+        Err(crate::Error::InvalidSchema)
     ));
 }

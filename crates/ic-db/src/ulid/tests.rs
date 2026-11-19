@@ -21,6 +21,7 @@ fn ic_stream_reads_identity_once_and_separates_principals_and_versions() {
                 next(u64::MAX),
                 (u128::from(u64::MAX / 1_000_000) << 80) | suffix
             );
+
             suffix
         })
         .join()

@@ -1,4 +1,5 @@
 //! Actual IC issuance consumption, message rollback and explicit upgrade restoration.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -51,6 +52,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Option<[u8; 16]>>(
             &reply,
             Encoding::Frame {

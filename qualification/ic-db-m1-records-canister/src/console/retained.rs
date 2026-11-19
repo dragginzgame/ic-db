@@ -1,13 +1,14 @@
 //! Thin local CLI adapter: product jobs own accumulation, progress and pages.
+
 use super::{
     AmountOnly, AverageAmount, CategoryOnly, EntryIdOnly, NoteOnly, OptionalDecimal, PriorityOnly,
     TotalAmount, TotalDecimal, TotalPriority, TotalScore, ZoneOnly,
     blob::{self, Optional, Payload},
     decimal_query, document_query, entry_query, optional, parse_group_order, select_groups,
 };
-use crate::handles::{AggregateJobs, Query};
 use crate::{
     aggregate_store::open_jobs,
+    handles::{AggregateJobs, Query},
     open, runtime,
     schema::{BinaryObject, DecimalRow, Document, Entry},
 };
@@ -15,6 +16,64 @@ use ic_db::{
     Entity, Error, GroupCount, GroupCursor, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep,
     Timestamp,
 };
+
+// aggregate_start
+// Start a retained console aggregate and return its handle.
+// guard  : validates the request frame for method 120.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_start",
+    guard = crate::transport::admit::<120>,
+    decode = crate::transport::decode_timed::<_, 120>,
+    encode = crate::transport::encode::<_, 120>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, String> {
+    start_at(&selection, message_time(time_ns))
+}
+
+// aggregate_resume
+// Advance the retained selection or read a completed result page.
+// guard  : validates the request frame for method 121.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_resume",
+    guard = crate::transport::admit::<121>,
+    decode = crate::transport::decode_timed::<_, 121>,
+    encode = crate::transport::encode::<_, 121>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn aggregate_resume((request, time_ns): (Request, u64)) -> Result<Response, String> {
+    resume_at(request, message_time(time_ns))
+}
+
+// aggregate_cancel
+// Cancel the retained aggregate identified by the supplied handle.
+// guard  : validates the request frame for method 122.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "aggregate_cancel",
+    guard = crate::transport::admit::<122>,
+    decode = crate::transport::decode::<_, 122>,
+    encode = crate::transport::encode::<_, 122>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Platform entrypoints receive an owned decoded request"
+)]
+fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
+    let host = runtime();
+    let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
+
+    open_jobs(&host).cancel(&handle).map_err(|e| e.to_string())
+}
 
 // Reconstructed on every call; product admission binds these semantics to the job.
 type Selection = (
@@ -32,26 +91,13 @@ fn configured<'a, E: Entity>(
 ) -> Result<Query<'a, E>, String> {
     let (_, select, _, limit, (group_min, group_max), group_order, filters) = selection;
     let query = super::filter_rows(query, filters)?;
+
     select_groups(
         query.limit(*limit as usize),
         select,
         (group_min.as_deref(), group_max.as_deref()),
         parse_group_order(group_order.as_deref())?,
     )
-}
-
-/// Start a retained console aggregate and return its handle.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "aggregate_start",
-    guard = crate::transport::admit::<120>,
-    decode = crate::transport::decode_timed::<_, 120>,
-    encode = crate::transport::encode::<_, 120>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, String> {
-    start_at(&selection, message_time(time_ns))
 }
 
 fn message_time(time_ns: u64) -> Timestamp {
@@ -105,6 +151,7 @@ pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>,
         ),
         _ => Err(Error::InvalidQuery),
     };
+
     result
         .map(|handle| handle.to_bytes())
         .map_err(|e| e.to_string())
@@ -158,6 +205,7 @@ fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> Output) -> Response {
         JobOutcome::Invalidated => ("Invalidated", (vec![], vec![], None)),
         JobOutcome::Expired => ("Expired", (vec![], vec![], None)),
     };
+
     (
         step.sequence,
         phase.into(),
@@ -201,20 +249,6 @@ fn values<K, R>(
             .collect(),
         page.next.map(|c| c.to_bytes()),
     )
-}
-
-/// Advance the retained selection or read a completed result page.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "aggregate_resume",
-    guard = crate::transport::admit::<121>,
-    decode = crate::transport::decode_timed::<_, 121>,
-    encode = crate::transport::encode::<_, 121>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn aggregate_resume((request, time_ns): (Request, u64)) -> Result<Response, String> {
-    resume_at(request, message_time(time_ns))
 }
 
 pub(super) fn resume_at(
@@ -295,6 +329,7 @@ pub(super) fn resume_at(
         ),
         _ => Err(Error::InvalidQuery),
     };
+
     result.map_err(|e| e.to_string())
 }
 
@@ -355,6 +390,7 @@ fn resume_blob(
             } else {
                 query.resume_max::<Payload>(jobs, handle, sequence, now)
             };
+
             step.map(|s| display(s, |v| scalar("payload", v.map(|r| super::hex(&r.payload)))))
         }
         "min:optional" | "max:optional" => {
@@ -363,6 +399,7 @@ fn resume_blob(
             } else {
                 query.resume_max::<Optional>(jobs, handle, sequence, now)
             };
+
             step.map(|s| {
                 display(s, |v| {
                     scalar(
@@ -409,6 +446,7 @@ fn resume_query<'a, E: Entity>(
     } else if cursor.is_some() {
         return Err("scalar aggregates have no page cursor".into());
     }
+
     Ok(query)
 }
 
@@ -501,26 +539,6 @@ fn resume_entry(
             }),
         _ => Err(Error::InvalidQuery),
     }
-}
-
-/// Cancel the retained aggregate identified by the supplied handle.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "aggregate_cancel",
-    guard = crate::transport::admit::<122>,
-    decode = crate::transport::decode::<_, 122>,
-    encode = crate::transport::encode::<_, 122>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Platform entrypoints receive an owned decoded request"
-)]
-fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
-    let host = runtime();
-    let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
-    open_jobs(&host).cancel(&handle).map_err(|e| e.to_string())
 }
 
 fn start_document(
@@ -788,6 +806,7 @@ fn resume_decimal(
                 "max:value" => query.resume_max::<TotalDecimal>(jobs, handle, sequence, now),
                 _ => query.resume_sum::<TotalDecimal>(jobs, handle, sequence, now),
             };
+
             result.map(|s| display(s, |v| scalar("value", v.map(|r| r.value.to_string()))))
         }
         "zone,sum:value" | "zone,avg:value" | "zone,min:value" | "zone,max:value" => {
@@ -802,6 +821,7 @@ fn resume_decimal(
                     _ => query
                         .resume_group_sum::<ZoneOnly, TotalDecimal>(jobs, handle, sequence, now),
                 };
+
             result.map(|s| {
                 display(s, |p| {
                     values(
@@ -820,6 +840,7 @@ fn resume_decimal(
                 "max:maybe" => query.resume_max::<OptionalDecimal>(jobs, handle, sequence, now),
                 _ => query.resume_sum::<OptionalDecimal>(jobs, handle, sequence, now),
             };
+
             result.map(|s| display(s, |v| scalar("maybe", v.map(|r| optional(r.maybe)))))
         }
         "zone,sum:maybe" | "zone,avg:maybe" | "zone,min:maybe" | "zone,max:maybe" => {
@@ -834,6 +855,7 @@ fn resume_decimal(
                     _ => query
                         .resume_group_sum::<ZoneOnly, OptionalDecimal>(jobs, handle, sequence, now),
                 };
+
             result.map(|s| {
                 display(s, |p| {
                     values(

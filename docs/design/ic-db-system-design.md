@@ -390,13 +390,15 @@ active entity declarations as inactive. Generated fields and codecs are shared.
 `build::generate(source_module, target_module)` selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler
-resolves the generated paths; target admission refuses host/target contract drift.
-For a canister-local schema, `ic_db::build_schema!(src::schema)` in the package-root
-`build.rs` maps the host declaration subtree to `crate::schema`. The colocated
-0.23.2 form also resolves declarations beside the script. A shared schema crate
-can supply its own module root to `build::write_schema`. Both call the same
-generator; Rust owns source discovery and import resolution. Declaration visibility must permit the emitted
-Rust references. No second persisted schema representation is introduced.
+resolves the emitted types. The target checks their fingerprint when the schema opens.
+For canister-local declarations, `ic_db::build_schema!()` selects `src/schema` in
+the package-root build script. A shared schema crate calls `ic_db::build_schema!(model)` in its own build
+script. The root and its complete declaration subtree form one contract. Child
+modules may reference each other. Re-exports do not alter membership. The
+library exports `compiled()` alongside its application types; a consuming
+canister needs only its normal Cargo dependency. The producer checks target
+membership at compile time and checks the descriptor fingerprint at admission.
+See the [single-tree producer and consumer proof](../../qualification/experiments/schema-owner/README.md).
 An admitted `Schema` can be cloned for host-owned reuse: it contains immutable
 executable metadata only. Generated assembly validates the host/target fingerprint
 once per thread, retains that immutable schema and returns clones. It never caches
@@ -404,8 +406,8 @@ database admission. The local M1 host also retains supplier runtime custody; eac
 call still opens a fresh database/collection lease and reads the current manifest.
 Revisions are validated by operations that need them, as described below.
 
-The actual M1 Wasm fixture now compiles the same schema module in its host build
-script and target, replacing the manually maintained entity list. It exercises
+The M1 records schema library compiles the same declarations in its host build
+script and target library. The Wasm canister imports its compiled schema. It exercises
 a cross-module re-export and an optional self-reference with an unchanged golden
 fingerprint. Native checks adapt IcyDB's order-independent assembly, duplicate
 registration and late-registration cases; missing targets and unresolved Rust names

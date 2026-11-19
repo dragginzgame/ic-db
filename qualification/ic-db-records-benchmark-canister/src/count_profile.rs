@@ -1,10 +1,14 @@
 //! Read-only cost decomposition for this fixed fixture, never an alternate executor.
+
 use super::{Entry, KEY, database, runtime, transport};
 use ic_db::{Comparison, Entity, Error};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
 
-/// Measure database opening and the selected count separately.
+// count_profile
+// Measure database opening and the selected count separately.
+// guard  : validates the request frame for method 9.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "count_profile",
@@ -44,6 +48,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
             Err(Error::Limit) => None,
             Err(error) => panic!("unexpected profile refusal: {error:?}"),
         };
+
         return (
             result,
             opened - start,
@@ -88,6 +93,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
         count += 1;
         assert!(count <= 512, "fixture-only raw traversal bound");
     }
+
     (
         Some(count),
         opened - start,

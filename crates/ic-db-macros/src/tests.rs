@@ -627,6 +627,7 @@ fn enum_authoring_is_bounded_and_named_index_types_resolve_in_rust() {
     let variants: Vec<_> = (0..65)
         .map(|i| {
             let name = format!("V{i}");
+
             quote!(variant(name=#name))
         })
         .collect();

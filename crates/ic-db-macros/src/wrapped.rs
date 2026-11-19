@@ -1,10 +1,9 @@
 //! Named lists and primitive newtypes reuse field descriptors and codecs.
+
 use super::{
     declaration,
     field::{Field, Kind, parse_value},
-    metas, once,
-    record::resolve_self,
-    text,
+    metas, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -26,13 +25,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
             ));
         }
     }
-    let name = name.unwrap_or_else(|| item.ident.to_string());
-    if name.is_empty() || name.len() > 64 {
-        return Err(syn::Error::new_spanned(
-            item.ident,
-            "type name must contain 1..64 UTF-8 bytes",
-        ));
-    }
+    let name = super::declaration_name(name, &item.ident, label)?;
     let cardinality = many.then(|| quote!(many,));
     let (kind, optional, bound) = parse_value(&syn::parse_quote!(value(#cardinality #(#parts),*)))?;
     if !many && matches!(kind, Kind::Named(..)) {
@@ -42,16 +35,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
         ));
     }
     let ident = item.ident;
-    let mut field = Field {
-        kind,
-        many: bound,
-        optional,
-        name: "value".into(),
-        managed: None,
-        default: None,
-        reference: None,
-    };
-    resolve_self(&mut field, &ident);
+    let mut field = Field::nested("value", kind, optional, bound);
+    field.resolve_self(&ident);
     let ty = field.rust_type();
     let desc = field.type_description();
     let write = field.encode_with(&quote!(&self.0));
@@ -67,12 +52,14 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
             Kind::Blob(_) => quote!(value.0.as_slice()),
             _ => quote!(value.0),
         };
+
         Some(quote! {
             impl<'a> From<&'a #ident> for ::ic_db::IndexValue<'a> {
                 fn from(value: &'a #ident) -> Self { Self::from(#inner) }
             }
         })
     };
+
     Ok(quote! {
         #attrs
         #order

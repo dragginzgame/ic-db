@@ -36,6 +36,7 @@ async fn bounded_reads() {
             )
             .await
             .unwrap();
+
         ic_wire::decode(
             &reply,
             Encoding::Frame {
@@ -64,6 +65,7 @@ async fn bounded_reads() {
             )
             .await
             .unwrap();
+
         (
             ic_wire::decode(
                 &reply,
@@ -95,6 +97,7 @@ async fn bounded_reads() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page<Option<u64>>, u8>>(
             &reply,
             Encoding::Frame {

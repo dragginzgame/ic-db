@@ -1,4 +1,5 @@
 //! Copy/checkpoint and cancellation must share the real IC rollback boundary.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -72,6 +73,7 @@ async fn exercise(publish: bool) {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Entries>(
             &reply,
             Encoding::Frame {
@@ -226,6 +228,7 @@ async fn exercise(publish: bool) {
         assert_eq!(decode(call(7, 2, false).await.unwrap()).unwrap(), (0, true));
         assert_eq!(pic.get_stable_memory(canister).await, before);
         owned.drop().await;
+
         return;
     }
     let before = pic.get_stable_memory(canister).await;
@@ -481,6 +484,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
     let mut finished = false;
     for _ in 0..40 {
         let before = pic.get_stable_memory(canister).await;
+
         match decode(call(4, false).await.unwrap()) {
             Ok((true, _, _)) => {
                 assert!(!invalid_reference);
@@ -624,6 +628,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             assert!(decode(call(9, false).await.unwrap()).is_err());
             assert_eq!(pic.get_stable_memory(canister).await, before);
             owned.drop().await;
+
             return;
         }
         let mut copied = false;

@@ -1,7 +1,8 @@
 //! Projected equality: adjacent live pages or one bounded complete collection.
+
 use super::{
-    MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Request, admit_ordered_fields, admit_output,
-    comparison_key, consume_index_component, copy_projection, projection_size,
+    INDEX_PREFIX_BYTES, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Request, admit_ordered_fields,
+    admit_output, comparison_key, consume_index_component, copy_projection, projection_size,
 };
 use crate::{EntitySchema, Error, IndexSchema, IndexValue};
 use std::collections::BTreeSet;
@@ -18,6 +19,7 @@ fn complete(request: &Request<'_>) -> Result<Strategy, Error> {
     if request.cursor.is_some() {
         return Err(Error::InvalidQuery);
     }
+
     Ok(Strategy::Complete)
 }
 
@@ -88,6 +90,7 @@ pub(super) fn admit(
             remaining &= !bit;
             prefix_len += 1;
         }
+
         return Ok(Strategy::Sorted { prefix_len });
     }
     let Some(index) = index else {
@@ -123,6 +126,7 @@ pub(super) fn admit(
             return Ok(Strategy::Adjacent(i + 1));
         }
     }
+
     complete(request)
 }
 
@@ -136,10 +140,13 @@ pub(super) fn boundary<'a>(
         return Ok(None);
     };
     let index = index.ok_or(Error::InvalidQuery)?;
-    let mut remaining = position.get(9..).ok_or(Error::InvalidCursor)?;
+    let mut remaining = position
+        .get(INDEX_PREFIX_BYTES..)
+        .ok_or(Error::InvalidCursor)?;
     for name in index.fields.iter().take(components) {
         consume_index_component(entity, index, name, &mut remaining)?;
     }
+
     Ok(Some(&position[..position.len() - remaining.len()]))
 }
 
@@ -191,6 +198,7 @@ impl Collection {
         self.state_bytes += charge;
         self.seen.insert(key);
         self.rows.push(row);
+
         Ok(())
     }
 }

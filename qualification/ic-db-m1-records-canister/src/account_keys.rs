@@ -1,32 +1,13 @@
 //! Cross-entity Account/Subaccount identities through the ordinary product API.
+
 use super::{Batch, Principal, open, runtime};
 use ic_db::{Account, Error, Subaccount};
-use ic_db_m1_records_schema::{AccountKey, SubaccountKey};
+use records_schema::{AccountKey, SubaccountKey};
 
-type Identity = (Vec<u8>, Option<Subaccount>);
-type AccountRow = (Identity, Option<Subaccount>, u64);
-type SubaccountRow = (Subaccount, Option<Identity>, u64);
-type Page = (
-    Vec<AccountRow>,
-    Option<Identity>,
-    Vec<SubaccountRow>,
-    Option<Subaccount>,
-    (u64, u64),
-    Vec<Identity>,
-);
-
-fn account((owner, subaccount): Identity) -> Account {
-    Account {
-        owner: Principal::from_slice(&owner),
-        subaccount,
-    }
-}
-
-fn identity(value: Account) -> Identity {
-    (value.owner.as_slice().to_vec(), value.subaccount)
-}
-
-/// Apply a batch to the Account and Subaccount key fixtures.
+// account_keys_write
+// Apply a batch to the Account and Subaccount key fixtures.
+// guard  : validates the request frame for method 86.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "account_keys_write",
@@ -82,10 +63,14 @@ fn account_keys_write(
     if trap {
         crate::system::trap("after Account key commit");
     }
+
     Ok(())
 }
 
-/// Page the Account and Subaccount key spaces from their supplied positions.
+// account_keys_page
+// Page the Account and Subaccount key spaces from their supplied positions.
+// guard  : validates the request frame for method 87.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_keys_page",
@@ -115,6 +100,7 @@ fn account_keys_page(
                 ..row.id
             };
             assert_eq!(db.get::<AccountKey>(alias).unwrap(), Some(row.clone()));
+
             (identity(row.id), row.peer, row.rank)
         })
         .collect();
@@ -123,6 +109,7 @@ fn account_keys_page(
         .into_iter()
         .map(|row| {
             assert_eq!(db.get::<SubaccountKey>(row.id).unwrap(), Some(row.clone()));
+
             (row.id, row.peer.map(identity), row.rank)
         })
         .collect();
@@ -132,6 +119,7 @@ fn account_keys_page(
         .into_iter()
         .map(|row| identity(row.id))
         .collect();
+
     (
         rows,
         accounts.next_after.map(identity),
@@ -143,4 +131,27 @@ fn account_keys_page(
         ),
         matched,
     )
+}
+
+type Identity = (Vec<u8>, Option<Subaccount>);
+type AccountRow = (Identity, Option<Subaccount>, u64);
+type SubaccountRow = (Subaccount, Option<Identity>, u64);
+type Page = (
+    Vec<AccountRow>,
+    Option<Identity>,
+    Vec<SubaccountRow>,
+    Option<Subaccount>,
+    (u64, u64),
+    Vec<Identity>,
+);
+
+fn account((owner, subaccount): Identity) -> Account {
+    Account {
+        owner: Principal::from_slice(&owner),
+        subaccount,
+    }
+}
+
+fn identity(value: Account) -> Identity {
+    (value.owner.as_slice().to_vec(), value.subaccount)
 }

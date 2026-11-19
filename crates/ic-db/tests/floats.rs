@@ -1,4 +1,5 @@
 //! Finite domains, canonical zero, index order and stored corruption boundaries.
+
 use ic_db::{
     Batch, Database, Entity, Error, Float32, Float64, IndexValue, Schema, entity, map, set,
 };
@@ -11,28 +12,52 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
+///
+/// FloatRow
+/// Exercises indexed access by `zone`, `small`, `id`, `value` and `maybe` on rows keyed by
+/// `id`.
+///
+
 #[entity(
-    pk(field="id"),
-    index(fields=["zone","small","id"]),
-    index(fields=["zone","value","id"]),
-    index(field="maybe",unique,present_only),
+    pk(field = "id"),
+    index(fields = ["zone", "small", "id"]),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
     fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="maybe",value(opt,item(prim="Float64"))),
-        field(name="small",value(item(prim="Float32"))),
-        field(name="value",value(item(prim="Float64"))),
-        field(name="zone",value(item(prim="Bool")))
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Float64"))),
+        field(name = "small", value(item(prim = "Float32"))),
+        field(name = "value", value(item(prim = "Float64"))),
+        field(name = "zone", value(item(prim = "Bool")))
     )
 )]
 struct FloatRow {}
+
+///
+/// Samples
+/// Stores up to 3 distinct `Float32` values.
+///
+
 #[set(item(prim = "Float32"), max_items = 3)]
 struct Samples {}
+
+///
+/// Measures
+/// Maps up to 3 `Float64` keys to optional `Float32` values.
+///
+
 #[map(
     key(prim = "Float64"),
     value(opt, item(prim = "Float32")),
     max_items = 3
 )]
 struct Measures {}
+
+///
+/// Collections
+/// Stores `list`, `map` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -88,12 +113,14 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
 fn hash(value: impl Hash) -> u64 {
     let mut state = DefaultHasher::new();
     value.hash(&mut state);
+
     state.finish()
 }
 

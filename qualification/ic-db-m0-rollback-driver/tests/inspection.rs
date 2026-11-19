@@ -1,4 +1,5 @@
 //! Actual native CLI -> verified HTTP query -> committed Canic application witness.
+
 use ic_agent::{Identity, identity::BasicIdentity};
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 use std::{path::PathBuf, process::Command};
@@ -109,6 +110,7 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
             args.extend(["--identity".into(), key.to_string_lossy().into_owned()]);
         }
         args.extend(extra.iter().map(|s| s.to_string()));
+
         command(args).await
     };
     let invoke =

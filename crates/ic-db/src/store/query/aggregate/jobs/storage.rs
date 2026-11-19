@@ -1,4 +1,5 @@
 //! Fixed slots in one host-owned allocation; bounded frames use the owned codec.
+
 use super::{JobHandle, JobOutcome, MAX_CANDIDATES};
 use crate::{
     Error, QueryCursor, Timestamp,
@@ -37,6 +38,7 @@ impl<M: Memory> AggregateJobs<M> {
         }
         let mut map = StableBTreeMap::create(memory);
         map.insert(0, header(incarnation, 0));
+
         Ok(Self {
             map,
             incarnation,
@@ -66,6 +68,7 @@ impl<M: Memory> AggregateJobs<M> {
         {
             return Err(Error::Corrupt);
         }
+
         Ok(Self {
             map,
             incarnation,
@@ -83,6 +86,7 @@ impl<M: Memory> AggregateJobs<M> {
     pub fn cancel(&mut self, handle: &JobHandle) -> Result<(), Error> {
         self.with_record(handle, |_| ())?;
         self.map.remove(&handle.slot);
+
         Ok(())
     }
 
@@ -109,6 +113,7 @@ impl<M: Memory> AggregateJobs<M> {
         for slot in &expired {
             self.map.remove(slot);
         }
+
         Ok(expired.len())
     }
 
@@ -127,6 +132,7 @@ impl<M: Memory> AggregateJobs<M> {
         self.map.insert(0, header(incarnation, generation));
         self.map.insert(slot, bytes);
         self.legacy = false;
+
         Ok(JobHandle {
             incarnation,
             slot,
@@ -153,6 +159,7 @@ impl<M: Memory> AggregateJobs<M> {
         if record.generation != handle.generation {
             return Err(Error::InvalidJob);
         }
+
         Ok(inspect(record))
     }
 
@@ -167,6 +174,7 @@ impl<M: Memory> AggregateJobs<M> {
         }
         self.map.insert(handle.slot, bytes);
         self.legacy = false;
+
         Ok(())
     }
 
@@ -174,6 +182,7 @@ impl<M: Memory> AggregateJobs<M> {
         if self.legacy && bytes.len() > LEGACY_MAX_JOB_BYTES {
             return Err(Error::Corrupt);
         }
+
         Record::decode(bytes)
     }
 }
@@ -182,6 +191,7 @@ fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
     bytes.extend(crate::codec::ROW_CODEC_VERSION.to_le_bytes());
     bytes.extend(incarnation);
     bytes.extend(generation.to_le_bytes());
+
     bytes
 }
 
@@ -198,6 +208,7 @@ fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64, bool), Error> {
     if incarnation == [0; 16] {
         return Err(Error::Corrupt);
     }
+
     Ok((
         incarnation,
         u64::from_le_bytes(bytes[28..].try_into().map_err(|_| Error::Corrupt)?),
@@ -242,6 +253,7 @@ impl Record {
         e.bytes(&self.cursor)?;
         e.nat64(self.count)?;
         e.bytes(&self.state)?;
+
         Ok(e.finish())
     }
 }
@@ -281,6 +293,7 @@ impl<'a> Record<&'a [u8]> {
         {
             return Err(Error::Corrupt);
         }
+
         Ok(record)
     }
 

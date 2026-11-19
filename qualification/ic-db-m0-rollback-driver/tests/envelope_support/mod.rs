@@ -1,4 +1,5 @@
 //! Independent row/index bytes shared by write and migration qualification.
+
 use std::collections::BTreeMap;
 
 const ENTITY: u32 = 931_470_443;
@@ -57,5 +58,6 @@ pub fn expected(generation: u8, count: u64) -> BTreeMap<Vec<u8>, Vec<u8>> {
             map.insert(key, id.to_be_bytes().to_vec());
         }
     }
+
     map
 }

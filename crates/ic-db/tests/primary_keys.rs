@@ -1,21 +1,48 @@
 //! Supplied ULID keys retain typed identity through shared storage and references.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, Ulid, entity};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
 
-#[entity(pk(field="id"),index(field="value",unique),index(fields=["owner","id"]),fields(
-    field(name="id",value(item(prim="Ulid"))),
-    field(name="owner",value(opt,item(prim="Nat64")),references(entity="Numbered")),
-    field(name="value",value(item(prim="Nat64")))
-))]
+///
+/// KeyRow
+/// Exercises references to `Numbered` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "value", unique),
+    index(fields = ["owner", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Ulid"))),
+        field(name = "owner", value(opt, item(prim = "Nat64")), references(entity = "Numbered")),
+        field(name = "value", value(item(prim = "Nat64")))
+    )
+)]
 pub(crate) struct KeyRow {}
-#[entity(pk(field="id"),index(fields=["target","id"]),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="target",value(opt,item(prim="Ulid")),references(entity="KeyRow"))
-))]
+
+///
+/// Numbered
+/// Exercises references to `KeyRow` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["target", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "target", value(opt, item(prim = "Ulid")), references(entity = "KeyRow"))
+    )
+)]
 pub(crate) struct Numbered {}
+
+///
+/// WrongReference
+/// Exercises references to `KeyRow` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(field = "target"),
@@ -38,6 +65,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -68,6 +96,7 @@ fn physical_row(id: Ulid) -> Vec<u8> {
     let mut b = vec![2];
     b.extend(KeyRow::SCHEMA.id.to_be_bytes());
     b.extend(id.to_bytes());
+
     b
 }
 
@@ -269,12 +298,23 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     }
 }
 
+///
+/// NumericIdentity
+/// Exercises an alternate `Identity` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Identity",
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
 struct NumericIdentity {}
+
+///
+/// UlidIdentity
+/// Exercises an alternate `Identity` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Identity",
     pk(field = "id"),

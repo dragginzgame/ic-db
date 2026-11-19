@@ -1,154 +1,20 @@
 //! Cross-chunk references during copy, validation, cancellation and publication.
-use crate::handles::{Database, Maintenance, RetiredSource, SchemaCopy};
+
 use crate::{
     faults,
+    handles::{Database, Maintenance, RetiredSource, SchemaCopy},
     maintenance::{COPY_SOURCE, COPY_TARGET},
     runtime,
 };
 use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
-use ic_db_m1_records_schema::OptionalLink;
 use ic_storage::{StableKey, adapter::StableBTreeMap};
+use records_schema::OptionalLink;
 use std::ops::Bound;
 
-#[ic_db::entity(name="OptionalLink", pk(field="id"),
-    index(fields=["next","id"]), index(field="rank", unique), fields(
-        field(name="id",value(item(prim="Nat64"))),
-        field(name="next",value(opt,item(prim="Nat64")),references(entity="Self",index="next,id")),
-        field(name="rank",value(item(prim="Nat64")))
-    ))]
-struct Target {}
-
-fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool), Error> {
-    let source = Schema::new(&[OptionalLink::SCHEMA])?;
-    let target = Schema::new(&[Target::SCHEMA])?;
-    let transition =
-        SchemaTransition::new(&source, &target, "reference-pairs", 1, &[u8::from(bad)])?;
-    let host = runtime();
-    let source_memory = host
-        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-        .unwrap();
-    match operation {
-        0 => {
-            Database::create(source_memory, source, [12; 16])?;
-            return Ok((0, false));
-        }
-        1 | 2 => {
-            assert!(first < 256 && first.is_multiple_of(32));
-            let mut db = Database::open(source_memory, source)?;
-            let mut batch = Batch::new();
-            for id in u64::from(first)..u64::from(first) + 32 {
-                let row = OptionalLink {
-                    id,
-                    next: Some(if operation == 1 { id } else { (id + 128) % 256 }),
-                };
-                if operation == 1 {
-                    batch.insert(&row)?;
-                } else {
-                    batch.replace(&row)?;
-                }
-            }
-            db.commit(batch)?;
-            return Ok((32, false));
-        }
-        3 => {
-            Database::open(source_memory, source)?.begin_maintenance(&transition)?;
-            return Ok((0, false));
-        }
-        8 => {
-            let mut retired =
-                RetiredSource::resume(source_memory, &transition, [12; 16], [13; 16])?;
-            return Ok((0, retired.cleanup_step(usize::from(limit))?));
-        }
-        10 => {
-            Database::open(source_memory, source)?;
-            return Ok((0, true));
-        }
-        _ => {}
-    }
-    let target_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .unwrap();
-    if operation == 11 {
-        Database::open(target_memory, target)?;
-        return Ok((0, true));
-    }
-    if operation == 12 {
-        let mut db = Database::open(target_memory, target)?;
-        let mut batch = Batch::new();
-        batch.delete::<Target>(0)?;
-        if first == 1 {
-            batch.delete::<Target>(128)?;
-        }
-        db.commit(batch)?;
-        return Ok((0, true));
-    }
-    if matches!(operation, 13..=15) {
-        let mut db = Database::open(target_memory, target)?;
-        let mut batch = Batch::new();
-        if operation == 14 {
-            // These 31 dependants do not include every surviving reference.
-            batch.delete::<Target>(255)?;
-            for id in 1..32 {
-                batch.delete::<Target>(id)?;
-            }
-        } else {
-            assert!(first < 256 && first.is_multiple_of(32));
-            for id in u64::from(first)..u64::from(first) + 32 {
-                // The preceding pair-deletion witness already removed these rows.
-                if matches!(id, 0 | 128) {
-                    continue;
-                }
-                if operation == 13 {
-                    batch.replace(&Target {
-                        id,
-                        next: Some(255),
-                        rank: id + 1000,
-                    })?;
-                } else {
-                    batch.delete::<Target>(id)?;
-                }
-            }
-        }
-        db.commit(batch)?;
-        return Ok((0, true));
-    }
-    if operation == 4 {
-        Maintenance::resume(source_memory, &transition)?.begin_copy(
-            target_memory,
-            source,
-            target,
-            [13; 16],
-        )?;
-        return Ok((0, false));
-    }
-    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
-    match operation {
-        5 => {
-            let step =
-                copy.copy_next::<OptionalLink, Target>(usize::from(limit), 4096, |row, inputs| {
-                    Ok(Target {
-                        id: row.id,
-                        next: if row.id == 255 && inputs == [1] {
-                            Some(999)
-                        } else {
-                            row.next
-                        },
-                        rank: row.id + 1000,
-                    })
-                })?;
-            Ok((step.rows as u32, step.complete))
-        }
-        6 => Ok((0, copy.validate_next(usize::from(limit))?)),
-        7 => {
-            copy.publish()?;
-            Ok((0, true))
-        }
-        9 => Ok((0, copy.cancel_step(usize::from(limit))?)),
-        _ => panic!("unsupported reference migration control"),
-    }
-}
-
-/// Advance the reference migration probe with optional failure injection.
+// migration_references
+// Advance the reference migration probe with optional failure injection.
+// guard  : validates the request frame for method 144.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "migration_references",
@@ -180,12 +46,14 @@ fn migration_references(
         crate::system::trap("reference migration trap after operation");
     }
     let (writes, _) = faults::finish();
+
     (result, writes, counter() - start)
 }
 
-type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
-
-/// Page raw source or target entries for the reference migration oracle.
+// migration_references_raw
+// Page raw source or target entries for the reference migration oracle.
+// guard  : validates the request frame for method 145.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "migration_references_raw",
@@ -209,5 +77,170 @@ fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage
         .map(|entry| (entry.key().clone(), entry.value()))
         .collect();
     let next = (rows.len() == 16).then(|| rows.last().unwrap().0.clone());
+
     (rows, next)
 }
+
+///
+/// Target
+/// Exercises references to `Self` on rows keyed by `id`.
+///
+
+#[ic_db::entity(
+    name = "OptionalLink",
+    pk(field = "id"),
+    index(fields = ["next", "id"]),
+    index(field = "rank", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "next", value(opt, item(prim = "Nat64")), references(entity = "Self", index = "next,id")),
+        field(name = "rank", value(item(prim = "Nat64")))
+    )
+)]
+struct Target {}
+
+fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool), Error> {
+    let source = Schema::new(&[OptionalLink::SCHEMA])?;
+    let target = Schema::new(&[Target::SCHEMA])?;
+    let transition =
+        SchemaTransition::new(&source, &target, "reference-pairs", 1, &[u8::from(bad)])?;
+    let host = runtime();
+    let source_memory = host
+        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+        .unwrap();
+    match operation {
+        0 => {
+            Database::create(source_memory, source, [12; 16])?;
+
+            return Ok((0, false));
+        }
+        1 | 2 => {
+            assert!(first < 256 && first.is_multiple_of(32));
+            let mut db = Database::open(source_memory, source)?;
+            let mut batch = Batch::new();
+            for id in u64::from(first)..u64::from(first) + 32 {
+                let row = OptionalLink {
+                    id,
+                    next: Some(if operation == 1 { id } else { (id + 128) % 256 }),
+                };
+
+                if operation == 1 {
+                    batch.insert(&row)?;
+                } else {
+                    batch.replace(&row)?;
+                }
+            }
+            db.commit(batch)?;
+
+            return Ok((32, false));
+        }
+        3 => {
+            Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+
+            return Ok((0, false));
+        }
+        8 => {
+            let mut retired =
+                RetiredSource::resume(source_memory, &transition, [12; 16], [13; 16])?;
+
+            return Ok((0, retired.cleanup_step(usize::from(limit))?));
+        }
+        10 => {
+            Database::open(source_memory, source)?;
+
+            return Ok((0, true));
+        }
+        _ => {}
+    }
+    let target_memory = host
+        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .unwrap();
+    if operation == 11 {
+        Database::open(target_memory, target)?;
+
+        return Ok((0, true));
+    }
+    if operation == 12 {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        batch.delete::<Target>(0)?;
+        if first == 1 {
+            batch.delete::<Target>(128)?;
+        }
+        db.commit(batch)?;
+
+        return Ok((0, true));
+    }
+    if matches!(operation, 13..=15) {
+        let mut db = Database::open(target_memory, target)?;
+        let mut batch = Batch::new();
+        if operation == 14 {
+            // These 31 dependants do not include every surviving reference.
+            batch.delete::<Target>(255)?;
+            for id in 1..32 {
+                batch.delete::<Target>(id)?;
+            }
+        } else {
+            assert!(first < 256 && first.is_multiple_of(32));
+            for id in u64::from(first)..u64::from(first) + 32 {
+                // The preceding pair-deletion witness already removed these rows.
+                if matches!(id, 0 | 128) {
+                    continue;
+                }
+
+                if operation == 13 {
+                    batch.replace(&Target {
+                        id,
+                        next: Some(255),
+                        rank: id + 1000,
+                    })?;
+                } else {
+                    batch.delete::<Target>(id)?;
+                }
+            }
+        }
+        db.commit(batch)?;
+
+        return Ok((0, true));
+    }
+    if operation == 4 {
+        Maintenance::resume(source_memory, &transition)?.begin_copy(
+            target_memory,
+            source,
+            target,
+            [13; 16],
+        )?;
+
+        return Ok((0, false));
+    }
+    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+
+    match operation {
+        5 => {
+            let step =
+                copy.copy_next::<OptionalLink, Target>(usize::from(limit), 4096, |row, inputs| {
+                    Ok(Target {
+                        id: row.id,
+                        next: if row.id == 255 && inputs == [1] {
+                            Some(999)
+                        } else {
+                            row.next
+                        },
+                        rank: row.id + 1000,
+                    })
+                })?;
+
+            Ok((step.rows as u32, step.complete))
+        }
+        6 => Ok((0, copy.validate_next(usize::from(limit))?)),
+        7 => {
+            copy.publish()?;
+
+            Ok((0, true))
+        }
+        9 => Ok((0, copy.cancel_step(usize::from(limit))?)),
+        _ => panic!("unsupported reference migration control"),
+    }
+}
+
+type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);

@@ -193,6 +193,7 @@ impl Duration {
         let value = digits
             .parse::<u64>()
             .map_err(|_| TimeParseError::InvalidDuration)?;
+
         value
             .checked_mul(multiplier)
             .map(Self)
@@ -335,6 +336,7 @@ impl Timestamp {
             if cursor == start {
                 return Err(TimeParseError::InvalidTimestamp);
             }
+
             parse_fractional_nanoseconds(&bytes[start..cursor])?
         } else {
             0
@@ -352,6 +354,7 @@ impl Timestamp {
             + i64::from(second);
         let offset_seconds =
             i64::from(sign) * (i64::from(offset_hour) * 3_600 + i64::from(offset_minute) * 60);
+
         Ok(Self(
             (local_seconds - offset_seconds) * Self::MILLIS_PER_SEC
                 + i64::from(nanoseconds / 1_000_000),
@@ -432,6 +435,7 @@ impl Sub for Timestamp {
         if self.0 <= other.0 {
             return Duration::ZERO;
         }
+
         Duration::from_millis(
             u64::try_from(i128::from(self.0) - i128::from(other.0)).unwrap_or(u64::MAX),
         )
@@ -472,6 +476,7 @@ fn parse_fractional_nanoseconds(bytes: &[u8]) -> Result<u32, TimeParseError> {
             .checked_mul(10)
             .ok_or(TimeParseError::InvalidTimestamp)?;
     }
+
     Ok(value)
 }
 

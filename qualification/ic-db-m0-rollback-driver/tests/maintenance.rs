@@ -44,6 +44,7 @@ async fn identified_maintenance() {
                 )
                 .await
                 .unwrap();
+
             ic_wire::decode(
                 &reply,
                 Encoding::Frame {
@@ -72,6 +73,7 @@ async fn identified_maintenance() {
                 )
                 .await
                 .unwrap();
+
             ic_wire::decode(
                 &reply,
                 Encoding::Frame {
@@ -320,6 +322,7 @@ async fn identified_maintenance() {
             .unwrap();
             let (status, bytes, index) = result.unwrap();
             assert_eq!(index, (1..=6).map(|id| (id, id)).collect::<Vec<_>>());
+
             (status, bytes)
         };
         let mut previous = [0; 5];

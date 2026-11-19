@@ -695,8 +695,8 @@ define durable identity. The fixture now uses
 IcyDB's two-stage approach: host-only `ctor` registration, followed by validated
 schema assembly generated for the target. This is implemented for scalar entities;
 named records and payload enums participate through typed fields. See the
-[shared schema](qualification/ic-db-m1-records-schema/src/lib.rs) and its
-[build script](qualification/ic-db-m1-records-canister/build.rs).
+[shared schema](qualification/ic-db-m1-records-schema/src/model.rs) and its
+[build script](qualification/ic-db-m1-records-schema/build.rs).
 Records use `#[record(fields(...))]` and enums use
 `#[enum_(variant(name = "Ready"), variant(name = "Data", value(item(is = "Details"))))]`.
 Both retain the empty-struct authoring style. Fields use `value(item(is = "Type"))`;
@@ -933,6 +933,44 @@ original IC DB errors. For a test of your own IC Storage allocation setup, pass
 its lease-opening function to `Fixture::with_allocation`.
 [Runnable example](crates/ic-db/src/testing.rs)
 
+## Build a shared schema in its owning crate
+
+The schema library owns the declarations, host build and generated assembly.
+In its package-root `build.rs`:
+
+```rust
+ic_db::build_schema!(model);
+```
+
+In the schema library’s `Cargo.toml`:
+
+```toml
+[dependencies]
+ic-db.workspace = true
+
+[build-dependencies]
+ic-db = { workspace = true, features = ["build"] }
+```
+
+In its `src/lib.rs`:
+
+```rust
+mod model;
+pub use model::*;
+
+include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+```
+
+The complete `src/model.rs` or `src/model/mod.rs` subtree forms one schema.
+A consuming canister declares the schema library under `[dependencies]` and
+calls `records_schema::compiled()`. When moving declarations into a shared
+library, remove the former consumer-side generation and its build dependencies.
+
+The [schema build script](qualification/ic-db-m1-records-schema/build.rs),
+[schema library](qualification/ic-db-m1-records-schema/src/lib.rs) and
+[records canister manifest](qualification/ic-db-m1-records-canister/Cargo.toml)
+show the working arrangement. `make schema-build-check` checks ownership in CI.
+
 ## Build a canister-local schema
 
 Keep the declarations in `src/schema.rs` or `src/schema/mod.rs`. In a workspace
@@ -949,10 +987,10 @@ ic-db = { workspace = true, features = ["build"] }
 In the package-root `build.rs`:
 
 ```rust
-ic_db::build_schema!(src::schema);
+ic_db::build_schema!();
 ```
 
-If the script already has a `main`, use `ic_db::build_schema!(src::schema => build_db_schema);`
+If the script already has a `main`, use `ic_db::build_schema!(=> build_db_schema);`
 at module scope and call `build_db_schema()?` from that function.
 
 In `src/lib.rs`, declare the same module and include its validated assembly:
@@ -963,9 +1001,9 @@ include!(concat!(env!("OUT_DIR"), "/schema.rs"));
 ```
 
 Use `compiled()` to obtain the executable schema. Both compilations resolve
-nested declarations through ordinary Rust modules. Canisters sharing a separate
-schema crate can call the host helper from that crate with its own `module_path!()`.
-See the [shared-schema build script](qualification/ic-db-m1-records-canister/build.rs).
+nested declarations through ordinary Rust modules. The explicit local path form is
+`build_schema!(src::schema)`. A build script located beside its declarations
+can select them with `build_schema!(self::schema)`.
 
 ## Database console
 

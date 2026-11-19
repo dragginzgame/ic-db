@@ -1,4 +1,5 @@
 //! Differential checks against SQLite for shared query semantics.
+
 use ic_db::{
     AggregateJobs, Batch, Comparison, Database, Decimal, Entity, JobOutcome, QueryCursor, Schema,
     Timestamp, entity, record,
@@ -9,19 +10,46 @@ use ic_storage::{
 };
 use rusqlite::{Connection, params};
 
-#[entity(pk(field="id"), index(fields=["lane","rank"]),
-    index(fields=["lane","price","id"], unique, present_only), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="lane",value(item(prim="Nat8"))),
-    field(name="rank",value(item(prim="Nat8"))),
-    field(name="visible",value(item(prim="Bool"))),
-    field(name="price",value(opt,item(prim="Decimal",scale=2)))
-))]
+///
+/// Item
+/// Exercises indexed access by `lane`, `rank`, `price` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["lane", "rank"]),
+    index(fields = ["lane", "price", "id"], unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "lane", value(item(prim = "Nat8"))),
+        field(name = "rank", value(item(prim = "Nat8"))),
+        field(name = "visible", value(item(prim = "Bool"))),
+        field(name = "price", value(opt, item(prim = "Decimal", scale = 2)))
+    )
+)]
 struct Item {}
+
+///
+/// Id
+/// Carries the `Nat64` value of `id`.
+///
+
 #[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct Id {}
+
+///
+/// Lane
+/// Carries the `Nat8` value of `lane`.
+///
+
 #[record(fields(field(name = "lane", value(item(prim = "Nat8")))))]
 struct Lane {}
+
+///
+/// Price
+/// Carries an optional `Decimal` value of `price`.
+///
+
 #[record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct Price {}
 
@@ -88,6 +116,7 @@ fn fixture() -> (Connection, MemoryRuntime<VectorMemory>) {
         .unwrap();
     }
     db.commit(batch).unwrap();
+
     (sql, host)
 }
 
@@ -135,6 +164,7 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
                 if let Some(cursor) = after {
                     q = q.after(cursor);
                 }
+
                 q.fetch_as::<Id>().unwrap()
             };
             let mut boundaries = vec![(None, 0)];
@@ -252,6 +282,7 @@ fn grouped_decimal_averages_agree_across_reopen_and_work_limits() {
                 .resume_group_avg::<Lane, Price>(&mut jobs, &handle, sequence, now)
                 .unwrap();
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => assert_eq!(step.output_bytes, 0),
                 JobOutcome::Complete(rows) => {

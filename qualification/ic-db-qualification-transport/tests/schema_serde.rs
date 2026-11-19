@@ -1,4 +1,5 @@
 //! Public schema value representations at the Wire and JSON boundaries.
+
 use ic_db::{Date, Decimal, Duration, Float32, Float64, Timestamp, U256, Ulid};
 use ic_wire::{Encoding, Limits};
 use serde::{Serialize, de::DeserializeOwned};
@@ -20,7 +21,7 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_wire::Error> {
 
 #[test]
 fn bare_ulid_accepts_the_existing_fixed_array_endpoint_payload() {
-    let bytes = core::array::from_fn(|i| (i * 17) as u8);
+    let bytes = std::array::from_fn(|i| (i * 17) as u8);
     let id = Ulid::from_bytes(bytes);
     assert_eq!(encode(&id), bytes);
     assert_eq!(decode::<Ulid>(&encode(&bytes)).unwrap(), id);

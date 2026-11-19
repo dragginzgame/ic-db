@@ -1,6 +1,10 @@
 //! Bounded mixed-history witness. These private controls are not product endpoints.
-use crate::handles::{AggregateJobs, Database, RetiredSource, SchemaCopy};
-use crate::{Backing, MemoryRuntime, runtime};
+
+use crate::{
+    Backing, MemoryRuntime,
+    handles::{AggregateJobs, Database, RetiredSource, SchemaCopy},
+    runtime,
+};
 use ic_db::{
     Batch, Comparison, CopyStatus, Entity, Error, JobHandle, JobOutcome, Schema, SchemaTransition,
     Timestamp,
@@ -10,6 +14,27 @@ use ic_db_qualification_transport::mixed::{
     Reply, Snapshot, Update,
 };
 use ic_storage::{RuntimeMemory, StableKey};
+
+// Drive one explicit maintenance step for the installed qualification workload.
+// mixed_migrate
+// Run one migration operation in the mixed-history fixture.
+// guard  : validates the request frame for method 244.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "mixed_migrate",
+    guard = crate::transport::admit::<244>,
+    decode = crate::transport::decode_measured::<_,244>,
+    encode = crate::transport::encode::<_,244>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn mixed_migrate((operation, counter): crate::transport::Measured<u8>) -> (u64, bool, u64) {
+    let start = counter();
+    let (rows, complete) = migrate(operation).unwrap();
+
+    (rows, complete, counter() - start)
+}
 
 // Canic exports its endpoint mount and Platform exposes caller identity only on Wasm.
 #[cfg(target_arch = "wasm32")]
@@ -51,6 +76,11 @@ pub(super) const KEYS: [&str; 3] = [
     "m1.mixed.jobs.v1",
 ];
 
+///
+/// Parent
+/// Exercises indexed access by `code` on rows keyed by `id`.
+///
+
 #[ic_db::entity(
     pk(field = "id"),
     index(field = "code", unique),
@@ -60,23 +90,62 @@ pub(super) const KEYS: [&str; 3] = [
     )
 )]
 struct Parent {}
-#[ic_db::entity(pk(field="id"), index(fields=["parent","id"]), index(fields=["score","id"]), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="parent",value(item(prim="Nat64")),references(entity="Parent",index="parent,id")),
-    field(name="score",value(item(prim="Nat64")))
-))]
+
+///
+/// Item
+/// Exercises references to `Parent` on rows keyed by `id`.
+///
+
+#[ic_db::entity(
+    pk(field = "id"),
+    index(fields = ["parent", "id"]),
+    index(fields = ["score", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "parent", value(item(prim = "Nat64")), references(entity = "Parent", index = "parent,id")),
+        field(name = "score", value(item(prim = "Nat64")))
+    )
+)]
 struct Item {}
-#[ic_db::entity(name="Item", pk(field="id"), index(fields=["parent","id"]), index(fields=["score","id"]), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="parent",value(item(prim="Nat64")),references(entity="Parent",index="parent,id")),
-    field(name="score",value(item(prim="Nat128")))
-))]
+
+///
+/// TargetItem
+/// Exercises references to `Parent` on rows keyed by `id`.
+///
+
+#[ic_db::entity(
+    name = "Item",
+    pk(field = "id"),
+    index(fields = ["parent", "id"]),
+    index(fields = ["score", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "parent", value(item(prim = "Nat64")), references(entity = "Parent", index = "parent,id")),
+        field(name = "score", value(item(prim = "Nat128")))
+    )
+)]
 struct TargetItem {}
-#[ic_db::entity(pk(field="id"), index(fields=["item","id"]), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="item",value(item(prim="Nat64")),references(entity="Item",index="item,id"))
-))]
+
+///
+/// Link
+/// Exercises references to `Item` on rows keyed by `id`.
+///
+
+#[ic_db::entity(
+    pk(field = "id"),
+    index(fields = ["item", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "item", value(item(prim = "Nat64")), references(entity = "Item", index = "item,id"))
+    )
+)]
 struct Link {}
+
+///
+/// ParentKey
+/// Carries the `Nat64` value of `parent`.
+///
+
 #[ic_db::record(fields(field(name = "parent", value(item(prim = "Nat64")))))]
 struct ParentKey {}
 
@@ -149,6 +218,7 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
                         .score
                         .checked_add(u128::from(score))
                         .ok_or(Error::Limit)?;
+
                     row
                 } else {
                     TargetItem {
@@ -157,6 +227,7 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
                         score: u128::from(score),
                     }
                 };
+
                 if operation == 0 {
                     batch.insert(&row)?;
                 } else {
@@ -167,6 +238,7 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
                 let row = if operation == 3 {
                     let mut row = db.get::<Item>(id)?.ok_or(Error::Missing)?;
                     row.score = row.score.checked_add(score).ok_or(Error::Limit)?;
+
                     row
                 } else {
                     Item {
@@ -175,6 +247,7 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
                         score,
                     }
                 };
+
                 if operation == 0 {
                     batch.insert(&row)?;
                 } else {
@@ -193,6 +266,7 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
             _ => panic!("invalid private fixture command"),
         }
     }
+
     db.commit(batch)
 }
 // Application-owned protocol for this installed workload. Canic owns the guards,
@@ -222,11 +296,13 @@ fn apply_update(request: Update, time_ns: u64, counter: fn() -> u64) -> Reply {
         Update::Batch(target, commands) => {
             let start = counter();
             let result = write(target, commands).map_err(refusal);
+
             Reply::Batch(result, counter() - start)
         }
         Update::Count(request) => {
             let start = counter();
             let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
+
             Reply::Count(result, counter() - start)
         }
     }
@@ -236,9 +312,11 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
     let now_ms = (time_ns / 1_000_000) as i64;
     let host = runtime();
     let mut jobs = AggregateJobs::open(memory(&host, 2))?;
+
     match request {
         CountRequest::Run(target, action) => {
             let db = open(&host, target)?;
+
             if target {
                 run_count::<TargetItem>(&db, &mut jobs, action, now_ms)
             } else {
@@ -247,6 +325,7 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
         }
         CountRequest::Cancel(bytes) => {
             jobs.cancel(&JobHandle::from_bytes(&bytes)?)?;
+
             Ok(CountReply::Cancelled)
         }
     }
@@ -265,6 +344,7 @@ fn run_count<E: Entity>(
                 Timestamp::from_millis(now_ms),
                 Timestamp::from_millis(now_ms + 3_600_000),
             )?;
+
             Ok(CountReply::Started(handle.to_bytes()))
         }
         CountAction::Resume(bytes, sequence) => {
@@ -281,6 +361,7 @@ fn run_count<E: Entity>(
                 JobOutcome::Invalidated => CountOutcome::Invalidated,
                 JobOutcome::Expired => CountOutcome::Expired,
             };
+
             Ok(CountReply::Advanced(step.sequence, outcome))
         }
     }
@@ -336,6 +417,7 @@ fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
     } else {
         items!(Item, minimum)
     };
+
     Ok((
         parents
             .rows
@@ -362,9 +444,11 @@ fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
 // Read a full fixture snapshot or one bounded item page.
 fn query(request: Query, counter: fn() -> u64) -> QueryReply {
     let start = counter();
+
     match request {
         Query::Snapshot(target, parent, minimum) => {
             let result = read(target, parent, minimum).map_err(refusal);
+
             QueryReply::Snapshot(result, counter() - start)
         }
         Query::Items {
@@ -390,6 +474,7 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
                     }
                 })
                 .map_err(refusal);
+
             QueryReply::Items(result, counter() - start)
         }
     }
@@ -415,6 +500,7 @@ fn item_page<E: Entity<Key = u64>>(
         query = query.after(cursor);
     }
     let page = query.fetch()?;
+
     Ok(ItemPage {
         ids: page.rows.iter().map(Entity::key).collect(),
         next: page.next.map(|cursor| cursor.to_bytes()),
@@ -431,6 +517,7 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
         open(&host, false)?
             .begin_maintenance(&transition)?
             .begin_copy(memory(&host, 1), source, target, [22; 16])?;
+
         return Ok((0, false));
     }
     if operation == 4 {
@@ -447,6 +534,7 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
         target,
         &transition,
     )?;
+
     match operation {
         1 => {
             let step = match copy.status() {
@@ -464,31 +552,15 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
                 CopyStatus::Validating | CopyStatus::ReadyToPublish => return Ok((0, true)),
                 _ => return Err(Error::InvalidTransition),
             };
+
             Ok((step.rows as u64, step.complete))
         }
         2 => Ok((0, copy.validate_next(2)?)),
         3 => {
             copy.publish()?;
+
             Ok((0, true))
         }
         _ => panic!("invalid migration control"),
     }
-}
-
-// Drive one explicit maintenance step for the installed qualification workload.
-
-/// Run one migration operation in the mixed-history fixture.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "mixed_migrate",
-    guard = crate::transport::admit::<244>,
-    decode = crate::transport::decode_measured::<_,244>,
-    encode = crate::transport::encode::<_,244>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn mixed_migrate((operation, counter): crate::transport::Measured<u8>) -> (u64, bool, u64) {
-    let start = counter();
-    let (rows, complete) = migrate(operation).unwrap();
-    (rows, complete, counter() - start)
 }

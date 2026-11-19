@@ -1,20 +1,12 @@
 //! Literal omission rules use the ordinary product batch and constraints.
+
 use crate::{open, runtime, schema::DefaultRow};
 use ic_db::{Batch, Error};
 
-type Row = (u64, u16, bool, Option<String>, Vec<u8>, Option<Vec<u8>>);
-fn view(row: DefaultRow) -> Row {
-    (
-        row.id,
-        row.count,
-        row.enabled,
-        row.label,
-        row.empty,
-        row.payload,
-    )
-}
-
-/// Apply an insert-default scenario with optional rollback injection.
+// default_write
+// Apply an insert-default scenario with optional rollback injection.
+// guard  : validates the request frame for method 80.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "default_write",
@@ -45,6 +37,7 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
             row.label = None;
             row.payload = None;
             batch.replace(&row).map_err(|_| 4_u8)?;
+
             Ok(row)
         }
         3 => batch.insert_input(DefaultRow::insert()),
@@ -72,10 +65,14 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
     if trap {
         crate::system::trap("after default commit");
     }
+
     Ok(view(row))
 }
 
-/// Read the stored defaulted rows, index observations and revision.
+// default_rows
+// Read the stored defaulted rows, index observations and revision.
+// guard  : validates the request frame for method 81.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "default_rows",
@@ -88,6 +85,7 @@ fn default_write((id, mode, trap): (u64, u8, bool)) -> Result<Row, u8> {
 fn default_rows((): ()) -> (Vec<Row>, Vec<u64>, u64) {
     let host = runtime();
     let db = open(&host);
+
     (
         db.page::<DefaultRow>(None, 32)
             .unwrap()
@@ -101,5 +99,17 @@ fn default_rows((): ()) -> (Vec<Row>, Vec<u64>, u64) {
             .map(|r| r.id)
             .collect(),
         db.revision::<DefaultRow>().unwrap(),
+    )
+}
+
+type Row = (u64, u16, bool, Option<String>, Vec<u8>, Option<Vec<u8>>);
+fn view(row: DefaultRow) -> Row {
+    (
+        row.id,
+        row.count,
+        row.enabled,
+        row.label,
+        row.empty,
+        row.payload,
     )
 }

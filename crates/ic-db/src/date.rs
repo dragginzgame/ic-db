@@ -1,5 +1,6 @@
 //! Bounded Gregorian date, adapted from frozen IcyDB 6d421e3.
 //! Serde carries the bounded day count since the Unix epoch.
+
 use std::fmt::{self, Debug, Display};
 
 /// A Gregorian calendar date, stored as days since the Unix epoch.
@@ -56,6 +57,7 @@ impl Date {
             + (153 * march_month + 2) / 5
             + i32::from(d)
             - 1;
+
         Self::try_from_days_since_epoch(
             cycle * Self::DAYS_PER_CYCLE + cycle_day - Self::MARCH_EPOCH_OFFSET,
         )
@@ -176,6 +178,7 @@ impl Debug for Date {
 impl Display for Date {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (year, month, day) = self.calendar_parts();
+
         write!(f, "{year:04}-{month:02}-{day:02}")
     }
 }

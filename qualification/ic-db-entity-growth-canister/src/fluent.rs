@@ -1,4 +1,5 @@
 //! Reachable fluent call sites; mapping runs only after database execution returns.
+
 use super::{Database, Entity, Observation, Row};
 use ic_db::Comparison as C;
 
@@ -94,6 +95,7 @@ pub(super) fn operate<E: Entity<Key = u64>>(
             .collect(),
         _ => rows.collect(),
     };
+
     (
         None,
         rows,

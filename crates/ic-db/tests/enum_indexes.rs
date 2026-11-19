@@ -1,9 +1,15 @@
 //! Unit-enum index identity, independent bytes and final-state integrity.
+
 use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, Value, entity, enum_};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
 };
+
+///
+/// State
+/// Distinguishes the `Ready`, `Archived` and `Draft` variants.
+///
 
 #[enum_(
     variant(name = "Ready"),
@@ -11,6 +17,12 @@ use ic_storage::{
     variant(name = "Draft")
 )]
 struct State {}
+
+///
+/// Reordered
+/// Distinguishes the `Draft`, `Ready` and `Archived` variants.
+///
+
 #[enum_(
     name = "State",
     variant(name = "Draft"),
@@ -18,6 +30,12 @@ struct State {}
     variant(name = "Archived")
 )]
 struct Reordered {}
+
+///
+/// Changed
+/// Distinguishes the `Archived`, `Draft` and `Stopped` variants.
+///
+
 #[enum_(
     name = "State",
     variant(name = "Archived"),
@@ -25,28 +43,64 @@ struct Reordered {}
     variant(name = "Stopped")
 )]
 struct Changed {}
+
+///
+/// Other
+/// Distinguishes the `Archived`, `Draft` and `Ready` variants.
+///
+
 #[enum_(
     variant(name = "Archived"),
     variant(name = "Draft"),
     variant(name = "Ready")
 )]
 struct Other {}
+
+///
+/// Payload
+/// Distinguishes the `Archived` and `Draft` variants.
+///
+
 #[enum_(
     variant(name = "Archived"),
     variant(name = "Draft", value(item(prim = "Nat8")))
 )]
 struct Payload {}
-#[entity(pk(field="id"),index(fields=["zone","state","id"]),index(field="maybe",unique,present_only),index(field="boxed"),fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="zone",value(item(prim="Bool"))),
-    field(name="state",value(item(is="State"))),
-    field(name="maybe",value(opt,item(is="State"))),
-    field(name="boxed",value(opt,item(indirect,is="State")))
-))]
+
+///
+/// Row
+/// Exercises indexed access by `zone`, `state`, `id`, `maybe` and `boxed` on rows keyed by
+/// `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "state", "id"]),
+    index(field = "maybe", unique, present_only),
+    index(field = "boxed"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "zone", value(item(prim = "Bool"))),
+        field(name = "state", value(item(is = "State"))),
+        field(name = "maybe", value(opt, item(is = "State"))),
+        field(name = "boxed", value(opt, item(indirect, is = "State")))
+    )
+)]
 struct Row {}
+
+///
+/// States
+/// Stores up to 3 distinct `State` values.
+///
 
 #[ic_db::set(item(is = "State"), max_items = 3)]
 struct States {}
+
+///
+/// Permissions
+/// Stores `allowed`, `wanted` and `unrelated` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -121,6 +175,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -296,6 +351,7 @@ fn complete_definition_controls_index_admission() {
             fields: Box::leak(fields.into_boxed_slice()),
             ..*Row::SCHEMA
         }));
+
         if definition.name == "Payload" {
             assert!(matches!(Schema::new(&[changed]), Err(Error::InvalidSchema)));
         } else {

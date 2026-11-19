@@ -3,6 +3,9 @@
 //! Controlled entity-count growth with one endpoint and identical typed operations.
 //! Optional fluent shapes and result maps isolate application composition growth.
 
+#[cfg(feature = "fluent")]
+mod fluent;
+
 use ic_db::{Batch, Database, Entity, Schema, entity};
 use ic_db_qualification_transport as transport;
 use ic_storage::{
@@ -10,9 +13,67 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
 };
 
+/// Initialize the fixture’s stable state at installation.
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
+fn initialize((): ()) {
+    with_host(|host| {
+        Database::create(
+            host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+            schema_for_open(),
+            [53; 16],
+        )
+        .unwrap();
+    });
+}
+
+// exercise
+// Measure the selected entity-growth workload and return its observations.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "exercise",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn exercise((selector, mode, row): (u8, u8, Row)) -> (Observation, [u64; 4], u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+
+    with_host(|host| {
+        let bootstrapped = ic_platform_runtime::raw::instruction_counter();
+        let memory = host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap();
+        let leased = ic_platform_runtime::raw::instruction_counter();
+        let schema = schema_for_open();
+        let described = ic_platform_runtime::raw::instruction_counter();
+        let mut db = Database::open(memory, schema).unwrap();
+        let opened = ic_platform_runtime::raw::instruction_counter();
+        let result = dispatch(&mut db, selector, mode, row);
+        let finished = ic_platform_runtime::raw::instruction_counter();
+
+        (
+            result,
+            [
+                bootstrapped - start,
+                leased - bootstrapped,
+                described - leased,
+                opened - described,
+            ],
+            finished - opened,
+        )
+    })
+}
+
 const KEY: &str = "m1.growth.records.v1";
-#[cfg(feature = "fluent")]
-mod fluent;
+
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);
 
@@ -29,6 +90,7 @@ fn with_host<R>(operation: impl FnOnce(&MemoryRuntime<DefaultMemoryImpl>) -> R) 
     {
         HOST.with(operation)
     }
+
     #[cfg(not(feature = "retained-host"))]
     {
         operation(&runtime())
@@ -40,6 +102,7 @@ fn schema_for_open() -> Schema {
     {
         SCHEMA.with(Clone::clone)
     }
+
     #[cfg(not(feature = "retained-host"))]
     {
         compiled()
@@ -56,14 +119,25 @@ macro_rules! declare_entity {
         declare_entity!(@fields $name,);
     };
     (@fields $name:ident, $($extra:tt)*) => {
-        #[entity(pk(field = "id"),
-            index(fields = ["category", "id"]), $($extra)*
-            fields(field(name = "id", value(item(prim = "Nat64"))),
+        #[doc = ""]
+        #[doc = stringify!($name)]
+        #[doc = "Measures the incremental cost of another indexed three-field entity."]
+        #[doc = ""]
+
+        #[entity(
+            pk(field = "id"),
+            index(fields = ["category", "id"]),
+            $($extra)*
+            fields(
+                field(name = "id", value(item(prim = "Nat64"))),
                 field(name = "category", value(item(prim = "Nat64"))),
-                field(name = "amount", value(item(prim = "Nat64")))))]
+                field(name = "amount", value(item(prim = "Nat64")))
+            )
+        )]
         struct $name {}
     };
 }
+
 macro_rules! entities {
     ($base:ident = $first:literal, $(#[$guard:meta] { $($name:ident = $selector:literal,)+ })+) => {
         entities!(@entries
@@ -141,26 +215,8 @@ fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
     let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
         .unwrap();
-    host
-}
 
-/// Initialize the fixture’s stable state at installation.
-#[ic_platform_runtime::init(
-    runtime = ic_platform_runtime,
-    guard = crate::transport::allow,
-    decode = crate::transport::empty,
-    max_bytes = 0,
-    on_error = crate::transport::lifecycle_error
-)]
-fn initialize((): ()) {
-    with_host(|host| {
-        Database::create(
-            host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-            schema_for_open(),
-            [53; 16],
-        )
-        .unwrap();
-    });
+    host
 }
 
 fn operate<E: Entity<Key = u64>>(
@@ -188,6 +244,7 @@ fn operate<E: Entity<Key = u64>>(
     if mode == 4 {
         ic_platform_runtime::system::trap("after retained-host commit");
     }
+
     (
         db.get::<E>(input.0).unwrap().as_ref().map(&project),
         db.page::<E>(None, 2)
@@ -204,39 +261,4 @@ fn operate<E: Entity<Key = u64>>(
         db.revision::<E>().unwrap(),
         u8::try_from(db.schema().entities().len()).unwrap(),
     )
-}
-
-/// Measure the selected entity-growth workload and return its observations.
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "exercise",
-    guard = crate::transport::admit::<1>,
-    decode = crate::transport::decode::<_, 1>,
-    encode = crate::transport::encode::<_, 1>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn exercise((selector, mode, row): (u8, u8, Row)) -> (Observation, [u64; 4], u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
-    with_host(|host| {
-        let bootstrapped = ic_platform_runtime::raw::instruction_counter();
-        let memory = host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap();
-        let leased = ic_platform_runtime::raw::instruction_counter();
-        let schema = schema_for_open();
-        let described = ic_platform_runtime::raw::instruction_counter();
-        let mut db = Database::open(memory, schema).unwrap();
-        let opened = ic_platform_runtime::raw::instruction_counter();
-        let result = dispatch(&mut db, selector, mode, row);
-        let finished = ic_platform_runtime::raw::instruction_counter();
-        (
-            result,
-            [
-                bootstrapped - start,
-                leased - bootstrapped,
-                described - leased,
-                opened - described,
-            ],
-            finished - opened,
-        )
-    })
 }

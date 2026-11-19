@@ -1,4 +1,5 @@
 //! Length-framed Principal identity through the real product and IC rollback.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -63,6 +64,7 @@ async fn principal_identity_pages_references_and_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Page>(
             &bytes,
             Encoding::Frame {

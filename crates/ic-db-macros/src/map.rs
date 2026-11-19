@@ -1,10 +1,9 @@
 //! Named maps with scalar/unit-enum keys; field rules own value composition.
+
 use super::{
     declaration,
     field::{Field, parse_value},
-    meta_items, metas, once,
-    record::resolve_self,
-    text,
+    meta_items, metas, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -34,30 +33,11 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let (kind, optional, max) =
         parse_value(&syn::parse_quote!(value(many, #max, item(#(#key),*))))?;
     let max = max.expect("many requires max_items");
-    let key = Field {
-        default: None,
-        managed: None,
-        name: "key".into(),
-        kind,
-        optional,
-        many: None,
-        reference: None,
-    };
+    let key = Field::nested("key", kind, optional, None);
     let (kind, optional, many) = value.ok_or_else(|| fail("map requires value(...)"))?;
-    let mut value = Field {
-        default: None,
-        managed: None,
-        name: "value".into(),
-        kind,
-        optional,
-        many,
-        reference: None,
-    };
-    resolve_self(&mut value, &item.ident);
-    let name = name.unwrap_or_else(|| item.ident.to_string());
-    if name.is_empty() || name.len() > 64 {
-        return Err(fail("map name must contain 1..64 UTF-8 bytes"));
-    }
+    let mut value = Field::nested("value", kind, optional, many);
+    value.resolve_self(&item.ident);
+    let name = super::declaration_name(name, &item.ident, "map")?;
     let kt = key.rust_type();
     let vt = value.rust_type();
     let kd = key.type_description();
@@ -69,6 +49,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let ident = item.ident;
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs)?;
+
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]

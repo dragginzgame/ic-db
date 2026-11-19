@@ -1,4 +1,5 @@
 //! Monotonic issuance for explicitly owned generators.
+
 use super::Ulid;
 use crate::Timestamp;
 use std::fmt;
@@ -65,11 +66,13 @@ impl UlidGenerator {
             let next = previous
                 .increment()
                 .map_err(|_| UlidGenerationError::Exhausted)?;
+
             Ulid::from_bytes(next.to_bytes())
         } else {
             Ulid::from_millis_and_suffix(millis, randomness)
         };
         self.last = Some(id);
+
         Ok(id)
     }
 }

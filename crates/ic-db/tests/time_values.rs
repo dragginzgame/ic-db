@@ -1,4 +1,5 @@
 //! Retained IcyDB millisecond, parsing and wide-arithmetic regressions.
+
 use ic_db::{Duration, TimeParseError, Timestamp};
 
 #[test]

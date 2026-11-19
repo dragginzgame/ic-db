@@ -1,4 +1,5 @@
 //! Typed input records for complete unique index lookups.
+
 use super::Field;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -34,6 +35,7 @@ impl Keys {
                     .split('_')
                     .filter_map(|word| {
                         let mut chars = word.chars();
+
                         Some(
                             chars
                                 .next()?
@@ -67,14 +69,14 @@ impl Keys {
             .iter()
             .zip(ids)
             .map(|(field, id)| field.index_operand(id, false));
-        let doc = format!("Named key for the unique index `{index}` on `{entity}`.");
+        let doc = format!("\n{key}\nNamed key for the unique index `{index}` on `{entity}`.\n");
         self.declarations.push(quote! {
             #[doc = #doc]
             #vis struct #key { #(#[doc = "Present lookup component."] pub #ids: #types,)* }
             impl ::ic_db::UniqueKey for #key {
                 type Entity = #entity;
                 const INDEX: &'static str = #index;
-                fn components(&self) -> impl ::core::convert::AsRef<[::ic_db::IndexValue<'_>]> {
+                fn components(&self) -> impl ::std::convert::AsRef<[::ic_db::IndexValue<'_>]> {
                     let row = self;
                     [#(#operands),*]
                 }

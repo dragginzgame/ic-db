@@ -1,4 +1,5 @@
 //! Omission/default semantics on the real typed and persistent write path.
+
 use ic_db::{
     Batch, Database, Entity, Error, FieldSchema, FieldType, InsertInput, LiteralDefault, Schema,
     entity,
@@ -8,15 +9,29 @@ use ic_storage::{
     SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
-#[entity(pk(field="id"), index(field="label",unique,present_only), fields(
-    field(name="id", value(item(prim="Nat64"))),
-    field(name="count", value(item(prim="Nat16")), default=7),
-    field(name="enabled", value(item(prim="Bool")), default=true),
-    field(name="label", value(opt,item(prim="Text",max_bytes=8)), default="draft"),
-    field(name="note", value(opt,item(prim="Text",max_bytes=8))),
-    field(name="signed", value(item(prim="Int8")), default=-128)
-))]
+///
+/// Entry
+/// Exercises indexed access by `label` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(field = "label", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "count", value(item(prim = "Nat16")), default = 7),
+        field(name = "enabled", value(item(prim = "Bool")), default = true),
+        field(name = "label", value(opt, item(prim = "Text", max_bytes = 8)), default = "draft"),
+        field(name = "note", value(opt, item(prim = "Text", max_bytes = 8))),
+        field(name = "signed", value(item(prim = "Int8")), default = -128)
+    )
+)]
 struct Entry {}
+
+///
+/// Policy
+/// Stores `value` under the `id` primary key.
+///
 
 #[entity(
     name = "Policy",
@@ -27,6 +42,12 @@ struct Entry {}
     )
 )]
 struct Policy {}
+
+///
+/// Reordered
+/// Exercises an alternate `Policy` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Policy",
     pk(field = "id"),
@@ -36,6 +57,12 @@ struct Policy {}
     )
 )]
 struct Reordered {}
+
+///
+/// Changed
+/// Exercises an alternate `Policy` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Policy",
     pk(field = "id"),
@@ -45,6 +72,12 @@ struct Reordered {}
     )
 )]
 struct Changed {}
+
+///
+/// Absent
+/// Exercises an alternate `Policy` declaration under the same logical identity.
+///
+
 #[entity(
     name = "Policy",
     pk(field = "id"),
@@ -55,23 +88,36 @@ struct Changed {}
 )]
 struct Absent {}
 
-#[entity(pk(field="id"), fields(
-    field(name="id", value(item(prim="Nat64"))),
-    field(name="u8", value(item(prim="Nat8")), default=255),
-    field(name="u16", value(item(prim="Nat16")), default=65535),
-    field(name="u32", value(item(prim="Nat32")), default=4294967295),
-    field(name="u64", value(item(prim="Nat64")), default=18446744073709551615),
-    field(name="u128", value(item(prim="Nat128")), default=340282366920938463463374607431768211455),
-    field(name="i8", value(item(prim="Int8")), default=-128),
-    field(name="i16", value(item(prim="Int16")), default=-32768),
-    field(name="i32", value(item(prim="Int32")), default=-2147483648),
-    field(name="i64", value(item(prim="Int64")), default=-9223372036854775808),
-    field(name="i128", value(item(prim="Int128")), default=-170141183460469231731687303715884105728)
-))]
+///
+/// Extremes
+/// Exercises stored representations across 10 fields sharing the primary key `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "u8", value(item(prim = "Nat8")), default = 255),
+        field(name = "u16", value(item(prim = "Nat16")), default = 65535),
+        field(name = "u32", value(item(prim = "Nat32")), default = 4294967295),
+        field(name = "u64", value(item(prim = "Nat64")), default = 18446744073709551615),
+        field(name = "u128", value(item(prim = "Nat128")), default = 340282366920938463463374607431768211455),
+        field(name = "i8", value(item(prim = "Int8")), default = -128),
+        field(name = "i16", value(item(prim = "Int16")), default = -32768),
+        field(name = "i32", value(item(prim = "Int32")), default = -2147483648),
+        field(name = "i64", value(item(prim = "Int64")), default = -9223372036854775808),
+        field(name = "i128", value(item(prim = "Int128")), default = -170141183460469231731687303715884105728)
+    )
+)]
 struct Extremes {}
 
 #[test]
 fn blob_defaults_preserve_omission_absence_uniqueness_and_reopen() {
+    ///
+    /// Binary
+    /// Exercises indexed access by `payload` on rows keyed by `id`.
+    ///
+
     #[entity(
         pk(field = "id"),
         index(field = "payload", unique, present_only),
@@ -171,6 +217,7 @@ fn runtime(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
             &GenericAllocationPolicy,
         )
         .unwrap();
+
     runtime
 }
 

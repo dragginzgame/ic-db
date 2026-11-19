@@ -5,49 +5,10 @@ use super::{NAMES, open, runtime};
 use ic_wire::{Direction, Encoding, Limits};
 use std::ops::Bound::{Excluded, Unbounded};
 
-type Cursor = (Vec<u8>, [u64; 5]); // Canister, incarnation, contract, mode, predicate, position.
-type Row = (u64, Option<u64>, u64);
-type Page<T> = (Vec<T>, Option<Cursor>, u64, u64); // Results, continuation, examined, fetched.
-const MAX_PRICE: u64 = 20_000;
-const LIMITS: Limits = Limits {
-    bytes: 4096,
-    allocation: 65_536,
-    nodes: 1024,
-    depth: 32,
-};
-
-fn cursor(incarnation: u64, mode: u64, price: u64, position: u64) -> Cursor {
-    (
-        ic_platform_runtime::system::canister_self()
-            .as_slice()
-            .to_vec(),
-        [incarnation, 1, mode, price, position],
-    )
-}
-
-fn position(token: Option<&Cursor>, incarnation: u64, mode: u64, price: u64) -> Result<u64, u8> {
-    let Some((canister, fields)) = token else {
-        return Ok(0);
-    };
-    if canister != ic_platform_runtime::system::canister_self().as_slice()
-        || fields[..4] != [incarnation, 1, mode, price]
-    {
-        return Err(2);
-    }
-    let key = fields[4];
-    if (mode == 0 && !(1..=8).contains(&key))
-        || (mode != 0 && (key > 10008 || !(1..=8).contains(&(key % 100))))
-    {
-        return Err(2);
-    }
-    Ok(key)
-}
-
-fn optional(score: u64) -> Option<u64> {
-    (score != 0).then_some(score)
-}
-
-/// Seed the bounded-read fixture and return its new incarnation.
+// seed_reads
+// Seed the bounded-read fixture and return its new incarnation.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "seed_reads",
@@ -90,10 +51,14 @@ fn seed_reads((): ()) -> u64 {
         index.insert(score * 100 + id, id);
     }
     metadata.insert(0, incarnation);
+
     incarnation
 }
 
-/// Replace or remove a fixture row between page requests.
+// change_read_row
+// Replace or remove a fixture row between page requests.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "change_read_row",
@@ -119,12 +84,15 @@ fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u
         rows.insert(id, score * 65536 + price);
         index.insert(score * 100 + id, id);
     }
+
     Ok(())
 }
 
 // Errors: bounds=1, cursor mismatch=2, oversized row=3, unsupported order/path=4.
-
-/// Read one ordered page under the candidate and response budgets.
+// bounded_page
+// Read one ordered page under the candidate and response budgets.
+// guard  : validates the request frame for method 6.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "bounded_page",
@@ -241,6 +209,7 @@ fn bounded_page(
         output.push(row);
         last = key;
     }
+
     Ok((
         output,
         (!exhausted).then(|| make_cursor(last)),
@@ -250,8 +219,10 @@ fn bounded_page(
 }
 
 // Only the unfiltered ordered-key DISTINCT witness is admitted here.
-
-/// Read one bounded page of distinct optional values.
+// distinct_page
+// Read one bounded page of distinct optional values.
+// guard  : validates the request frame for method 7.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "distinct_page",
@@ -289,10 +260,54 @@ fn distinct_page(
         }
         previous = Some(score);
     }
+
     Ok((
         output,
         (!exhausted).then(|| cursor(incarnation, 2, MAX_PRICE, last)),
         examined,
         0,
     ))
+}
+
+type Cursor = (Vec<u8>, [u64; 5]); // Canister, incarnation, contract, mode, predicate, position.
+type Row = (u64, Option<u64>, u64);
+type Page<T> = (Vec<T>, Option<Cursor>, u64, u64); // Results, continuation, examined, fetched.
+const MAX_PRICE: u64 = 20_000;
+const LIMITS: Limits = Limits {
+    bytes: 4096,
+    allocation: 65_536,
+    nodes: 1024,
+    depth: 32,
+};
+
+fn cursor(incarnation: u64, mode: u64, price: u64, position: u64) -> Cursor {
+    (
+        ic_platform_runtime::system::canister_self()
+            .as_slice()
+            .to_vec(),
+        [incarnation, 1, mode, price, position],
+    )
+}
+
+fn position(token: Option<&Cursor>, incarnation: u64, mode: u64, price: u64) -> Result<u64, u8> {
+    let Some((canister, fields)) = token else {
+        return Ok(0);
+    };
+    if canister != ic_platform_runtime::system::canister_self().as_slice()
+        || fields[..4] != [incarnation, 1, mode, price]
+    {
+        return Err(2);
+    }
+    let key = fields[4];
+    if (mode == 0 && !(1..=8).contains(&key))
+        || (mode != 0 && (key > 10008 || !(1..=8).contains(&(key % 100))))
+    {
+        return Err(2);
+    }
+
+    Ok(key)
+}
+
+fn optional(score: u64) -> Option<u64> {
+    (score != 0).then_some(score)
 }

@@ -38,6 +38,7 @@ async fn revision_aggregation() {
             )
             .await
             .unwrap();
+
         ic_wire::decode(
             &reply,
             Encoding::Frame {
@@ -66,6 +67,7 @@ async fn revision_aggregation() {
             )
             .await
             .unwrap();
+
         ic_wire::decode(
             &reply,
             Encoding::Frame {

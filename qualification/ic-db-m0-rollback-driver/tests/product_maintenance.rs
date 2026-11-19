@@ -1,4 +1,5 @@
 //! Real product manifest gate, exact executable identity and IC rollback boundary.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -110,6 +111,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<SourcePage, String>>(
             &reply,
             Encoding::Frame {

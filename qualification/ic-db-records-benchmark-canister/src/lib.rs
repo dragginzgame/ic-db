@@ -13,54 +13,6 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
 };
 
-#[entity( pk(field = "id"),
-    index(fields = ["category", "id"]),
-    fields(field(name = "id", value(item(prim = "Nat64"))),
-        field(name = "category", value(item(prim = "Nat64"))),
-        field(name = "amount", value(item(prim = "Nat64")))))]
-struct Entry {}
-
-const KEY: &str = "m1.benchmark.records.v1";
-type Row = (u64, u64, u64);
-
-fn compiled() -> Schema {
-    Schema::new(&[Entry::SCHEMA]).unwrap()
-}
-
-fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
-    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
-    let declarations =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("m1", KEY).unwrap()]).unwrap();
-    let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-    host
-}
-
-fn database() -> Database {
-    let host = runtime();
-    Database::open(
-        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-        compiled(),
-    )
-    .unwrap()
-}
-
-fn row(value: &Entry) -> Row {
-    (value.id, value.category, value.amount)
-}
-
-// Include runtime construction, schema admission, database work and result mapping.
-// Wire decode/encode is outside this interval, as in the frozen IcyDB host.
-fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
-    let start = ic_platform_runtime::raw::instruction_counter();
-    let result = operation();
-    (
-        result,
-        ic_platform_runtime::raw::instruction_counter() - start,
-    )
-}
-
 /// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
@@ -80,7 +32,10 @@ fn initialize((): ()) {
     .unwrap();
 }
 
-/// Measure one startup step and report whether the database is ready.
+// advance_startup
+// Measure one startup step and report whether the database is ready.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "advance_startup",
@@ -93,11 +48,15 @@ fn initialize((): ()) {
 fn advance_startup((): ()) -> (bool, u64) {
     measure(|| {
         let _ = database();
+
         true
     })
 }
 
-/// Insert a benchmark row and report its instruction cost.
+// insert
+// Insert a benchmark row and report its instruction cost.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "insert",
@@ -118,6 +77,7 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
                 amount,
             })
             .unwrap();
+
         match database.commit(batch) {
             Ok(()) => true,
             Err(Error::Exists) => false,
@@ -126,7 +86,10 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-/// Look up a benchmark row by ID and report its instruction cost.
+// lookup
+// Look up a benchmark row by ID and report its instruction cost.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "lookup",
@@ -140,7 +103,10 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     measure(|| database().get::<Entry>(id).unwrap().as_ref().map(row))
 }
 
-/// Measure the complete journey from lookup through replacement.
+// read_modify_write
+// Measure the complete journey from lookup through replacement.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "read_modify_write",
@@ -159,11 +125,15 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
         let mut batch = Batch::new();
         batch.replace(&current).unwrap();
         database.commit(batch).unwrap();
+
         Some(row(&current))
     })
 }
 
-/// List rows in the requested category for the engine comparison.
+// listing
+// List rows in the requested category for the engine comparison.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "listing",
@@ -186,7 +156,10 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     })
 }
 
-/// Read two matches after the last emitted ID on fixed benchmark input.
+// keyset_listing
+// Read two matches after the last emitted ID on fixed benchmark input.
+// guard  : validates the request frame for method 11.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "keyset-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -216,11 +189,15 @@ fn keyset_listing((after, category, hinted): (Option<u64>, u64, bool)) -> (Vec<R
         }
         let page = query.fetch().unwrap();
         assert!(page.rows.len() == 2 || page.next.is_none());
+
         page.rows.iter().map(row).collect()
     })
 }
 
-/// Run the selected filtered listing and report its result and instruction cost.
+// fluent_listing
+// Run the selected filtered listing and report its result and instruction cost.
+// guard  : validates the request frame for method 6.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "fluent-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -258,19 +235,15 @@ fn fluent_listing(
         };
         #[cfg(feature = "query-matrix")]
         let query = query.work_limit(512);
+
         Ok(query.fetch().unwrap().rows.iter().map(row).collect())
     })
 }
 
-// Output records only; no additional stored entity or index.
-#[cfg(feature = "aggregate-comparison")]
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
-struct AmountOnly {}
-#[cfg(feature = "aggregate-comparison")]
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
-struct CategoryOnly {}
-
-/// Measure the requested aggregate over matching benchmark entries.
+// grouped_aggregate
+// Measure the requested aggregate over matching benchmark entries.
+// guard  : validates the request frame for method 7.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "aggregate-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -309,6 +282,7 @@ fn grouped_aggregate(
             } else {
                 query
             };
+
             (query, operation % 4)
         };
         if operation == 0 {
@@ -327,6 +301,7 @@ fn grouped_aggregate(
             _ => panic!("unsupported comparison aggregate"),
         }
         .unwrap();
+
         result
             .value
             .into_iter()
@@ -335,7 +310,10 @@ fn grouped_aggregate(
     })
 }
 
-/// Count all benchmark rows or the selected category under the work limit.
+// count_rows
+// Count all benchmark rows or the selected category under the work limit.
+// guard  : validates the request frame for method 8.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "count-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -360,6 +338,7 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
                 category,
             );
         }
+
         match query.count_validated() {
             Ok(result) => Some(result.value),
             // Explicit work refusal, never a successful partial count.
@@ -369,7 +348,10 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     })
 }
 
-/// Check whether the benchmark category has an owner and measure the lookup.
+// category_exists
+// Check whether the benchmark category has an owner and measure the lookup.
+// guard  : validates the request frame for method 10.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "exists-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -391,3 +373,82 @@ fn category_exists(category: u64) -> (bool, u64) {
             .value
     })
 }
+
+///
+/// Entry
+/// Exercises indexed access by `category` and `id` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["category", "id"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "category", value(item(prim = "Nat64"))),
+        field(name = "amount", value(item(prim = "Nat64")))
+    )
+)]
+struct Entry {}
+
+const KEY: &str = "m1.benchmark.records.v1";
+type Row = (u64, u64, u64);
+
+fn compiled() -> Schema {
+    Schema::new(&[Entry::SCHEMA]).unwrap()
+}
+
+fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
+    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
+    let declarations =
+        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("m1", KEY).unwrap()]).unwrap();
+    let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
+    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
+        .unwrap();
+
+    host
+}
+
+fn database() -> Database {
+    let host = runtime();
+
+    Database::open(
+        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+        compiled(),
+    )
+    .unwrap()
+}
+
+fn row(value: &Entry) -> Row {
+    (value.id, value.category, value.amount)
+}
+
+// Include runtime construction, schema admission, database work and result mapping.
+// Wire decode/encode is outside this interval, as in the frozen IcyDB host.
+fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
+    let start = ic_platform_runtime::raw::instruction_counter();
+    let result = operation();
+
+    (
+        result,
+        ic_platform_runtime::raw::instruction_counter() - start,
+    )
+}
+
+// Output records only; no additional stored entity or index.
+///
+/// AmountOnly
+/// Carries the `Nat64` value of `amount`.
+///
+
+#[cfg(feature = "aggregate-comparison")]
+#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+struct AmountOnly {}
+
+///
+/// CategoryOnly
+/// Carries the `Nat64` value of `category`.
+///
+
+#[cfg(feature = "aggregate-comparison")]
+#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+struct CategoryOnly {}

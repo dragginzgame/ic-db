@@ -1,4 +1,5 @@
 //! Exact retained aggregates: independent results, retries, invalidation and reclamation.
+
 use ic_db::{
     AggregateJobs, Batch, Comparison, Database, Entity, Error, GroupOrder, JobHandle, JobOutcome,
     Schema, Timestamp, entity,
@@ -7,6 +8,11 @@ use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
+
+///
+/// Row
+/// Exercises indexed access by `flag` on rows keyed by `id`.
+///
 
 #[entity(
     pk(field = "id"),
@@ -19,15 +25,39 @@ use ic_storage::{
     )
 )]
 struct Row {}
+
+///
+/// Other
+/// Exercises a row containing only its `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
 struct Other {}
+
+///
+/// Amount
+/// Carries an optional `Int128` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Int128")))))]
 struct Amount {}
+
+///
+/// Id
+/// Carries the `Nat64` value of `id`.
+///
+
 #[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct Id {}
+
+///
+/// Payload
+/// Carries the `Blob` value of `payload`.
+///
+
 #[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 3500)))))]
 struct Payload {}
 fn time(ms: i64) -> Timestamp {
@@ -82,6 +112,7 @@ fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
             }
             let query = || {
                 let q = db.query::<Row>().filter("flag", Comparison::Eq, 1_u8);
+
                 if indexed {
                     q.using_index("flag", &[])
                 } else {
@@ -125,6 +156,7 @@ fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
                         .query::<Row>()
                         .filter("flag", Comparison::Eq, 1_u8)
                         .work_limit(work);
+
                     if indexed {
                         q.using_index("flag", &[])
                     } else {
@@ -192,6 +224,7 @@ fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
                         (count.sequence, count.examined),
                         (step.sequence, step.examined)
                     );
+
                     match count.outcome {
                         JobOutcome::Running => assert!(matches!(step.outcome, JobOutcome::Running)),
                         JobOutcome::Complete(value) => assert_eq!(value, distinct),
@@ -204,6 +237,7 @@ fn retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages() {
                 if !indexed && examined <= 24 {
                     assert!(matches!(step.outcome, JobOutcome::Running));
                 }
+
                 match step.outcome {
                     JobOutcome::Running => assert!(cursor.is_none()),
                     JobOutcome::Complete(page) => {
@@ -307,6 +341,7 @@ fn retained_blob_group_prefix_selection_waits_for_final_winners_and_pages() {
                         .limit(2)
                         .work_limit(1)
                         .group_page(1, cursor.as_ref());
+
                     if indexed {
                         q.using_index("flag", &[])
                     } else {
@@ -350,6 +385,7 @@ fn retained_blob_group_prefix_selection_waits_for_final_winners_and_pages() {
                 }
                 .unwrap();
                 sequence = step.sequence;
+
                 match step.outcome {
                     JobOutcome::Running => assert!(actual.is_empty()),
                     JobOutcome::Complete(page) => {
@@ -379,6 +415,12 @@ fn retained_blob_group_prefix_selection_waits_for_final_winners_and_pages() {
 #[test]
 fn retained_optional_blob_groups_preserve_absence_across_chunks() {
     use std::collections::BTreeMap;
+
+    ///
+    /// Binary
+    /// Exercises indexed access by `bytes` on rows keyed by `id`.
+    ///
+
     #[entity(
         pk(field = "id"),
         index(field = "bytes"),
@@ -388,6 +430,12 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
         )
     )]
     struct Binary {}
+
+    ///
+    /// Key
+    /// Carries an optional `Blob` value of `bytes`.
+    ///
+
     #[ic_db::record(fields(field(
         name = "bytes",
         value(opt, item(prim = "Blob", max_bytes = 16))
@@ -423,6 +471,7 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
         db.commit(batch).unwrap();
         let query = || {
             let q = db.query::<Binary>();
+
             if indexed {
                 q.using_index("bytes", &[])
             } else {
@@ -455,6 +504,7 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
             .unwrap();
             let query = || {
                 let q = db.query::<Binary>().work_limit(2);
+
                 if indexed {
                     q.using_index("bytes", &[])
                 } else {
@@ -469,6 +519,7 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
                 .unwrap();
             assert_eq!((g.sequence, g.examined), (d.sequence, d.examined));
             sequence = g.sequence;
+
             match (g.outcome, d.outcome) {
                 (JobOutcome::Running, JobOutcome::Running) => {}
                 (JobOutcome::Complete(page), JobOutcome::Complete(count)) => {
@@ -589,6 +640,7 @@ fn retained_blob_pattern_reopen(comparison: Comparison, pattern: &[u8]) {
             .resume_count(&mut jobs, &job, sequence, time(1))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(count) => {
@@ -628,6 +680,7 @@ fn range_counts_resume_after_reopen_without_visiting_outside_rows() {
                 .query::<Row>()
                 .filter(field, Comparison::Ge, lower)
                 .filter(field, Comparison::Lt, upper);
+
             if index {
                 query.using_index("flag", &[])
             } else {
@@ -661,6 +714,7 @@ fn range_counts_resume_after_reopen_without_visiting_outside_rows() {
                 .query::<Row>()
                 .filter(field, Comparison::Ge, lower)
                 .filter(field, Comparison::Lt, upper);
+
             if index {
                 query.using_index("flag", &[])
             } else {
@@ -825,6 +879,7 @@ fn range_helpers_resume_exact_counts_through_explicit_comparisons_after_reopen()
                 .resume_count(&mut jobs, &handle, sequence, time(1))
                 .unwrap();
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => {}
                 JobOutcome::Complete(value) => {
@@ -861,11 +916,13 @@ fn exclusion_jobs_share_inequality_identity_and_exact_counts() {
             .resume_count(&mut jobs, &handle, sequence, time(1))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(value) => {
                 assert_eq!(value, 1);
                 assert_eq!(step.examined, 4);
+
                 return;
             }
             other => panic!("unexpected outcome: {other:?}"),
@@ -894,11 +951,13 @@ fn membership_jobs_share_equality_clause_identity_and_exact_counts() {
             .resume_count(&mut jobs, &handle, sequence, time(1))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(value) => {
                 assert_eq!(value, 3);
                 assert_eq!(step.examined, 4);
+
                 return;
             }
             other => panic!("unexpected outcome: {other:?}"),
@@ -963,11 +1022,13 @@ fn any_clauses_resume_exact_counts_and_refuse_changed_boolean_structure() {
             .resume_count(&mut jobs, &handle, sequence, time(2))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(value) => {
                 assert_eq!(value, 4);
                 assert_eq!(step.examined, 4);
+
                 return;
             }
             other => panic!("unexpected outcome: {other:?}"),
@@ -987,6 +1048,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -1008,6 +1070,7 @@ fn create_stores(host: &MemoryRuntime<VectorMemory>, schema: Schema) -> (Databas
         [2; 16],
     )
     .unwrap();
+
     (db, jobs)
 }
 
@@ -1032,6 +1095,7 @@ fn create(
         }
         db.commit(batch).unwrap();
     }
+
     (db, jobs)
 }
 
@@ -1079,6 +1143,7 @@ fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
         .start_sum::<Amount>(&mut jobs, time(0), time(100))
         .unwrap();
     let mut sequence = 0;
+
     loop {
         let c = db
             .query::<Row>()
@@ -1100,6 +1165,7 @@ fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
         assert_eq!(retry.examined, c.examined);
         assert_eq!(retry.outcome, c.outcome);
         sequence = c.sequence;
+
         match c.outcome {
             JobOutcome::Running => assert!(matches!(s.outcome, JobOutcome::Running)),
             JobOutcome::Complete(n) => {
@@ -1130,6 +1196,7 @@ fn sparse_index_work_and_source_bytes_bound_progress_independently() {
     let mut sequence = 0;
     let mut previous_bytes = 0;
     let mut previous_examined = 0;
+
     loop {
         let step = query()
             .work_limit(512)
@@ -1141,6 +1208,7 @@ fn sparse_index_work_and_source_bytes_bound_progress_independently() {
         sequence = step.sequence;
         previous_bytes = step.input_bytes;
         previous_examined = step.examined;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(n) => {
@@ -1611,6 +1679,7 @@ fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
             Err(Error::Corrupt)
         ));
         assert_eq!(*backing.borrow(), before);
+
         if corruption == 3 {
             // Framed opaque state remains cancellable even when the reducer
             // rejects its contents. Cleanup never becomes an aggregate executor.
@@ -1670,6 +1739,11 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
     assert_eq!(*backing.borrow(), before);
 }
 
+///
+/// NumericRow
+/// Stores `price` and `wide` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -1679,10 +1753,28 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
     )
 )]
 struct NumericRow {}
+
+///
+/// Price
+/// Carries the `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 2)))))]
 struct Price {}
+
+///
+/// WrongScale
+/// Carries the `Decimal` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 3)))))]
 struct WrongScale {}
+
+///
+/// Wide
+/// Carries the `U256` value of `wide`.
+///
+
 #[ic_db::record(fields(field(name = "wide", value(item(prim = "U256")))))]
 struct Wide {}
 #[test]
@@ -1745,12 +1837,35 @@ fn decimal_coefficients_and_full_width_unsigned_totals_survive_checkpoints() {
     assert_eq!(value.wide, U256::MAX);
 }
 
+///
+/// Average0
+/// Carries an optional `Decimal` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 0)))))]
 struct Average0 {}
+
+///
+/// Average2
+/// Carries an optional `Decimal` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct Average2 {}
+
+///
+/// Average28
+/// Carries an optional `Decimal` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 28)))))]
 struct Average28 {}
+
+///
+/// WideAverage
+/// Carries the `Decimal` value of `wide`.
+///
+
 #[ic_db::record(fields(field(name = "wide", value(item(prim = "Decimal", scale = 0)))))]
 struct WideAverage {}
 
@@ -1780,6 +1895,7 @@ fn averages_round_once_across_unequal_chunks_and_ignore_absence() {
                     .work_limit(work)
                     .resume_avg::<Average0>(&mut jobs, &handle, sequence, time(1))
                     .unwrap();
+
                 match step.outcome {
                     JobOutcome::Running => {
                         assert_eq!(step.output_bytes, 0);
@@ -2054,6 +2170,7 @@ fn unsigned_average_checks_result_after_division_across_messages() {
         let result =
             db.query::<NumericRow>()
                 .resume_avg::<WideAverage>(&mut jobs, &handle, 1, time(2));
+
         if let Some(expected) = expected {
             let JobOutcome::Complete(Some(value)) = result.unwrap().outcome else {
                 panic!("missing average")
@@ -2066,8 +2183,19 @@ fn unsigned_average_checks_result_after_division_across_messages() {
     }
 }
 
+///
+/// Flag
+/// Carries the `Nat8` value of `flag`.
+///
+
 #[ic_db::record(fields(field(name = "flag", value(item(prim = "Nat8")))))]
 struct Flag {}
+
+///
+/// GroupKey
+/// Groups `amount` and `flag` into one record.
+///
+
 #[ic_db::record(fields(
     field(name = "amount", value(opt, item(prim = "Int128"))),
     field(name = "flag", value(item(prim = "Nat8")))
@@ -2171,6 +2299,7 @@ fn descending_group_keys_select_and_page_after_complete_accumulation() {
             .resume_group_count::<GroupKey>(&mut jobs, &handle, sequence, time(2))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => assert_eq!(step.output_bytes, 0),
             JobOutcome::Complete(page) => {
@@ -2232,6 +2361,7 @@ fn grouped_jobs_count_complete_input_before_filtering_order_and_limit() {
                 (step.sequence, step.examined)
             );
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => assert_eq!(step.output_bytes, 0),
                 JobOutcome::Complete(rows) => {
@@ -2440,6 +2570,11 @@ fn grouped_job_cardinality_refuses_even_when_output_filters_hide_every_group() {
     assert_eq!((retry.sequence, retry.examined), (1, 32));
 }
 
+///
+/// LabelRow
+/// Stores `label` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -2448,6 +2583,12 @@ fn grouped_job_cardinality_refuses_even_when_output_filters_hide_every_group() {
     )
 )]
 struct LabelRow {}
+
+///
+/// Label
+/// Carries the `Text` value of `label`.
+///
+
 #[ic_db::record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 1500)))))]
 struct Label {}
 #[test]
@@ -2592,6 +2733,7 @@ fn grouped_numeric_jobs_complete_large_inputs_with_absent_groups_and_exact_total
         .start_group_avg::<Flag, Average2>(&mut jobs, time(0), time(100))
         .unwrap();
     let mut sequence = 0;
+
     loop {
         let s = db
             .query::<Row>()
@@ -2610,6 +2752,7 @@ fn grouped_numeric_jobs_complete_large_inputs_with_absent_groups_and_exact_total
             .unwrap();
         assert_eq!((retry.sequence, retry.examined), (a.sequence, a.examined));
         sequence = s.sequence;
+
         match (s.outcome, a.outcome) {
             (JobOutcome::Running, JobOutcome::Running) => {}
             (JobOutcome::Complete(s), JobOutcome::Complete(a)) => {
@@ -2665,12 +2808,14 @@ fn grouped_averages_round_per_group_once_and_select_completed_values() {
                 .start_group_avg::<Flag, Average0>(&mut jobs, time(0), time(100))
                 .unwrap();
             let mut sequence = 0;
+
             loop {
                 let step = query()
                     .work_limit(work)
                     .resume_group_avg::<Flag, Average0>(&mut jobs, &handle, sequence, time(1))
                     .unwrap();
                 sequence = step.sequence;
+
                 match step.outcome {
                     JobOutcome::Running => {}
                     JobOutcome::Complete(rows) => {
@@ -3034,6 +3179,7 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
         .start_count_field("payload", &mut jobs, time(0), time(100))
         .unwrap();
     let mut sequence = 0;
+
     loop {
         let c = db
             .query::<Row>()
@@ -3060,6 +3206,7 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
             (c.sequence, c.examined, &c.outcome)
         );
         sequence = c.sequence;
+
         match (c.outcome, g.outcome, b.outcome) {
             (JobOutcome::Running, JobOutcome::Running, JobOutcome::Running) => {}
             (JobOutcome::Complete(c), JobOutcome::Complete(g), JobOutcome::Complete(b)) => {
@@ -3078,6 +3225,11 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
     }
 }
 
+///
+/// PresenceRow
+/// Exercises indexed access by `note` and `id` on rows keyed by `id`.
+///
+
 #[entity(
     pk(field = "id"),
     index(fields = ["note", "id"], unique, present_only),
@@ -3089,6 +3241,11 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
     )
 )]
 struct PresenceRow {}
+
+///
+/// PresenceNote
+/// Carries an optional `Text` value of `note`.
+///
 
 #[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 12)))))]
 struct PresenceNote {}
@@ -3288,6 +3445,7 @@ fn text_job_reopen(comparison: Comparison, needle: &str, expected_count: u64) {
             .resume_group_max::<Flag, PresenceNote>(&mut jobs, &groups, sequence, time(2))
             .unwrap();
         sequence = step.sequence;
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(page) => {
@@ -3297,6 +3455,7 @@ fn text_job_reopen(comparison: Comparison, needle: &str, expected_count: u64) {
                     page.rows[0].value.as_ref().unwrap().note.as_deref(),
                     Some("a\0c")
                 );
+
                 return;
             }
             other => panic!("unexpected outcome: {other:?}"),
@@ -3534,6 +3693,7 @@ fn retained_distinct_counts_whole_tuples_across_chunks_and_reopen() {
         )
         .unwrap();
         let mut sequence = first.sequence;
+
         loop {
             let step = db
                 .query::<Row>()
@@ -3550,6 +3710,7 @@ fn retained_distinct_counts_whole_tuples_across_chunks_and_reopen() {
                 (step.sequence, step.examined, &step.outcome)
             );
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => {}
                 JobOutcome::Complete(count) => {
@@ -3573,6 +3734,7 @@ fn retained_distinct_empty_absent_and_text_keys_keep_exact_equality() {
             .start_count_distinct::<Amount>(&mut jobs, time(0), time(100))
             .unwrap();
         let mut sequence = 0;
+
         loop {
             let step = db
                 .query::<Row>()
@@ -3824,6 +3986,7 @@ fn retained_group_distinct_matches_independent_sets_with_overlap_and_selection()
     for selected in [false, true] {
         let query = || {
             let query = db.query::<Row>();
+
             if selected {
                 query
                     .filter_groups(Comparison::Ge, 2_u64)
@@ -3846,6 +4009,7 @@ fn retained_group_distinct_matches_independent_sets_with_overlap_and_selection()
             expected.truncate(1);
         }
         let mut sequence = 0;
+
         loop {
             let step = query()
                 .work_limit(19)
@@ -3870,6 +4034,7 @@ fn retained_group_distinct_matches_independent_sets_with_overlap_and_selection()
                 (step.sequence, step.examined)
             );
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => {}
                 JobOutcome::Complete(rows) => {
@@ -4381,11 +4546,13 @@ fn completed_page_cursors_refuse_foreign_pending_and_out_of_range_jobs() {
         {
             let mut b = cursor.to_bytes();
             b[27] = 0;
+
             b
         },
         {
             let mut b = cursor.to_bytes();
             b[0] = 2;
+
             b
         },
     ] {
@@ -4824,11 +4991,13 @@ fn retained_text_extrema_restore_owned_encoding_and_replace_winners() {
             .work_limit(1)
             .resume_max::<Label>(&mut jobs, &max, sequence, time(1))
             .unwrap();
+
         match (a.outcome, b.outcome) {
             (JobOutcome::Running, JobOutcome::Running) => {}
             (JobOutcome::Complete(Some(a)), JobOutcome::Complete(Some(b))) => {
                 assert_eq!(a.label, "a\0a");
                 assert_eq!(b.label, "é");
+
                 return;
             }
             _ => panic!("inconsistent extrema progress"),
@@ -4877,6 +5046,11 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
     }
 }
 
+///
+/// WideLabelRow
+/// Stores `label` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -4885,6 +5059,12 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
     )
 )]
 struct WideLabelRow {}
+
+///
+/// WideLabel
+/// Carries the `Text` value of `label`.
+///
+
 #[ic_db::record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 4000)))))]
 struct WideLabel {}
 
@@ -5050,6 +5230,7 @@ fn retained_group_extrema_match_independent_winners_across_reopen_and_pages() {
             }
             .unwrap();
             sequence = step.sequence;
+
             match step.outcome {
                 JobOutcome::Running => assert!(step.examined < 522),
                 JobOutcome::Complete(page) => {
@@ -5392,6 +5573,7 @@ fn retained_group_text_extrema_restore_winners_and_apply_completed_order() {
             .work_limit(1)
             .resume_group_min::<Id, Label>(&mut jobs, &handle, sequence, time(1))
             .unwrap();
+
         match step.outcome {
             JobOutcome::Running => {}
             JobOutcome::Complete(page) => {
@@ -5407,6 +5589,7 @@ fn retained_group_text_extrema_restore_winners_and_apply_completed_order() {
                         .map(|(k, v)| (k, v.to_string()))
                         .collect::<Vec<_>>()
                 );
+
                 return;
             }
             _ => panic!("unexpected group state"),
@@ -5415,10 +5598,27 @@ fn retained_group_text_extrema_restore_winners_and_apply_completed_order() {
     panic!("groups did not complete");
 }
 
+///
+/// UnitPrice
+/// Gives `Decimal` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Decimal", scale = 2))]
 struct UnitPrice {}
+
+///
+/// Quantity
+/// Gives `Int16` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Int16"))]
 struct Quantity {}
+
+///
+/// Line
+/// Stores `flag`, `price` and `amount` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -5493,16 +5693,51 @@ fn numeric_newtype_inputs_share_widening_and_retained_decimal_rounding() {
     assert!(matches!(rest.outcome, JobOutcome::Complete(Some(value)) if value == expected));
 }
 
+///
+/// NamedPrice
+/// Carries the `UnitPrice` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(is = "UnitPrice")))))]
 struct NamedPrice {}
+
+///
+/// Discount
+/// Gives `Decimal` a distinct schema identity.
+///
+
 #[ic_db::newtype(item(prim = "Decimal", scale = 2))]
 struct Discount {}
+
+///
+/// WrongUnit
+/// Carries the `Discount` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(is = "Discount")))))]
 struct WrongUnit {}
+
+///
+/// OtherScale
+/// Gives `Decimal` a distinct schema identity.
+///
+
 #[ic_db::newtype(name = "UnitPrice", item(prim = "Decimal", scale = 3))]
 struct OtherScale {}
+
+///
+/// ChangedUnit
+/// Carries the `OtherScale` value of `price`.
+///
+
 #[ic_db::record(fields(field(name = "price", value(item(is = "OtherScale")))))]
 struct ChangedUnit {}
+
+///
+/// NamedAmount
+/// Carries an optional `Quantity` value of `amount`.
+///
+
 #[ic_db::record(fields(field(name = "amount", value(opt, item(is = "Quantity")))))]
 struct NamedAmount {}
 

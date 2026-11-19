@@ -1,4 +1,5 @@
 //! Maps preserve scalar key identity without overwriting corrupt stored entries.
+
 use ic_db::{Batch, Database, Entity, Error, Schema, entity, map};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -6,12 +7,23 @@ use ic_storage::{
 };
 use std::collections::BTreeMap;
 
+///
+/// Rates
+/// Maps up to 3 `Int16` keys to optional `Text` values.
+///
+
 #[map(
     key(prim = "Int16"),
     value(opt, item(prim = "Text", max_bytes = 4)),
     max_items = 3
 )]
 struct Rates {}
+
+///
+/// WiderRates
+/// Maps up to 4 `Int16` keys to optional `Text` values.
+///
+
 #[map(
     name = "Rates",
     key(prim = "Int16"),
@@ -19,6 +31,12 @@ struct Rates {}
     max_items = 4
 )]
 struct WiderRates {}
+
+///
+/// MapRow
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -27,6 +45,12 @@ struct WiderRates {}
     )
 )]
 struct MapRow {}
+
+///
+/// WiderRow
+/// Exercises an alternate `MapRow` declaration under the same logical identity.
+///
+
 #[entity(
     name = "MapRow",
     pk(field = "id"),
@@ -36,6 +60,12 @@ struct MapRow {}
     )
 )]
 struct WiderRow {}
+
+///
+/// OptionalRow
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -44,12 +74,24 @@ struct WiderRow {}
     )
 )]
 struct OptionalRow {}
+
+///
+/// Lists
+/// Maps up to 256 `Nat16` keys to `Nat8` values.
+///
+
 #[map(
     key(prim = "Nat16"),
     value(many, max_items = 256, item(prim = "Nat8")),
     max_items = 256
 )]
 struct Lists {}
+
+///
+/// ListMapRow
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -58,8 +100,20 @@ struct Lists {}
     )
 )]
 struct ListMapRow {}
+
+///
+/// Tree
+/// Maps up to 256 `Nat16` keys to `Self` values.
+///
+
 #[map(key(prim = "Nat16"), value(item(is = "Self")), max_items = 256)]
 struct Tree {}
+
+///
+/// TreeRow
+/// Stores `tree` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -68,12 +122,24 @@ struct Tree {}
     )
 )]
 struct TreeRow {}
+
+///
+/// Blobs
+/// Maps up to 2 `Nat8` keys to `Blob` values.
+///
+
 #[map(
     key(prim = "Nat8"),
     value(item(prim = "Blob", max_bytes = 4096)),
     max_items = 2
 )]
 struct Blobs {}
+
+///
+/// BlobRow
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -82,8 +148,20 @@ struct Blobs {}
     )
 )]
 struct BlobRow {}
+
+///
+/// Empty
+/// Maps up to 0 `Bool` keys to `Nat8` values.
+///
+
 #[map(key(prim = "Bool"), value(item(prim = "Nat8")), max_items = 0)]
 struct Empty {}
+
+///
+/// EmptyRow
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -113,6 +191,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 

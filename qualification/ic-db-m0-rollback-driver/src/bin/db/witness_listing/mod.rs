@@ -1,6 +1,7 @@
 //! Explicit native binding to canic-db-witness.query.v1.
 //! These DTOs describe that application's Wire contract, not an IC DB query API.
 //! Importing its witness package would enable db-schema and an unnecessary engine.
+
 #[cfg(test)]
 mod tests;
 
@@ -85,6 +86,7 @@ fn decode(bytes: &[u8], limit: u8, work: u8) -> Result<Page, String> {
     {
         return Err("listing reply exceeds the application's page bounds".into());
     }
+
     Ok(page)
 }
 
@@ -116,6 +118,7 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
             .next
             .as_ref()
             .map(|bytes| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
+
         if options.json {
             println!(
                 "{}",
@@ -146,5 +149,6 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
         }
     }
     remote::report(statistics, options.json || outcome.is_err());
+
     outcome.map(|_| ())
 }

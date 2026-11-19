@@ -1,5 +1,6 @@
 //! Small typed identity boundary over shared commit/traversal execution.
 //! Primary and secondary keys share their ordered component encoding.
+
 use crate::{Account, Error, FieldType, IndexValue, Principal, Subaccount, U256, Ulid, key};
 
 mod sealed {
@@ -85,26 +86,31 @@ impl RowKey {
             FieldType::Int8 => {
                 let mut bytes: [u8; 1] = bytes.try_into().map_err(|_| Error::Corrupt)?;
                 bytes[0] ^= 0x80;
+
                 Ok(Self::Int8(i8::from_be_bytes(bytes)))
             }
             FieldType::Int16 => {
                 let mut bytes: [u8; 2] = bytes.try_into().map_err(|_| Error::Corrupt)?;
                 bytes[0] ^= 0x80;
+
                 Ok(Self::Int16(i16::from_be_bytes(bytes)))
             }
             FieldType::Int32 => {
                 let mut bytes: [u8; 4] = bytes.try_into().map_err(|_| Error::Corrupt)?;
                 bytes[0] ^= 0x80;
+
                 Ok(Self::Int32(i32::from_be_bytes(bytes)))
             }
             FieldType::Int64 => {
                 let mut bytes: [u8; 8] = bytes.try_into().map_err(|_| Error::Corrupt)?;
                 bytes[0] ^= 0x80;
+
                 Ok(Self::Int64(i64::from_be_bytes(bytes)))
             }
             FieldType::Int128 => {
                 let mut bytes: [u8; 16] = bytes.try_into().map_err(|_| Error::Corrupt)?;
                 bytes[0] ^= 0x80;
+
                 Ok(Self::Int128(i128::from_be_bytes(bytes)))
             }
             FieldType::U256 => Ok(Self::U256(U256::from_be_bytes(
@@ -127,11 +133,13 @@ impl RowKey {
                 let owner_end = 1 + usize::from(bytes[0]);
                 let owner =
                     Principal::try_from_slice(&bytes[1..owner_end]).map_err(|_| Error::Corrupt)?;
+
                 if field == FieldType::Principal {
                     Ok(Self::Principal(owner))
                 } else {
                     let subaccount: Subaccount =
                         bytes[owner_end..].try_into().map_err(|_| Error::Corrupt)?;
+
                     Ok(Self::Account(Account {
                         owner,
                         subaccount: (subaccount != [0; 32]).then_some(subaccount),
@@ -149,6 +157,7 @@ impl RowKey {
     pub(crate) fn encode(self) -> Vec<u8> {
         let mut bytes = Vec::new();
         self.append_to(&mut bytes);
+
         bytes
     }
 }

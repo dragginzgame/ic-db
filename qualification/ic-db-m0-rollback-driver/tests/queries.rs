@@ -1,4 +1,5 @@
 //! Fluent query pages remain bounded and resume across upgrades in real Wasm.
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
@@ -87,6 +88,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<IdPage, u8>>(
             &reply,
             Encoding::Frame {
@@ -212,6 +214,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<IdPage, u8>>(
             &reply,
             Encoding::Frame {
@@ -294,6 +297,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<IdPage, u8>>(
             &reply,
             Encoding::Frame {
@@ -405,6 +409,7 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<DisplayPage, String>>(
             &reply,
             Encoding::Frame {
@@ -517,6 +522,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<IdPage, u8>>(
             &reply,
             Encoding::Frame {
@@ -666,6 +672,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
                 )
                 .await
                 .unwrap();
+
             ic_wire::decode::<Result<SparsePage, u8>>(
                 &reply,
                 Encoding::Frame {
@@ -757,6 +764,7 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<TextPage, u8>>(
             &reply,
             Encoding::Frame {
@@ -898,6 +906,7 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -998,6 +1007,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -1107,6 +1117,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -1170,6 +1181,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 )
                 .await
                 .unwrap();
+
             ic_wire::decode::<Result<DisplayPage, String>>(
                 &reply,
                 Encoding::Frame {
@@ -1525,6 +1537,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -1569,6 +1582,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<Page, u8>>(
             &reply,
             Encoding::Frame {
@@ -1786,6 +1800,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<(Vec<u64>, u32, u64)>(
             &reply,
             Encoding::Frame {
@@ -1937,6 +1952,7 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
             )
             .await
             .unwrap();
+
         ic_wire::decode::<Result<DisplayPage, String>>(
             &reply,
             Encoding::Frame {

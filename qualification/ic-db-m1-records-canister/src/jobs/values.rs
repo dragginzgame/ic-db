@@ -1,4 +1,5 @@
 //! Variable-size winners through the existing typed engine and job store.
+
 use super::{EntryId, open_jobs, runtime};
 use crate::{
     open,
@@ -6,23 +7,10 @@ use crate::{
 };
 use ic_db::{Batch, GroupCursor, GroupOrder, JobHandle, JobOutcome, Timestamp};
 
-#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
-struct Id {}
-#[ic_db::record(fields(
-    field(name = "id", value(item(prim = "Nat64"))),
-    field(name = "a", value(item(prim = "Text", max_bytes = 1024)))
-))]
-struct IdText {}
-#[ic_db::record(fields(field(name = "a", value(item(prim = "Text", max_bytes = 1024)))))]
-struct Text {}
-#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
-struct Note {}
-#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
-struct Payload {}
-
-type WriteRequest = (Vec<(u64, u64, Option<String>)>, Vec<(u64, String)>);
-
-/// Populate the value and text inputs for retained aggregates.
+// job_values_write
+// Populate the value and text inputs for retained aggregates.
+// guard  : validates the request frame for method 118.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_write",
@@ -48,6 +36,7 @@ fn job_values_write((documents, texts): WriteRequest) -> Result<(), String> {
                 previous_score: None,
                 priority: None,
             };
+
             if db.get::<Document>(id)?.is_some() {
                 batch.replace(&row)?;
             } else {
@@ -63,21 +52,26 @@ fn job_values_write((documents, texts): WriteRequest) -> Result<(), String> {
                 d: String::new(),
                 padding: Vec::new(),
             };
+
             if db.get::<EnvelopeRow>(id)?.is_some() {
                 batch.replace(&row)?;
             } else {
                 batch.insert(&row)?;
             }
         }
+
         db.commit(batch)
     })();
+
     result.map_err(|e: ic_db::Error| e.to_string())
 }
 
 // 0/1: optional-text min/max; 2: wide text; 3: Blob max. These are compiled
 // fixture operations, not a schema-driven dynamic frontend.
-
-/// Start the selected retained value aggregate.
+// job_values_start
+// Start the selected retained value aggregate.
+// guard  : validates the request frame for method 119.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_start",
@@ -110,15 +104,16 @@ fn job_values_start((operation, limit): (u8, u32)) -> Result<Vec<u8>, String> {
             .start_group_max::<Id, Payload>(&mut jobs, now, expires),
         _ => Err(ic_db::Error::InvalidQuery),
     };
+
     result
         .map(|handle| handle.to_bytes())
         .map_err(|e| e.to_string())
 }
 
-type AdvanceRequest = (Vec<u8>, u8, u32, u64, u32, u32, Option<Vec<u8>>, u32);
-type Response = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
-
-/// Advance the value aggregate and measure the step.
+// job_values_advance
+// Advance the value aggregate and measure the step.
+// guard  : validates the request frame for method 149.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "job_values_advance",
@@ -133,8 +128,57 @@ fn job_values_advance(
 ) -> (Result<Response, String>, u64) {
     let start = counter();
     let result = advance(request).map_err(|e| e.to_string());
+
     (result, counter() - start)
 }
+
+///
+/// Id
+/// Carries the `Nat64` value of `id`.
+///
+
+#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+struct Id {}
+
+///
+/// IdText
+/// Groups `id` and `a` into one record.
+///
+
+#[ic_db::record(fields(
+    field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "a", value(item(prim = "Text", max_bytes = 1024)))
+))]
+struct IdText {}
+
+///
+/// Text
+/// Carries the `Text` value of `a`.
+///
+
+#[ic_db::record(fields(field(name = "a", value(item(prim = "Text", max_bytes = 1024)))))]
+struct Text {}
+
+///
+/// Note
+/// Carries an optional `Text` value of `note`.
+///
+
+#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
+struct Note {}
+
+///
+/// Payload
+/// Carries the `Blob` value of `payload`.
+///
+
+#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
+struct Payload {}
+
+type WriteRequest = (Vec<(u64, u64, Option<String>)>, Vec<(u64, String)>);
+
+type AdvanceRequest = (Vec<u8>, u8, u32, u64, u32, u32, Option<Vec<u8>>, u32);
+type Response = (u64, u8, Vec<(u64, Option<Vec<u8>>)>, Option<Vec<u8>>, u64);
 
 fn advance(
     (bytes, operation, limit, sequence, work, size, after, output_bytes): AdvanceRequest,
@@ -152,6 +196,7 @@ fn advance(
         .work_limit(work as usize)
         .test_output_limit(output_bytes as usize)
         .group_page(size as usize, cursor.as_ref());
+
     // Map already-completed typed results to passive bytes for the independent
     // native oracle. No fixture-side comparison, sorting or aggregation.
     match operation {
@@ -161,6 +206,7 @@ fn advance(
             } else {
                 query.resume_group_max::<EntryId, Note>(&mut jobs, &handle, sequence, now)?
             };
+
             Ok(response(step, |page| {
                 (
                     page.rows
@@ -222,10 +268,12 @@ fn response<T>(
         JobOutcome::Running => (0, vec![], None),
         JobOutcome::Complete(value) => {
             let (rows, next) = map(value);
+
             (1, rows, next.map(|c| c.to_bytes()))
         }
         JobOutcome::Invalidated => (2, vec![], None),
         JobOutcome::Expired => (3, vec![], None),
     };
+
     (step.sequence, phase, rows, next, step.examined)
 }

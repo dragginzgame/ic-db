@@ -13,105 +13,6 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
 };
 
-type Map = StableBTreeMap<u64, u64, DefaultMemoryImpl>;
-type Target = StableBTreeMap<u64, [u8; 16], DefaultMemoryImpl>;
-// Executable schema, stored schema, phase, transformation, copy cursor,
-// source/target/index lengths, physical pages.
-type Status = [u64; 9];
-type Page = (Vec<(u64, u64)>, Option<u64>, u64);
-const KEYS: [&str; 4] = [
-    "migration.control.v1",
-    "migration.source.v1",
-    "migration.target.v2",
-    "migration.index.v2",
-];
-const SCHEMA: u64 = if cfg!(feature = "target") { 2 } else { 1 };
-const TRANSFORM: u64 = if cfg!(feature = "changed-transform") {
-    8
-} else {
-    7
-};
-const FORMAT: u64 = 0;
-const PHASE: u64 = 1;
-const TRANSFORMATION: u64 = 2;
-const CURSOR: u64 = 3;
-const TARGET_FORMAT: u64 = 4;
-const RETIRED: u64 = 5;
-// Phases: live, copying, ready, cancelling, published/cleaning.
-
-fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
-    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
-    let declarations = SealedDeclarationSnapshot::new(
-        KEYS.iter()
-            .map(|key| MemoryRequest::new("migration", key).unwrap())
-            .collect(),
-    )
-    .unwrap();
-    let grants = AllocationGrants::new(vec![
-        MemoryAuthority::new("migration", "migration.").unwrap(),
-    ])
-    .unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-    host
-}
-
-fn map(host: &MemoryRuntime<DefaultMemoryImpl>, slot: usize) -> Map {
-    Map::load(
-        host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
-            .unwrap(),
-    )
-}
-
-fn target(host: &MemoryRuntime<DefaultMemoryImpl>) -> Target {
-    Target::load(
-        host.open_memory(&StableKey::parse(KEYS[2]).unwrap())
-            .unwrap(),
-    )
-}
-
-fn field(control: &Map, key: u64) -> Result<u64, u8> {
-    control.get(&key).ok_or(1)
-}
-
-fn admitted(control: &Map) -> Result<(), u8> {
-    if !matches!(field(control, PHASE)?, 0 | 4) {
-        return Err(3);
-    }
-    if field(control, FORMAT)? != SCHEMA {
-        return Err(2);
-    }
-    Ok(())
-}
-
-fn supported(control: &Map) -> Result<(), u8> {
-    if SCHEMA != 2
-        || field(control, TRANSFORMATION)? != TRANSFORM
-        || field(control, TARGET_FORMAT)? != 2
-    {
-        return Err(4);
-    }
-    Ok(())
-}
-
-fn encode(value: u64) -> [u8; 16] {
-    let normalized = value / 10 + if TRANSFORM == 8 { 100 } else { 0 };
-    let mut bytes = [0; 16];
-    bytes[..8].copy_from_slice(&normalized.to_le_bytes());
-    bytes[8..].copy_from_slice(&value.to_le_bytes());
-    bytes
-}
-
-fn normalized(bytes: [u8; 16]) -> u64 {
-    u64::from_le_bytes(bytes[..8].try_into().unwrap())
-}
-
-fn fail_at(selected: u8, boundary: u8) {
-    if selected == boundary {
-        ic_platform_runtime::system::trap("M0 injected maintenance failure");
-    }
-}
-
 /// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
@@ -157,22 +58,10 @@ fn post_upgrade((): ()) {
     }
 }
 
-fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
-    let control = map(host, 0);
-    [
-        SCHEMA,
-        control.get(&FORMAT).unwrap_or(0),
-        control.get(&PHASE).unwrap_or(0),
-        control.get(&TRANSFORMATION).unwrap_or(0),
-        control.get(&CURSOR).unwrap_or(0),
-        map(host, 1).len(),
-        target(host).len(),
-        map(host, 3).len(),
-        ic_storage::Memory::size(&ic_storage::DefaultMemoryImpl::default()),
-    ]
-}
-
-/// Read the fixture’s persisted state for comparison across calls.
+// inspect
+// Read the fixture’s persisted state for comparison across calls.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",
@@ -186,7 +75,10 @@ fn inspect((): ()) -> Status {
     status(&runtime())
 }
 
-/// Inspect the schema admitted by the installed fixture.
+// schema
+// Inspect the schema admitted by the installed fixture.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "schema",
@@ -202,12 +94,15 @@ fn schema((): ()) -> (Status, String) {
     } else {
         "M0 TargetRow v2: id:u64 primary key; normalized:u64 unique index; original:u64; 16-byte row encoding."
     };
+
     (status(&runtime()), description.to_string())
 }
 
 // Three candidates maximum per page, including residual nonmatches; IDs are bounded.
-
-/// Read the requested bounded result from the local fixture.
+// query
+// Read the requested bounded result from the local fixture.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "query",
@@ -243,6 +138,7 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
     } else {
         None
     };
+
     Ok((
         candidates
             .into_iter()
@@ -256,8 +152,10 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
 // start, copy, publish, cleanup, cancel, cancel-cleanup, source-write, damage-manifest.
 // Errors: missing manifest=1, incompatible schema=2, closed phase=3,
 // unsupported transformation=4, invalid bounds=5, unique/validation refusal=6.
-
-/// Advance the selected operation and return the resulting fixture state.
+// command
+// Advance the selected operation and return the resulting fixture state.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "command",
@@ -410,5 +308,125 @@ fn command((operation, a, b, failure): (u8, u64, u64, u8)) -> Result<Status, u8>
         _ => return Err(5),
     }
     drop((source, destination, index, control));
+
     Ok(status(&host))
+}
+
+type Map = StableBTreeMap<u64, u64, DefaultMemoryImpl>;
+type Target = StableBTreeMap<u64, [u8; 16], DefaultMemoryImpl>;
+// Executable schema, stored schema, phase, transformation, copy cursor,
+// source/target/index lengths, physical pages.
+type Status = [u64; 9];
+type Page = (Vec<(u64, u64)>, Option<u64>, u64);
+const KEYS: [&str; 4] = [
+    "migration.control.v1",
+    "migration.source.v1",
+    "migration.target.v2",
+    "migration.index.v2",
+];
+const SCHEMA: u64 = if cfg!(feature = "target") { 2 } else { 1 };
+const TRANSFORM: u64 = if cfg!(feature = "changed-transform") {
+    8
+} else {
+    7
+};
+const FORMAT: u64 = 0;
+const PHASE: u64 = 1;
+const TRANSFORMATION: u64 = 2;
+const CURSOR: u64 = 3;
+const TARGET_FORMAT: u64 = 4;
+const RETIRED: u64 = 5;
+
+// Phases: live, copying, ready, cancelling, published/cleaning.
+fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {
+    let mut host = MemoryRuntime::new(DefaultMemoryImpl::default()).unwrap();
+    let declarations = SealedDeclarationSnapshot::new(
+        KEYS.iter()
+            .map(|key| MemoryRequest::new("migration", key).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let grants = AllocationGrants::new(vec![
+        MemoryAuthority::new("migration", "migration.").unwrap(),
+    ])
+    .unwrap();
+    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
+        .unwrap();
+
+    host
+}
+
+fn map(host: &MemoryRuntime<DefaultMemoryImpl>, slot: usize) -> Map {
+    Map::load(
+        host.open_memory(&StableKey::parse(KEYS[slot]).unwrap())
+            .unwrap(),
+    )
+}
+
+fn target(host: &MemoryRuntime<DefaultMemoryImpl>) -> Target {
+    Target::load(
+        host.open_memory(&StableKey::parse(KEYS[2]).unwrap())
+            .unwrap(),
+    )
+}
+
+fn field(control: &Map, key: u64) -> Result<u64, u8> {
+    control.get(&key).ok_or(1)
+}
+
+fn admitted(control: &Map) -> Result<(), u8> {
+    if !matches!(field(control, PHASE)?, 0 | 4) {
+        return Err(3);
+    }
+    if field(control, FORMAT)? != SCHEMA {
+        return Err(2);
+    }
+
+    Ok(())
+}
+
+fn supported(control: &Map) -> Result<(), u8> {
+    if SCHEMA != 2
+        || field(control, TRANSFORMATION)? != TRANSFORM
+        || field(control, TARGET_FORMAT)? != 2
+    {
+        return Err(4);
+    }
+
+    Ok(())
+}
+
+fn encode(value: u64) -> [u8; 16] {
+    let normalized = value / 10 + if TRANSFORM == 8 { 100 } else { 0 };
+    let mut bytes = [0; 16];
+    bytes[..8].copy_from_slice(&normalized.to_le_bytes());
+    bytes[8..].copy_from_slice(&value.to_le_bytes());
+
+    bytes
+}
+
+fn normalized(bytes: [u8; 16]) -> u64 {
+    u64::from_le_bytes(bytes[..8].try_into().unwrap())
+}
+
+fn fail_at(selected: u8, boundary: u8) {
+    if selected == boundary {
+        ic_platform_runtime::system::trap("M0 injected maintenance failure");
+    }
+}
+
+fn status(host: &MemoryRuntime<DefaultMemoryImpl>) -> Status {
+    let control = map(host, 0);
+
+    [
+        SCHEMA,
+        control.get(&FORMAT).unwrap_or(0),
+        control.get(&PHASE).unwrap_or(0),
+        control.get(&TRANSFORMATION).unwrap_or(0),
+        control.get(&CURSOR).unwrap_or(0),
+        map(host, 1).len(),
+        target(host).len(),
+        map(host, 3).len(),
+        ic_storage::Memory::size(&ic_storage::DefaultMemoryImpl::default()),
+    ]
 }

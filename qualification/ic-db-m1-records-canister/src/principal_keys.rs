@@ -1,12 +1,13 @@
 //! Principal identities use the ordinary typed batch, references and page path.
+
 use super::{Batch, Principal, open, runtime};
 use ic_db::Error;
-use ic_db_m1_records_schema::PrincipalKey;
+use records_schema::PrincipalKey;
 
-type Row = (Vec<u8>, Option<Vec<u8>>, u64);
-type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);
-
-/// Apply the supplied principal-key mutations with optional rollback injection.
+// principal_keys_write
+// Apply the supplied principal-key mutations with optional rollback injection.
+// guard  : validates the request frame for method 84.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "principal_keys_write",
@@ -51,10 +52,14 @@ fn principal_keys_write((mode, rows, trap): (u8, Vec<Row>, bool)) -> Result<(), 
     if trap {
         crate::system::trap("after Principal key commit");
     }
+
     Ok(())
 }
 
-/// Page principal keys and inspect the selected rank.
+// principal_keys_page
+// Page principal keys and inspect the selected rank.
+// guard  : validates the request frame for method 85.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_keys_page",
@@ -79,6 +84,7 @@ fn principal_keys_page((after, limit, rank): (Option<Vec<u8>>, u8, u64)) -> Page
         .map(|row| {
             // Check direct typed lookup independently of page traversal.
             assert_eq!(db.get::<PrincipalKey>(row.id).unwrap(), Some(row.clone()));
+
             (
                 row.id.as_slice().to_vec(),
                 row.next.map(|p| p.as_slice().to_vec()),
@@ -92,6 +98,7 @@ fn principal_keys_page((after, limit, rank): (Option<Vec<u8>>, u8, u64)) -> Page
         .into_iter()
         .map(|row| row.id.as_slice().to_vec())
         .collect();
+
     (
         rows,
         page.next_after.map(|p| p.as_slice().to_vec()),
@@ -99,3 +106,6 @@ fn principal_keys_page((after, limit, rank): (Option<Vec<u8>>, u8, u64)) -> Page
         owners,
     )
 }
+
+type Row = (Vec<u8>, Option<Vec<u8>>, u64);
+type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);

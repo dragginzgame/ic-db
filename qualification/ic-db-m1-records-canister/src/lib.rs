@@ -10,9 +10,6 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
-use ic_db_qualification_transport as transport;
-use ic_platform_runtime::system;
-
 #[cfg(test)]
 mod tests;
 
@@ -23,11 +20,11 @@ mod console;
 mod defaults;
 mod enum_collections;
 mod envelope;
+#[cfg(feature = "fault-injection")]
+mod faults;
 mod generation;
 #[cfg(feature = "fault-injection")]
 mod handles;
-#[cfg(not(feature = "fault-injection"))]
-use ic_db as handles;
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
 #[cfg(feature = "maintenance")]
@@ -43,78 +40,19 @@ mod principal_keys;
 mod queries;
 
 use crate::handles::Database;
+#[cfg(not(feature = "fault-injection"))]
+use ic_db as handles;
 use ic_db::{Batch, Entity, FieldType, Principal};
-
-// Treat framed unit as one reply value for the generic encoder hook.
-type EmptyReply = ();
+use ic_db_qualification_transport as transport;
+use ic_platform_runtime::system;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
 };
-
-#[cfg(feature = "fault-injection")]
-mod faults;
-#[cfg(feature = "fault-injection")]
-type Backing = faults::FaultMemory;
-#[cfg(not(feature = "fault-injection"))]
-type Backing = DefaultMemoryImpl;
-
-use ic_db_m1_records_schema as schema;
+use records_schema as schema;
 use schema::{
-    BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, WideNumbers,
+    BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, WideNumbers, compiled,
 };
-
-const KEY: &str = "m1.records.v1";
-type Status = ([u8; 32], [u8; 16], u64, u64);
-
-include!(concat!(env!("OUT_DIR"), "/schema.rs"));
-
-fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
-    // Host custody survives calls; Database handles and leases remain local.
-    // Upgrade clears this heap state and the next access re-admits the runtime.
-    thread_local! {
-        static HOST: std::rc::Rc<MemoryRuntime<Backing>> = std::rc::Rc::new(new_runtime());
-    }
-    HOST.with(std::rc::Rc::clone)
-}
-
-fn new_runtime() -> MemoryRuntime<Backing> {
-    let mut host = MemoryRuntime::new(Backing::default()).unwrap();
-    let groups: &[&[&str]] = &[
-        &[KEY],
-        #[cfg(feature = "maintenance")]
-        &[
-            maintenance::COPY_SOURCE,
-            maintenance::COPY_TARGET,
-            maintenance::COPY_NEXT,
-            maintenance::COPY_ROUTE,
-        ],
-        #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
-        &[aggregate_store::KEY],
-        #[cfg(feature = "retained-console")]
-        &[console::migration::SOURCE, console::migration::TARGET],
-        #[cfg(feature = "mixed-lifecycle")]
-        &mixed_lifecycle::KEYS,
-    ];
-    let requests = groups
-        .iter()
-        .flat_map(|keys| keys.iter())
-        .map(|&key| MemoryRequest::new("m1", key).unwrap())
-        .collect();
-    let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
-    let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-    host
-}
-
-fn open(host: &MemoryRuntime<Backing>) -> Database {
-    Database::open(
-        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-        compiled(),
-    )
-    .unwrap()
-}
 
 /// Initialize the fixture’s stable state at installation.
 #[ic_platform_runtime::init(
@@ -202,16 +140,10 @@ fn initialize((): ()) {
     mixed_lifecycle::initialize(&host);
 }
 
-fn status(db: &Database) -> Status {
-    (
-        db.schema().fingerprint(),
-        db.incarnation(),
-        db.revision::<Entry>().unwrap(),
-        ic_storage::Memory::size(&DefaultMemoryImpl::default()),
-    )
-}
-
-/// Read the fixture’s persisted state for comparison across calls.
+// inspect
+// Read the fixture’s persisted state for comparison across calls.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "inspect",
@@ -224,15 +156,14 @@ fn status(db: &Database) -> Status {
 fn inspect((): ()) -> Status {
     let host = runtime();
     let db = open(&host);
+
     status(&db)
 }
-// Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, String, Option<(String, String)>);
-type IndexView = (String, Vec<String>, bool, bool);
-type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
-type TypeView = (String, String, Vec<(String, String, bool, String)>);
 
-/// Inspect the schema admitted by the installed fixture.
+// schema
+// Inspect the schema admitted by the installed fixture.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "schema",
@@ -281,6 +212,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                             },
                         );
                     }
+
                     (
                         field.name.into(),
                         kind,
@@ -295,6 +227,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                                         .iter()
                                         .find(|target| target.id == reference.entity)
                                         .unwrap();
+
                                     format!("{}.{}", target.name, target.primary_key)
                                 },
                                 entity
@@ -321,6 +254,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                     )
                 })
                 .collect();
+
             (
                 entity.name.into(),
                 entity.id,
@@ -343,6 +277,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                         "Newtype"
                     };
                     let (kind, info) = type_view(*value);
+
                     (label, vec![("value".into(), kind, false, info)])
                 }
                 ic_db::TypeBody::Map {
@@ -352,6 +287,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                 } => {
                     let (key_type, key_info) = type_view(*key);
                     let (value_type, value_info) = type_view(value.value);
+
                     (
                         "Map",
                         vec![
@@ -367,6 +303,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                 }
                 ic_db::TypeBody::Set { item, max_items } => {
                     let (kind, info) = type_view(*item);
+
                     (
                         "Set",
                         vec![(
@@ -383,6 +320,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                         .iter()
                         .map(|f| {
                             let (kind, info) = type_view(f.value);
+
                             (f.name.into(), kind, f.optional, info)
                         })
                         .collect(),
@@ -396,6 +334,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                                 || ("-".into(), String::new()),
                                 |p| type_view(p.value),
                             );
+
                             (
                                 v.name.into(),
                                 kind,
@@ -406,42 +345,18 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                         .collect(),
                 ),
             };
+
             (definition.name.into(), kind.into(), members)
         })
         .collect();
+
     (status(&db), entities, types)
 }
 
-// Presentation selection over an already admitted graph. Names terminate recursive
-// definitions; this neither validates nor reconstructs the database schema.
-fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&'static str>) {
-    match value {
-        FieldType::List { item, .. } => include_type_names(*item, names),
-        FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
-            ic_db::TypeBody::Wrapped(inner) => include_type_names(*inner, names),
-            ic_db::TypeBody::Record(fields) => {
-                for field in *fields {
-                    include_type_names(field.value, names);
-                }
-            }
-            ic_db::TypeBody::Enum(variants) => {
-                for variant in *variants {
-                    if let Some(payload) = variant.payload {
-                        include_type_names(payload.value, names);
-                    }
-                }
-            }
-            ic_db::TypeBody::Map { key, value, .. } => {
-                include_type_names(*key, names);
-                include_type_names(value.value, names);
-            }
-            ic_db::TypeBody::Set { item, .. } => include_type_names(*item, names),
-        },
-        _ => {}
-    }
-}
-
-/// Apply the selected mutation to a fixture entry.
+// write
+// Apply the selected mutation to a fixture entry.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "write",
@@ -475,10 +390,14 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
     if mode == 3 {
         return Err(4);
     }
+
     Ok(())
 }
 
-/// List entry IDs and amounts for the supplied category.
+// category
+// List entry IDs and amounts for the supplied category.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "category",
@@ -491,6 +410,7 @@ fn write((id, category, amount, mode): (u64, u64, u64, u8)) -> Result<(), u8> {
 fn category(category: u64) -> Vec<(u64, u64)> {
     let host = runtime();
     let db = open(&host);
+
     db.index_prefix::<Entry>("category,id", &[category.into()], 32)
         .unwrap()
         .into_iter()
@@ -498,9 +418,10 @@ fn category(category: u64) -> Vec<(u64, u64)> {
         .collect()
 }
 
-type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
-
-/// Read the fixture document and its entity revision.
+// document
+// Read the fixture document and its entity revision.
+// guard  : validates the request frame for method 7.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "document",
@@ -514,6 +435,7 @@ fn document((): ()) -> (DocumentValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<Document>(1).unwrap().unwrap();
+
     (
         (
             row.title,
@@ -527,7 +449,10 @@ fn document((): ()) -> (DocumentValue, u64) {
     )
 }
 
-/// Replace the fixture document with the supplied fields.
+// replace_document
+// Replace the fixture document with the supplied fields.
+// guard  : validates the request frame for method 8.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_document",
@@ -555,10 +480,14 @@ fn replace_document(
             priority,
         })
         .map_err(|_| 1)?;
+
     db.commit(batch).map_err(|_| 2)
 }
 
-/// Look up the entry reference stored on the requested document.
+// document_reference
+// Look up the entry reference stored on the requested document.
+// guard  : validates the request frame for method 9.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "document_reference",
@@ -570,13 +499,17 @@ fn replace_document(
 )]
 fn document_reference(id: u64) -> Option<u64> {
     let host = runtime();
+
     open(&host)
         .get::<Document>(id)
         .unwrap()
         .map(|row| row.entry_id)
 }
 
-/// Apply the selected cross-record reference scenario as one batch.
+// reference_batch
+// Apply the selected cross-record reference scenario as one batch.
+// guard  : validates the request frame for method 10.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "reference_batch",
@@ -634,6 +567,7 @@ fn reference_batch(mode: u8) -> Result<(), u8> {
         }
         _ => return Err(2),
     }
+
     db.commit(batch).map_err(|error| {
         if matches!(error, ic_db::Error::ReferenceViolation) {
             1
@@ -643,9 +577,10 @@ fn reference_batch(mode: u8) -> Result<(), u8> {
     })
 }
 
-type WideValue = (i128, u128, Option<i128>, Option<u128>);
-
-/// Read the wide integer fields and their revision.
+// wide_numbers
+// Read the wide integer fields and their revision.
+// guard  : validates the request frame for method 11.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "wide_numbers",
@@ -659,6 +594,7 @@ fn wide_numbers((): ()) -> (WideValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<WideNumbers>(1).unwrap().unwrap();
+
     (
         (
             row.signed,
@@ -670,7 +606,10 @@ fn wide_numbers((): ()) -> (WideValue, u64) {
     )
 }
 
-/// Replace the fixture’s wide numbers fields with optional rollback injection.
+// replace_wide_numbers
+// Replace the fixture’s wide numbers fields with optional rollback injection.
+// guard  : validates the request frame for method 12.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_wide_numbers",
@@ -701,19 +640,10 @@ fn replace_wide_numbers(
     }
 }
 
-type BinaryValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
-type NarrowRequired = (i8, i16, i32, u8, u16, u32);
-type NarrowOptional = (
-    Option<i8>,
-    Option<i16>,
-    Option<i32>,
-    Option<u8>,
-    Option<u16>,
-    Option<u32>,
-);
-type NarrowValue = (NarrowRequired, NarrowOptional);
-
-/// Read the narrow integer fields and their revision.
+// narrow_numbers
+// Read the narrow integer fields and their revision.
+// guard  : validates the request frame for method 16.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "narrow_numbers",
@@ -727,6 +657,7 @@ fn narrow_numbers((): ()) -> (NarrowValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<NarrowNumbers>(1).unwrap().unwrap();
+
     (
         (
             (
@@ -750,7 +681,10 @@ fn narrow_numbers((): ()) -> (NarrowValue, u64) {
     )
 }
 
-/// Replace the fixture’s narrow numbers fields with optional rollback injection.
+// replace_narrow_numbers
+// Replace the fixture’s narrow numbers fields with optional rollback injection.
+// guard  : validates the request frame for method 17.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_narrow_numbers",
@@ -799,8 +733,10 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
 }
 
 // Private decoder probe: transport carries opaque bytes, never decodes a row.
-
-/// Validate the supplied bytes with the `BinaryObject` row decoder.
+// binary_decodes
+// Validate the supplied bytes with the `BinaryObject` row decoder.
+// guard  : validates the request frame for method 15.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "binary_decodes",
@@ -818,7 +754,10 @@ fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
     BinaryObject::decode(bytes.as_ref()).is_ok()
 }
 
-/// Read the stored blob fields and their revision.
+// binary_object
+// Read the stored blob fields and their revision.
+// guard  : validates the request frame for method 13.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "binary_object",
@@ -832,13 +771,17 @@ fn binary_object((): ()) -> (BinaryValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<BinaryObject>(1).unwrap().unwrap();
+
     (
         (row.payload.into(), row.optional.map(Into::into)),
         db.revision::<BinaryObject>().unwrap(),
     )
 }
 
-/// Replace the fixture’s binary object fields with optional rollback injection.
+// replace_binary_object
+// Replace the fixture’s binary object fields with optional rollback injection.
+// guard  : validates the request frame for method 14.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_binary_object",
@@ -863,14 +806,14 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
     if trap {
         crate::system::trap("M1 binary application trap");
     }
+
     Ok(())
 }
 
-// Bytes cross the test transport; Principal admission and persistence belong to
-// their respective owners, never Wire's representation of an identity.
-type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
-
-/// Read the stored principal fields and their revision.
+// principal_record
+// Read the stored principal fields and their revision.
+// guard  : validates the request frame for method 18.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_record",
@@ -884,6 +827,7 @@ fn principal_record((): ()) -> (PrincipalValue, u64) {
     let host = runtime();
     let db = open(&host);
     let row = db.get::<IdentityRow>(1).unwrap().unwrap();
+
     (
         (
             row.owner.as_slice().to_vec().into(),
@@ -893,7 +837,10 @@ fn principal_record((): ()) -> (PrincipalValue, u64) {
     )
 }
 
-/// Replace the fixture’s principal record fields with optional rollback injection.
+// replace_principal_record
+// Replace the fixture’s principal record fields with optional rollback injection.
+// guard  : validates the request frame for method 19.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "replace_principal_record",
@@ -921,10 +868,14 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     if trap {
         crate::system::trap("M1 principal application trap");
     }
+
     Ok(())
 }
 
-/// Validate the supplied bytes with the `IdentityRow` row decoder.
+// principal_decodes
+// Validate the supplied bytes with the `IdentityRow` row decoder.
+// guard  : validates the request frame for method 20.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "principal_decodes",
@@ -942,10 +893,10 @@ fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
     IdentityRow::decode(bytes.as_ref()).is_ok()
 }
 
-// Private qualification controls; product endpoints remain adapter-owned.
-type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
-
-/// Apply the supplied indexed writes with optional rollback injection.
+// indexed_batch
+// Apply the supplied indexed writes with optional rollback injection.
+// guard  : validates the request frame for method 21.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "indexed_batch",
@@ -976,6 +927,7 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
         } else {
             batch.insert(&identity).map_err(|_| 2)?;
         }
+
         if db.get::<Document>(id).unwrap().is_some() {
             batch.replace(&changed).map_err(|_| 2)?;
         } else {
@@ -986,12 +938,14 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("M1 indexed batch application trap");
     }
+
     Ok(())
 }
 
-type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
-
-/// Inspect the fixture indexes for the supplied principal.
+// typed_indexes
+// Inspect the fixture indexes for the supplied principal.
+// guard  : validates the request frame for method 22.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "typed_indexes",
@@ -1009,6 +963,7 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     let principal = Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?;
     let host = runtime();
     let db = open(&host);
+
     Ok((
         db.index_prefix::<IdentityRow>("owner", &[principal.into()], 32)
             .unwrap()
@@ -1023,7 +978,10 @@ fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
     ))
 }
 
-/// Populate the published/title index with the supplied records.
+// text_index_batch
+// Populate the published/title index with the supplied records.
+// guard  : validates the request frame for method 23.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "text_index_batch",
@@ -1045,6 +1003,7 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
             published,
             ..template.clone()
         };
+
         if db.get::<Document>(id).unwrap().is_some() {
             batch.replace(&row).map_err(|_| 1)?;
         } else {
@@ -1055,10 +1014,14 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
     if trap {
         crate::system::trap("M1 text index application trap");
     }
+
     Ok(())
 }
 
-/// List indexed titles and IDs under the selected published/title prefix.
+// text_index
+// List indexed titles and IDs under the selected published/title prefix.
+// guard  : validates the request frame for method 24.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "text_index",
@@ -1075,15 +1038,16 @@ fn text_index((published, title): (bool, Option<String>)) -> Result<Vec<(String,
     if let Some(title) = title.as_deref() {
         prefix.push(title.into());
     }
+
     db.index_prefix::<Document>("published,title", &prefix, 32)
         .map(|rows| rows.into_iter().map(|row| (row.title, row.id)).collect())
         .map_err(|_| 1)
 }
 
-type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
-type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
-
-/// Apply the supplied optional-index mutations as a batch.
+// optional_index_batch
+// Apply the supplied optional-index mutations as a batch.
+// guard  : validates the request frame for method 25.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "optional_index_batch",
@@ -1131,10 +1095,14 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     if trap {
         crate::system::trap("M1 optional index application trap");
     }
+
     Ok(())
 }
 
-/// Inspect optional index entries for the supplied value or absence.
+// optional_indexes
+// Inspect optional index entries for the supplied value or absence.
+// guard  : validates the request frame for method 26.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "optional_indexes",
@@ -1166,13 +1134,14 @@ fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
         .into_iter()
         .map(|row| (row.priority, row.id))
         .collect();
+
     (owners, priorities)
 }
 
-// Optional relationships share the product batch; these are private probe controls.
-type OptionalLinks = Vec<(u64, Option<u64>)>;
-
-/// Apply optional reference changes and deletions in one batch.
+// optional_reference_batch
+// Apply optional reference changes and deletions in one batch.
+// guard  : validates the request frame for method 27.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "optional_reference_batch",
@@ -1204,10 +1173,14 @@ fn optional_reference_batch(
     if trap {
         crate::system::trap("M1 optional reference application trap");
     }
+
     Ok(())
 }
 
-/// Read optional links and reverse lookups for the selected target.
+// optional_references
+// Read optional links and reverse lookups for the selected target.
+// guard  : validates the request frame for method 28.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "optional_references",
@@ -1239,13 +1212,16 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
         .into_iter()
         .map(|row| row.id)
         .collect();
+
     (rows, dependants, db.revision::<OptionalLink>().unwrap())
 }
 
 // Private enum qualification controls. Transport uses ordinals solely to exercise
 // the typed database boundary; it does not define the persisted enum codec.
-
-/// Exercise bounded enum encoding and storage for the requested fixture case.
+// enum_write
+// Exercise bounded enum encoding and storage for the requested fixture case.
+// guard  : validates the request frame for method 29.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "enum_write",
@@ -1259,6 +1235,7 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
     fn lifecycle(ordinal: u8) -> Result<schema::Lifecycle, ic_db::Error> {
         let bytes = [ordinal];
         let mut reader = ic_db::__private::Decoder::new(&bytes)?;
+
         reader.named()
     }
     use schema::EnumRow;
@@ -1282,6 +1259,7 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
             crate::system::trap("after enum replacement");
         }
     }
+
     Ok((
         db.get::<EnumRow>(1)
             .unwrap()
@@ -1314,6 +1292,7 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
                         );
                     }
                 }
+
                 row.encode().unwrap()
             })
             .unwrap_or_default(),
@@ -1321,7 +1300,10 @@ fn enum_write((mode, state, previous): (u8, u8, Option<u8>)) -> Result<(Vec<u8>,
     ))
 }
 
-/// Validate the supplied bytes with the `EnumRow` row decoder.
+// enum_decode
+// Validate the supplied bytes with the `EnumRow` row decoder.
+// guard  : validates the request frame for method 30.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "enum_decode",
@@ -1339,55 +1321,10 @@ fn enum_decode(bytes: Vec<u8>) -> bool {
     schema::EnumRow::decode(&bytes).is_ok()
 }
 
-// Inspection projection only: names and constraints stay separate from terminal layout.
-fn type_view(value: FieldType) -> (String, String) {
-    match value {
-        FieldType::List { item, max_items } => {
-            let (kind, info) = type_view(*item);
-            let item_info = if info.is_empty() {
-                info
-            } else {
-                format!("item {info}")
-            };
-            (
-                format!("List<{kind}>"),
-                joined_info(format!("max {max_items} items"), &item_info),
-            )
-        }
-        FieldType::Named(link) => (link.name.into(), String::new()),
-        FieldType::Text { max_bytes } => ("Text".into(), format!("max {max_bytes} bytes")),
-        FieldType::Blob { max_bytes } => ("Blob".into(), format!("max {max_bytes} bytes")),
-        FieldType::Principal => ("Principal".into(), "max 29 bytes".into()),
-        FieldType::Subaccount => ("Subaccount".into(), "32 bytes".into()),
-        FieldType::Date => ("Date".into(), "4 bytes; days; 0000–9999".into()),
-        FieldType::Timestamp => ("Timestamp".into(), "8 bytes; Unix milliseconds".into()),
-        FieldType::Decimal { scale } => {
-            ("Decimal".into(), format!("17 bytes; scale {scale}; exact"))
-        }
-        FieldType::Duration => (
-            "Duration".into(),
-            "8 bytes; nonnegative milliseconds".into(),
-        ),
-        FieldType::Ulid => ("Ulid".into(), "16 bytes".into()),
-        FieldType::Account => (
-            "Account".into(),
-            "owner max 29 bytes; subaccount 32 bytes".into(),
-        ),
-        scalar => (format!("{scalar:?}"), String::new()),
-    }
-}
-
-fn joined_info(bound: String, nested: &str) -> String {
-    if bound.is_empty() {
-        nested.to_owned()
-    } else if nested.is_empty() {
-        bound
-    } else {
-        format!("{bound}; {nested}")
-    }
-}
-
-/// Exercise bounded nested encoding and storage for the requested fixture case.
+// nested_write
+// Exercise bounded nested encoding and storage for the requested fixture case.
+// guard  : validates the request frame for method 31.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "nested_write",
@@ -1443,6 +1380,7 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
             crate::system::trap("after nested replacement");
         }
     }
+
     Ok((
         db.get::<NestedRow>(1)
             .unwrap()
@@ -1452,7 +1390,10 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
     ))
 }
 
-/// Validate the supplied bytes with the `NestedRow` row decoder.
+// nested_decodes
+// Validate the supplied bytes with the `NestedRow` row decoder.
+// guard  : validates the request frame for method 32.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "nested_decodes",
@@ -1470,7 +1411,10 @@ fn nested_decodes(bytes: Vec<u8>) -> bool {
     schema::NestedRow::decode(&bytes).is_ok()
 }
 
-/// Exercise bounded list encoding and storage for the requested fixture case.
+// list_write
+// Exercise bounded list encoding and storage for the requested fixture case.
+// guard  : validates the request frame for method 33.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "list_write",
@@ -1529,6 +1473,7 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
             crate::system::trap("after list replacement");
         }
     }
+
     Ok((
         db.get::<ListRow>(1)
             .unwrap()
@@ -1538,7 +1483,10 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     ))
 }
 
-/// Validate the supplied bytes with the `ListRow` row decoder.
+// list_decodes
+// Validate the supplied bytes with the `ListRow` row decoder.
+// guard  : validates the request frame for method 34.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "list_decodes",
@@ -1556,7 +1504,10 @@ fn list_decodes(bytes: Vec<u8>) -> bool {
     schema::ListRow::decode(&bytes).is_ok()
 }
 
-/// Exercise bounded set encoding and storage for the requested fixture case.
+// set_write
+// Exercise bounded set encoding and storage for the requested fixture case.
+// guard  : validates the request frame for method 35.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "set_write",
@@ -1591,6 +1542,7 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
             crate::system::trap("after set replacement");
         }
     }
+
     Ok((
         db.get::<SetRow>(1)
             .unwrap()
@@ -1600,7 +1552,10 @@ fn set_write((mode, reverse, size): (u8, bool, u8)) -> Result<(Vec<u8>, u64), u8
     ))
 }
 
-/// Validate the supplied bytes with the `SetRow` row decoder.
+// set_decodes
+// Validate the supplied bytes with the `SetRow` row decoder.
+// guard  : validates the request frame for method 36.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "set_decodes",
@@ -1618,7 +1573,10 @@ fn set_decodes(bytes: Vec<u8>) -> bool {
     schema::SetRow::decode(&bytes).is_ok()
 }
 
-/// Exercise bounded map encoding and storage for the requested fixture case.
+// map_write
+// Exercise bounded map encoding and storage for the requested fixture case.
+// guard  : validates the request frame for method 37.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "map_write",
@@ -1662,6 +1620,7 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
             crate::system::trap("after map replacement");
         }
     }
+
     Ok((
         db.get::<MapRow>(1)
             .unwrap()
@@ -1671,7 +1630,10 @@ fn map_write((mode, shape): (u8, u8)) -> Result<(Vec<u8>, u64), u8> {
     ))
 }
 
-/// Validate the supplied bytes with the `MapRow` row decoder.
+// map_decodes
+// Validate the supplied bytes with the `MapRow` row decoder.
+// guard  : validates the request frame for method 38.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_decodes",
@@ -1689,7 +1651,10 @@ fn map_decodes(bytes: Vec<u8>) -> bool {
     schema::MapRow::decode(&bytes).is_ok()
 }
 
-/// Encode a recursive map of the requested shape and size.
+// map_tree_encode
+// Encode a recursive map of the requested shape and size.
+// guard  : validates the request frame for method 39.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_tree_encode",
@@ -1709,10 +1674,14 @@ fn map_tree_encode((star, size): (bool, u16)) -> Result<Vec<u8>, u8> {
     } else {
         (0..size).fold(MapTree::default(), |child, _| MapTree([(0, child)].into()))
     };
+
     MapTreeRow { id: 1, tree }.encode().map_err(|_| 1)
 }
 
-/// Validate the supplied bytes with the `MapTreeRow` row decoder.
+// map_tree_decodes
+// Validate the supplied bytes with the `MapTreeRow` row decoder.
+// guard  : validates the request frame for method 40.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "map_tree_decodes",
@@ -1730,9 +1699,10 @@ fn map_tree_decodes(bytes: Vec<u8>) -> bool {
     schema::MapTreeRow::decode(&bytes).is_ok()
 }
 
-type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
-
-/// Apply the supplied U256 rows in one batch with optional rollback injection.
+// u256_batch
+// Apply the supplied U256 rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 41.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "u256_batch",
@@ -1765,10 +1735,14 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after U256 batch");
     }
+
     Ok(())
 }
 
-/// Read the stored U256 rows and their revision.
+// u256_rows
+// Read the stored U256 rows and their revision.
+// guard  : validates the request frame for method 42.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_rows",
@@ -1782,6 +1756,7 @@ fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::BigNumbers;
     let host = runtime();
     let db = open(&host);
+
     (
         db.index_prefix::<BigNumbers>("zone,value,id", &[true.into()], 32)
             .unwrap()
@@ -1792,7 +1767,10 @@ fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Look up matching row IDs for the supplied U256 value.
+// u256_lookup
+// Look up matching row IDs for the supplied U256 value.
+// guard  : validates the request frame for method 43.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_lookup",
@@ -1804,6 +1782,7 @@ fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
 )]
 fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
     let host = runtime();
+
     open(&host)
         .index_prefix::<schema::BigNumbers>(
             "zone,value,id",
@@ -1816,7 +1795,10 @@ fn u256_lookup(value: [u8; 32]) -> Vec<u64> {
         .collect()
 }
 
-/// Validate the supplied bytes with the `BigNumbers` row decoder.
+// u256_decodes
+// Validate the supplied bytes with the `BigNumbers` row decoder.
+// guard  : validates the request frame for method 44.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "u256_decodes",
@@ -1834,9 +1816,10 @@ fn u256_decodes(bytes: Vec<u8>) -> bool {
     schema::BigNumbers::decode(&bytes).is_ok()
 }
 
-type FloatInput = (u64, Option<u64>, u32, u64);
-
-/// Apply the supplied float rows in one batch with optional rollback injection.
+// float_batch
+// Apply the supplied float rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 45.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "float_batch",
@@ -1874,10 +1857,14 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after float batch");
     }
+
     Ok(())
 }
 
-/// Read the stored float rows and their revision.
+// float_rows
+// Read the stored float rows and their revision.
+// guard  : validates the request frame for method 46.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_rows",
@@ -1896,6 +1883,7 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     } else {
         "zone,value,id"
     };
+
     (
         db.index_prefix::<FloatRow>(index, &[true.into()], 32)
             .unwrap()
@@ -1906,7 +1894,10 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Look up matching row IDs for the supplied float value.
+// float_lookup
+// Look up matching row IDs for the supplied float value.
+// guard  : validates the request frame for method 47.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_lookup",
@@ -1919,6 +1910,7 @@ fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
 fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
     let value = ic_db::Float64::try_new(f64::from_bits(bits)).ok_or(1_u8)?;
     let host = runtime();
+
     Ok(open(&host)
         .index_prefix::<schema::FloatRow>("maybe", &[value.into()], 32)
         .unwrap()
@@ -1927,7 +1919,10 @@ fn float_lookup(bits: u64) -> Result<Vec<u64>, u8> {
         .collect())
 }
 
-/// Validate the supplied bytes with the `FloatRow` row decoder.
+// float_decodes
+// Validate the supplied bytes with the `FloatRow` row decoder.
+// guard  : validates the request frame for method 48.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "float_decodes",
@@ -1945,16 +1940,10 @@ fn float_decodes(bytes: Vec<u8>) -> bool {
     schema::FloatRow::decode(&bytes).is_ok()
 }
 
-type AccountInput = (Vec<u8>, Option<[u8; 32]>);
-type AccountRowInput = (u64, Option<AccountInput>, [u8; 32], AccountInput);
-fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account, u8> {
-    Ok(ic_db::Account {
-        owner: Principal::try_from_slice(&owner).map_err(|_| 1_u8)?,
-        subaccount,
-    })
-}
-
-/// Apply the supplied account rows in one batch with optional rollback injection.
+// account_batch
+// Apply the supplied account rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 49.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "account_batch",
@@ -1988,10 +1977,14 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after account batch");
     }
+
     Ok(())
 }
 
-/// Read the stored account rows and their revision.
+// account_rows
+// Read the stored account rows and their revision.
+// guard  : validates the request frame for method 50.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_rows",
@@ -2006,6 +1999,7 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     let host = runtime();
     let db = open(&host);
     let index = if sub { "zone,sub,id" } else { "zone,value,id" };
+
     (
         db.index_prefix::<AccountRow>(index, &[true.into()], 32)
             .unwrap()
@@ -2016,7 +2010,10 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Look up matching row IDs for the supplied account value.
+// account_lookup
+// Look up matching row IDs for the supplied account value.
+// guard  : validates the request frame for method 51.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_lookup",
@@ -2029,6 +2026,7 @@ fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
 fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
     let value = admitted_account(value)?;
     let host = runtime();
+
     Ok(open(&host)
         .index_prefix::<schema::AccountRow>("maybe", &[value.into()], 32)
         .unwrap()
@@ -2037,7 +2035,10 @@ fn account_lookup(value: AccountInput) -> Result<Vec<u64>, u8> {
         .collect())
 }
 
-/// Validate the supplied bytes with the `AccountRow` row decoder.
+// account_decodes
+// Validate the supplied bytes with the `AccountRow` row decoder.
+// guard  : validates the request frame for method 52.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "account_decodes",
@@ -2055,9 +2056,10 @@ fn account_decodes(bytes: Vec<u8>) -> bool {
     schema::AccountRow::decode(&bytes).is_ok()
 }
 
-type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
-
-/// Apply the supplied ULID rows in one batch with optional rollback injection.
+// ulid_batch
+// Apply the supplied ULID rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 53.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "ulid_batch",
@@ -2090,10 +2092,14 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after Ulid batch");
     }
+
     Ok(())
 }
 
-/// Read the stored ULID rows and their revision.
+// ulid_rows
+// Read the stored ULID rows and their revision.
+// guard  : validates the request frame for method 54.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_rows",
@@ -2107,6 +2113,7 @@ fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::UlidRow;
     let host = runtime();
     let db = open(&host);
+
     (
         db.index_prefix::<UlidRow>("zone,value,id", &[true.into()], 32)
             .unwrap()
@@ -2117,7 +2124,10 @@ fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Look up matching row IDs for the supplied ULID value.
+// ulid_lookup
+// Look up matching row IDs for the supplied ULID value.
+// guard  : validates the request frame for method 55.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_lookup",
@@ -2129,6 +2139,7 @@ fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
 )]
 fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
     let host = runtime();
+
     open(&host)
         .index_prefix::<schema::UlidRow>(
             "zone,value,id",
@@ -2141,7 +2152,10 @@ fn ulid_lookup(value: [u8; 16]) -> Vec<u64> {
         .collect()
 }
 
-/// Validate the supplied bytes with the `UlidRow` row decoder.
+// ulid_decodes
+// Validate the supplied bytes with the `UlidRow` row decoder.
+// guard  : validates the request frame for method 56.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_decodes",
@@ -2159,7 +2173,10 @@ fn ulid_decodes(bytes: Vec<u8>) -> bool {
     schema::UlidRow::decode(&bytes).is_ok()
 }
 
-/// Parse a ULID and return its formatted text and bytes.
+// ulid_text
+// Parse a ULID and return its formatted text and bytes.
+// guard  : validates the request frame for method 57.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "ulid_text",
@@ -2175,12 +2192,14 @@ fn ulid_decodes(bytes: Vec<u8>) -> bool {
 )]
 fn ulid_text(text: String) -> Result<(String, [u8; 16]), u8> {
     let value = text.parse::<ic_db::Ulid>().map_err(|_| 1_u8)?;
+
     Ok((value.to_string(), value.to_bytes()))
 }
 
-type DateInput = (u64, Option<i32>, i32);
-
-/// Apply the supplied date rows in one batch with optional rollback injection.
+// date_batch
+// Apply the supplied date rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 58.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "date_batch",
@@ -2216,10 +2235,14 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after Date batch");
     }
+
     Ok(())
 }
 
-/// Read the stored date rows and their revision.
+// date_rows
+// Read the stored date rows and their revision.
+// guard  : validates the request frame for method 59.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_rows",
@@ -2233,6 +2256,7 @@ fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::DateRow;
     let host = runtime();
     let db = open(&host);
+
     (
         db.index_prefix::<DateRow>("zone,value,id", &[true.into()], 32)
             .unwrap()
@@ -2243,7 +2267,10 @@ fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Look up matching row IDs for the supplied date value.
+// date_lookup
+// Look up matching row IDs for the supplied date value.
+// guard  : validates the request frame for method 60.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_lookup",
@@ -2255,6 +2282,7 @@ fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
 )]
 fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
     let host = runtime();
+
     Ok(open(&host)
         .index_prefix::<schema::DateRow>(
             "zone,value,id",
@@ -2272,7 +2300,10 @@ fn date_lookup(value: i32) -> Result<Vec<u64>, u8> {
         .collect())
 }
 
-/// Validate the supplied bytes with the `DateRow` row decoder.
+// date_decodes
+// Validate the supplied bytes with the `DateRow` row decoder.
+// guard  : validates the request frame for method 61.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "date_decodes",
@@ -2290,9 +2321,10 @@ fn date_decodes(bytes: Vec<u8>) -> bool {
     schema::DateRow::decode(&bytes).is_ok()
 }
 
-type TimeInput = (u64, Option<u64>, u64, Option<i64>, i64);
-
-/// Apply the supplied time rows in one batch with optional rollback injection.
+// time_batch
+// Apply the supplied time rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 62.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "time_batch",
@@ -2327,10 +2359,14 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after time batch");
     }
+
     Ok(())
 }
 
-/// Read the stored time rows and their revision.
+// time_rows
+// Read the stored time rows and their revision.
+// guard  : validates the request frame for method 63.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_rows",
@@ -2349,6 +2385,7 @@ fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     } else {
         "zone,timestamp,id"
     };
+
     (
         db.index_prefix::<TimeRow>(index, &[true.into()], 32)
             .unwrap()
@@ -2359,7 +2396,10 @@ fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Validate the supplied bytes with the `TimeRow` row decoder.
+// time_decodes
+// Validate the supplied bytes with the `TimeRow` row decoder.
+// guard  : validates the request frame for method 64.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_decodes",
@@ -2377,7 +2417,10 @@ fn time_decodes(bytes: Vec<u8>) -> bool {
     schema::TimeRow::decode(&bytes).is_ok()
 }
 
-/// Parse the supplied duration and timestamp strings.
+// time_text
+// Parse the supplied duration and timestamp strings.
+// guard  : validates the request frame for method 65.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_text",
@@ -2398,7 +2441,10 @@ fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> 
     ))
 }
 
-/// Exercise conversions and arithmetic on the supplied time operands.
+// time_math
+// Exercise conversions and arithmetic on the supplied time operands.
+// guard  : validates the request frame for method 66.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "time_math",
@@ -2410,6 +2456,7 @@ fn time_text((duration, timestamp): (String, String)) -> Result<(u64, i64), u8> 
 )]
 fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64) {
     let duration = ic_db::Duration::from_millis(duration);
+
     (
         ic_db::Timestamp::from_micros(micros).as_millis(),
         ic_db::Timestamp::from_nanos(nanos).as_millis(),
@@ -2418,10 +2465,10 @@ fn time_math((micros, nanos, duration): (i64, i64, u64)) -> (i64, i64, i64, i64)
     )
 }
 
-// Strings are private transport inputs; the database receives exact Decimal values.
-type DecimalInput = (u64, Option<String>, String);
-
-/// Apply the supplied decimal rows in one batch with optional rollback injection.
+// decimal_batch
+// Apply the supplied decimal rows in one batch with optional rollback injection.
+// guard  : validates the request frame for method 67.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "decimal_batch",
@@ -2454,10 +2501,14 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     if trap {
         crate::system::trap("after decimal batch");
     }
+
     Ok(())
 }
 
-/// Read the stored decimal rows and their revision.
+// decimal_rows
+// Read the stored decimal rows and their revision.
+// guard  : validates the request frame for method 68.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "decimal_rows",
@@ -2471,6 +2522,7 @@ fn decimal_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     use schema::DecimalRow;
     let host = runtime();
     let db = open(&host);
+
     (
         db.index_prefix::<DecimalRow>("zone,value,id", &[true.into()], 32)
             .unwrap()
@@ -2481,7 +2533,10 @@ fn decimal_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
     )
 }
 
-/// Validate the supplied bytes with the `DecimalRow` row decoder.
+// decimal_decodes
+// Validate the supplied bytes with the `DecimalRow` row decoder.
+// guard  : validates the request frame for method 69.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "decimal_decodes",
@@ -2499,17 +2554,10 @@ fn decimal_decodes(bytes: Vec<u8>) -> bool {
     schema::DecimalRow::decode(&bytes).is_ok()
 }
 
-type KeyInput = ([u8; 16], Option<u64>, u64);
-type NumberedInput = (u64, Option<[u8; 16]>);
-type KeyBatchInput = (
-    Vec<KeyInput>,
-    Vec<NumberedInput>,
-    Vec<[u8; 16]>,
-    Vec<u64>,
-    bool,
-);
-
-/// Apply ULID-key changes, links and deletions in one batch.
+// key_batch
+// Apply ULID-key changes, links and deletions in one batch.
+// guard  : validates the request frame for method 70.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "key_batch",
@@ -2561,10 +2609,14 @@ fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> R
     if trap {
         crate::system::trap("after ULID primary-key batch");
     }
+
     Ok(())
 }
 
-/// Page ULID-keyed rows after the supplied position.
+// key_page
+// Page ULID-keyed rows after the supplied position.
+// guard  : validates the request frame for method 71.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "key_page",
@@ -2581,6 +2633,7 @@ fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u
     let page = db
         .page::<KeyRow>(after.map(ic_db::Ulid::from_bytes), usize::from(limit))
         .unwrap();
+
     (
         page.rows
             .into_iter()
@@ -2591,7 +2644,10 @@ fn key_page((after, limit): (Option<[u8; 16]>, u8)) -> (Vec<KeyInput>, Option<[u
     )
 }
 
-/// Read a ULID-keyed row and its indexed lookup results.
+// key_lookup
+// Read a ULID-keyed row and its indexed lookup results.
+// guard  : validates the request frame for method 72.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "key_lookup",
@@ -2606,6 +2662,7 @@ fn key_lookup((id, value): ([u8; 16], u64)) -> (Option<KeyInput>, Vec<KeyInput>)
     let host = runtime();
     let db = open(&host);
     let view = |r: KeyRow| (r.id.to_bytes(), r.owner, r.value);
+
     (
         db.get::<KeyRow>(ic_db::Ulid::from_bytes(id))
             .unwrap()
@@ -2621,17 +2678,10 @@ fn key_lookup((id, value): ([u8; 16], u64)) -> (Option<KeyInput>, Vec<KeyInput>)
     )
 }
 
-type SignedInput = (i128, Option<[u8; 32]>, u64);
-type WideInput = ([u8; 32], Option<i128>, u64);
-type IntegerKeyBatch = (
-    Vec<SignedInput>,
-    Vec<WideInput>,
-    Vec<i128>,
-    Vec<[u8; 32]>,
-    bool,
-);
-
-/// Apply signed and wide primary-key changes in one batch.
+// integer_key_batch
+// Apply signed and wide primary-key changes in one batch.
+// guard  : validates the request frame for method 73.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "integer_key_batch",
@@ -2686,10 +2736,14 @@ fn integer_key_batch(
     if trap {
         crate::system::trap("after integer-key batch");
     }
+
     Ok(())
 }
 
-/// Page signed integer primary keys after the supplied position.
+// signed_key_page
+// Page signed integer primary keys after the supplied position.
+// guard  : validates the request frame for method 74.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "signed_key_page",
@@ -2704,6 +2758,7 @@ fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Opt
     let host = runtime();
     let db = open(&host);
     let page = db.page::<SignedKey>(after, usize::from(limit)).unwrap();
+
     (
         page.rows
             .into_iter()
@@ -2714,7 +2769,10 @@ fn signed_key_page((after, limit): (Option<i128>, u8)) -> (Vec<SignedInput>, Opt
     )
 }
 
-/// Page wide integer primary keys after the supplied position.
+// wide_key_page
+// Page wide integer primary keys after the supplied position.
+// guard  : validates the request frame for method 75.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "wide_key_page",
@@ -2733,6 +2791,7 @@ fn wide_key_page(
     let page = db
         .page::<WideKey>(after.map(ic_db::U256::from_be_bytes), usize::from(limit))
         .unwrap();
+
     (
         page.rows
             .into_iter()
@@ -2743,7 +2802,10 @@ fn wide_key_page(
     )
 }
 
-/// Look up signed-key and wide-key rows by rank.
+// integer_key_lookup
+// Look up signed-key and wide-key rows by rank.
+// guard  : validates the request frame for method 76.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "integer_key_lookup",
@@ -2757,6 +2819,7 @@ fn integer_key_lookup(rank: u64) -> (Vec<SignedInput>, Vec<WideInput>) {
     use schema::{SignedKey, WideKey};
     let host = runtime();
     let db = open(&host);
+
     (
         db.index_prefix::<SignedKey>("rank", &[rank.into()], 32)
             .unwrap()
@@ -2770,3 +2833,229 @@ fn integer_key_lookup(rank: u64) -> (Vec<SignedInput>, Vec<WideInput>) {
             .collect(),
     )
 }
+
+// Treat framed unit as one reply value for the generic encoder hook.
+type EmptyReply = ();
+
+#[cfg(feature = "fault-injection")]
+type Backing = faults::FaultMemory;
+#[cfg(not(feature = "fault-injection"))]
+type Backing = DefaultMemoryImpl;
+
+const KEY: &str = "m1.records.v1";
+type Status = ([u8; 32], [u8; 16], u64, u64);
+
+fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
+    // Host custody survives calls; Database handles and leases remain local.
+    // Upgrade clears this heap state and the next access re-admits the runtime.
+    thread_local! {
+        static HOST: std::rc::Rc<MemoryRuntime<Backing>> = std::rc::Rc::new(new_runtime());
+    }
+
+    HOST.with(std::rc::Rc::clone)
+}
+
+fn new_runtime() -> MemoryRuntime<Backing> {
+    let mut host = MemoryRuntime::new(Backing::default()).unwrap();
+    let groups: &[&[&str]] = &[
+        &[KEY],
+        #[cfg(feature = "maintenance")]
+        &[
+            maintenance::COPY_SOURCE,
+            maintenance::COPY_TARGET,
+            maintenance::COPY_NEXT,
+            maintenance::COPY_ROUTE,
+        ],
+        #[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
+        &[aggregate_store::KEY],
+        #[cfg(feature = "retained-console")]
+        &[console::migration::SOURCE, console::migration::TARGET],
+        #[cfg(feature = "mixed-lifecycle")]
+        &mixed_lifecycle::KEYS,
+    ];
+    let requests = groups
+        .iter()
+        .flat_map(|keys| keys.iter())
+        .map(|&key| MemoryRequest::new("m1", key).unwrap())
+        .collect();
+    let declarations = SealedDeclarationSnapshot::new(requests).unwrap();
+    let grants = AllocationGrants::new(vec![MemoryAuthority::new("m1", "m1.").unwrap()]).unwrap();
+    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
+        .unwrap();
+
+    host
+}
+
+fn open(host: &MemoryRuntime<Backing>) -> Database {
+    Database::open(
+        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
+        compiled(),
+    )
+    .unwrap()
+}
+
+fn status(db: &Database) -> Status {
+    (
+        db.schema().fingerprint(),
+        db.incarnation(),
+        db.revision::<Entry>().unwrap(),
+        ic_storage::Memory::size(&DefaultMemoryImpl::default()),
+    )
+}
+
+// Private fixture transport: entity identity, fields and indexes, without terminal layout.
+type FieldView = (String, String, bool, String, Option<(String, String)>);
+type IndexView = (String, Vec<String>, bool, bool);
+type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
+type TypeView = (String, String, Vec<(String, String, bool, String)>);
+
+// Presentation selection over an already admitted graph. Names terminate recursive
+// definitions; this neither validates nor reconstructs the database schema.
+fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&'static str>) {
+    match value {
+        FieldType::List { item, .. } => include_type_names(*item, names),
+        FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
+            ic_db::TypeBody::Wrapped(inner) => include_type_names(*inner, names),
+            ic_db::TypeBody::Record(fields) => {
+                for field in *fields {
+                    include_type_names(field.value, names);
+                }
+            }
+            ic_db::TypeBody::Enum(variants) => {
+                for variant in *variants {
+                    if let Some(payload) = variant.payload {
+                        include_type_names(payload.value, names);
+                    }
+                }
+            }
+            ic_db::TypeBody::Map { key, value, .. } => {
+                include_type_names(*key, names);
+                include_type_names(value.value, names);
+            }
+            ic_db::TypeBody::Set { item, .. } => include_type_names(*item, names),
+        },
+        _ => {}
+    }
+}
+
+type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
+
+type WideValue = (i128, u128, Option<i128>, Option<u128>);
+
+type BinaryValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+type NarrowRequired = (i8, i16, i32, u8, u16, u32);
+type NarrowOptional = (
+    Option<i8>,
+    Option<i16>,
+    Option<i32>,
+    Option<u8>,
+    Option<u16>,
+    Option<u32>,
+);
+type NarrowValue = (NarrowRequired, NarrowOptional);
+
+// Bytes cross the test transport; Principal admission and persistence belong to
+// their respective owners, never Wire's representation of an identity.
+type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+
+// Private qualification controls; product endpoints remain adapter-owned.
+type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
+
+type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
+
+type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
+type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
+
+// Optional relationships share the product batch; these are private probe controls.
+type OptionalLinks = Vec<(u64, Option<u64>)>;
+
+// Inspection projection only: names and constraints stay separate from terminal layout.
+fn type_view(value: FieldType) -> (String, String) {
+    match value {
+        FieldType::List { item, max_items } => {
+            let (kind, info) = type_view(*item);
+            let item_info = if info.is_empty() {
+                info
+            } else {
+                format!("item {info}")
+            };
+
+            (
+                format!("List<{kind}>"),
+                joined_info(format!("max {max_items} items"), &item_info),
+            )
+        }
+        FieldType::Named(link) => (link.name.into(), String::new()),
+        FieldType::Text { max_bytes } => ("Text".into(), format!("max {max_bytes} bytes")),
+        FieldType::Blob { max_bytes } => ("Blob".into(), format!("max {max_bytes} bytes")),
+        FieldType::Principal => ("Principal".into(), "max 29 bytes".into()),
+        FieldType::Subaccount => ("Subaccount".into(), "32 bytes".into()),
+        FieldType::Date => ("Date".into(), "4 bytes; days; 0000–9999".into()),
+        FieldType::Timestamp => ("Timestamp".into(), "8 bytes; Unix milliseconds".into()),
+        FieldType::Decimal { scale } => {
+            ("Decimal".into(), format!("17 bytes; scale {scale}; exact"))
+        }
+        FieldType::Duration => (
+            "Duration".into(),
+            "8 bytes; nonnegative milliseconds".into(),
+        ),
+        FieldType::Ulid => ("Ulid".into(), "16 bytes".into()),
+        FieldType::Account => (
+            "Account".into(),
+            "owner max 29 bytes; subaccount 32 bytes".into(),
+        ),
+        scalar => (format!("{scalar:?}"), String::new()),
+    }
+}
+
+fn joined_info(bound: String, nested: &str) -> String {
+    if bound.is_empty() {
+        nested.to_owned()
+    } else if nested.is_empty() {
+        bound
+    } else {
+        format!("{bound}; {nested}")
+    }
+}
+
+type WideRow = (u64, Option<[u8; 32]>, [u8; 32]);
+
+type FloatInput = (u64, Option<u64>, u32, u64);
+
+type AccountInput = (Vec<u8>, Option<[u8; 32]>);
+type AccountRowInput = (u64, Option<AccountInput>, [u8; 32], AccountInput);
+fn admitted_account((owner, subaccount): AccountInput) -> Result<ic_db::Account, u8> {
+    Ok(ic_db::Account {
+        owner: Principal::try_from_slice(&owner).map_err(|_| 1_u8)?,
+        subaccount,
+    })
+}
+
+type UlidInput = (u64, Option<[u8; 16]>, [u8; 16]);
+
+type DateInput = (u64, Option<i32>, i32);
+
+type TimeInput = (u64, Option<u64>, u64, Option<i64>, i64);
+
+// Strings are private transport inputs; the database receives exact Decimal values.
+type DecimalInput = (u64, Option<String>, String);
+
+type KeyInput = ([u8; 16], Option<u64>, u64);
+type NumberedInput = (u64, Option<[u8; 16]>);
+type KeyBatchInput = (
+    Vec<KeyInput>,
+    Vec<NumberedInput>,
+    Vec<[u8; 16]>,
+    Vec<u64>,
+    bool,
+);
+
+type SignedInput = (i128, Option<[u8; 32]>, u64);
+type WideInput = ([u8; 32], Option<i128>, u64);
+type IntegerKeyBatch = (
+    Vec<SignedInput>,
+    Vec<WideInput>,
+    Vec<i128>,
+    Vec<[u8; 32]>,
+    bool,
+);

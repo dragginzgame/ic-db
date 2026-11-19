@@ -1,4 +1,5 @@
 //! Independent ULID bytes, canonical text and stored/indexed identity boundaries.
+
 use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, Ulid, entity, map, set};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -6,17 +7,45 @@ use ic_storage::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-#[entity(pk(field="id"), index(fields=["zone","value","id"]),
-    index(field="maybe",unique,present_only), fields(
-    field(name="id",value(item(prim="Nat64"))),
-    field(name="maybe",value(opt,item(prim="Ulid"))),
-    field(name="value",value(item(prim="Ulid"))),
-    field(name="zone",value(item(prim="Bool")))))]
+///
+/// UlidRow
+/// Exercises indexed access by `zone`, `value`, `id` and `maybe` on rows keyed by `id`.
+///
+
+#[entity(
+    pk(field = "id"),
+    index(fields = ["zone", "value", "id"]),
+    index(field = "maybe", unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "maybe", value(opt, item(prim = "Ulid"))),
+        field(name = "value", value(item(prim = "Ulid"))),
+        field(name = "zone", value(item(prim = "Bool")))
+    )
+)]
 struct UlidRow {}
+
+///
+/// Ids
+/// Stores up to 3 distinct `Ulid` values.
+///
+
 #[set(item(prim = "Ulid"), max_items = 3)]
 struct Ids {}
+
+///
+/// Links
+/// Maps up to 3 `Ulid` keys to optional `Ulid` values.
+///
+
 #[map(key(prim = "Ulid"), value(opt, item(prim = "Ulid")), max_items = 3)]
 struct Links {}
+
+///
+/// Collections
+/// Stores `list`, `map` and `set` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(
@@ -36,6 +65,7 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
         .unwrap();
+
     host
 }
 
@@ -276,6 +306,12 @@ fn collections_reject_duplicate_keys_before_materialization() {
     assert!(matches!(db.commit(b), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+///
+/// WideList
+/// Stores `values` under the `id` primary key.
+///
+
 #[entity(
     pk(field = "id"),
     fields(

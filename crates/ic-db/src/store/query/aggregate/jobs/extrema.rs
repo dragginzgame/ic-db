@@ -1,4 +1,5 @@
 //! Retained extrema over the synchronous comparator and shared job lifecycle.
+
 use super::{Accumulator, AggregateJobs, JobHandle, JobStep, binding, start};
 use crate::{Entity, Error, GroupPage, GroupValue, Timestamp, Value, store::Query};
 use ic_storage::Memory;
@@ -20,6 +21,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         let admitted = self.group_extremum_plan::<K, R>(false)?;
+
         self.start_group_value(jobs, now, expires, admitted)
     }
 
@@ -36,6 +38,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         let admitted = self.group_extremum_plan::<K, R>(true)?;
+
         self.start_group_value(jobs, now, expires, admitted)
     }
 
@@ -57,6 +60,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let admitted = self.group_extremum_plan::<K, R>(false)?;
+
         self.resume_group_value(jobs, handle, sequence, now, admitted)
     }
 
@@ -74,6 +78,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let admitted = self.group_extremum_plan::<K, R>(true)?;
+
         self.resume_group_value(jobs, handle, sequence, now, admitted)
     }
 
@@ -128,6 +133,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         let (plan, reducer) = self.extremum_plan::<R>(false)?;
+
         self.resume_value(jobs, handle, sequence, now, (plan, reducer))
     }
 
@@ -144,6 +150,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         let (plan, reducer) = self.extremum_plan::<R>(true)?;
+
         self.resume_value(jobs, handle, sequence, now, (plan, reducer))
     }
 
@@ -155,6 +162,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         maximum: bool,
     ) -> Result<JobHandle, Error> {
         let (plan, mut reducer) = self.extremum_plan::<R>(maximum)?;
+
         start(
             jobs,
             binding(&plan, &reducer)?,
