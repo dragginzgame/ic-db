@@ -159,7 +159,7 @@ fn corrupt_collections_refuse_before_materialization_or_mutation() {
     for bytes in corruptions {
         assert!(matches!(Row::decode(&bytes), Err(Error::Corrupt)));
         let mut key = vec![2];
-        key.extend(Row::ID.to_be_bytes());
+        key.extend(Row::SCHEMA.id.to_be_bytes());
         key.extend(1_u64.to_be_bytes());
         let mut raw =
             StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
@@ -208,7 +208,7 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
     let db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [19; 16]).unwrap();
     drop(db);
     let mut key = vec![2];
-    key.extend(Nested::ID.to_be_bytes());
+    key.extend(Nested::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     raw.insert(key, bytes);
@@ -273,7 +273,7 @@ fn wrapped_collection_keys_keep_numeric_order_on_typed_and_borrowed_reads() {
             corrupt[second_key..second_key + 2].copy_from_slice(&invalid.to_le_bytes());
             assert!(matches!(Ranked::decode(&corrupt), Err(Error::Corrupt)));
             let mut key = vec![2];
-            key.extend(Ranked::ID.to_be_bytes());
+            key.extend(Ranked::SCHEMA.id.to_be_bytes());
             key.extend(1_u64.to_be_bytes());
             let mut raw =
                 StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());

@@ -223,7 +223,7 @@ fn corrupt_source_rows_and_revisions_refuse_without_repair() {
         let mut raw =
             StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
         let mut stored_key = vec![tag];
-        stored_key.extend(Source::ID.to_be_bytes());
+        stored_key.extend(Source::SCHEMA.id.to_be_bytes());
         if tag == 2 {
             stored_key.extend(1_u64.to_be_bytes());
         }

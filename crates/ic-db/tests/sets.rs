@@ -171,7 +171,7 @@ fn stored_duplicates_refuse_mutation_and_schema_changes_refuse_reopen() {
     ));
     assert_eq!(*backing.borrow(), before);
     let mut row_key = vec![2];
-    row_key.extend(SetRow::ID.to_be_bytes());
+    row_key.extend(SetRow::SCHEMA.id.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());
     for suffix in [[255, 255, 255, 255, 0, 1], [0, 0, 255, 255, 0, 1]] {
         let mut corrupt = row.encode().unwrap();

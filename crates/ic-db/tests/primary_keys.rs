@@ -66,7 +66,7 @@ fn rows() -> Vec<KeyRow> {
 
 fn physical_row(id: Ulid) -> Vec<u8> {
     let mut b = vec![2];
-    b.extend(KeyRow::ID.to_be_bytes());
+    b.extend(KeyRow::SCHEMA.id.to_be_bytes());
     b.extend(id.to_bytes());
     b
 }
@@ -214,7 +214,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
         .find(|i| i.name == "value")
         .unwrap();
     let mut index = vec![3];
-    index.extend(KeyRow::ID.to_be_bytes());
+    index.extend(KeyRow::SCHEMA.id.to_be_bytes());
     index.extend(unique.id.to_be_bytes());
     index.extend(6_u64.to_be_bytes());
     assert_eq!(raw.get(&index).unwrap(), vec![255; 16]);
@@ -224,7 +224,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
         .find(|i| i.name == "owner,id")
         .unwrap();
     let mut full = vec![3];
-    full.extend(KeyRow::ID.to_be_bytes());
+    full.extend(KeyRow::SCHEMA.id.to_be_bytes());
     full.extend(nonunique.id.to_be_bytes());
     full.push(0);
     full.extend([255; 16]);

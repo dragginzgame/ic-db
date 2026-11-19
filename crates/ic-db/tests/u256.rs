@@ -241,7 +241,7 @@ fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
         .find(|i| i.name == "zone,value,id")
         .unwrap();
     let mut physical = vec![3];
-    physical.extend(BigNumbers::ID.to_be_bytes());
+    physical.extend(BigNumbers::SCHEMA.id.to_be_bytes());
     physical.extend(index.id.to_be_bytes());
     physical.push(1);
     physical.extend([255; 32]);
@@ -302,7 +302,7 @@ fn collections_keep_high_bits_and_validate_unindexed_payloads() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut rk = vec![2];
-    rk.extend(Collections::ID.to_be_bytes());
+    rk.extend(Collections::SCHEMA.id.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());
     raw.insert(rk, duplicate);
     drop(raw);

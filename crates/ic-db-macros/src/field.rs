@@ -280,8 +280,8 @@ impl Field {
             Some((entity, index)) => {
                 let index = index.as_ref().expect("reverse index was resolved");
                 quote!(Some(::ic_db::ReferenceSchema {
-                    entity: <#entity as ::ic_db::Entity>::ID,
-                    entity_name: <#entity as ::ic_db::Entity>::NAME,
+                    entity: ::ic_db::__private::handle(<#entity as ::ic_db::__private::ReferenceTarget>::NAME),
+                    entity_name: <#entity as ::ic_db::__private::ReferenceTarget>::NAME,
                     index: ::ic_db::__private::handle(#index)
                 }))
             }

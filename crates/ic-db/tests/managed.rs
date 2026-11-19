@@ -241,7 +241,7 @@ fn corrupt_managed_order_refuses_reads_and_noop_replacement_without_repair() {
     assert!(matches!(Entry::decode(&corrupt), Err(Error::Corrupt)));
     let mut map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(memory());
     let mut key = vec![2];
-    key.extend(Entry::ID.to_be_bytes());
+    key.extend(Entry::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     map.insert(key, corrupt);
     drop(map);

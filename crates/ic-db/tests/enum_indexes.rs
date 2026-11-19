@@ -226,7 +226,7 @@ fn enum_keys_preserve_identity_order_uniqueness_and_reopen() {
         .unwrap();
     for (ordinal, r) in rows.iter().enumerate() {
         let mut key = vec![3];
-        key.extend(Row::ID.to_be_bytes());
+        key.extend(Row::SCHEMA.id.to_be_bytes());
         key.extend(index.id.to_be_bytes());
         key.extend([1, ordinal as u8]);
         key.extend(r.id.to_be_bytes());
@@ -261,7 +261,7 @@ fn sparse_membership_and_corrupt_ordinals_refuse_without_mutation() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
-    key.extend(Row::ID.to_be_bytes());
+    key.extend(Row::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     let mut bad = golden.to_vec();
     bad[10] = 3;
@@ -324,7 +324,7 @@ fn malformed_or_wrong_owner_index_entries_refuse() {
         .find(|i| i.name == "zone,state,id")
         .unwrap();
     let mut prefix = vec![3];
-    prefix.extend(Row::ID.to_be_bytes());
+    prefix.extend(Row::SCHEMA.id.to_be_bytes());
     prefix.extend(index.id.to_be_bytes());
     prefix.push(1);
     let mut original = prefix.clone();

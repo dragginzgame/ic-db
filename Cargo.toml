@@ -29,7 +29,7 @@ syn = "3.0.10"
 ulid = { version = "3.0.0", default-features = false }
 
 # Tests and tooling
-toko-tooling = "=0.45.10"
+toko-tooling = "=0.45.11"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

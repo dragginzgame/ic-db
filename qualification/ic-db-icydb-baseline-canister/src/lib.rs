@@ -191,14 +191,14 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn keyset_listing(after: Option<u64>) -> (Vec<Row>, u64) {
+fn keyset_listing((after, category): (Option<u64>, u64)) -> (Vec<Row>, u64) {
     measure(|| {
         use icydb::db::query::{FieldRef, asc};
         let db = db().unwrap();
         let mut query = db
             .query::<Entry>()
             .unwrap()
-            .filter(FieldRef::new("category").eq(1_u64))
+            .filter(FieldRef::new("category").eq(category))
             .filter(FieldRef::new("amount").gte(10_u64))
             .order_by(asc("id"))
             .limit(2);

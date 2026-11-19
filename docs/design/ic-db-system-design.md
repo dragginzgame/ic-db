@@ -268,6 +268,13 @@ second schema authority or host endpoints. Review individual attributes against
 their retained responsibility; this is not blanket source compatibility with
 IcyDB's existing options or generated artifacts.
 
+Like frozen IcyDB `6d421e3` (`icydb-model-macros/src/node/schema_reference.rs`),
+each entity exposes an uppercase associated constant for every authored field.
+Application Rust uses `User::ID` and `User::NAME` across the existing fluent
+methods. IC DB emits static logical names directly; the same admission path
+validates fields supplied at runtime. The constants carry no ordinal or stored
+identity. Field spellings that generate the same constant are rejected.
+
 ### Authoring and inspection contract
 
 Keep field definitions inside the entity attribute. Latest maintainer direction:
@@ -357,9 +364,9 @@ and [graph collection/sealing](https://github.com/dragginzgame/icydb/blob/6d421e
 without importing endpoint generation or runtime schema reconciliation.
 Rust resolution paths and durable schema identity remain distinct: map resolved
 nodes to their declared schema names/identities under the compiled-contract rules.
-The scalar entity slice now implements both stages. `Entity::PATH` carries the
+The scalar entity slice now implements both stages. `Entity::declaration_path()` carries the
 compiler-resolved declaration path; typed reference spelling such as
-`references(entity = "Entry")` lowers through `Entity::NAME` and its generated
+`references(entity = "Entry")` uses the target’s macro-private logical name and its derived
 handle, independently of the target descriptor, so self/cyclic relationships do
 not create recursive constant evaluation. Numeric target IDs are no longer accepted. The optional native-only `ic-db/build` feature collects nodes
 using `ctor`; `build::generate(source_module, target_module)` selects a module
@@ -2800,7 +2807,13 @@ same bounded complete sorter; explicit paths refuse. Existing all-ascending
 orders retain their cursor identity. Other direction lists add a bounded signature
 suffix; changing directions cannot reuse a live cursor.
 
-Selection first admits all predicates, including contradictions. Singleton equality terms
+Selection first admits all predicates, including contradictions. A mandatory
+absent equality produces an empty traversal when another mandatory clause
+requires that field to be present in every alternative. Sparse-index admission
+and this empty-range check share the presence proof. Frozen IcyDB
+`6d421e3`, `db/query/plan/planner/predicate/mod.rs`, likewise uses empty
+access for a provably impossible null test on a primary key. IC DB applies
+the rule to admitted optional-field filters; invalid operands still refuse. Singleton equality terms
 supply exact leading index operands; all predicates remain residual checks.
 An equality inside a multi-alternative OR clause cannot establish a fixed field
 or an index prefix, even when several alternatives happen to be identical.
@@ -2849,6 +2862,51 @@ cursors continue on their admitted traversal. Partial keys and OR alternatives
 alone do not prove uniqueness. The `eq` method constructs the ordinary equality
 predicate. The `first` terminal returns an entity, a proven miss, or a work-limit
 refusal when traversal stops before either outcome.
+
+Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys)`
+for a page of related keys. The batch admits the entity once, reads up to 32
+positions and preserves input order, duplicates and missing slots. This carries
+the positional contract of frozen IcyDB `6d421e3`,
+`db/session/query/exact_key/mod.rs`, into the existing typed read path. The
+32-position bound matches an entity page; repeated positions currently repeat
+the direct lookup. Toko's asset/thumbnail flow at `2f45ba193` illustrates why
+the order of the input page matters. A query's `filter_in` instead selects
+matching entities once in query order.
+
+For a filtered lookup, `try_one()` verifies at most one match across the whole
+query. Like Toko's terminal, it probes for two even after `limit(1)`; IC DB
+reports `MultipleMatches` on a second row and `Limit` when a partial page
+cannot establish cardinality. A continuation refuses. Use `first()` when
+the caller wants the first match in order. Schema uniqueness controls writes.
+
+For application listings use fluent predicates, typed projections, directed
+ordering and live cursors. Grouped counts for a bounded key set compose
+`filter_in` and `group_count` within the existing predicate and work limits.
+Larger sets remain a qualification gap. Offset contracts and accepting serialized
+recursive filters are application compatibility decisions. Filtered deletes
+must collect explicit keys and fit the normal atomic batch contract.
+For a bounded read of physical index entries in
+index order, `index_prefix` also admits partial prefixes of sparse indexes.
+Ordinary fluent queries must cover every possible matching entity.
+
+**Default-order equality pages (0.23.13).** Entity reads and ordinary projections
+may traverse a non-unique equality prefix when the remaining key produces primary-key
+order. Admission uses the same membership and ordering proofs as an explicit
+primary-key order. Index reads validate the owners visited within that range.
+Primary cursors from earlier releases resume on primary storage.
+Frozen IcyDB `6d421e3` distinguishes unordered traversal from primary order in
+`db/query/plan/planner/prefix/branch_tests.rs`. IC DB promises primary order
+even when the caller omits `order_by`.
+
+After equality fixes every declared component of a non-unique index, the next
+bytes encode the owner primary key. A comparison on that ID tightens the
+physical range, including strict last-ID boundaries in either direction.
+A fully covered count can count those keys directly. A synchronous aggregate
+with additional row predicates can still use the prefix when it preserves every usable primary-key bound.
+An ID inside an OR clause supplies no independent bound. The scanner checks remaining predicates on each visited owner.
+A unique index has
+no owner suffix. Frozen IcyDB `6d421e3` also relies on primary-key suffix
+order for fixed secondary prefixes in `db/query/plan/planner/predicate/mod.rs`.
 
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply
 the requested order, the same scanner traverses the primary range and retains
@@ -3012,9 +3070,8 @@ inspect later rows after a match. The result occupies one logical byte. Output
 `limit` does not truncate input; cursors, DISTINCT, input ordering and group
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
-every predicate uses the same proof as count. Otherwise, when no predicate
-filters the primary field, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Both terminals check the remaining filters on each visited owner. Count must establish exhaustion within the candidate budget.
+every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
+prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Both terminals check the remaining filters on each visited owner. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
 residual predicates in `db/query/plan/planner/index_select/mod.rs`. A hit
 still fetches and validates its owner. An empty prefix range returns false

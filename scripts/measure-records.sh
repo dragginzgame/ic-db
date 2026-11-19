@@ -17,7 +17,7 @@ case "$workload" in
         export IC_DB_FLUENT_COMPARISON=1
         ;;
     keyset)
-        evidence="$PWD/qualification/target/evidence/keyset-comparison"
+        evidence="$PWD/qualification/target/evidence/keyset-comparison-02313"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         export IC_DB_KEYSET_COMPARISON=1

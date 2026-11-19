@@ -24,6 +24,7 @@ use field::Field;
 
 /// Author a typed record with named fields, a supplied scalar key and indexes.
 ///
+/// Each field has an associated name constant, e.g. `User::NAME` for `name`.
 /// Field types follow the implemented `ic_db::FieldType` contract, with explicit
 /// bounds for variable-size values. Secondary indexes admit supported ordered
 /// scalar fields and unit enums, including optional forms. Optional unique indexes require
@@ -279,6 +280,23 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .map(|field| syn::parse_str(&field.name))
         .collect::<syn::Result<_>>()?;
+    let mut constant_names = BTreeSet::new();
+    let mut field_constants = Vec::with_capacity(authored.len());
+    for field in &authored {
+        let source = &field.name;
+        let constant = source
+            .strip_prefix("r#")
+            .unwrap_or(source)
+            .to_ascii_uppercase();
+        if !constant_names.insert(constant.clone()) {
+            return Err(fail(&format!(
+                "fields generate the same associated constant `{constant}`"
+            )));
+        }
+        let ident = syn::parse_str::<syn::Ident>(&constant)?;
+        let doc = format!("Logical field name `{source}` for fluent queries.");
+        field_constants.push(quote! { #[doc = #doc] pub const #ident: &'static str = #source; });
+    }
     let key_type = authored
         .iter()
         .find(|field| field.name == primary && field.required_key())
@@ -455,13 +473,15 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         #(#attrs)*
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
+        impl #name { #(#field_constants)* }
+        impl ::ic_db::__private::ReferenceTarget for #name {
+            const NAME: &'static str = #logical_name;
+        }
         impl ::ic_db::Entity for #name {
             type Key = #key_type;
-            const ID: u32 = ::ic_db::__private::handle(#logical_name);
-            const NAME: &'static str = #logical_name;
-            const PATH: &'static str = concat!(module_path!(), "::", stringify!(#name));
+            fn declaration_path() -> &'static str { concat!(module_path!(), "::", stringify!(#name)) }
             const SCHEMA: &'static ::ic_db::EntitySchema = &::ic_db::EntitySchema {
-                id: Self::ID, name: Self::NAME, fields: &[#(#descriptions_fields),*], primary_key: #primary,
+                id: ::ic_db::__private::handle(#logical_name), name: #logical_name, fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
             };
             fn key(&self) -> Self::Key { self.#key_id }
@@ -500,7 +520,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             const _: () = {
                 #[::ic_db::build::__ctor::ctor(unsafe, anonymous, crate_path = ::ic_db::build::__ctor)]
                 fn register() {
-                    ::ic_db::build::__register(<#name as ::ic_db::Entity>::PATH, <#name as ::ic_db::Entity>::SCHEMA);
+                    ::ic_db::build::__register(<#name as ::ic_db::Entity>::declaration_path(), <#name as ::ic_db::Entity>::SCHEMA);
                 }
             };
         }

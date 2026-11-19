@@ -228,7 +228,7 @@ fn exact_indexes_final_state_swaps_and_reopen() {
         .find(|i| i.name == "zone,timestamp,id")
         .unwrap();
     let mut physical = vec![3];
-    physical.extend(TimeRow::ID.to_be_bytes());
+    physical.extend(TimeRow::SCHEMA.id.to_be_bytes());
     physical.extend(index.id.to_be_bytes());
     physical.push(1);
     physical.extend([0; 8]);
@@ -279,7 +279,7 @@ fn collection_order_and_unindexed_validation() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
-    key.extend(Collections::ID.to_be_bytes());
+    key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     let mut truncated = bytes;
     truncated.pop();

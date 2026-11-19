@@ -27,6 +27,7 @@ make_path("$root/assets/.failed-attempt");
 open my $log, '>', "$root/assets/.failed-attempt/install.log" or die $!;
 print {$log} "download: certificate verification failed\n";
 print {$log} qq({"password":"hidden-password"}\n);
+print {$log} qq({"payload":"private-attempt-body"}\n);
 print {$log} "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----\n";
 close $log;
 open my $outside, '>', "$root/outside.txt" or die $!;
@@ -38,6 +39,7 @@ open my $giant, '>', "$root/assets/.failed-attempt/download.log" or die $!;
 print {$giant} 'x' x (1024 * 1024 + 1); close $giant;
 for (1..1000) { print "setup progress $_ ", 'building a fixture ' x 6, "\n"; }
 print "Authorization: Bearer known-auth\n";
+print "download refused: Bearer private-download-id\n";
 print "token=", 't' x 10000, "\n";
 print "https://user:pass\@host/file?key=hidden-url\n";
 print "$ENV{TEST_SECRET}\n";
@@ -83,7 +85,7 @@ like($retained, qr/certificate verification failed/, 'hidden attempt diagnostic 
 like($retained, qr/attempt-1=install.log source_path_sha256=[0-9a-f]{64}/, 'attempt identity retained without disclosing arbitrary paths');
 like($retained, qr/earlier output or oversized lines omitted/, 'truncation explicit');
 like($retained, qr/oversized attempt log omitted/, 'giant attempt log explicitly omitted');
-for my $secret (qw(hidden-password known-auth hidden-url exact-environment-secret private-key-body other-private-body must-not-follow-link must-not-select-config)) {
+for my $secret (qw(hidden-password private-attempt-body known-auth private-download-id hidden-url exact-environment-secret private-key-body other-private-body must-not-follow-link must-not-select-config)) {
     unlike($retained . $printed, qr/\Q$secret\E/, "sensitive/unselected bytes excluded: $secret");
 }
 cmp_ok(length($retained), '<', 70000, 'retention bound holds for setup and attempt logs');

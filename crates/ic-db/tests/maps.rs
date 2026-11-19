@@ -286,7 +286,7 @@ fn persisted_keys_cannot_be_overwritten_by_decode_or_repair_writes() {
     ));
     assert_eq!(*backing.borrow(), before);
     let mut row_key = vec![2];
-    row_key.extend(MapRow::ID.to_be_bytes());
+    row_key.extend(MapRow::SCHEMA.id.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());
     let mut duplicate = row.encode().unwrap();
     duplicate[15..17].copy_from_slice(&[255, 255]);

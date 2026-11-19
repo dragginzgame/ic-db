@@ -328,13 +328,13 @@ fn copy_rebuilds_indexes_and_resumes_from_its_own_checkpoint() {
     for id in 1..=5_u64 {
         let value = id as u16 + 7;
         let mut row_key = vec![2];
-        row_key.extend(Target::ID.to_be_bytes());
+        row_key.extend(Target::SCHEMA.id.to_be_bytes());
         row_key.extend(id.to_be_bytes());
         let mut row = id.to_le_bytes().to_vec();
         row.extend(value.to_le_bytes());
         expected.push((row_key, row));
         let mut index = vec![3];
-        index.extend(Target::ID.to_be_bytes());
+        index.extend(Target::SCHEMA.id.to_be_bytes());
         index.extend(Target::SCHEMA.indexes[0].id.to_be_bytes());
         index.extend(value.to_be_bytes());
         expected.push((index, id.to_be_bytes().to_vec()));
@@ -1354,7 +1354,7 @@ fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
             raw.insert(vec![0], frame);
         } else {
             let mut revision = vec![1];
-            revision.extend(Other::ID.to_be_bytes());
+            revision.extend(Other::SCHEMA.id.to_be_bytes());
             raw.remove(&revision);
         }
         drop(raw);

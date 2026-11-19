@@ -953,7 +953,7 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
         Err(Error::InvalidSchema)
     ));
     let contract = || Schema::new(&[Parent::SCHEMA, Child::SCHEMA, Node::SCHEMA]).unwrap();
-    for target in [None, Some(Node::ID)] {
+    for target in [None, Some(Node::SCHEMA.id)] {
         let mut fields = Child::SCHEMA.fields.to_vec();
         fields[1].reference = target.map(|entity| ic_db::ReferenceSchema {
             entity_name: "Node",
@@ -2105,12 +2105,12 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     );
     for row in &expected {
         assert_eq!(
-            db.get_by_unique::<TextIndex>(
-                "first,second",
-                &[row.first.as_str().into(), row.second.as_str().into()]
-            )
-            .unwrap()
-            .as_ref(),
+            db.query::<TextIndex>()
+                .eq("first", row.first.as_str())
+                .eq("second", row.second.as_str())
+                .first()
+                .unwrap()
+                .as_ref(),
             Some(row)
         );
         let exact = db
@@ -2122,22 +2122,6 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
             .unwrap();
         assert_eq!(exact, std::slice::from_ref(row));
     }
-    assert!(
-        db.get_by_unique::<TextIndex>("first,second", &["missing".into(), "".into()])
-            .unwrap()
-            .is_none()
-    );
-    assert!(matches!(
-        db.get_by_unique::<TextIndex>("first,second", &["a".into()]),
-        Err(Error::InvalidQuery)
-    ));
-    assert!(matches!(
-        db.get_by_unique::<TextIndex>(
-            "bucket,first,second",
-            &[false.into(), "a".into(), "".into()]
-        ),
-        Err(Error::InvalidQuery)
-    ));
     // The candidate is outside a one-row primary scan. Reverse predicate order
     // relative to the declaration to exercise lookup by field identity.
     let lookup = || {
@@ -2945,8 +2929,8 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     struct Dependent {}
 
     // Independent known FNV-1a/32 collision; a storage handle is not authority.
-    assert_eq!(First::ID, 1_582_148_253);
-    assert_eq!(Second::ID, 1_582_148_253);
+    assert_eq!(First::SCHEMA.id, 1_582_148_253);
+    assert_eq!(Second::SCHEMA.id, 1_582_148_253);
     for entities in [
         vec![First::SCHEMA, Second::SCHEMA],
         vec![CollidingIndexes::SCHEMA],
@@ -3151,7 +3135,7 @@ fn named_enums_use_canonical_ordinals_and_exact_admission() {
     // Corrupt an unindexed enum; shared preparation must inspect it before deletion.
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
-    row_key.extend(EnumRow::ID.to_be_bytes());
+    row_key.extend(EnumRow::SCHEMA.id.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());
     let mut bytes = absent.encode().unwrap();
     *bytes.last_mut().unwrap() = 255;

@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.23.13] - Unreleased
+
+### 🔎 Queries
+
+- `#[entity]` generates field constants such as `User::ID` and `User::NAME`.
+  Use them in filters and ordering. Physical schema metadata is available via
+  `<User as Entity>::SCHEMA.id` and `<User as Entity>::SCHEMA.name`.
+  Use `Entity::declaration_path()` for the Rust declaration path.
+
+- Removed `Database::get_by_unique`. Express the lookup with
+  `db.query::<UserRoute>().eq(UserRoute::ISSUER, issuer).eq(UserRoute::SUBJECT, subject).try_one()?`.
+  Keep the unique constraint on the schema when duplicate values must be refused.
+  `.try_one()` reports a second match; `.first()` selects the first in order.
+- Use `db.get_many::<E>(&keys)?` to load related rows for a page. It accepts
+  up to 32 keys and returns one optional row per position in the supplied order.
+
+- Equality-filtered entity and projection pages can automatically use a
+  non-unique index while preserving default primary-key order in either
+  direction. Existing primary cursors continue on their original path.
+- For a non-unique index on `category`, a query for one category with
+  `id > last_id` now seeks directly past that ID. A covered `.count()`
+  uses the same range without fetching owner rows. When another filter needs
+  row data, count and existence checks can still seek to the ID boundary and
+  check that filter on the matching owners. An ID inside an OR filter also
+  permits an independent category equality to narrow the scan.
+- With a complete unique key and extra filters, automatic count and existence
+  checks can finish within a one-candidate work limit. When a compound index
+  also covers the same equality, count prefers the exact unique key and can
+  finish on the matching index entry without fetching its owner.
+
+- A query that requires the same field to be both absent and present now
+  finishes without examining rows, including under a one-candidate work limit.
+
 ## [0.23.12] - 2026-11-18
 
 ### 🔎 Queries

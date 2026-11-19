@@ -2,7 +2,7 @@
 use crate::{
     console::NoteOnly,
     open, runtime,
-    schema::{Document, Entry},
+    schema::{BinaryObject, DecimalRow, Document, Entry, ListRow},
 };
 use ic_db::{Comparison, IndexValue, QueryCursor};
 
@@ -168,7 +168,7 @@ fn fluent_text_seek(
     let mut query = db
         .query::<Document>()
         .using_index("published,title", &[false.into()])
-        .filter("title", Comparison::StartsWith, needle.as_str())
+        .filter(Document::TITLE, Comparison::StartsWith, needle.as_str())
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
     if descending {
@@ -200,7 +200,7 @@ type PrimaryRangeRequest = (Option<Vec<u8>>, bool, u64, u64, u32, u32);
     on_error = crate::transport::endpoint_error
 )]
 fn fluent_primary_range(request: PrimaryRangeRequest) -> Result<IdPage, u8> {
-    range_read(request, None, "id")
+    range_read(request, None, Entry::ID)
 }
 
 type IndexRangeRequest = (Option<Vec<u8>>, bool, Option<u64>, u64, u64, u32, u32);
@@ -220,8 +220,8 @@ fn fluent_index_range(
 ) -> Result<IdPage, u8> {
     let request = (after, descending, lower, upper, work, bytes);
     match category {
-        Some(category) => range_read(request, Some(&[category.into()]), "id"),
-        None => range_read(request, Some(&[]), "category"),
+        Some(category) => range_read(request, Some(&[category.into()]), Entry::ID),
+        None => range_read(request, Some(&[]), Entry::CATEGORY),
     }
 }
 
@@ -283,11 +283,11 @@ fn fluent_sparse_presence(
         .transpose()
         .map_err(|error| query_error(&error))?;
     let mut query = db
-        .query::<crate::schema::DecimalRow>()
+        .query::<DecimalRow>()
         .filter_any(&[
-            ("maybe", Comparison::Ne, ic_db::IndexValue::Absent),
+            (DecimalRow::MAYBE, Comparison::Ne, ic_db::IndexValue::Absent),
             (
-                "maybe",
+                DecimalRow::MAYBE,
                 if include_absent {
                     Comparison::Eq
                 } else {
@@ -296,7 +296,7 @@ fn fluent_sparse_presence(
                 ic_db::IndexValue::Absent,
             ),
         ])
-        .order_by(&["maybe"])
+        .order_by(&[DecimalRow::MAYBE])
         .work_limit(1)
         .test_output_limit(bytes as usize);
     if descending {
@@ -333,16 +333,16 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
         .map(QueryCursor::from_bytes)
         .transpose()
         .map_err(|error| query_error(&error))?;
-    let query = db.query::<crate::schema::ListRow>().work_limit(1);
+    let query = db.query::<ListRow>().work_limit(1);
     let mut query = match mode {
-        0 => query.filter_absent("labels"),
-        1 => query.filter_present("labels"),
-        2 => query.filter_length("labels", Comparison::Eq, 1),
-        3 => query.filter_length("numbers", Comparison::Eq, 0),
-        4 => query.filter("labels", Comparison::Contains, ""),
-        5 => query.filter("labels", Comparison::Contains, "x"),
-        6 => query.filter("numbers", Comparison::Contains, 258_u16),
-        7 => query.filter("numbers", Comparison::Contains, 1_u16),
+        0 => query.filter_absent(ListRow::LABELS),
+        1 => query.filter_present(ListRow::LABELS),
+        2 => query.filter_length(ListRow::LABELS, Comparison::Eq, 1),
+        3 => query.filter_length(ListRow::NUMBERS, Comparison::Eq, 0),
+        4 => query.filter(ListRow::LABELS, Comparison::Contains, ""),
+        5 => query.filter(ListRow::LABELS, Comparison::Contains, "x"),
+        6 => query.filter(ListRow::NUMBERS, Comparison::Contains, 258_u16),
+        7 => query.filter(ListRow::NUMBERS, Comparison::Contains, 1_u16),
         _ => return Err(1),
     };
     if let Some(cursor) = &cursor {
@@ -371,7 +371,7 @@ fn text_match(
         .map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Document>()
-        .filter("note", comparison, needle.as_str())
+        .filter(Document::NOTE, comparison, needle.as_str())
         .limit(1)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
@@ -404,26 +404,27 @@ fn read(
     let query = db.query::<Entry>();
     let mut query = match shape {
         Shape::Any => query.filter_any(&[
-            ("amount", Comparison::Ge, minimum.into()),
-            ("amount", Comparison::Le, 20_u64.into()),
+            (Entry::AMOUNT, Comparison::Ge, minimum.into()),
+            (Entry::AMOUNT, Comparison::Le, 20_u64.into()),
         ]),
-        Shape::Membership => {
-            query.filter_in("amount", &[minimum.into(), 20_u64.into(), minimum.into()])
-        }
-        _ => query.filter("amount", Comparison::Ge, minimum),
+        Shape::Membership => query.filter_in(
+            Entry::AMOUNT,
+            &[minimum.into(), 20_u64.into(), minimum.into()],
+        ),
+        _ => query.filter(Entry::AMOUNT, Comparison::Ge, minimum),
     }
     .limit(limit as usize)
     .work_limit(work as usize)
     .test_output_limit(bytes as usize);
     if let Some(category) = category {
-        query = if matches!(shape, Shape::Ordered) {
-            query.filter("category", Comparison::Eq, category)
+        query = if matches!(shape, Shape::Ordered | Shape::Projection) {
+            query.eq(Entry::CATEGORY, category)
         } else {
             query.using_index("category,id", &[category.into()])
         };
     }
     if matches!(shape, Shape::Ordered) {
-        query = query.order_by(&["category"]);
+        query = query.order_by(&[Entry::CATEGORY]);
     }
     if descending {
         query = query.descending();
@@ -490,8 +491,8 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     let db = open(&host);
     let start = crate::system::instruction_counter();
     let query = db
-        .query::<crate::schema::BinaryObject>()
-        .filter("id", Comparison::Eq, 1_u64);
+        .query::<BinaryObject>()
+        .filter(BinaryObject::ID, Comparison::Eq, 1_u64);
     let (rows, bytes) = if projected {
         let page = query.fetch_as::<IdOnly>().unwrap();
         (
@@ -538,9 +539,9 @@ fn measured_listing(
         .unwrap();
     let mut q = db
         .query::<Document>()
-        .filter("entry_id", Comparison::Eq, 1_u64)
-        .filter("published", Comparison::Eq, true)
-        .order_by(&["score", "id"])
+        .filter(Document::ENTRY_ID, Comparison::Eq, 1_u64)
+        .filter(Document::PUBLISHED, Comparison::Eq, true)
+        .order_by(&[Document::SCORE, Document::ID])
         .descending()
         .limit(20)
         .work_limit(work as usize)

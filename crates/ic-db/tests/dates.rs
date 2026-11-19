@@ -240,7 +240,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         .find(|i| i.name == "zone,value,id")
         .unwrap();
     let mut physical = vec![3];
-    physical.extend(DateRow::ID.to_be_bytes());
+    physical.extend(DateRow::SCHEMA.id.to_be_bytes());
     physical.extend(index.id.to_be_bytes());
     physical.push(1);
     physical.extend([128, 44, 192, 160]);
@@ -293,7 +293,7 @@ fn collections_reject_duplicate_keys_before_materialization() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
-    key.extend(Collections::ID.to_be_bytes());
+    key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     // Stored inspection must also validate a date outside every index.
     let mut invalid_date = row.encode().unwrap();

@@ -2,6 +2,28 @@ use super::expand;
 use quote::quote;
 
 #[test]
+fn entity_field_constants_reject_ambiguous_spellings() {
+    let args = quote!(
+        pk(field = "id"),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "Id", value(item(prim = "Nat64")))
+        )
+    );
+    assert!(
+        expand(
+            args,
+            quote!(
+                struct Row {}
+            )
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("same associated constant `ID`")
+    );
+}
+
+#[test]
 fn declarations_never_discard_authored_where_constraints() {
     let item = quote!(
         struct Constrained

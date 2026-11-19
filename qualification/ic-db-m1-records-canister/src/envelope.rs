@@ -205,7 +205,7 @@ fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
     );
     let mut prefix = vec![tag];
-    prefix.extend(EnvelopeRow::ID.to_be_bytes());
+    prefix.extend(EnvelopeRow::SCHEMA.id.to_be_bytes());
     let lower = match after {
         Some(key) => {
             assert!(key.len() <= 512 && key.starts_with(&prefix));

@@ -61,7 +61,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
     );
     let opened = ic_platform_runtime::raw::instruction_counter();
     let mut prefix = vec![if mode == 2 { 2 } else { 3 }];
-    prefix.extend(Entry::ID.to_be_bytes());
+    prefix.extend(Entry::SCHEMA.id.to_be_bytes());
     if mode == 2 {
         assert!(operand.is_none());
     } else {
@@ -81,7 +81,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
         if mode == 4 {
             assert_eq!(bytes.len(), 8);
             let mut owner = vec![2];
-            owner.extend(Entry::ID.to_be_bytes());
+            owner.extend(Entry::SCHEMA.id.to_be_bytes());
             owner.extend(bytes);
             assert!(!map.get(&owner).unwrap().is_empty());
         }

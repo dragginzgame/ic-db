@@ -253,7 +253,7 @@ fn indexed_default_account_refusal_noop_and_final_state_exchange() {
         .find(|i| i.name == "zone,value,id")
         .unwrap();
     let mut physical = vec![3];
-    physical.extend(AccountRow::ID.to_be_bytes());
+    physical.extend(AccountRow::SCHEMA.id.to_be_bytes());
     physical.extend(index.id.to_be_bytes());
     physical.extend([1, 1, 4]);
     physical.extend([255; 32]);
@@ -303,7 +303,7 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut rk = vec![2];
-    rk.extend(Collections::ID.to_be_bytes());
+    rk.extend(Collections::SCHEMA.id.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());
     let mut bad = bytes;
     bad[12..16].copy_from_slice(&u32::MAX.to_le_bytes());

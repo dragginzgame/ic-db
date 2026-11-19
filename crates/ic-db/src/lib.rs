@@ -129,6 +129,8 @@ pub enum Error {
     ArithmeticOverflow,
     /// Unsupported query field/shape or unavailable ordered access path.
     InvalidQuery,
+    /// A query requiring at most one matching entity found a second.
+    MultipleMatches,
     /// Malformed continuation or a different database/schema/query boundary.
     InvalidCursor,
     /// One matching encoded row exceeds the whole requested output-byte allowance.
@@ -231,16 +233,25 @@ pub mod design {
 /// struct Small {}
 /// fn wrong_width(db: &Database) { let _ = db.get::<Small>(7_u64); }
 /// ```
+/// Field names come from the declaration. A missing `name` field cannot
+/// resolve to the entity's logical name, even when `Entity` is in scope.
+/// ```compile_fail
+/// use ic_db::{entity, Entity};
+/// #[entity(pk(field="id"), fields(field(name="id", value(item(prim="Nat64")))))]
+/// struct Entry {}
+/// let _ = Entry::NAME;
+/// ```
+/// ```compile_fail
+/// use ic_db::{entity, Entity};
+/// #[entity(pk(field="id"), fields(field(name="id", value(item(prim="Nat64")))))]
+/// struct Entry {}
+/// let _ = Entry::ENTITY_NAME;
+/// ```
 pub trait Entity: Sized {
     /// Exact supplied primary-key type, selected by the declared field.
     type Key: PrimaryKey;
-    /// Generated handle, also usable in cyclic typed references; not authored.
-    #[doc(hidden)]
-    const ID: u32;
-    /// Logical entity name under the stored contract.
-    const NAME: &'static str;
-    /// Rust-resolved declaration path for host schema assembly, not durable identity.
-    const PATH: &'static str;
+    /// Rust-resolved declaration path for host schema assembly.
+    fn declaration_path() -> &'static str;
     /// This executable's compiled entity contract.
     const SCHEMA: &'static EntitySchema;
     /// Read the application's primary key without encoding or inspecting indexes.
@@ -269,6 +280,11 @@ pub trait Entity: Sized {
 /// Implementation support for generated code; not a second query frontend.
 #[doc(hidden)]
 pub mod __private {
+    /// Independent of the descriptor so references can form cycles.
+    pub trait ReferenceTarget {
+        /// Schema-authored logical name of the target entity.
+        const NAME: &'static str;
+    }
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     pub use crate::key::encode_index;
     pub use crate::managed::validate_order as validate_managed_order;

@@ -320,7 +320,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
-| Complete sparse ID listing | 128 rows, ten matches and six calls in both scalar hosts | IC DB used 51.7% fewer handler instructions after upgrade and startup | Fixed input and last-ID pagination. The Canic listing with an eight-candidate budget is a separate workload. [Measurement](#matched-complete-keyset-listing-02310) |
+| Complete sparse ID listing | 128 rows, two categories, default-order IC DB and explicit-index control | Automatic IC DB used 51.7–55.1% fewer handler instructions than legacy after upgrade and readiness | Two-row pages on fixed input with last-ID boundaries. [0.23.13 comparison](#automatic-equality-listings-02313) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Automatic whole-entity metadata, covered equality-prefix key scans, or row execution. Explicit owner validation remains available. | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | [Automatic count measurements](#automatic-prefix-counts-0235) cover the default fluent call. [Prefix comparison](#prefix-count-paths-0234), [adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
 | Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
@@ -2802,6 +2802,34 @@ work limit. This measures result agreement. IC instruction costs remain unmeasur
 ```sh
 cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-icydb-baseline-canister --features unique-lookup --test native_matrix compound_equality_lookup -- --ignored
 ```
+
+### Automatic equality listings (0.23.13)
+
+On the 128-row fixture below, the automatic IC DB query declares category equality
+and the amount threshold. Its default order is ascending ID. The control on the
+same Wasm supplies the category through `using_index("category,id", ...)`.
+Frozen IcyDB `6d421e3` uses fluent filters and requests ascending ID explicitly.
+The two IC DB routes include their respective predicate and validation costs.
+
+| Category | Qualifying / category rows | Calls through exhaustion | IC DB automatic | IC DB explicit | IcyDB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 10 / 113 | 6 | 14,577,642 | 14,407,193 | 30,175,770 |
+| 2 | 2 / 15 | 2 | 2,557,372 | 2,521,915 | 5,693,865 |
+
+Values are total handler instructions after upgrade and readiness. Each call
+opens the database and returns up to two full rows. Both traversals include
+the final empty call. The driver checks each tuple against its independent
+oracle and verifies stable memory before and after each traversal. These
+measurements use caller-supplied last-ID boundaries. Engine cursor resumption
+is covered separately by the query suite. The automatic IC DB totals were
+1.18% and 1.41% above the corresponding explicit totals.
+[Seeded and post-upgrade page costs](measurements/0.23.13-keyset-listing.csv)
+
+Reproduce with `make m2-keyset-comparison`. The runner retains artifacts and
+source inputs in `qualification/target/evidence/keyset-comparison-02313/`.
+Wasm SHA-256 was `a49b7b563df61d5950132d409b19648166d0140795cb15b6ca9b28a94748890e`
+for IC DB and `08ce7449d2a9110b0a087afb328e68d94de7da3429856427e092e48bf6541dfa`
+for frozen IcyDB's comparison host.
 
 ### Matched complete keyset listing (0.23.10)
 

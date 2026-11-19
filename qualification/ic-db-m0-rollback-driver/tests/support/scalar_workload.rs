@@ -276,6 +276,7 @@ pub async fn run(
         // Final item state of the skewed application after its move, seeded
         // directly: the timed workload contains reads on immutable input.
         let mut expected = Vec::new();
+        let mut sparse = Vec::new();
         for id in 1..=128 {
             let category = if id % 8 == 0 && id != 128 { 2 } else { 1 };
             let amount = if id == 128 { 10 } else { id % 11 };
@@ -284,18 +285,22 @@ pub async fn run(
             settle().await;
             if category == 1 && amount >= 10 {
                 expected.push(value);
+            } else if category == 2 && amount >= 10 {
+                sparse.push(value);
             }
         }
         assert_eq!(expected.len(), 10);
-        let page = async |after: Option<u64>| {
-            let request = ic_wire::encode(
-                &after,
-                Encoding::Frame {
-                    method: 11,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
+        let page = async |after: Option<u64>, category: u64, hinted: bool| {
+            let encoding = Encoding::Frame {
+                method: 11,
+                direction: Direction::Request,
+            };
+            let request = if label == "ic-db" {
+                ic_wire::encode(&(after, category, hinted), encoding, LIMITS)
+            } else {
+                assert!(!hinted);
+                ic_wire::encode(&(after, category), encoding, LIMITS)
+            }
             .unwrap();
             let reply = pic
                 .query_call(canister, canister, "keyset_listing", request)
@@ -312,22 +317,23 @@ pub async fn run(
             .unwrap();
             (rows, instructions)
         };
-        let traverse = async |mut after: Option<u64>, expected: &[Row]| {
-            let before = pic.get_stable_memory(canister).await;
-            let mut costs = Vec::new();
-            for offset in (0..=expected.len()).step_by(2) {
-                let (rows, instructions) = page(after).await;
-                assert_eq!(
-                    rows,
-                    expected[offset..(offset + 2).min(expected.len())],
-                    "{label} after {after:?}"
-                );
-                after = rows.last().map(|row| row.0);
-                costs.push(instructions);
-            }
-            assert_eq!(pic.get_stable_memory(canister).await, before);
-            costs
-        };
+        let traverse =
+            async |mut after: Option<u64>, expected: &[Row], category: u64, hinted: bool| {
+                let before = pic.get_stable_memory(canister).await;
+                let mut costs = Vec::new();
+                for offset in (0..=expected.len()).step_by(2) {
+                    let (rows, instructions) = page(after, category, hinted).await;
+                    assert_eq!(
+                        rows,
+                        expected[offset..(offset + 2).min(expected.len())],
+                        "{label} after {after:?}"
+                    );
+                    after = rows.last().map(|row| row.0);
+                    costs.push(instructions);
+                }
+                assert_eq!(pic.get_stable_memory(canister).await, before);
+                costs
+            };
         for phase in ["seeded", "after-upgrade-settled"] {
             if phase == "after-upgrade-settled" {
                 ic_db_m0_rollback_driver::upgrade_stopped(
@@ -344,13 +350,22 @@ pub async fn run(
                     startup().await
                 );
             }
-            let costs = traverse(None, &expected).await;
-            eprintln!(
-                "{label} keyset {phase} pages={costs:?} total={}",
-                costs.iter().sum::<u64>()
-            );
+            for (category, rows) in [(1, &expected), (2, &sparse)] {
+                for &hinted in if label == "ic-db" {
+                    &[false, true][..]
+                } else {
+                    &[false][..]
+                } {
+                    let costs = traverse(None, rows, category, hinted).await;
+                    eprintln!(
+                        "{label} keyset {phase} category={category} hinted={hinted} rows={} pages={costs:?} total={}",
+                        rows.len(),
+                        costs.iter().sum::<u64>()
+                    );
+                }
+            }
         }
-        let (first, first_cost) = page(None).await;
+        let (first, first_cost) = page(None, 1, false).await;
         assert_eq!(first, expected[..2]);
         let boundary = first.last().unwrap().0;
         assert_eq!(boundary, 21);
@@ -372,8 +387,8 @@ pub async fn run(
             .unwrap();
         let (_, reopen_cost, _) = startup().await;
         let suffix = &expected[expected.partition_point(|row| row.0 <= boundary)..];
-        let resumed = traverse(Some(boundary), suffix).await;
-        let fresh = traverse(None, &expected).await;
+        let resumed = traverse(Some(boundary), suffix, 1, false).await;
+        let fresh = traverse(None, &expected, 1, false).await;
         eprintln!(
             "{label} keyset edited first={first_cost} writes={write_cost} settling={settle_cost} readiness={reopen_cost} resumed={resumed:?} fresh={fresh:?}"
         );

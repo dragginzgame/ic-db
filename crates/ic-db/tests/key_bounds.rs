@@ -108,7 +108,7 @@ fn complete_keys_count_escaping_and_owner_before_any_mutation() {
     drop(db);
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut prefix = vec![3];
-    prefix.extend(TextKey::ID.to_be_bytes());
+    prefix.extend(TextKey::SCHEMA.id.to_be_bytes());
     let keys: Vec<_> = raw
         .range(prefix.clone()..)
         .take_while(|e| e.key().starts_with(&prefix))
@@ -201,7 +201,7 @@ fn no_op_cannot_admit_an_overlong_stored_after_image() {
     };
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
-    key.extend(TextKey::ID.to_be_bytes());
+    key.extend(TextKey::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     raw.insert(key, row.encode().unwrap());
     drop(raw);
@@ -242,7 +242,12 @@ fn selected_index_read_checks_unrelated_complete_key_bound() {
     // exceeds 512 bytes (namespace 9 + a 3 + b 493 + owner 8).
     row.b.push('y');
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
-    let key = [&[2][..], &Compound::ID.to_be_bytes(), &row.id.to_be_bytes()].concat();
+    let key = [
+        &[2][..],
+        &Compound::SCHEMA.id.to_be_bytes(),
+        &row.id.to_be_bytes(),
+    ]
+    .concat();
     assert!(raw.insert(key, row.encode().unwrap()).is_some());
     drop(raw);
     let before = backing.borrow().clone();

@@ -229,7 +229,7 @@ fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_m
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
-    row_key.extend(Asset::ID.to_be_bytes());
+    row_key.extend(Asset::SCHEMA.id.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());
     let mut corrupt = vec![7, 0, 0, 0, 0, 0, 0, 0, 0];
     corrupt.extend([2; 32]);

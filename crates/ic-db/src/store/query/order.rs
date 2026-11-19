@@ -65,7 +65,7 @@ pub(super) fn select<'a>(
             positions[i] = (position, request.order_descending & (1 << i) != 0);
         }
     }
-    let single_row = request.order.is_some() && equality(request, entity.primary_key).is_some();
+    let single_row = equality(request, entity.primary_key).is_some();
     let fits_order = |index, fixed| single_row || satisfies(entity, request, index, fixed);
     if let Some((name, values)) = &request.index {
         let index = entity
@@ -82,7 +82,7 @@ pub(super) fn select<'a>(
             && index.unique
             && values.len() == index.fields.len();
         if !complete_membership(entity, index, values, request)
-            || !(exact_owner || fits_order(Some(index), values.len()))
+            || !(request.order.is_none() || exact_owner || fits_order(Some(index), values.len()))
         {
             return Err(Error::InvalidQuery);
         }
@@ -103,7 +103,16 @@ pub(super) fn select<'a>(
     }
     // A mandatory primary equality admits at most one row under any valid order.
     // Projected DISTINCT retains its path-dependent continuation strategy.
-    if request.order.is_none() || (single_row && !request.distinct) {
+    // Before 0.23.13 a default-order page could only resume on the primary
+    // path. The cursor still has to pass the complete binding and key checks.
+    let default_primary = request.order.is_none()
+        && (!matches!(output, super::PlanOutput::Rows)
+            || request.distinct
+            || request
+                .cursor
+                .is_some_and(|c| c.position.first() == Some(&2))
+            || literal_equalities(request).next().is_none());
+    if default_primary || (single_row && !request.distinct) {
         return Ok(Path::Primary);
     }
     let primary_fits = fits_order(None, 0);
@@ -194,63 +203,64 @@ pub(super) fn select_aggregate_prefix<'a>(
     plan: &mut super::Plan<'a>,
 ) -> Result<bool, Error> {
     if let Some((_, values)) = &request.index {
-        return Ok(plan
-            .index
-            .is_some_and(|index| covers_index(request, plan, index, values)));
+        return Ok(plan.index.is_some_and(|index| {
+            covers_index(entity, request, plan, index, values, plan.prefix.len())
+        }));
     }
-    // Preserve primary seeks when the equality prefix would leave an ID predicate
-    // to be checked only after fetching owners.
-    let allow_residual = !request
-        .predicates
-        .iter()
-        .any(|p| p.field == entity.primary_key);
+    let exact_id = equality(request, entity.primary_key).is_some();
     let mut best = None;
     for index in entity.indexes {
         let values = leading_equalities(request, index);
-        let covered = request
-            .predicates
-            .iter()
-            .all(|p| !p.or_next && fixed_equality(p, index, &values));
-        if (!covered && !allow_residual) || !complete_membership(entity, index, &values, request) {
+        if !complete_membership(entity, index, &values, request) {
             continue;
         }
         let Some(path) = automatic_prefix(entity, index, &values)? else {
             continue;
         };
-        if covered {
+        let covered = covers_index(entity, request, plan, index, &values, path.prefix.len());
+        let single_owner = index.unique && path.fixed == index.fields.len();
+        // The exact key proves exhaustion in one visit. If it also covers
+        // every predicate, no other candidate can improve the work bound.
+        if single_owner && covered {
             plan.use_index(entity, path);
             return Ok(true);
+        }
+        if !covered
+            && (exact_id
+                || (!single_owner && !super::range::preserves_primary_bounds(entity, plan, &path)))
+        {
+            continue;
         }
         let (fixed, width, name) = rank(index, path.fixed);
         let bounded = super::range::has_secondary_bound(entity, plan, &path);
         if values.is_empty() && !bounded {
             continue;
         }
-        let score = (fixed, !bounded, width, name);
+        let score = (!single_owner, !covered, fixed, !bounded, width, name);
         if best.as_ref().is_none_or(|(old, _)| score < *old) {
-            best = Some((score, (path, values)));
+            best = Some((score, (path, covered)));
         }
     }
-    if let Some((_, (path, values))) = best {
-        let index = path.index;
+    if let Some((_, (path, covered))) = best {
         plan.use_index(entity, path);
-        return Ok(covers_index(request, plan, index, &values));
+        return Ok(covered);
     }
     Ok(false)
 }
 
 // Plan admission emits one encoded term per predicate, in request order.
 fn covers_index(
+    entity: &EntitySchema,
     request: &Request<'_>,
     plan: &super::Plan<'_>,
     index: &IndexSchema,
     values: &[IndexValue<'_>],
+    prefix_len: usize,
 ) -> bool {
-    let next = index.fields.get(values.len()).copied();
     request.predicates.iter().zip(&plan.terms).all(|(p, term)| {
         !p.or_next
             && (fixed_equality(p, index, values)
-                || super::range::bounds_secondary_field(p.field, next, term, plan.prefix.len()))
+                || super::range::bounds_index_term(entity, index, values.len(), term, prefix_len))
     })
 }
 
@@ -298,6 +308,22 @@ fn requires_presence(predicate: &Predicate<'_>, name: &str, entity: &EntitySchem
     }
 }
 
+// One mandatory clause must reject absence in every alternative.
+pub(super) fn requires_present_field(
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    name: &str,
+) -> bool {
+    request
+        .predicates
+        .split_inclusive(|p| !p.or_next)
+        .any(|clause| {
+            clause
+                .iter()
+                .all(|predicate| requires_presence(predicate, name, entity))
+        })
+}
+
 // Sparse traversal must cover every possible match. Each optional component needs
 // a present prefix operand or a mandatory clause whose alternatives all reject
 // absence on that same field. Presence alone never makes an ordering field fixed.
@@ -316,14 +342,7 @@ fn complete_membership(
                 .is_some_and(|field| {
                     !field.optional
                         || values.get(i).is_some_and(|v| *v != IndexValue::Absent)
-                        || request
-                            .predicates
-                            .split_inclusive(|p| !p.or_next)
-                            .any(|clause| {
-                                clause
-                                    .iter()
-                                    .all(|predicate| requires_presence(predicate, name, entity))
-                            })
+                        || requires_present_field(entity, request, name)
                 })
         })
 }
@@ -334,9 +353,8 @@ fn satisfies(
     index: Option<&IndexSchema>,
     prefix_len: usize,
 ) -> bool {
-    let Some(order) = &request.order else {
-        return true;
-    };
+    // An empty requested field list leaves just the primary-key tie-breaker.
+    let order = request.order.as_deref().unwrap_or_default();
     let fields = index.map_or(&[][..], |i| i.fields);
     let fixed =
         |name: &&str| fields[..prefix_len].contains(name) || equality(request, name).is_some();

@@ -78,7 +78,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let index = E::SCHEMA.indexes.iter().find(|i| i.name == "rank").unwrap();
     let mut index_prefix = vec![3];
-    index_prefix.extend(E::ID.to_be_bytes());
+    index_prefix.extend(E::SCHEMA.id.to_be_bytes());
     index_prefix.extend(index.id.to_be_bytes());
     let reverse = E::SCHEMA
         .indexes
@@ -87,14 +87,14 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
         .unwrap();
     for (n, key) in encoded.iter().enumerate() {
         let mut physical = vec![2];
-        physical.extend(E::ID.to_be_bytes());
+        physical.extend(E::SCHEMA.id.to_be_bytes());
         physical.extend(key);
         assert_eq!(raw.get(&physical).unwrap(), rows[n].encode().unwrap());
         let mut unique = index_prefix.clone();
         unique.extend((n as u64).to_be_bytes());
         assert_eq!(raw.get(&unique).unwrap(), *key);
         let mut dependent = vec![3];
-        dependent.extend(E::ID.to_be_bytes());
+        dependent.extend(E::SCHEMA.id.to_be_bytes());
         dependent.extend(reverse.id.to_be_bytes());
         dependent.push(1);
         dependent.extend(&encoded[(n + 1) % encoded.len()]);
@@ -411,7 +411,7 @@ fn malformed_owners<E: Entity>(row: &E, invalid: Vec<Vec<u8>>) {
     drop(db);
     let index = E::SCHEMA.indexes.iter().find(|i| i.name == "rank").unwrap();
     let mut key = vec![3];
-    key.extend(E::ID.to_be_bytes());
+    key.extend(E::SCHEMA.id.to_be_bytes());
     key.extend(index.id.to_be_bytes());
     key.extend(0_u64.to_be_bytes());
     // Missing length, truncation, trailing bytes, oversized principal, and a

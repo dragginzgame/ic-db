@@ -31,7 +31,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             binding(plan.binding),
-            self.db.revision_by_id(E::ID)?,
+            self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             vec![0],
@@ -96,7 +96,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             group_binding(&plan, &groups, self.request.rows)?,
-            self.db.revision_by_id(E::ID)?,
+            self.db.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             vec![0],

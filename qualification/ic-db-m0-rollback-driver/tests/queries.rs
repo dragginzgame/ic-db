@@ -1579,6 +1579,15 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         )
         .unwrap()
     };
+    let even = project((None, false, Some(0), 0, 1, 1, 4096))
+        .await
+        .unwrap();
+    assert_eq!(even.0, [(2, 20)]);
+    assert_eq!((even.2, even.3), (1, 1));
+    let next = project((Some(even.1.unwrap()), false, Some(0), 0, 1, 1, 4096))
+        .await
+        .unwrap();
+    assert_eq!(next.0, [(4, 40)]);
     let projected = project((None, false, None, 0, 32, 128, 31)).await.unwrap();
     assert_eq!(projected.0, [(1, 11)]);
     assert_eq!((projected.2, projected.4), (2, 16));

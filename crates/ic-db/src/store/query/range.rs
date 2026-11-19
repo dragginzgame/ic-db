@@ -1,7 +1,7 @@
 //! Tighten the selected traversal by mandatory leading-key predicates and continuation.
 //! Uses the admitted fixed prefix; this does not select new paths.
 use super::{Comparison, Plan, Request, Term, TermOperand};
-use crate::{EntitySchema, Error, store_key::StoreKey};
+use crate::{EntitySchema, Error, IndexSchema, store_key::StoreKey};
 use std::{cmp::Ordering, ops::Bound};
 
 type Bounds = (Bound<StoreKey>, Bound<StoreKey>);
@@ -65,15 +65,36 @@ fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Opti
     Ok((prefix_len + operand.len() <= crate::MAX_INDEX_KEY_BYTES).then_some(operand))
 }
 
-// Both path ranking and key-only counting require an encodable bound on
-// the first varying field. Callers separately establish mandatory clauses.
-pub(super) fn bounds_secondary_field(
-    field: &str,
-    next: Option<&str>,
+// A non-unique index stores the owner key immediately after all declared
+// components. Once they are fixed, owner comparisons bound complete keys.
+fn next_field<'a>(
+    entity: &'a EntitySchema,
+    index: Option<&'a IndexSchema>,
+    fixed: usize,
+) -> Option<(&'a str, bool)> {
+    if let Some(index) = index {
+        if let Some(field) = index.fields.get(fixed) {
+            return Some((field, true));
+        }
+        if index.unique {
+            return None;
+        }
+    }
+    Some((entity.primary_key, false))
+}
+
+// Both path ranking and key-only counting use the same encodable range proof.
+pub(super) fn bounds_index_term(
+    entity: &EntitySchema,
+    index: &IndexSchema,
+    fixed: usize,
     term: &Term,
     prefix_len: usize,
 ) -> bool {
-    next == Some(field) && matches!(bound_operand(term, true, prefix_len), Ok(Some(_)))
+    next_field(entity, Some(index), fixed).is_some_and(|(name, secondary)| {
+        name == entity.fields[term.position].name
+            && matches!(bound_operand(term, secondary, prefix_len), Ok(Some(_)))
+    })
 }
 
 // Rank only bounds the traversal can actually encode on the next index field.
@@ -82,13 +103,28 @@ pub(super) fn has_secondary_bound(
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
 ) -> bool {
-    let next = path.index.fields.get(path.fixed).copied();
     plan.terms
         .split_inclusive(|term| !term.or_next)
         .any(|clause| {
-            matches!(clause, [term] if bounds_secondary_field(
-                entity.fields[term.position].name, next, term, path.prefix.len()
+            matches!(clause, [term] if bounds_index_term(
+                entity, path.index, path.fixed, term, path.prefix.len()
             ))
+        })
+}
+
+// A secondary candidate must retain every bound the primary scan could seek.
+pub(super) fn preserves_primary_bounds(
+    entity: &EntitySchema,
+    plan: &Plan<'_>,
+    path: &super::order::IndexPath<'_>,
+) -> bool {
+    plan.terms
+        .split_inclusive(|term| !term.or_next)
+        .all(|clause| {
+            let [term] = clause else { return true };
+            term.position != plan.primary
+                || !matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
+                || bounds_index_term(entity, path.index, path.fixed, term, path.prefix.len())
         })
 }
 
@@ -107,6 +143,12 @@ pub(super) fn bounds(
     request: &Request<'_>,
     plan: &Plan<'_>,
 ) -> Result<Option<Bounds>, Error> {
+    if super::order::literal_equalities(request).any(|(field, value)| {
+        value == crate::IndexValue::Absent
+            && super::order::requires_present_field(entity, request, field)
+    }) {
+        return Ok(None);
+    }
     let mut lower = Endpoint {
         key: StoreKey::new(plan.prefix.clone())?,
         inclusive: true,
@@ -125,12 +167,7 @@ pub(super) fn bounds(
             inclusive: false,
         }
     };
-    let secondary = plan.index.is_some();
-    let field = match plan.index {
-        Some(index) => index.fields.get(plan.fixed_components).copied(),
-        None => Some(entity.primary_key),
-    };
-    if let Some(field) = field {
+    if let Some((field, secondary)) = next_field(entity, plan.index, plan.fixed_components) {
         for clause in plan.terms.split_inclusive(|term| !term.or_next) {
             let [term] = clause else { continue };
             if entity.fields[term.position].name != field {

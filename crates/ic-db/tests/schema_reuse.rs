@@ -79,7 +79,7 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
 
     let key = StableKey::parse(names[0]).unwrap();
     let mut revision_key = vec![1];
-    revision_key.extend(Entry::ID.to_be_bytes());
+    revision_key.extend(Entry::SCHEMA.id.to_be_bytes());
     for failure in 0..4 {
         let mut raw: StableBTreeMap<Vec<u8>, Vec<u8>, _> =
             StableBTreeMap::load(runtime.open_memory(&key).unwrap());

@@ -757,7 +757,7 @@ fn malformed_blob_index_components_refuse_without_mutation() {
         .find(|i| i.name == "payload,id")
         .unwrap();
     let mut prefix = vec![3];
-    prefix.extend(Binary::ID.to_be_bytes());
+    prefix.extend(Binary::SCHEMA.id.to_be_bytes());
     prefix.extend(index.id.to_be_bytes());
     // Literal bytes, independent of the product encoder: payload, id component, owner.
     let mut valid = prefix.clone();

@@ -197,14 +197,18 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn keyset_listing(after: Option<u64>) -> (Vec<Row>, u64) {
+fn keyset_listing((after, category, hinted): (Option<u64>, u64, bool)) -> (Vec<Row>, u64) {
     measure(|| {
         let db = database();
-        let mut query = db
-            .query::<Entry>()
-            .filter("category", ic_db::Comparison::Eq, 1_u64)
+        let prefix = [category.into()];
+        let query = db.query::<Entry>();
+        let query = if hinted {
+            query.using_index("category,id", &prefix)
+        } else {
+            query.eq("category", category)
+        };
+        let mut query = query
             .filter("amount", ic_db::Comparison::Ge, 10_u64)
-            .order_by(&["id"])
             .limit(2)
             .work_limit(512);
         if let Some(id) = after {

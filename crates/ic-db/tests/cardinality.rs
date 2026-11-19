@@ -129,7 +129,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
             h.open_memory(&key("test.source.v1")).unwrap(),
         );
         let mut k = vec![1];
-        k.extend(Row::ID.to_be_bytes());
+        k.extend(Row::SCHEMA.id.to_be_bytes());
         match case {
             0 => {
                 raw.remove(&k);
@@ -196,7 +196,7 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     manifest[..8].copy_from_slice(b"ICDBMF02");
     raw.insert(vec![0], manifest);
     let mut row = vec![2];
-    row.extend(Row::ID.to_be_bytes());
+    row.extend(Row::SCHEMA.id.to_be_bytes());
     row.extend(1_u64.to_be_bytes());
     raw.insert(row, vec![0]);
     drop(raw);
@@ -273,7 +273,7 @@ fn copy_counts(corrupt_target: bool) {
             h.open_memory(&key("test.target.v1")).unwrap(),
         );
         let mut k = vec![1];
-        k.extend(Wide::ID.to_be_bytes());
+        k.extend(Wide::SCHEMA.id.to_be_bytes());
         let mut value = raw.get(&k).unwrap();
         value[8..].copy_from_slice(&2_u64.to_le_bytes());
         raw.insert(k, value);

@@ -735,14 +735,38 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and storage errors as `fetch`. Returns `Limit`
     /// if the work budget ends before a match or exhaustion is established.
     pub fn first(self) -> Result<Option<E>, Error> {
-        if !(1..=32).contains(&self.request.rows) {
-            return Err(Error::Limit);
-        }
-        let mut page = self.limit(1).fetch()?;
+        let mut page = self.probe_matches(1)?;
         match page.rows.pop() {
             None if page.next.is_some() => Err(Error::Limit),
             result => Ok(result),
         }
+    }
+
+    /// Return the only match, or `None` when the query is exhausted without one.
+    /// A valid row limit is overridden to probe for two matches. Applies to the
+    /// whole query, so a continuation is refused.
+    /// # Errors
+    /// Returns `MultipleMatches` on a second match and `Limit` if the page is
+    /// incomplete before cardinality is known. Ordinary fetch errors apply.
+    pub fn try_one(self) -> Result<Option<E>, Error> {
+        if self.request.cursor.is_some() {
+            return Err(Error::InvalidQuery);
+        }
+        let mut page = self.probe_matches(2)?;
+        if page.rows.len() == 2 {
+            return Err(Error::MultipleMatches);
+        }
+        if page.next.is_some() {
+            return Err(Error::Limit);
+        }
+        Ok(page.rows.pop())
+    }
+
+    fn probe_matches(self, rows: usize) -> Result<QueryPage<E>, Error> {
+        if !(1..=32).contains(&self.request.rows) {
+            return Err(Error::Limit);
+        }
+        self.limit(rows).fetch()
     }
 
     /// Project matching top-level fields into an existing `#[record]` type.

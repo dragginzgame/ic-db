@@ -8,16 +8,16 @@ ic_db::build_schema!(src::schema);
 #[test]
 fn constructors_collect_full_paths_and_compiler_resolved_references() {
     assert_eq!(
-        source::Link::PATH,
+        source::Link::declaration_path(),
         concat!(module_path!(), "::src::schema::source::Link")
     );
     assert_eq!(
         source::Link::SCHEMA.fields[1].reference.unwrap().entity,
-        destination::Target::ID
+        destination::Target::SCHEMA.id
     );
     assert_eq!(
         cycle::Link::SCHEMA.fields[1].reference.unwrap().entity,
-        cycle::Link::ID
+        cycle::Link::SCHEMA.id
     );
     let output =
         ic_db::build::generate(concat!(module_path!(), "::src::schema"), "crate::schema").unwrap();

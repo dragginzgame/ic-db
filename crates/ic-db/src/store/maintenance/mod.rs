@@ -204,7 +204,7 @@ impl<M: Memory> Maintenance<M> {
             return Err(Error::IncompatibleSchema);
         }
         source.admits(E::SCHEMA)?;
-        let revision = read_revision(&self.map, E::ID)?;
+        let revision = read_revision(&self.map, E::SCHEMA.id)?;
         let mut hash = Sha256::new();
         hash.update(b"ic-db:maintenance-source:v1\0");
         hash.update(self.transition.freeze(self.incarnation)?);

@@ -297,7 +297,7 @@ fn uniqueness_reopen_and_key_integrity() {
         .find(|i| i.name == "zone,value,id")
         .unwrap();
     let mut prefix = vec![3];
-    prefix.extend(DecimalRow::ID.to_be_bytes());
+    prefix.extend(DecimalRow::SCHEMA.id.to_be_bytes());
     prefix.extend(index.id.to_be_bytes());
     prefix.push(1);
     let mut original = prefix.clone();
@@ -368,7 +368,7 @@ fn collections_and_unindexed_scale_are_checked() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
-    key.extend(Collections::ID.to_be_bytes());
+    key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
     let mut corrupt = bytes;
     corrupt[28] = 1;

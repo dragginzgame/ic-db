@@ -30,7 +30,7 @@ fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
         .entities()
         .iter()
         .map(|entity| {
-            if entity.id == EntryV2::ID {
+            if entity.id == EntryV2::SCHEMA.id {
                 EntryV2::SCHEMA
             } else {
                 *entity

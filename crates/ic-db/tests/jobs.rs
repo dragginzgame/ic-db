@@ -1119,11 +1119,12 @@ fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
 #[test]
 fn sparse_index_work_and_source_bytes_bound_progress_independently() {
     let host = host(VectorMemory::default());
-    let (db, mut jobs) = create(&host, &vec![Some(1); 64], 3500);
+    let amounts = std::array::from_fn::<_, 64, _>(|id| Some(id as i128));
+    let (db, mut jobs) = create(&host, &amounts, 3500);
     let query = || {
         db.query::<Row>()
             .using_index("flag", &[0_u8.into()])
-            .filter("id", Comparison::Ge, 60_u64)
+            .filter("amount", Comparison::Ge, 60_i128)
     };
     let handle = query().start_count(&mut jobs, time(0), time(100)).unwrap();
     let mut sequence = 0;
@@ -2460,11 +2461,12 @@ fn grouped_jobs_handle_empty_sparse_and_corrupt_checkpoints() {
     use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let host = host(backing.clone());
-    let (db, mut jobs) = create(&host, &[Some(1); 8], 0);
+    let amounts = std::array::from_fn::<_, 8, _>(|id| Some(id as i128));
+    let (db, mut jobs) = create(&host, &amounts, 0);
     let query = || {
         db.query::<Row>()
             .using_index("flag", &[0_u8.into()])
-            .filter("id", Comparison::Ge, 6_u64)
+            .filter("amount", Comparison::Ge, 6_i128)
     };
     let handle = query()
         .start_group_count::<Flag>(&mut jobs, time(0), time(100))
