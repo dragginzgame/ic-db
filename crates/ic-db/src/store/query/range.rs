@@ -180,11 +180,21 @@ pub(super) fn bounds(
     request: &Request<'_>,
     plan: &Plan<'_>,
 ) -> Result<Option<Bounds>, Error> {
-    if super::order::literal_equalities(request).any(|(field, value)| {
-        value == crate::IndexValue::Absent
-            && super::order::requires_present_field(entity, request, field)
-    }) {
-        return Ok(None);
+    let mut equalities = super::order::literal_equalities(request);
+    while let Some((field, value)) = equalities.next() {
+        let prefix_value = request
+            .index
+            .as_ref()
+            .and_then(|(_, values)| super::order::prefix_value(plan.index?, values, field));
+        if prefix_value.is_some_and(|fixed| fixed != value)
+            || equalities
+                .clone()
+                .any(|(other, operand)| other == field && operand != value)
+            || (value == crate::IndexValue::Absent
+                && super::order::requires_present_field(entity, request, field))
+        {
+            return Ok(None);
+        }
     }
     let mut lower = Endpoint {
         key: StoreKey::new(plan.prefix.clone())?,

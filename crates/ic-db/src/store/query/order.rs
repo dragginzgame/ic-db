@@ -176,17 +176,17 @@ fn unique_lookup<'a>(
     Ok(None)
 }
 
-// A fixed component implies an equality only when its selected value agrees.
-fn fixed_equality(
-    predicate: &Predicate<'_>,
+// Only supplied prefix components have a fixed value.
+pub(super) fn prefix_value<'a>(
     index: &IndexSchema,
-    values: &[IndexValue<'_>],
-) -> bool {
-    predicate.comparison == Comparison::Eq
-        && index.fields.iter().zip(values).any(|(name, value)| {
-            *name == predicate.field
-                && matches!(predicate.operand, QueryOperand::Literal(v) if v == *value)
-        })
+    values: &[IndexValue<'a>],
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    index
+        .fields
+        .iter()
+        .zip(values)
+        .find_map(|(name, value)| (*name == field).then_some(*value))
 }
 
 /// Select the aggregate input path and report whether its keys prove every predicate.
@@ -251,8 +251,10 @@ fn covers_index(
     prefix_len: usize,
 ) -> bool {
     request.predicates.iter().zip(&plan.terms).all(|(p, term)| {
+        let fixed_equality = p.comparison == Comparison::Eq
+            && matches!(p.operand, QueryOperand::Literal(v) if prefix_value(index, values, p.field) == Some(v));
         !p.or_next
-            && (fixed_equality(p, index, values)
+            && (fixed_equality
                 || super::range::bounds_index_term(entity, index, values.len(), term, prefix_len))
     })
 }
@@ -385,7 +387,7 @@ fn satisfies(
 // must not restrict an index prefix or prove that an ordering field is constant.
 pub(super) fn literal_equalities<'r, 'a>(
     request: &'r Request<'a>,
-) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
+) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + Clone + 'r {
     request.clauses().filter_map(|clause| {
         if let [predicate] = clause
             && predicate.comparison == Comparison::Eq

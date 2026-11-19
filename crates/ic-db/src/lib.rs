@@ -48,6 +48,7 @@ mod key;
 mod managed;
 mod primary;
 mod schema;
+mod session;
 mod store;
 mod store_key;
 mod time;
@@ -85,6 +86,7 @@ pub use ulid::{
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
+pub use session::DatabaseSession;
 pub use store::{
     Aggregate, Batch, Comparison, CopyStep, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage,
@@ -117,6 +119,8 @@ pub use store_key::MAX_INDEX_KEY_BYTES;
 /// Failure before commit begins, or a refusal to admit stored data.
 #[derive(Debug)]
 pub enum Error {
+    /// A session operation conflicts with an active borrow of the attached database.
+    BorrowConflict,
     /// Ordinary access is closed by an admitted durable maintenance gate.
     Maintenance,
     /// A maintenance identity is invalid or does not match this source/active transition.

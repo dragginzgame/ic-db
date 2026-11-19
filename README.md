@@ -885,6 +885,26 @@ later. For a real executable declaration and write/reopen journey, see
 [the CLI fixture](qualification/ic-db-m1-records-canister/src/lib.rs).
 Run `make m1-records` for their focused native and Wasm checks.
 
+## Share an attached database across helpers
+
+The host creates or opens the database once, wraps it in `DatabaseSession::new(db)`,
+and supplies a clone through its application accessor. For example, with a
+host-provided `session()` and a friendship entity indexed by owner and peer:
+
+```rust
+fn find(owner: u64, peer: u64) -> Result<Option<Friendship>, ic_db::Error> {
+    session().read()?.query::<Friendship>()
+        .eq(Friendship::OWNER, owner)
+        .eq(Friendship::PEER, peer)
+        .try_one()
+}
+```
+
+The returned row is owned. An outer helper can hold a session across this call
+and then call `outer.commit(batch)?`. If you bind a read guard to a variable,
+drop it before committing. Keep handles within one synchronous execution and
+reacquire from the host after an `await`. [Native fixture example](crates/ic-db/tests/sessions.rs)
+
 ## Test an application database on the host
 
 Enable the `test-support` feature on the application’s `ic-db` dev-dependency.

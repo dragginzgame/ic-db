@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.17] - Unreleased
+
+- Hosts can hand nested helpers a clone of `DatabaseSession` over one attachment.
+  Typed lookups return owned rows, fluent queries use a read guard, and batch commits
+  report a borrow conflict before mutation if that guard is still live. [#10](https://github.com/dragginzgame/ic-db/issues/10)
+
+- A query that requires two different values for the same field now finishes with
+  zero candidate visits. This also applies when an equality filter contradicts an
+  explicit index prefix. Invalid filters still return an admission error.
+
 ## [0.23.16] - 2026-11-19
 
 - IC DB’s qualification fixtures and local CLI use IC Wire 0.26.0. Calls to the

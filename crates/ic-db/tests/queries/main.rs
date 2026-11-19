@@ -4062,6 +4062,37 @@ fn automatic_order_matches_a_full_sort_with_ties_and_sparse_pages() {
 }
 
 #[test]
+fn conflicting_mandatory_equalities_finish_without_visiting_candidates() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 10);
+    for (left, right) in [(0_u8, 1_u8), (1, 0)] {
+        let query = || {
+            db.query::<Entry>()
+                .eq(Entry::CATEGORY, left)
+                .eq(Entry::CATEGORY, right)
+                .work_limit(1)
+        };
+        let page = query().fetch().unwrap();
+        assert!(page.rows.is_empty() && page.next.is_none());
+        assert_eq!(page.examined, 0);
+        let count = query().count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
+        assert!(matches!(
+            query().eq("unknown", 1_u64).fetch(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+    let count = db
+        .query::<Entry>()
+        .eq(Entry::CATEGORY, 1_u8)
+        .filter_in(Entry::CATEGORY, &[0_u8, 1])
+        .eq(Entry::CATEGORY, 1_u8)
+        .count()
+        .unwrap();
+    assert_eq!(count.value, 4);
+}
+
+#[test]
 fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -5000,7 +5031,7 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
         .fetch_as::<AmountOnly>()
         .unwrap();
     assert!(empty.rows.is_empty());
-    assert_eq!(empty.examined, 4);
+    assert_eq!(empty.examined, 0);
     // With a varying predicate, the first row of a class may fail and a later
     // duplicate may match. A one-candidate cursor cannot carry that distinction.
     assert!(matches!(
@@ -8122,11 +8153,17 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         .count()
         .unwrap();
     assert_eq!((implicit.value, implicit.fetched), (4, 0));
+    // A contradictory filter visits no owner, even when the index has a dangling entry.
+    let empty = db
+        .query::<Entry>()
+        .eq(Entry::CATEGORY, 0_u8)
+        .eq(Entry::CATEGORY, 1_u8)
+        .count()
+        .unwrap();
+    assert_eq!((empty.value, empty.examined, empty.fetched), (0, 0, 0));
+    // A residual on a different field still requires the missing owner.
     assert!(matches!(
-        db.query::<Entry>()
-            .filter("category", C::Eq, 0_u8)
-            .filter("category", C::Eq, 1_u8)
-            .count(),
+        query().filter(Entry::AMOUNT, C::Gt, 0_u64).count(),
         Err(Error::Corrupt)
     ));
 }

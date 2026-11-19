@@ -9,7 +9,15 @@ and local operation; it does not establish remote application support.
 The 0.22.1 native CLI adds Canic application inspection; section 9 separates
 its checked inspection/listing scope from broader application qualification.
 The changelog and Git tags record releases.
-Application helpers take `&Database` or `&mut Database`. Database, fluent query,
+Application helpers can borrow a database directly or independently obtain a
+`DatabaseSession` clone from their host. One attachment owns the storage lease.
+A typed lookup returns an owned entity. A fluent builder borrows a read guard,
+and a batch takes exclusive access only for the commit. A conflicting borrow
+returns `BorrowConflict` before mutation. The last handle can return the database
+to the host for maintenance. Frozen IcyDB `6d421e3` shared a store and request
+root across sessions in `icydb-core/src/db/session/mod.rs`. IC DB keeps its
+existing per-operation budgets. A host imposing cumulative accounting shares
+one request allowance across helpers; it owns the request boundary and accessor. Database, fluent query,
 maintenance and aggregate-job handles use IC Storage's target-default backing.
 This follows the concrete backing used in frozen IcyDB `6d421e3`,
 `db/schema/control_store/mod.rs`. Hosts still select named allocations at open.
@@ -2829,7 +2837,14 @@ same bounded complete sorter; explicit paths refuse. Existing all-ascending
 orders retain their cursor identity. Other direction lists add a bounded signature
 suffix; changing directions cannot reuse a live cursor.
 
-Selection first admits all predicates, including contradictions. A mandatory
+Selection first admits all predicates, including contradictions. Two mandatory
+literal equalities that require different values of one field prove empty input.
+The same proof applies when a mandatory equality disagrees with an explicitly
+fixed index component. Pages finish without a continuation and counts return
+zero with no candidate visits. Unvisited owners receive no integrity check.
+Only singleton equality clauses supply those values. This follows the validation
+precedence in frozen IcyDB `6d421e3`, `db/query/plan/planner/index_select/mod.rs`,
+using the existing bounded conjunction and index prefix. A mandatory
 absent equality produces an empty traversal when another mandatory clause
 requires that field to be present in every alternative. Sparse-index admission
 and this empty-range check share the presence proof. Frozen IcyDB

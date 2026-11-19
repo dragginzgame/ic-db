@@ -308,7 +308,7 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
-    fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> {
+    fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> + Clone {
         self.predicates.split_inclusive(|p| !p.or_next)
     }
 
