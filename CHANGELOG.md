@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.24.1] - Unreleased
+## [0.24.1] - 2026-11-19
 
 - Fixed rust-analyzer marking active entity, store and canister declarations
   as inactive UEFI code with default Cargo settings.
