@@ -58,6 +58,21 @@ impl Decimal {
         self.scale
     }
 }
+// Exact decimal text also round-trips the full i128 domain through JSON.
+impl serde::Serialize for Decimal {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Decimal {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 impl Ord for Decimal {
     fn cmp(&self, other: &Self) -> Ordering {
         // Adapt IcyDB's bounded exact alignment. If multiplication overflows,

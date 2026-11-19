@@ -116,9 +116,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         quote!()
     };
     let visibility = item.vis;
-    let attrs = item.attrs;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     Ok(quote! {
-        #(#attrs)* #copy #[derive(Clone,Debug,PartialEq,Eq)]
+        #attrs #copy #[derive(Clone,Debug,PartialEq,Eq)]
         #visibility enum #ident { #(#declarations,)* }
         #index_value
         impl ::ic_db::Value for #ident {

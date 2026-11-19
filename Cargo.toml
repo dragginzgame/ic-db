@@ -14,7 +14,7 @@ publish = ["crates-io"]
 [workspace.dependencies]
 # Production
 ctor = { version = "1.0.14", default-features = false, features = ["std"] }
-ethnum = { version = "1.5.3", default-features = false }
+ethnum = { version = "1.5.3", default-features = false, features = ["serde"] }
 getrandom = "0.4.3"
 ic-db-macros = { version = "=0.23.18", path = "crates/ic-db-macros" }
 ic-platform-runtime = { version = "0.23.20", default-features = false }
@@ -23,13 +23,14 @@ ic-storage = "0.78.0"
 memchr = { version = "2.8.3", default-features = false }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
+serde = { version = "1.0.229", features = ["derive"] }
 sha2 = { version = "0.11.1", default-features = false }
 syn = "3.0.10"
 # IC DB owns generation policy; ulid's std feature enables native rand.
 ulid = { version = "3.0.0", default-features = false }
 
 # Tests and tooling
-toko-tooling = "=0.45.19"
+toko-tooling = "=0.45.21"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"
@@ -61,3 +62,4 @@ wildcard_imports = "warn"
 missing_panics_doc = "warn"
 must_use_candidate = "warn"
 too_many_lines = "allow"
+empty_line_after_doc_comments = "allow"

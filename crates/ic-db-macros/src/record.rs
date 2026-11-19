@@ -85,9 +85,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     };
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = item.attrs;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     Ok(quote! {
-        #(#attrs)*
+        #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #ident { #(#[doc="Authored stored field."] pub #ids: #types,)* }
         impl ::ic_db::Value for #ident {

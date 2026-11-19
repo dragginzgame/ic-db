@@ -250,7 +250,7 @@ pub(super) fn select_aggregate_path<'a>(
         }
         let (fixed, width, name) = rank(index, path.fixed);
         let bounded = super::range::has_secondary_bound(entity, plan, &path);
-        if values.is_empty() && !bounded {
+        if values.is_empty() && !bounded && !covered {
             continue;
         }
         let score = (!single_owner, !covered, fixed, !bounded, width, name);
@@ -281,10 +281,14 @@ fn covers_keys(
         .clauses()
         .zip(plan.clauses())
         .all(|(clause, terms)| {
-            let prefix_proves_clause = clause
-                .iter()
-                .any(|p| fixed_comparison(p, prefix_value(fields, values, p.field)) == Some(true));
-            prefix_proves_clause
+            let key_proves_clause = clause.iter().any(|p| {
+                // Every entry in an admitted sparse path has all its components.
+                (matches!(p.operand, QueryOperand::Literal(IndexValue::Absent))
+                    && p.comparison == Comparison::Ne
+                    && index.is_some_and(|i| i.present_only && i.fields.contains(&p.field)))
+                    || fixed_comparison(p, prefix_value(fields, values, p.field)) == Some(true)
+            });
+            key_proves_clause
                 || match terms {
                     [term] => {
                         super::range::bounds_key_term(entity, index, values.len(), term, prefix_len)
@@ -447,6 +451,35 @@ fn fixed_comparison(predicate: &Predicate<'_>, fixed: Option<IndexValue<'_>>) ->
     }
 }
 
+// An explicit prefix takes precedence over a requested equality on the same field.
+fn constrained_value<'a>(
+    request: &Request<'a>,
+    index: Option<&IndexSchema>,
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    request
+        .index
+        .as_ref()
+        .zip(index)
+        .and_then(|((_, values), index)| prefix_value(index.fields, values, field))
+        .or_else(|| equality(request, field))
+}
+
+pub(super) fn prefix_proves_clause(
+    request: &Request<'_>,
+    plan: &super::Plan<'_>,
+    clause: &[Predicate<'_>],
+) -> bool {
+    let Some(index) = plan.index else {
+        return false;
+    };
+    let fixed = &index.fields[..plan.fixed_components];
+    clause.iter().any(|p| {
+        fixed.contains(&p.field)
+            && fixed_comparison(p, constrained_value(request, Some(index), p.field)) == Some(true)
+    })
+}
+
 // A mandatory clause is impossible only if every alternative is disproved.
 pub(super) fn has_conflicting_predicates(
     entity: &EntitySchema,
@@ -458,20 +491,24 @@ pub(super) fn has_conflicting_predicates(
     {
         return false;
     }
-    if literal_equalities(request).any(|(field, value)| {
-        value == IndexValue::Absent && requires_present_field(entity, request, field)
-    }) {
+    let prefix = request.index.as_ref().zip(index);
+    let components = prefix
+        .into_iter()
+        .flat_map(|((_, values), index)| index.fields.iter().copied().zip(values.iter().copied()));
+    if components
+        .chain(literal_equalities(request))
+        .any(|(field, value)| {
+            value == IndexValue::Absent && requires_present_field(entity, request, field)
+        })
+    {
         return true;
     }
     request.clauses().any(|clause| {
         clause.iter().all(|predicate| {
-            // Prefer the supplied prefix so a conflicting equality cannot prove itself.
-            let fixed = request
-                .index
-                .as_ref()
-                .and_then(|(_, values)| prefix_value(index?.fields, values, predicate.field))
-                .or_else(|| equality(request, predicate.field));
-            fixed_comparison(predicate, fixed) == Some(false)
+            fixed_comparison(
+                predicate,
+                constrained_value(request, index, predicate.field),
+            ) == Some(false)
         })
     })
 }

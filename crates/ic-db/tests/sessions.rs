@@ -195,7 +195,7 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
     };
     #[record(fields(field(name = "value", value(item(prim = "Nat8")))))]
     struct Payload {}
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
     struct Probe(Payload);
     thread_local! {
         static DURING_ADMISSION: RefCell<Option<DatabaseSession>> = const { RefCell::new(None) };

@@ -284,6 +284,7 @@ pub trait Entity: Sized {
 /// Implementation support for generated code; not a second query frontend.
 #[doc(hidden)]
 pub mod __private {
+    pub use serde;
     /// Independent of the descriptor so references can form cycles.
     pub trait ReferenceTarget {
         /// Schema-authored logical name of the target entity.

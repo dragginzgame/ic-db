@@ -937,6 +937,9 @@ name = "ethnum"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "event-listener"
@@ -1415,6 +1418,7 @@ dependencies = [
  "ic-platform-types 0.21.3",
  "ic-storage 0.78.6",
  "memchr",
+ "serde",
  "sha2 0.11.1",
  "ulid",
 ]
@@ -1542,9 +1546,11 @@ dependencies = [
 name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
+ "ic-db",
  "ic-platform-runtime 0.23.22",
  "ic-wire 0.26.0",
  "serde",
+ "serde_json",
  "toko-tooling",
 ]
 
@@ -3607,9 +3613,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.19"
+version = "0.45.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e43f1a0e1e4c04290daff05316f2ea21bbda86ebe8c1adf70605c6fd018be9e2"
+checksum = "af1ba8e16aaf1dae0951f08a228a4f00b928d09ff68997bd94ccc397ace5e4be"
 
 [[package]]
 name = "toml_datetime"

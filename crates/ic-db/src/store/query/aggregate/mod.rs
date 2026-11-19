@@ -110,7 +110,7 @@ struct Selection {
 pub struct Aggregate<T> {
     /// Completed value over all matching input rows.
     pub value: T,
-    /// Examined primary/index candidates, including residual nonmatches.
+    /// Examined primary/index candidates, including residual nonmatches and missing point probes.
     pub examined: usize,
     /// Fetched and validated source rows.
     pub fetched: usize,
@@ -372,7 +372,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
     /// Uses maintained cardinality for unfiltered input and physical index keys for
     /// fully covered index ranges or primary-key comparison ranges. A partially covered
-    /// equality prefix narrows the owner rows checked by the remaining predicates. Use
+    /// equality prefix narrows the owner rows checked by the remaining predicates.
+    /// Membership counts can probe distinct complete primary or secondary keys
+    /// when the fixed prefix and final component prove every filter and the probes fit. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be established within `work_limit`; an exact-boundary
@@ -396,8 +398,18 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 output_bytes: 8,
             });
         }
+        if plan.index.is_none()
+            && let Some(count) = self.count_members(&plan)?
+        {
+            return Ok(count);
+        }
         if super::order::select_aggregate_path(E::SCHEMA, &self.request, &mut plan)? {
             return self.count_keys(&plan);
+        }
+        if plan.index.is_some()
+            && let Some(count) = self.count_members(&plan)?
+        {
+            return Ok(count);
         }
         let reducer = self.count_reducer(None)?;
         self.scalar_count_value(&plan, reducer)
@@ -431,6 +443,25 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         }
         let plan = self.aggregate_plan(None, false)?;
         self.count_keys(&plan)
+    }
+
+    fn count_members(&self, plan: &Plan<'_>) -> Result<Option<Aggregate<u64>>, Error> {
+        let Some(members) = super::range::point_count_members(E::SCHEMA, plan, &self.request)
+        else {
+            return Ok(None);
+        };
+        let db = self.db.read()?;
+        let mut count = 0;
+        for member in &members {
+            let key = crate::store_key::StoreKey::new([plan.prefix.as_slice(), *member].concat())?;
+            count += u64::from(db.map.contains_key(&key));
+        }
+        Ok(Some(Aggregate {
+            value: count,
+            examined: members.len(),
+            fetched: 0,
+            output_bytes: 8,
+        }))
     }
 
     fn count_keys(&self, plan: &Plan<'_>) -> Result<Aggregate<u64>, Error> {

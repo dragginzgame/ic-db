@@ -1,11 +1,19 @@
 //! Bounded Gregorian date, adapted from frozen IcyDB 6d421e3.
-//! Database codecs own persistence; this value has no clock or transport policy.
+//! Serde carries the bounded day count since the Unix epoch.
 use std::fmt::{self, Debug, Display};
 
 /// A Gregorian calendar date, stored as days since the Unix epoch.
-#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[serde(transparent)]
 #[repr(transparent)]
 pub struct Date(i32);
+
+impl<'de> serde::Deserialize<'de> for Date {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from_days_since_epoch(i32::deserialize(deserializer)?)
+            .ok_or_else(|| serde::de::Error::custom("date outside supported day range"))
+    }
+}
 
 impl Date {
     /// The Unix epoch date, 1970-01-01.

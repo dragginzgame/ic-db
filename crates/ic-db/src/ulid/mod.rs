@@ -45,6 +45,28 @@ impl std::error::Error for UlidEntropyError {}
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Ulid([u8; 16]);
 
+impl serde::Serialize for Ulid {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Ulid {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            String::deserialize(deserializer)?
+                .parse()
+                .map_err(serde::de::Error::custom)
+        } else {
+            <[u8; 16]>::deserialize(deserializer).map(Self::from_bytes)
+        }
+    }
+}
+
 impl Ulid {
     /// Minimum (nil) identifier.
     pub const MIN: Self = Self([0; 16]);

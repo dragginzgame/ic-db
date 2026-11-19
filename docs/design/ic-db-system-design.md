@@ -505,7 +505,13 @@ field-name order so names need not be repeated in each row; keep primary/index k
 encoding separate because payload byte order does not establish index ordering.
 A field rename still changes schema identity. Database admission enforces field
 and whole-row bounds; codec changes require an explicit contract version and
-supported transition. Transport adapters convert only at their own boundary.
+supported transition. Public schema values also implement Serde for endpoints
+and other application formats. This representation is independent of storage
+admission. For example, a timestamp carries signed milliseconds to a serializer
+while the row encoder writes eight little-endian bytes. ULID follows frozen
+IcyDB `6d421e3`, `icydb-schema/src/atom/mod.rs`, for human-readable text and
+uses a fixed binary array to match Toko’s existing endpoint adapter. Serde
+decoding enforces intrinsic scalar invariants. Writes enforce field and row bounds.
 
 The earlier fixed three-field Wire candidate probe checks literal bytes, absent/empty distinction,
 integer extremes, UTF-8 byte bounds, schema-before-payload admission, truncation,
@@ -2857,8 +2863,8 @@ proof. If no alternative is proven true and one is unknown, the clause remains
 a row predicate. Only explicit
 prefix components and singleton literal equalities establish fixed values. This follows the validation
 precedence in frozen IcyDB `6d421e3`, `db/query/plan/planner/index_select/mod.rs`,
-using the existing bounded conjunction and index prefix. A mandatory
-absent equality produces an empty traversal when another mandatory clause
+using the existing bounded conjunction and index prefix. An absent component
+in an explicit index prefix or a mandatory absent equality produces an empty traversal when another mandatory clause
 requires that field to be present in every alternative. Sparse-index admission
 and this empty-range check share the presence proof. Frozen IcyDB
 `6d421e3`, `db/query/plan/planner/predicate/mod.rs`, likewise uses empty
@@ -2892,7 +2898,11 @@ An OR containing an absent member or a different field cannot prove presence.
 When the next indexed component is optional, `filter_present` seeks to the
 present tag. The range includes present empty values and fully covers this
 filter for counting. Inequality against a present literal can still match
-absent rows. Each component of a compound sparse index is checked independently. This adapts
+absent rows. Each component of a compound sparse index is checked independently.
+Once the planner proves that the index contains every possible match, each entry
+proves presence for every indexed component, regardless of its position.
+A count can therefore scan just those keys within its work budget. Predicates
+on other fields still need their own proof or an owner read. This adapts
 IcyDB `6d421e3`'s nullable-guard lessons from
 `db/query/plan/planner/index_select` and its implication regression tests to the
 existing flat eight-comparison contract. It adds no recursive implication engine,
@@ -2963,11 +2973,29 @@ even when the caller omits `order_by`.
 After equality fixes every declared component of a non-unique index, the next
 bytes encode the owner primary key. A comparison on that ID tightens the
 physical range, including strict last-ID boundaries in either direction.
-A fully covered count can count those keys directly. A synchronous aggregate
+A fully covered count can count those keys directly. With a fixed non-unique
+index prefix covering all declared fields, an ID membership list supplies the
+remaining owner suffix. The existing point-count path probes each distinct
+complete key within budget, including misses for IDs under other prefixes. A synchronous aggregate
 with additional row predicates can still use the prefix when it preserves every usable primary-key bound.
 An individual ID alternative supplies no independent bound; an all-ID literal equality clause can bound the interval as a whole. The scanner checks remaining predicates on each visited owner.
-A unique index has
-no owner suffix. Frozen IcyDB `6d421e3` also relies on primary-key suffix
+For synchronous `count()` with a required OR of primary-key literal equalities and
+no explicit index, the planner collects distinct candidate keys. Other clauses
+of primary-key literal comparisons intersect this set using the row evaluator’s
+comparison rules. Each surviving key costs one probe, including misses.
+Sets exceeding the budget fall back to bounded traversal. A predicate involving
+another field still requires ordinary planning. Frozen IcyDB `6d421e3` also
+deduplicates membership inputs in `db/query/plan/planner/compare/mod.rs` and
+tests intersection of borrowed keys in `db/query/plan/planner/predicate/child_tests.rs`. IC DB retains all authored terms for admission
+and leaves validated counts on the owner-reading path.
+A unique index has no owner suffix. Membership on its last unfixed component
+can reuse the point probes when every preceding component is fixed by a mandatory
+equality or by an explicit prefix. Each other clause must be proven by that
+selected prefix or evaluated against the candidate value of the last field. Each
+probe then addresses one complete physical key. Sparse-index admission still
+has to prove that every matching row belongs to the selected index. Once that
+proof holds, absence in a membership list has no physical entry to probe.
+Without a proof of presence, the query must still count matching absent rows. Frozen IcyDB `6d421e3` also relies on primary-key suffix
 order for fixed secondary prefixes in `db/query/plan/planner/predicate/mod.rs`.
 
 **Bounded complete sorting (0.18).** If automatic path selection cannot supply

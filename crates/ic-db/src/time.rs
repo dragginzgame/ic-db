@@ -1,5 +1,5 @@
 //! Millisecond value semantics adapted from frozen IcyDB 6d421e3.
-//! No clock, managed-field policy or transport serialization.
+//! Serde carries the underlying millisecond counts.
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -10,7 +10,20 @@ use crate::Date;
 
 /// Nonnegative millisecond duration. Constructors from larger units and arithmetic
 /// operators saturate; text parsing refuses overflow. No clock or timer is owned.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
 #[repr(transparent)]
 pub struct Duration(u64);
 
@@ -224,7 +237,20 @@ impl SubAssign for Duration {
 /// Signed Unix-millisecond timestamp, including instants before 1970.
 /// Sub-millisecond conversions floor; arithmetic operators saturate only after
 /// the complete wide operation. This value never reads the clock.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
 #[repr(transparent)]
 pub struct Timestamp(i64);
 

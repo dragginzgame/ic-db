@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.23.19] - Unreleased
+
+- Adopt Toko Tooling 0.45.21 in both workspaces and apply its shared Clippy policy.
+
+- Schema scalars, including `Ulid` and `U256`, and macro-authored entities,
+  records, enums, lists, sets, maps and newtypes support Serde by default.
+  Canic endpoints can take a bare `Ulid`. Its Wire payload matches the
+  existing fixed 16-byte array, and its JSON form is canonical ULID text.
+
+- `filter_in` on the primary key followed by `.count()` can probe each
+  distinct requested ID directly. Additional literal ID filters narrow the set
+  before any probes, including intersecting multiple membership lists. A miss
+  costs one probe. When the probes
+  exceed the work budget, the existing bounded range scan still applies.
+
+- Membership on the last component of a selected unique index can use the same
+  probes. For a compound unique index on `(tenant, code)`, an equality on
+  `tenant` and `filter_in` on `code` can select that path automatically.
+  On a non-unique index, fixing all indexed fields also lets `.count()` probe
+  requested owner IDs directly. IDs belonging to another prefix count as misses.
+  On a sparse unique index, `filter_in` may include `None` alongside present
+  values. If another filter requires presence, only the distinct present values
+  cost probes.
+
+- `.count()` can use a compound `present_only` index when its membership
+  proves the presence filters, including on trailing fields. The usual scan
+  budget applies, and `.count_validated()` still checks owner rows.
+- A query that fixes an index component to absent and requires it to be present
+  now finishes with zero candidate visits, including for length and field comparisons.
+
 ## [0.23.18] - 2026-11-19
 
 - Start a fluent query with `session.query::<User>()`. It sees data at

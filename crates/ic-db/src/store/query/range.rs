@@ -153,6 +153,65 @@ fn membership_interval<'a>(
     Some((low, high))
 }
 
+// Membership on the last component of a physical key supplies all possible keys. Other
+// key-only clauses can narrow that set before we spend any storage probes.
+pub(super) fn point_count_members<'a>(
+    entity: &EntitySchema,
+    plan: &'a Plan<'_>,
+    request: &Request<'_>,
+) -> Option<Vec<&'a [u8]>> {
+    if plan.terms.len() < 2 {
+        return None;
+    }
+    let position = match plan.index {
+        None => plan.primary,
+        Some(index) if index.is_unique_lookup(plan.fixed_components + 1) => {
+            entity.field_position(index.fields[plan.fixed_components])?
+        }
+        // Non-unique indexes append the owner ID after all declared components.
+        Some(index) if !index.unique && plan.fixed_components == index.fields.len() => plan.primary,
+        Some(_) => return None,
+    };
+    let optional = entity.fields[position].optional;
+    let (seed_index, seed) = plan.clauses().enumerate().find(|(_, clause)| {
+        clause.len() > 1
+            && clause.iter().all(|term| {
+                term.position == position
+                    && term.comparison == Comparison::Eq
+                    && matches!(term.operand, TermOperand::Literal { .. })
+            })
+    })?;
+    let mut members = Vec::new();
+    for term in seed {
+        if matches!(term.operand, TermOperand::Literal { absent: true, .. }) {
+            // An admitted present-only index has no physical key for absence.
+            plan.index.filter(|index| index.present_only)?;
+            continue;
+        }
+        let key = bound_operand(term, false, plan.prefix.len()).ok()??;
+        if !members.contains(&key) {
+            members.push(key);
+        }
+    }
+    for (i, (clause, predicates)) in plan.clauses().zip(request.clauses()).enumerate() {
+        if i == seed_index || super::order::prefix_proves_clause(request, plan, predicates) {
+            continue;
+        }
+        if !clause.iter().all(|term| {
+            term.position == position && matches!(term.operand, TermOperand::Literal { .. })
+        }) {
+            return None;
+        }
+        members.retain(|key| {
+            clause.iter().any(|term| {
+                matches!(&term.operand, TermOperand::Literal { bytes, absent }
+                if term.comparison.accepts(Some(key), (!absent).then_some(bytes.as_slice()), optional))
+            })
+        });
+    }
+    (members.len() <= request.work).then_some(members)
+}
+
 // A secondary candidate must retain every bound the primary scan could seek.
 pub(super) fn preserves_primary_bounds(
     entity: &EntitySchema,

@@ -835,6 +835,14 @@ Their canonical variant-name order agrees with secondary indexes. Stored duplica
 reversed or invalid variants refuse before collection construction. Inspect
 `db schema EnumCollectionsRow` for an example. Payload-enum/nested/collection
 indexes, nested references and other named collection keys/elements remain work.
+Schema values implement Serde by default. Endpoint arguments can use a bare
+`ic_db::Ulid` (fixed 16-byte array in binary formats, canonical text in JSON).
+Dates use signed epoch days, timestamps and durations use integer milliseconds,
+decimals use exact decimal strings, and `U256` uses ethnum’s hex quantity string.
+Floating-point inputs must be finite. Schema macros supply Serde for the
+declared Rust values, including nested records and collections. Writes still
+apply the declared database bounds.
+
 IC DB owns its durable row codec and has no IC Wire dependency. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a

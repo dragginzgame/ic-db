@@ -57,7 +57,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     let write = field.encode_with(&quote!(&self.0));
     let read = field.read_result();
     let vis = item.vis;
-    let attrs = item.attrs;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     let order = (!many).then(|| quote!(#[derive(PartialOrd, Ord)]));
     let operand = if many {
         None
@@ -74,7 +74,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
         })
     };
     Ok(quote! {
-        #(#attrs)*
+        #attrs
         #order
         #[derive(Clone, Debug, PartialEq, Eq)]
         #vis struct #ident(#[doc="Wrapped value."] pub #ty);

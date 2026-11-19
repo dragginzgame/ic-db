@@ -122,6 +122,34 @@ struct Index {
     present_only: bool,
 }
 
+// Supply Serde through ic-db even in schema crates without a direct serde dependency.
+fn schema_attrs(attrs: &[syn::Attribute]) -> syn::Result<Tokens> {
+    let mut serialize = true;
+    let mut deserialize = true;
+    let mut supply_crate = true;
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            for path in
+                attr.parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)?
+            {
+                if let Some(name) = path.segments.last() {
+                    serialize &= name.ident != "Serialize";
+                    deserialize &= name.ident != "Deserialize";
+                }
+            }
+        } else if attr.path().is_ident("serde") {
+            supply_crate &= !meta_items(&attr.meta)?
+                .iter()
+                .any(|m| m.path().is_ident("crate"));
+        }
+    }
+    let ser = serialize.then(|| quote!(#[derive(::ic_db::__private::serde::Serialize)]));
+    let de = deserialize.then(|| quote!(#[derive(::ic_db::__private::serde::Deserialize)]));
+    let path = (supply_crate && (serialize || deserialize))
+        .then(|| quote!(#[serde(crate = "::ic_db::__private::serde")]));
+    Ok(quote!(#ser #de #(#attrs)* #path))
+}
+
 fn metas(tokens: Tokens) -> syn::Result<Vec<Meta>> {
     Ok(Punctuated::<Meta, Token![,]>::parse_terminated
         .parse2(tokens)?
@@ -401,7 +429,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     }
     let lookup_keys = unique_keys.declarations;
     let name = &item.ident;
-    let attrs = &item.attrs;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     let visibility = &item.vis;
     let mut ordered: Vec<_> = authored.iter().collect();
     ordered.sort_by_key(|field| &field.name);
@@ -480,7 +508,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     Ok(quote! {
         #insert_input
         #(#lookup_keys)*
-        #(#attrs)*
+        #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
         impl #name { #(#field_constants)* }

@@ -845,6 +845,50 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
 }
 
 #[test]
+fn absent_index_prefix_checks_presence_before_scanning() {
+    let runtime = host(VectorMemory::default());
+    let (db, input) = text_rows(&runtime);
+    let absent = || {
+        db.query::<TextRow>()
+            .using_index("text,id", &[IndexValue::Absent])
+    };
+    for impossible in [
+        absent().filter_length(TextRow::TEXT, C::Eq, 0),
+        absent().filter_fields(TextRow::REQUIRED, C::Eq, TextRow::TEXT),
+        absent().filter_any(&[
+            (TextRow::TEXT, C::StartsWith, "".into()),
+            (TextRow::TEXT, C::Lt, "z".into()),
+        ]),
+    ] {
+        let count = impossible.work_limit(1).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
+    }
+    let allowed = absent()
+        .filter_any(&[
+            (TextRow::TEXT, C::StartsWith, "".into()),
+            (TextRow::ID, C::Eq, 0_u64.into()),
+        ])
+        .fetch()
+        .unwrap();
+    assert_eq!(allowed.rows, [input[0].clone()]);
+    assert_eq!(
+        absent()
+            .filter_length(TextRow::TEXT, C::Ne, 0)
+            .count()
+            .unwrap()
+            .value,
+        input.iter().filter(|row| row.text.is_none()).count() as u64
+    );
+    assert!(matches!(
+        absent()
+            .filter_present(TextRow::TEXT)
+            .eq("unknown", 1_u8)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_values() {
     let runtime = host(VectorMemory::default());
     let (db, input) = text_rows(&runtime);
@@ -2256,7 +2300,28 @@ fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
     assert_eq!((page.examined, page.fetched), (3, 3));
     assert!(page.next.is_none());
     let count = query().count().unwrap();
-    assert_eq!((count.value, count.examined), (2, 3));
+    assert_eq!((count.value, count.examined, count.fetched), (2, 2, 0));
+    let sparse = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[8_u64, 1, 99, 1])
+        .work_limit(3)
+        .count()
+        .unwrap();
+    assert_eq!((sparse.value, sparse.examined, sparse.fetched), (2, 3, 0));
+    // If the probes cannot fit, the original bounded interval may still prove a miss.
+    let missing = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[90_u64, 99])
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!((missing.value, missing.examined), (0, 0));
+    assert!(matches!(query().work_limit(1).count(), Err(Error::Limit)));
+    let checked = query().count_validated().unwrap();
+    assert_eq!(
+        (checked.value, checked.examined, checked.fetched),
+        (2, 3, 3)
+    );
     let first = query().descending().limit(1).fetch().unwrap();
     assert_eq!(ids(&first.rows), [8]);
     let rest = query()
@@ -2273,8 +2338,18 @@ fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
         .unwrap();
     assert_eq!(
         (indexed.value, indexed.examined, indexed.fetched),
-        (2, 2, 2)
+        (2, 2, 0)
     );
+
+    // ID 7 exists in the other category, and ID 99 has no owner.
+    let sparse = || {
+        db.query::<Entry>()
+            .eq(Entry::CATEGORY, 0_u8)
+            .filter_in(Entry::ID, &[2_u64, 7, 99, 2])
+    };
+    let count = sparse().work_limit(3).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 3, 0));
+    assert_eq!(sparse().count_validated().unwrap().value, count.value);
 
     let mixed = db
         .query::<Entry>()
@@ -2285,6 +2360,141 @@ fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
         .fetch()
         .unwrap();
     assert_eq!(ids(&mixed.rows), [2, 8]);
+}
+
+#[test]
+fn primary_membership_counts_intersect_before_spending_the_probe_budget() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let left = [8_u64, 2, 4, 99];
+    let right = [7_u64, 2, 99];
+    for (first, second) in [(&left[..], &right[..]), (&right[..], &left[..])] {
+        let query = || {
+            db.query::<Entry>()
+                .filter_in(Entry::ID, first)
+                .filter_in(Entry::ID, second)
+        };
+        let count = query().work_limit(2).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 2, 0));
+        assert_eq!(query().count_validated().unwrap().value, count.value);
+        let narrowed = query().lt(Entry::ID, 99_u64).work_limit(1).count().unwrap();
+        assert_eq!(
+            (narrowed.value, narrowed.examined, narrowed.fetched),
+            (1, 1, 0)
+        );
+    }
+    let excluded = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[1_u64, 8])
+        .filter_not_in(Entry::ID, &[8_u64, 1])
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (excluded.value, excluded.examined, excluded.fetched),
+        (0, 0, 0)
+    );
+    let residual = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[1_u64, 8])
+        .filter_any(&[
+            (Entry::ID, C::Eq, 2_u64.into()),
+            (Entry::AMOUNT, C::Eq, 80_u64.into()),
+        ])
+        .count()
+        .unwrap();
+    assert_eq!(residual.value, 1);
+    assert!(residual.fetched > 0);
+}
+
+#[test]
+fn unique_membership_counts_probe_only_complete_physical_keys() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for explicit in [false, true] {
+        let q = db
+            .query::<Entry>()
+            .filter_in(Entry::MAYBE, &[1_u64, 8, 99, 8]);
+        let q = if explicit {
+            q.using_index("maybe", &[])
+        } else {
+            q
+        };
+        let count = q.work_limit(3).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (2, 3, 0));
+    }
+    let residual = db
+        .query::<Entry>()
+        .filter_in(Entry::MAYBE, &[1_u64, 8])
+        .eq(Entry::CATEGORY, 0_u8)
+        .using_index("maybe", &[])
+        .count()
+        .unwrap();
+    assert_eq!(residual.value, 1);
+    assert!(residual.fetched > 0);
+    let members = || {
+        db.query::<Entry>()
+            .filter_in(Entry::MAYBE, &[None, Some(1_u64), Some(8), Some(99)])
+    };
+    let includes_absent = members().count().unwrap();
+    assert_eq!(includes_absent.value, 4);
+    assert!(includes_absent.fetched > 0);
+    let present_members = || members().filter_present(Entry::MAYBE);
+    let count = present_members().work_limit(3).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (2, 3, 0));
+    assert_eq!(
+        present_members().count_validated().unwrap().value,
+        count.value
+    );
+
+    let nonunique = db
+        .query::<Entry>()
+        .filter_in(Entry::CATEGORY, &[0_u8, 1])
+        .using_index("category", &[])
+        .count()
+        .unwrap();
+    assert_eq!(nonunique.value, 8);
+}
+
+#[test]
+fn compound_unique_membership_counts_use_the_equality_prefix_selected_by_the_planner() {
+    #[entity(pk(field="id"), index(fields=["tenant","code"],unique), index(field="tenant"), fields(
+        field(name="id",value(item(prim="Nat64"))),
+        field(name="tenant",value(item(prim="Nat8"))),
+        field(name="code",value(item(prim="Nat64")))
+    ))]
+    struct Booking {}
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Booking::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, tenant, code) in [(1, 1, 10), (2, 1, 20), (3, 1, 30), (4, 2, 10), (5, 2, 40)] {
+        batch.insert(&Booking { id, tenant, code }).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let codes = || {
+        db.query::<Booking>()
+            .filter_in(Booking::CODE, &[10_u64, 40, 30, 10])
+    };
+    let query = || codes().eq(Booking::TENANT, 1_u8);
+    let count = query().work_limit(3).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (2, 3, 0));
+    assert_eq!(query().count_validated().unwrap().value, count.value);
+    for conflict in [
+        query().eq(Booking::TENANT, 2_u8),
+        query().using_index("tenant,code", &[2_u8.into()]),
+    ] {
+        let empty = conflict.work_limit(1).count().unwrap();
+        assert_eq!((empty.value, empty.examined), (0, 0));
+    }
+    let across_tenants = codes().count().unwrap();
+    assert_eq!(across_tenants.value, 4);
 }
 
 #[test]
@@ -4236,7 +4446,7 @@ fn primary_point_counts_use_the_key_only_when_it_proves_every_clause() {
         .filter_in(Entry::ID, &[2_u64, 5])
         .count()
         .unwrap();
-    assert_eq!((gaps.value, gaps.examined, gaps.fetched), (2, 4, 4));
+    assert_eq!((gaps.value, gaps.examined, gaps.fetched), (2, 2, 0));
 }
 
 #[test]
@@ -4411,7 +4621,8 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     assert_eq!(*backing.borrow(), before);
 }
 
-#[entity(pk(field="id"), index(fields=["left","right","id"],unique,present_only),fields(
+#[entity(pk(field="id"), index(fields=["left","right","id"],unique,present_only),
+index(fields=["id","right"],unique,present_only),fields(
     field(name="id",value(item(prim="Nat64"))),
     field(name="left",value(opt,item(prim="Nat64"))),
     field(name="right",value(opt,item(prim="Text",max_bytes=8)))
@@ -4450,6 +4661,34 @@ fn sparse_compound_membership_requires_every_optional_component() {
             .unwrap();
     }
     db.commit(batch).unwrap();
+    let names = || {
+        db.query::<SparsePair>()
+            .using_index("id,right", &[5_u64.into()])
+            .filter_in(SparsePair::RIGHT, &["ba", "a", "x", "ba"])
+            .filter(SparsePair::RIGHT, C::EndsWith, "a")
+    };
+    let count = names().work_limit(2).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 2, 0));
+    assert_eq!(names().count_validated().unwrap().value, count.value);
+    // The index beginning with ID omits exactly the rows without a right value.
+    // Its membership proves presence even without a leading equality or range.
+    let right = || db.query::<SparsePair>().filter_present(SparsePair::RIGHT);
+    let count = right().work_limit(5).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (4, 4, 0));
+    assert_eq!(right().count_validated().unwrap().value, count.value);
+    assert!(matches!(right().work_limit(3).count(), Err(Error::Limit)));
+
+    let both = || right().filter_present(SparsePair::LEFT);
+    let covered = both().using_index("left,right,id", &[]).count().unwrap();
+    assert_eq!(
+        (covered.value, covered.examined, covered.fetched),
+        (3, 3, 0)
+    );
+    let residual = both().using_index("id,right", &[]).count().unwrap();
+    assert_eq!(
+        (residual.value, residual.examined, residual.fetched),
+        (3, 4, 4)
+    );
     // The matching row with an absent right field is missing from this index.
     let left = || db.query::<SparsePair>().filter("left", C::Eq, 1_u64);
     let incomplete_index = left().count().unwrap();
@@ -8227,7 +8466,14 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
         .filter_any(&[("id", C::Eq, 1_u64.into()), ("id", C::Eq, 8_u64.into())])
         .count()
         .unwrap();
-    assert_eq!((alternatives.value, alternatives.fetched), (2, 8));
+    assert_eq!(
+        (
+            alternatives.value,
+            alternatives.examined,
+            alternatives.fetched
+        ),
+        (2, 2, 0)
+    );
 }
 
 #[test]

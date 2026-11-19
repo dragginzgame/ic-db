@@ -18,6 +18,8 @@ ic-wire.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+ic-db.workspace = true
+serde_json.workspace = true
 toko-tooling.workspace = true
 
 [lints]

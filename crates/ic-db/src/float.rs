@@ -10,7 +10,8 @@ use std::{
 macro_rules! finite_float {
     ($name:ident, $float:ty, $bits:ty, $width:literal) => {
         #[doc = concat!("Finite canonical `", stringify!($float), "`. Construction normalizes negative zero; NaN and infinities refuse.")]
-        #[derive(Clone, Copy, Debug, Default, PartialEq)]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+        #[serde(transparent)]
         pub struct $name($float);
         impl $name {
             /// Admit a finite primitive and normalize either signed zero to positive zero.
@@ -39,6 +40,12 @@ macro_rules! finite_float {
                 let bits = <$bits>::from_be_bytes(bytes);
                 let sign = 1 << (<$bits>::BITS - 1);
                 Self::from_canonical_bits(if bits & sign != 0 { bits ^ sign } else { !bits })
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::try_new(<$float>::deserialize(deserializer)?)
+                    .ok_or_else(|| serde::de::Error::custom("expected a finite float"))
             }
         }
         impl Eq for $name {}

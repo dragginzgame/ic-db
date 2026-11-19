@@ -45,9 +45,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let read = field.read_result();
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = item.attrs;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     Ok(quote! {
-        #(#attrs)*
+        #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
         #visibility struct #ident(#[doc="Authored bounded set."] pub ::std::collections::BTreeSet<#ty>);
         impl ::ic_db::Value for #ident {
