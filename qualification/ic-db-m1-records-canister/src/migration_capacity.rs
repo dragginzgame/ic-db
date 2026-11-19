@@ -6,7 +6,8 @@ use crate::{
     maintenance::{COPY_SOURCE, COPY_TARGET},
     runtime,
 };
-use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Error, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use records_schema::EnvelopeRow;
 use std::ops::Bound;
@@ -80,7 +81,8 @@ fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
 /// Exercises an alternate `EnvelopeRow` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "EnvelopeRow",
     pk(field = "id"),
     fields(

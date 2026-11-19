@@ -8,7 +8,8 @@ use super::{
     schema::{Document, Entry},
 };
 use crate::handles::{Database, Query};
-use ic_db::{Batch, Comparison, GroupOrder, JobHandle, JobOutcome, JobStep, Timestamp};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Comparison, GroupOrder, JobHandle, JobOutcome, JobStep};
 
 // job_start
 // Start a retained aggregate with the supplied observation time and expiry.
@@ -564,7 +565,7 @@ fn job_group_extremum(
 /// Carries the `Nat64` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct Amount {}
 
 ///
@@ -572,7 +573,7 @@ struct Amount {}
 /// Groups `id` and `amount` into one record.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "id", value(item(prim = "Nat64"))),
     field(name = "amount", value(item(prim = "Nat64")))
 ))]
@@ -583,7 +584,7 @@ struct IdAmount {}
 /// Carries the `Decimal` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
 struct AverageAmount {}
 
 ///
@@ -591,7 +592,7 @@ struct AverageAmount {}
 /// Carries the `Nat64` value of `category`.
 ///
 
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "category", value(item(prim = "Nat64")))))]
 struct Category {}
 
 ///
@@ -599,7 +600,7 @@ struct Category {}
 /// Carries the `Nat64` value of `entry_id`.
 ///
 
-#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
 struct EntryId {}
 
 fn query(db: &Database, operation: u8) -> Query<'_, Entry> {

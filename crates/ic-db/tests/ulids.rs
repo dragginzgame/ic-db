@@ -1,6 +1,7 @@
 //! Independent ULID bytes, canonical text and stored/indexed identity boundaries.
 
-use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, Ulid, entity, map, set};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -13,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -47,6 +49,7 @@ struct Links {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -313,6 +316,7 @@ fn collections_reject_duplicate_keys_before_materialization() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

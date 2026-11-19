@@ -1,6 +1,7 @@
 //! A host hands independent helpers sessions on the same attached database.
 
-use ic_db::{Batch, DatabaseSession, Entity, Error, Schema, entity, testing::Fixture};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, DatabaseSession, Error, testing::Fixture};
 use std::cell::RefCell;
 
 ///
@@ -9,6 +10,7 @@ use std::cell::RefCell;
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["owner", "peer"], unique),
     fields(
@@ -102,6 +104,7 @@ fn nested_helpers_share_one_attachment_and_commit_atomically() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
@@ -205,9 +208,10 @@ fn single_mutations_match_batches_including_refusals_and_index_effects() {
 
 #[test]
 fn query_execution_refuses_an_active_commit_and_recovers() {
+    use ic_db::design::prelude::*;
     use ic_db::{
         __private::{Decoder, Encoder},
-        TypeSchema, Value, record,
+        TypeSchema,
     };
 
     ///
@@ -250,6 +254,7 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
@@ -288,6 +293,7 @@ fn named_unique_keys_use_declared_order_types_and_sparse_membership() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(name = "account", fields = ["issuer", "subject"], unique),
         index(field = "alias", unique, present_only),

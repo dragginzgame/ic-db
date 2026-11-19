@@ -34,6 +34,9 @@ This overlay owns local authority, product boundaries and qualification choices.
 
 ## Product boundaries and contract owners
 
+- Import `ic_db::design::prelude::*` wherever a Rust module or example declares
+  IC DB schema types. Use unqualified schema attributes and import additional
+  runtime APIs explicitly as needed.
 - Use attribute-owned declarations with empty struct bodies and logical schema
   names/typed paths. Numeric storage handles stay internal. Renames require
   explicit transitions; do not infer identity from declaration order. Alternative
@@ -64,9 +67,11 @@ This overlay owns local authority, product boundaries and qualification choices.
   product-engine dependency or sibling implementation authority.
 - The crate declaring a shared schema owns its package-root `build.rs`, the
   `ic-db/build` build dependency and the generated assembly. Use
-  `ic_db::build_schema!(model);` for the complete module tree and export
-  `compiled()` from the library. A consuming canister imports that library
-  normally and calls its `compiled()`. When extracting declarations from a
+  `ic_db::build_schema!(model);` to compile the declarations and `ic_db::include_schema!();` at the
+  declaring crate’s root to include the assembly. Each entity names
+  one store; each store names its canister and stable key. Generate one schema
+  per store and one typed store roster per canister. Consumers import the
+  canister type and use its `CompiledCanister::STORES`. When extracting declarations from a
   canister, remove its schema build dependencies, generated include and any
   build script whose only job was schema generation in the same patch.
 - A canister that actually declares its own local schema may use

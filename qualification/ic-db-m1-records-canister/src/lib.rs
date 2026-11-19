@@ -51,7 +51,8 @@ use ic_storage::{
 };
 use records_schema as schema;
 use schema::{
-    BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, WideNumbers, compiled,
+    BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, RecordsStore,
+    WideNumbers,
 };
 
 /// Initialize the fixture’s stable state at installation.
@@ -67,7 +68,7 @@ fn initialize((): ()) {
     // Fixed fixture identity only. A real host supplies a fresh database incarnation.
     let mut db = Database::create(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-        compiled(),
+        RecordsStore::compiled(),
         [1; 16],
     )
     .unwrap();
@@ -2842,7 +2843,7 @@ type Backing = faults::FaultMemory;
 #[cfg(not(feature = "fault-injection"))]
 type Backing = DefaultMemoryImpl;
 
-const KEY: &str = "m1.records.v1";
+const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
 type Status = ([u8; 32], [u8; 16], u64, u64);
 
 fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
@@ -2889,7 +2890,7 @@ fn new_runtime() -> MemoryRuntime<Backing> {
 fn open(host: &MemoryRuntime<Backing>) -> Database {
     Database::open(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-        compiled(),
+        RecordsStore::compiled(),
     )
     .unwrap()
 }

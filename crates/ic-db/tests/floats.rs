@@ -1,8 +1,7 @@
 //! Finite domains, canonical zero, index order and stored corruption boundaries.
 
-use ic_db::{
-    Batch, Database, Entity, Error, Float32, Float64, IndexValue, Schema, entity, map, set,
-};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -19,6 +18,7 @@ use std::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["zone", "small", "id"]),
     index(fields = ["zone", "value", "id"]),
@@ -59,6 +59,7 @@ struct Measures {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

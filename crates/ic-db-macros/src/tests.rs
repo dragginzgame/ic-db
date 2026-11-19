@@ -1,5 +1,13 @@
-use super::expand;
 use quote::quote;
+
+fn expand(
+    args: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let mut owned = quote!(store = TestStore,);
+    owned.extend(args);
+    super::expand(owned, item)
+}
 
 #[test]
 fn entity_field_constants_reject_ambiguous_spellings() {

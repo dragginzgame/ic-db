@@ -4,7 +4,8 @@ use crate::{
     handles::{Database, RetiredSource, SchemaCopy},
     runtime,
 };
-use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Error, SchemaTransition};
 use ic_storage::StableKey;
 
 // migration_demo
@@ -24,7 +25,9 @@ fn migration_demo(action: u8) -> Result<Reply, String> {
     run(action).map_err(|error| error.to_string())
 }
 
-pub(crate) const SOURCE: &str = "m1.console.migration.source.v1";
+#[store(canister = records_schema::RecordsCanister, key = "m1.console.migration.source.v1")]
+struct DemoStore {}
+pub(crate) const SOURCE: &str = <DemoStore as ic_db::Store>::KEY;
 pub(crate) const TARGET: &str = "m1.console.migration.target.v1";
 
 ///
@@ -32,7 +35,8 @@ pub(crate) const TARGET: &str = "m1.console.migration.target.v1";
 /// Exercises an alternate `Item` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = DemoStore,
     name = "Item",
     pk(field = "id"),
     fields(
@@ -47,7 +51,8 @@ struct Before {}
 /// Exercises an alternate `Item` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = DemoStore,
     name = "Item",
     pk(field = "id"),
     index(fields = ["label"]),

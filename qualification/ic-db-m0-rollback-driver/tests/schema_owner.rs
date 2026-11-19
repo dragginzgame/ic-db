@@ -6,7 +6,7 @@ use ic_wire::{Direction, Encoding};
 #[tokio::test]
 async fn selected_schema_on_replica() {
     let pic = instance().await.unwrap();
-    for (artifact, expected) in [("baseline", Some(2)), ("drift", None)] {
+    for (artifact, expected) in [("baseline", Some(3)), ("drift", None)] {
         let path =
             std::path::PathBuf::from(std::env::var_os("IC_DB_SCHEMA_OWNER_ARTIFACTS").unwrap())
                 .join(format!("{artifact}.wasm"));

@@ -1,10 +1,10 @@
 //! Complete sorting compared with independent Rust tuple/text order.
 
 use super::{C, DecimalSale, Entry, OptionalPrice, Summary, create, decimal_sales, host, ids, row};
+use ic_db::design::prelude::*;
 use ic_db::{
-    Batch, Database, Entity, Error, Schema,
+    Batch, Database, Error,
     SortDirection::{Ascending as Asc, Descending as Desc},
-    entity,
 };
 use ic_storage::{StableKey, VectorMemory};
 
@@ -342,6 +342,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -356,7 +357,7 @@ struct SortRow {}
 /// Carries an optional `Text` value of `label`.
 ///
 
-#[ic_db::record(fields(field(name = "label", value(opt, item(prim = "Text", max_bytes = 4096)))))]
+#[record(fields(field(name = "label", value(opt, item(prim = "Text", max_bytes = 4096)))))]
 struct LabelOnly {}
 
 #[test]
@@ -665,7 +666,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
 /// Groups `category` and `amount` into one record.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "category", value(item(prim = "Nat8"))),
     field(name = "amount", value(item(prim = "Nat64")))
 ))]

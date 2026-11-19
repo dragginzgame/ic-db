@@ -323,10 +323,13 @@ including reference targets. This avoids a durable assignment registry while
 retaining the compact physical prefixes. The grammar is version 2; old numbered
 contracts refuse intact. There is no automatic migration or data recreation.
 
-The implemented scalar spelling is:
+Schema declarations use the design prelude as described in the [schema authoring rules](../../README.md#schema-authoring-rules). The implemented scalar spelling is:
 
 ```rust
+use ic_db::design::prelude::*;
+
 #[entity(
+    store = RecordsStore,
     pk(field = "id"),
     index(fields = ["amount", "id"]),
     fields(
@@ -387,16 +390,21 @@ using `ctor`. The registration helper expands to a constructor in a compiled
 host build. During rust-analyzer analysis it expands to nothing: linker startup
 is a build-time operation, and ctor’s internal target branches otherwise mark
 active entity declarations as inactive. Generated fields and codecs are shared.
-`build::generate(source_module, target_module)` selects a module
+The private generator selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler
 resolves the emitted types. The target checks their fingerprint when the schema opens.
 For canister-local declarations, `ic_db::build_schema!()` selects `src/schema` in
 the package-root build script. A shared schema crate calls `ic_db::build_schema!(model)` in its own build
-script. The root and its complete declaration subtree form one contract. Child
-modules may reference each other. Re-exports do not alter membership. The
-library exports `compiled()` alongside its application types; a consuming
-canister needs only its normal Cargo dependency. The producer checks target
+script and `ic_db::include_schema!()` in its library. The generator discovers the declarations in that tree and follows each entity's
+typed store link and each store's typed canister link. This restores the
+ownership invariant from IcyDB `6d421e3` (archived generated entity,
+`docs/design/archive/0.61-entity-macro-cleanup/generated.rs`, lines 826–827).
+A store has one IC Storage stable key and one validated entity schema.
+A canister exports a roster of these keys and schema constructors. Module
+moves and re-exports preserve membership. References stay within their store;
+named value types can be shared. These links add no bytes to the row or schema
+fingerprint. The host owns grants, installation and reopen policy. The producer checks target
 membership at compile time and checks the descriptor fingerprint at admission.
 See the [single-tree producer and consumer proof](../../qualification/experiments/schema-owner/README.md).
 An admitted `Schema` can be cloned for host-owned reuse: it contains immutable

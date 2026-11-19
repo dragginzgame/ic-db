@@ -1,9 +1,7 @@
 //! Omission/default semantics on the real typed and persistent write path.
 
-use ic_db::{
-    Batch, Database, Entity, Error, FieldSchema, FieldType, InsertInput, LiteralDefault, Schema,
-    entity,
-};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, FieldSchema, FieldType, InsertInput, LiteralDefault};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -15,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "label", unique, present_only),
     fields(
@@ -34,6 +33,7 @@ struct Entry {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Policy",
     pk(field = "id"),
     fields(
@@ -49,6 +49,7 @@ struct Policy {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Policy",
     pk(field = "id"),
     fields(
@@ -64,6 +65,7 @@ struct Reordered {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Policy",
     pk(field = "id"),
     fields(
@@ -79,6 +81,7 @@ struct Changed {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Policy",
     pk(field = "id"),
     fields(
@@ -94,6 +97,7 @@ struct Absent {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -119,6 +123,7 @@ fn blob_defaults_preserve_omission_absence_uniqueness_and_reopen() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(field = "payload", unique, present_only),
         fields(

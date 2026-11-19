@@ -1,6 +1,7 @@
 //! Unit-enum index identity, independent bytes and final-state integrity.
 
-use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, Value, entity, enum_};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -74,6 +75,7 @@ struct Payload {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["zone", "state", "id"]),
     index(field = "maybe", unique, present_only),
@@ -93,7 +95,7 @@ struct Row {}
 /// Stores up to 3 distinct `State` values.
 ///
 
-#[ic_db::set(item(is = "State"), max_items = 3)]
+#[set(item(is = "State"), max_items = 3)]
 struct States {}
 
 ///
@@ -102,6 +104,7 @@ struct States {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

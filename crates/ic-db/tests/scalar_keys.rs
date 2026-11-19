@@ -1,6 +1,7 @@
 //! Scalar primary keys share ordering, references and corruption checks.
 
-use ic_db::{Account, Batch, Database, Entity, Error, Principal, Schema, U256, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -172,6 +173,7 @@ macro_rules! unsigned_case {
     ($module:ident,$prim:literal,$ty:ty,$width:literal)=>{mod $module {
         use super::*;
         #[entity(
+            store = ic_db::testing::FixtureStore,
             pk(field = "id"),
             index(field = "rank", unique),
             index(fields = ["zone", "id"]),
@@ -192,6 +194,7 @@ macro_rules! signed_case {
     ($module:ident,$prim:literal,$ty:ty,$width:literal)=>{mod $module {
         use super::*;
         #[entity(
+            store = ic_db::testing::FixtureStore,
             pk(field = "id"),
             index(field = "rank", unique),
             index(fields = ["zone", "id"]),
@@ -225,6 +228,7 @@ signed_case!(int128, "Int128", i128, 16);
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["zone", "id"]),
@@ -244,6 +248,7 @@ struct U256Row {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["zone", "id"]),
@@ -263,6 +268,7 @@ struct PrincipalRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["zone", "id"]),
@@ -282,6 +288,7 @@ struct SubaccountRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["zone", "id"]),
@@ -533,6 +540,7 @@ fn u256_keeps_high_half() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -550,6 +558,7 @@ pub(crate) struct SignedKey {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -567,6 +576,7 @@ pub(crate) struct WideKey {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "target"),
     fields(
@@ -586,6 +596,7 @@ struct WrongSignedness {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "target"),
     fields(

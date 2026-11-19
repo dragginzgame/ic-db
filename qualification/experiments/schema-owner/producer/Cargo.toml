@@ -20,6 +20,7 @@ ic-db = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
 ic-db = { workspace = true, features = ["test-support"] }
+ic-storage.workspace = true
 toko-tooling.workspace = true
 
 [lints]

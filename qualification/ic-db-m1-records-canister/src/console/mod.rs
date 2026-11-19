@@ -16,9 +16,10 @@ use crate::{
     schema::{DecimalRow, Document, Entry},
     transport::RowFilters,
 };
+use ic_db::design::prelude::*;
 use ic_db::{
-    Aggregate, Comparison, Entity, Error, GroupCount, GroupOrder, GroupValue, QueryCursor,
-    QueryPage, SortDirection, Value,
+    Aggregate, Comparison, Error, GroupCount, GroupOrder, GroupValue, QueryCursor, QueryPage,
+    SortDirection,
 };
 use std::fmt::Write;
 
@@ -276,7 +277,7 @@ pub(super) fn hex(bytes: &[u8]) -> String {
 /// Carries the `Nat64` value of `category`.
 ///
 
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "category", value(item(prim = "Nat64")))))]
 struct CategoryOnly {}
 
 ///
@@ -284,7 +285,7 @@ struct CategoryOnly {}
 /// Carries the `Nat64` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct AmountOnly {}
 
 ///
@@ -292,7 +293,7 @@ struct AmountOnly {}
 /// Carries the `Text` value of `title`.
 ///
 
-#[ic_db::record(fields(field(name = "title", value(item(prim = "Text", max_bytes = 32)))))]
+#[record(fields(field(name = "title", value(item(prim = "Text", max_bytes = 32)))))]
 struct TitleOnly {}
 
 ///
@@ -300,7 +301,7 @@ struct TitleOnly {}
 /// Carries an optional `Text` value of `note`.
 ///
 
-#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
+#[record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
 pub(super) struct NoteOnly {}
 
 ///
@@ -308,7 +309,7 @@ pub(super) struct NoteOnly {}
 /// Carries an optional `Nat64` value of `priority`.
 ///
 
-#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
+#[record(fields(field(name = "priority", value(opt, item(prim = "Nat64")))))]
 struct PriorityOnly {}
 
 ///
@@ -316,7 +317,7 @@ struct PriorityOnly {}
 /// Carries the `Nat64` value of `entry_id`.
 ///
 
-#[ic_db::record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
 struct EntryIdOnly {}
 
 ///
@@ -324,7 +325,7 @@ struct EntryIdOnly {}
 /// Carries the `Nat128` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
+#[record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
 struct TotalAmount {}
 
 ///
@@ -332,7 +333,7 @@ struct TotalAmount {}
 /// Carries the `Decimal` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
 struct AverageAmount {}
 
 ///
@@ -340,7 +341,7 @@ struct AverageAmount {}
 /// Carries an optional `Nat128` value of `priority`.
 ///
 
-#[ic_db::record(fields(field(name = "priority", value(opt, item(prim = "Nat128")))))]
+#[record(fields(field(name = "priority", value(opt, item(prim = "Nat128")))))]
 struct TotalPriority {}
 
 ///
@@ -348,7 +349,7 @@ struct TotalPriority {}
 /// Carries the `Int128` value of `score`.
 ///
 
-#[ic_db::record(fields(field(name = "score", value(item(prim = "Int128")))))]
+#[record(fields(field(name = "score", value(item(prim = "Int128")))))]
 struct TotalScore {}
 
 ///
@@ -356,7 +357,7 @@ struct TotalScore {}
 /// Carries the `Decimal` value of `value`.
 ///
 
-#[ic_db::record(fields(field(name = "value", value(item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "value", value(item(prim = "Decimal", scale = 2)))))]
 struct TotalDecimal {}
 
 ///
@@ -364,7 +365,7 @@ struct TotalDecimal {}
 /// Carries an optional `Decimal` value of `maybe`.
 ///
 
-#[ic_db::record(fields(field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "maybe", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct OptionalDecimal {}
 
 ///
@@ -372,7 +373,7 @@ struct OptionalDecimal {}
 /// Carries the `Bool` value of `zone`.
 ///
 
-#[ic_db::record(fields(field(name = "zone", value(item(prim = "Bool")))))]
+#[record(fields(field(name = "zone", value(item(prim = "Bool")))))]
 struct ZoneOnly {}
 
 fn filter_rows<'a, E: Entity>(

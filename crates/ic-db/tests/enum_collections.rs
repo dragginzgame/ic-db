@@ -1,6 +1,7 @@
 //! Enum order agrees across collections, row bytes and secondary keys.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, Value, entity, enum_, map, set};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -54,6 +55,7 @@ struct Counts {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -69,6 +71,7 @@ struct Row {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -111,6 +114,7 @@ struct InvalidMap {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -125,6 +129,7 @@ struct BadSetRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -293,7 +298,7 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
 /// Gives `Nat16` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Nat16"))]
+#[newtype(item(prim = "Nat16"))]
 struct Rank {}
 
 ///
@@ -318,6 +323,7 @@ struct Ranks {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

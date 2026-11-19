@@ -1,9 +1,7 @@
 //! Exact account/subaccount bytes and one identity for the default account.
 
-use ic_db::{
-    Account, Batch, Database, Entity, Error, IndexValue, Principal, Schema, Subaccount, entity,
-    map, set,
-};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -16,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(fields = ["zone", "sub", "id"]),
@@ -56,6 +55,7 @@ struct Allocations {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -349,6 +349,7 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

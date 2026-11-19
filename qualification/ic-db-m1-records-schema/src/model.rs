@@ -5,10 +5,10 @@
 //! Shared authored schema: compiled once for host collection and again for the target.
 
 pub use entries::Entry;
-use ic_db::design::prelude::{entity, enum_, list, map, newtype, record, set};
+use ic_db::design::prelude::*;
 
 pub mod entries {
-    use ic_db::design::prelude::entity;
+    use ic_db::design::prelude::*;
 
     ///
     /// Entry
@@ -16,6 +16,7 @@ pub mod entries {
     ///
 
     #[entity(
+        store = crate::model::RecordsStore,
         pk(field = "id"),
         index(fields = ["category", "id"]),
         fields(
@@ -33,6 +34,7 @@ pub mod entries {
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["entry_id", "score"]),
     index(fields = ["published", "title"]),
@@ -56,6 +58,7 @@ pub struct Document {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -73,6 +76,7 @@ pub struct WideNumbers {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -88,6 +92,7 @@ pub struct BinaryObject {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -113,6 +118,7 @@ pub struct NarrowNumbers {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "owner", unique),
     index(field = "optional", unique, present_only),
@@ -130,6 +136,7 @@ pub struct IdentityRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["next", "id"]),
     fields(
@@ -157,6 +164,7 @@ pub struct Lifecycle {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["state", "id"]),
     index(field = "previous", unique, present_only),
@@ -190,6 +198,7 @@ pub struct LifecycleCounts {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -241,6 +250,7 @@ pub struct NestedPayload {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -280,6 +290,7 @@ pub struct Samples {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -307,6 +318,7 @@ pub struct Scores {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -333,6 +345,7 @@ pub struct Rates {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -355,6 +368,7 @@ pub struct MapTree {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -369,6 +383,7 @@ pub struct MapTreeRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -387,6 +402,7 @@ pub struct BigNumbers {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "small", "id"]),
     index(fields = ["zone", "value", "id"]),
@@ -407,6 +423,7 @@ pub struct FloatRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(fields = ["zone", "sub", "id"]),
@@ -427,6 +444,7 @@ pub struct AccountRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -445,6 +463,7 @@ pub struct UlidRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -463,6 +482,7 @@ pub struct DateRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "duration", "id"]),
     index(fields = ["zone", "timestamp", "id"]),
@@ -485,6 +505,7 @@ pub struct TimeRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -503,6 +524,7 @@ pub struct DecimalRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "value", unique),
     index(fields = ["owner", "id"]),
@@ -520,6 +542,7 @@ pub struct KeyRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["target", "id"]),
     fields(
@@ -535,6 +558,7 @@ pub struct Numbered {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -552,6 +576,7 @@ pub struct SignedKey {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -569,6 +594,7 @@ pub struct WideKey {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "label", unique, present_only),
     fields(
@@ -600,6 +626,7 @@ pub struct DefaultRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "body", unique),
     index(field = "updated"),
@@ -630,6 +657,7 @@ pub struct ManagedRow {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["next", "id"]),
@@ -647,6 +675,7 @@ pub struct PrincipalKey {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -664,6 +693,7 @@ pub struct AccountKey {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(field = "rank", unique),
     index(fields = ["peer", "id"]),
@@ -681,6 +711,7 @@ pub struct SubaccountKey {}
 ///
 
 #[entity(
+    store = crate::model::RecordsStore,
     pk(field = "id"),
     index(fields = ["a", "b", "c", "d"]),
     index(fields = ["a", "b", "d", "c"]),
@@ -700,3 +731,11 @@ pub struct SubaccountKey {}
     )
 )]
 pub struct EnvelopeRow {}
+
+/// Logical owner of the RecordsStore allocation.
+#[canister]
+pub struct RecordsCanister {}
+
+/// Store using the existing m1.records.v1 allocation key.
+#[store(canister = RecordsCanister, key = "m1.records.v1")]
+pub struct RecordsStore {}

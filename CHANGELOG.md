@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.24.0] - Unreleased
+
+### Schema authoring
+
+- Schema owners now call `ic_db::include_schema!();` at the crate root.
+  This replaces the handwritten generated-file include. Use `build_schema!`
+  in the owner’s build script in place of the retired `ic_db::build::generate`.
+
+- Shared schemas now declare `#[canister]`, `#[store(canister = Hub, key = "...")]`
+  and `#[entity(store = Accounts, ...)]`. Add an explicit store to every entity.
+  Replace the shared crate's flat `compiled()` with `Accounts::compiled()` or
+  iterate `Hub::STORES` to open all of its allocations. Keeping the same store
+  key and entity contract preserves existing backing.
+  [#15 — Typed canister and store ownership](https://github.com/dragginzgame/ic-db/issues/15) ·
+  [#16 — Export each canister’s owned stores](https://github.com/dragginzgame/ic-db/issues/16)
+
+- Schema declarations use `ic_db::design::prelude::*`. The schema build check
+  enforces this convention across the product and qualification sources.
+
+### 🎯 Qualification
+
+- Qualification uses IC Wire 0.27.0 for DB fixtures and their clients. Canic
+  inspection retains Wire 0.25.2 to match the pinned producer's protocol types.
+
 ## [0.23.22] - 2026-11-19
 
 - Document schema fixture types and generated insert and unique-key types.

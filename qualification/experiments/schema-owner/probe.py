@@ -38,7 +38,7 @@ def probe(root):
     deps, rest = manifest.split("[workspace.dependencies]\n")
     entries, lints = rest.split("[workspace.lints.cargo]")
     selected = [line for line in entries.splitlines() if line.split(" = ")[0] in {
-        "ic-db", "ic-platform-runtime", "ic-db-qualification-transport", "toko-tooling"
+        "ic-db", "ic-storage", "ic-platform-runtime", "ic-db-qualification-transport", "toko-tooling"
     }]
     manifest = deps + "[workspace.dependencies]\n" + "\n".join(selected) + "\n[workspace.lints.cargo]" + lints
     (root / "Cargo.toml").write_text(manifest)
@@ -54,12 +54,27 @@ def probe(root):
         binary = QUAL / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
         image = binary.read_bytes()
         assert b"schema_size" in image and b"ic_db_schema_owner_consumer" in image
-        assert b"__register_schema" not in image and b"build10__register" not in image
+        for symbol in (b"__register_schema", b"build8__entity", b"build7__store",
+                       b"build10__canister", b".init_array"):
+            assert symbol not in image, symbol
         shutil.copy(binary, ARTIFACTS / f"{name}.wasm")
 
     baseline = check_variant(root, native)
     assert baseline.startswith('["Entry", "User"]')
     artifact("baseline")
+
+    # A generic host operation can constrain an entity to its own canister.
+    example = root / "consumer/examples/membership.rs"
+    consumer = example.read_text()
+    owner_check = """
+fn accepts<C: ic_db::Canister, E: ic_db::Entity<Store: ic_db::Store<Canister = C>>>() {}
+const _: fn() = accepts::<directory::model::Hub, directory::model::hub::User>;
+"""
+    example.write_text(consumer + owner_check)
+    assert check_variant(root, native) == baseline
+    example.write_text(consumer + owner_check.replace("model::Hub,", "model::Shard,"))
+    check_variant(root, native, "type mismatch")
+    example.write_text(consumer)
 
     moved = model_dir / "hub"
     moved.mkdir()
@@ -78,15 +93,15 @@ def probe(root):
     shard = model_dir / "shard.rs"
     shard_source = shard.read_text()
     shard.write_text(shard_source.replace("struct Entry", "struct User").replace(
-        "#[ic_db::entity(", '#[ic_db::entity(name = "Entry",'
+        "#[entity(", '#[entity(name = "Entry",'
     ) + "\npub use User as Entry;\n")
     assert check_variant(root, native) == added
     shard.write_text(shard_source)
 
     (moved / "audit.rs").write_text(original)
-    check_variant(root, native, "InvalidSchema")
+    check_variant(root, native, "both declare entity User")
     hub.write_text(original + '''
-#[ic_db::entity(pk(field = "id"), index(field = "entry"), fields(
+#[entity(store = crate::model::Accounts, pk(field = "id"), index(field = "entry"), fields(
     field(name = "id", value(item(prim = "Nat64"))),
     field(name = "entry", value(item(prim = "Nat64")), references(entity = "super::shard::Entry"))
 ))]
@@ -97,16 +112,42 @@ pub struct Link {}
                                           'name = "entry", value(item(prim = "Nat32"))'))
     check_variant(root, native, "references Entry.id")
 
-    host_only = '#[cfg(not(target_family = "wasm"))]\n' + original
-    hub.write_text(host_only)
+    manifest = model_dir / "mod.rs"
+    owners = manifest.read_text()
+    manifest.write_text(owners.replace("probe.audit.v1", "probe.account.v1"))
+    check_variant(root, native, "both declare probe.account.v1")
+    manifest.write_text(owners.replace('key = "probe.audit.v1"', 'key = "probe.audit.v1", key = "probe.other.v1"'))
+    check_variant(root, native, "duplicate attribute")
+    manifest.write_text(owners.replace("canister = Hub,", "canister = MissingCanister,", 1))
+    check_variant(root, native, "cannot find type")
+    manifest.write_text(owners)
+    hub.write_text(original.replace("store = crate::model::Accounts,", ""))
+    check_variant(root, native, "entity requires store")
+    hub.write_text(original.replace("crate::model::Accounts", "crate::model::Unknown"))
+    check_variant(root, native, "cannot find type")
+    hub.write_text(original + """
+#[entity(store = crate::model::ShardStore, pk(field = "id"), index(field = "user"), fields(
+    field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "user", value(item(prim = "Nat64")), references(entity = "User"))
+))]
+pub struct Link {}
+#[entity(store = crate::model::ShardStore, name = "User", pk(field = "id"),
+    fields(field(name = "id", value(item(prim = "Nat64")))))]
+pub struct OtherUser {}
+""")
+    check_variant(root, native, "type mismatch")
+    hub.write_text(original)
+    imports, declaration = original.split("\n\n", 1)
+    host_only = '#[cfg(not(target_family = "wasm"))]\n' + declaration
+    hub.write_text(imports + "\n\n" + host_only)
     check_variant(root, wasm, "cannot find type `User`")
-    hub.write_text(host_only + '#[cfg(target_family = "wasm")]\n' + original.replace("Nat64", "Nat32"))
+    hub.write_text(imports + "\n\n" + host_only + '#[cfg(target_family = "wasm")]\n' + declaration.replace("Nat64", "Nat32"))
     artifact("drift")
-    hub.write_text(original + '#[cfg(target_family = "wasm")]\n' + original.replace("struct User", "struct Ghost"))
-    check_variant(root, wasm, "entity missing from host schema:")
+    hub.write_text(original + '#[cfg(target_family = "wasm")]\n' + declaration.replace("struct User", "struct Ghost"))
+    check_variant(root, wasm, "declaration missing from host schema:")
     (moved / "only.rs").write_text(original)
     hub.write_text(original + '#[cfg(target_family = "wasm")]\npub mod only;\n')
-    check_variant(root, wasm, "entity missing from host schema: ic_db_schema_owner_producer::model::hub::only::User")
+    check_variant(root, wasm, "declaration missing from host schema: ic_db_schema_owner_producer::model::hub::only::User")
     hub.write_text(original)
     # A similarly spelled name outside the selected module cannot join its tree.
     target = root / "producer/src/lib.rs"
@@ -116,7 +157,7 @@ pub struct Link {}
     assert check_variant(root, native) == baseline
     check_variant(root, wasm)
     print(baseline, end="")
-    print("Single-root membership, moves, cross-module references and drift checks passed.")
+    print("Typed canister/store membership, moves, cross-module references and drift checks passed.")
     print(f"Two Wasm artifacts ready for the replica probe in {ARTIFACTS}.")
 
 

@@ -6,7 +6,8 @@
 #[cfg(feature = "fluent")]
 mod fluent;
 
-use ic_db::{Batch, Database, Entity, Schema, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database};
 use ic_db_qualification_transport as transport;
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
@@ -72,7 +73,7 @@ fn exercise((selector, mode, row): (u8, u8, Row)) -> (Observation, [u64; 4], u64
     })
 }
 
-const KEY: &str = "m1.growth.records.v1";
+const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
 
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);
@@ -125,6 +126,7 @@ macro_rules! declare_entity {
         #[doc = ""]
 
         #[entity(
+            store = crate::RecordsStore,
             pk(field = "id"),
             index(fields = ["category", "id"]),
             $($extra)*
@@ -262,3 +264,11 @@ fn operate<E: Entity<Key = u64>>(
         u8::try_from(db.schema().entities().len()).unwrap(),
     )
 }
+
+/// Logical owner of the RecordsStore allocation.
+#[canister]
+pub struct ProbeCanister {}
+
+/// Store using the existing m1.growth.records.v1 allocation key.
+#[store(canister = ProbeCanister, key = "m1.growth.records.v1")]
+pub struct RecordsStore {}

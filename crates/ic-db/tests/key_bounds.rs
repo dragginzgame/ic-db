@@ -1,6 +1,7 @@
 //! Complete encoded-key admission, independent of row and field bounds.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -12,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "text"),
     fields(
@@ -28,6 +30,7 @@ struct TextKey {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "a"),
     index(fields = ["a", "b"]),
@@ -45,6 +48,7 @@ struct Compound {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["a", "b"], unique, present_only),
     fields(
@@ -61,6 +65,7 @@ struct Sparse {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "text"),
     fields(

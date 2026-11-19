@@ -1,7 +1,8 @@
 //! First public journey: real generated records, governed storage and final-state batches.
 
 use enum_values::Lifecycle as State;
-use ic_db::{Batch, Blob, Database, Entity, Error, Schema, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -13,6 +14,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["category", "id"]),
     fields(
@@ -29,6 +31,7 @@ struct Entry {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "token", unique),
     fields(
@@ -44,6 +47,7 @@ struct TokenRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Entry",
     pk(field = "id"),
     index(fields = ["category", "id"]),
@@ -61,6 +65,7 @@ struct Changed {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Entry",
     pk(field = "id"),
     index(fields = ["category", "id"]),
@@ -78,6 +83,7 @@ struct Reordered {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -95,6 +101,7 @@ struct Document {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -110,6 +117,7 @@ struct WideText {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -126,6 +134,7 @@ struct SignedRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -143,6 +152,7 @@ struct WideRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -158,6 +168,7 @@ struct BinaryRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -172,6 +183,7 @@ struct EmptyBlob {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -186,6 +198,7 @@ struct EmptyText {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -200,6 +213,7 @@ struct WideBlob {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "reader"),
     fields(
         field(name = "reader", value(item(prim = "Nat64"))),
@@ -215,6 +229,7 @@ struct CodecNames {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -240,6 +255,7 @@ struct NarrowRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["category", "id"]),
     fields(
@@ -259,6 +275,7 @@ struct InspectionRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["parent_id", "id"]),
     fields(
@@ -275,6 +292,7 @@ struct InspectionDependent {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
@@ -286,6 +304,7 @@ struct Parent {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["parent_id", "id"]),
     fields(
@@ -301,6 +320,7 @@ struct Child {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "next"),
     fields(
@@ -320,6 +340,7 @@ struct Node {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["next", "id"]),
     index(fields = ["alternate", "id"]),
@@ -1684,6 +1705,7 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -1832,7 +1854,7 @@ macro_rules! integer_index_case {
             /// Exercises compound index ordering for the selected numeric type.
             ///
 
-            #[entity(pk(field = "id"), index(fields = ["bucket", "value"]), fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "bucket", value(item(prim = "Nat64"))), field(name = "value", value(item(prim = $prim)))))]
+            #[entity(store = ic_db::testing::FixtureStore, pk(field = "id"), index(fields = ["bucket", "value"]), fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "bucket", value(item(prim = "Nat64"))), field(name = "value", value(item(prim = $prim)))))]
             struct Indexed {}
             let contract = || Schema::new(&[Indexed::SCHEMA]).unwrap();
             let backing = VectorMemory::default();
@@ -1941,6 +1963,7 @@ integer_index_case!(
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "owner", unique),
     index(fields = ["parent", "owner", "rank"]),
@@ -2211,6 +2234,7 @@ fn runtime_schema_admission_rejects_unsupported_index_shapes() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["bucket", "first", "second"]),
     index(fields = ["first", "second"], unique),
@@ -2476,6 +2500,7 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "text", unique),
     fields(
@@ -2552,6 +2577,7 @@ fn indexed_text_obeys_complete_key_bound_while_retaining_row_bounds() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["parent", "alias", "code"]),
     index(fields = ["alias", "code"], unique, present_only),
@@ -3084,6 +3110,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         name = "costarring",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -3096,6 +3123,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         name = "liquid",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -3108,6 +3136,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         name = "costarring",
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -3120,6 +3149,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(name = "costarring", field = "id"),
         index(name = "liquid", field = "id", unique),
@@ -3133,6 +3163,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(field = "target"),
         fields(
@@ -3205,7 +3236,7 @@ fn logical_names_remain_authoritative_when_compact_handles_collide() {
 }
 
 mod enum_values {
-    use ic_db::enum_;
+    use ic_db::design::prelude::*;
 
     ///
     /// Lifecycle
@@ -3252,6 +3283,7 @@ mod enum_values {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -3267,6 +3299,7 @@ struct EnumRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "EnumRow",
     pk(field = "id"),
     fields(
@@ -3283,6 +3316,7 @@ struct EnumReordered {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "EnumRow",
     pk(field = "id"),
     fields(

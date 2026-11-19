@@ -1,6 +1,7 @@
 //! Supplied ULID keys retain typed identity through shared storage and references.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, Ulid, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -12,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "value", unique),
     index(fields = ["owner", "id"]),
@@ -29,6 +31,7 @@ pub(crate) struct KeyRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["target", "id"]),
     fields(
@@ -44,6 +47,7 @@ pub(crate) struct Numbered {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "target"),
     fields(
@@ -304,6 +308,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Identity",
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -316,6 +321,7 @@ struct NumericIdentity {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Identity",
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Ulid"))))

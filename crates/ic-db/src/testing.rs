@@ -11,9 +11,10 @@ use ic_storage::{
 /// or open acquires a fresh lease. Drop the previous database before reopening.
 ///
 /// ```
-/// use ic_db::{Batch, Entity, Schema, entity, testing::Fixture};
+/// use ic_db::design::prelude::*;
+/// use ic_db::{Batch, testing::Fixture};
 ///
-/// #[entity(pk(field="id"), fields(field(name="id", value(item(prim="Nat64")))))]
+/// #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), fields(field(name="id", value(item(prim="Nat64")))))]
 /// struct Profile {}
 ///
 /// let schema = Schema::new(&[Profile::SCHEMA])?;
@@ -90,4 +91,19 @@ impl Fixture {
     pub fn open(&self, schema: Schema) -> Result<Database, Error> {
         Database::open((self.allocation)(), schema)
     }
+}
+
+/// Logical owner of the FixtureStore allocation.
+pub struct FixtureCanister {}
+
+/// Store using the existing fixture.records.v1 allocation key.
+pub struct FixtureStore {}
+
+impl crate::Canister for FixtureCanister {
+    const DECLARATION: &'static str = "ic_db::testing::FixtureCanister";
+}
+impl crate::Store for FixtureStore {
+    type Canister = FixtureCanister;
+    const KEY: &'static str = "fixture.records.v1";
+    const DECLARATION: &'static str = "ic_db::testing::FixtureStore";
 }

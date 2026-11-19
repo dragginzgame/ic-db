@@ -1,6 +1,7 @@
 //! Canonical scalar sets: logical order, strict corruption refusal, shared limits.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, entity, set};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -29,6 +30,7 @@ struct WiderScores {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -43,6 +45,7 @@ struct SetRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "SetRow",
     pk(field = "id"),
     fields(
@@ -82,6 +85,7 @@ struct Empty {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -98,6 +102,7 @@ struct Mixed {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -368,6 +373,7 @@ struct BlobSet {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

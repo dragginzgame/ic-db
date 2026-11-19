@@ -1,5 +1,6 @@
 //! Explicit native comparison of the three engines on the same scalar fixture.
-use ic_db::{Batch, Comparison, Database, Entity, Schema, SortDirection, entity, record};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Comparison, Database, SortDirection};
 use ic_db_icydb_baseline_schema::{Entry as Legacy, EntryInsert as LegacyInsert, EntryReplace};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -40,7 +41,7 @@ fn native_matrix() {
     std::fs::write(path, csv).unwrap();
 }
 
-#[entity(pk(field="id"),index(fields=["category","id"]),fields(
+#[entity(store = crate::TestStore, pk(field="id"),index(fields=["category","id"]),fields(
     field(name="id",value(item(prim="Nat64"))),field(name="category",value(item(prim="Nat64"))),
     field(name="amount",value(item(prim="Nat64")))))]
 struct Entry {}
@@ -580,7 +581,7 @@ fn compound_equality_lookup() {
     use ic_db_icydb_baseline_schema::{Route as LegacyRoute, RouteInsert as LegacyRouteInsert};
     use icydb::{db::query::FieldRef, types::Principal as LegacyPrincipal};
 
-    #[entity(pk(field="id"),index(fields=["issuer","subject"],unique),fields(
+    #[entity(store = crate::TestStore, pk(field="id"),index(fields=["issuer","subject"],unique),fields(
         field(name="id",value(item(prim="Nat64"))),
         field(name="issuer",value(item(prim="Principal"))),
         field(name="subject",value(item(prim="Principal")))))]
@@ -749,3 +750,11 @@ fn compound_equality_lookup() {
         );
     }
 }
+
+/// Logical owner of the TestStore allocation.
+#[canister]
+pub struct TestCanister {}
+
+/// Store using the existing fixture.records.v1 allocation key.
+#[store(canister = TestCanister, key = "fixture.records.v1")]
+pub struct TestStore {}

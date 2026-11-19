@@ -1,6 +1,6 @@
 //! Shared declarations used by the host build and target.
 
-use ic_db::entity;
+use ic_db::design::prelude::*;
 
 pub(crate) mod destination {
     use super::*;
@@ -11,6 +11,7 @@ pub(crate) mod destination {
     ///
 
     #[entity(
+        store = crate::schema::TestStore,
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
     )]
@@ -26,6 +27,7 @@ pub(crate) mod source {
     ///
 
     #[entity(
+        store = crate::schema::TestStore,
         name = "SourceLink",
         pk(field = "id"),
         index(field = "target"),
@@ -45,6 +47,7 @@ pub(crate) mod cycle {
     ///
 
     #[entity(
+        store = crate::schema::TestStore,
         name = "CycleLink",
         pk(field = "id"),
         index(field = "next"),
@@ -55,3 +58,11 @@ pub(crate) mod cycle {
     )]
     pub struct Link {}
 }
+
+/// Logical owner of the TestStore allocation.
+#[canister]
+pub struct TestCanister {}
+
+/// Store using the existing fixture.records.v1 allocation key.
+#[store(canister = TestCanister, key = "fixture.records.v1")]
+pub struct TestStore {}

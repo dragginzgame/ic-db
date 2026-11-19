@@ -1,6 +1,15 @@
 use super::{Error, Registry};
 use crate::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema};
 
+const STORE: &str = "host::schema::Data";
+fn registry_fixture() -> Registry {
+    Registry {
+        stores: vec![(STORE, "host::schema::App", "test.data.v1")],
+        canisters: vec!["host::schema::App"],
+        ..Registry::default()
+    }
+}
+
 static PARENT: EntitySchema = EntitySchema {
     id: crate::schema::handle("Parent"),
     name: "Parent",
@@ -52,12 +61,12 @@ static CHILD: EntitySchema = EntitySchema {
 
 #[test]
 fn order_independent_generation_seals_and_preserves_the_complete_schema() {
-    let mut left = Registry::default();
-    left.register("host::schema::Child", &CHILD);
-    left.register("host::schema::nested::Parent", &PARENT);
-    let mut right = Registry::default();
-    right.register("host::schema::nested::Parent", &PARENT);
-    right.register("host::schema::Child", &CHILD);
+    let mut left = registry_fixture();
+    left.register("host::schema::Child", STORE, &CHILD);
+    left.register("host::schema::nested::Parent", STORE, &PARENT);
+    let mut right = registry_fixture();
+    right.register("host::schema::nested::Parent", STORE, &PARENT);
+    right.register("host::schema::Child", STORE, &CHILD);
     let output = left.generate("host::schema", "crate::schema").unwrap();
     assert_eq!(
         output,
@@ -69,7 +78,7 @@ fn order_independent_generation_seals_and_preserves_the_complete_schema() {
     );
     assert!(output.contains("<crate::schema::nested::Parent as ::ic_db::Entity>::SCHEMA"));
     assert!(output.contains("<crate::schema::Child as ::ic_db::Entity>::SCHEMA"));
-    left.register("host::schema::Late", &PARENT);
+    left.register("host::schema::Late", STORE, &PARENT);
     assert!(matches!(
         left.generate("host::schema", "crate::schema"),
         Err(Error::LateRegistration)
@@ -80,24 +89,24 @@ fn order_independent_generation_seals_and_preserves_the_complete_schema() {
 #[test]
 fn duplicates_and_missing_targets_refuse_before_emission() {
     for reverse in [false, true] {
-        let mut registry = Registry::default();
+        let mut registry = registry_fixture();
         let mut nodes = [("host::schema::B", &CHILD), ("host::schema::A", &PARENT)];
         if reverse {
             nodes.reverse();
         }
         for (path, schema) in nodes {
-            registry.register(path, schema);
-            registry.register(path, schema);
+            registry.register(path, STORE, schema);
+            registry.register(path, STORE, schema);
         }
         assert!(matches!(
             registry.generate("host::schema", "crate::schema"),
             Err(Error::DuplicatePath("host::schema::A"))
         ));
     }
-    let mut registry = Registry::default();
-    registry.register("host::schema::Child", &CHILD);
+    let mut registry = registry_fixture();
+    registry.register("host::schema::Child", STORE, &CHILD);
     // A similarly prefixed module does not supply a missing target.
-    registry.register("host::schema_extra::Parent", &PARENT);
+    registry.register("host::schema_extra::Parent", STORE, &PARENT);
     let error = registry
         .generate("host::schema", "crate::schema")
         .unwrap_err();
@@ -109,14 +118,14 @@ fn duplicates_and_missing_targets_refuse_before_emission() {
         registry.generate("host::missing", "crate::schema"),
         Err(Error::EmptyModule)
     ));
-    registry.register("host::schema::Parent", &PARENT);
+    registry.register("host::schema::Parent", STORE, &PARENT);
     registry.generate("host::schema", "crate::schema").unwrap();
-    let mut registry = Registry::default();
-    registry.register("host::schema::Parent", &PARENT);
-    registry.register("host::schema::DifferentPathSameId", &PARENT);
+    let mut registry = registry_fixture();
+    registry.register("host::schema::Parent", STORE, &PARENT);
+    registry.register("host::schema::DifferentPathSameId", STORE, &PARENT);
     assert!(matches!(
         registry.generate("host::schema", "crate::schema"),
-        Err(Error::Schema(crate::Error::InvalidSchema))
+        Err(Error::Ownership(message)) if message.contains("both declare entity Parent")
     ));
 }
 
@@ -129,9 +138,9 @@ fn mismatched_reference_identifies_both_fields_and_key_types() {
         }],
         ..PARENT
     };
-    let mut registry = Registry::default();
-    registry.register("host::schema::Child", &CHILD);
-    registry.register("host::schema::Parent", &ULID_PARENT);
+    let mut registry = registry_fixture();
+    registry.register("host::schema::Child", STORE, &CHILD);
+    registry.register("host::schema::Parent", STORE, &ULID_PARENT);
     let error = registry
         .generate("host::schema", "crate::schema")
         .unwrap_err();

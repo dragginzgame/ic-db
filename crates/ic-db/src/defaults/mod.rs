@@ -58,8 +58,8 @@ impl LiteralDefault {
 /// Generated inputs implement this once per entity; execution stays in `Batch`.
 /// Managed fields have no input setters:
 /// ```compile_fail
-/// use ic_db::entity;
-/// #[entity(pk(field="id"), fields(
+/// use ic_db::design::prelude::*;
+/// #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), fields(
 ///     field(name="id",value(item(prim="Nat64"))),
 ///     field(name="created",value(item(prim="Timestamp")),managed="created_at")
 /// ))]

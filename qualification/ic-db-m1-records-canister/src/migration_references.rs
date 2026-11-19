@@ -6,7 +6,8 @@ use crate::{
     maintenance::{COPY_SOURCE, COPY_TARGET},
     runtime,
 };
-use ic_db::{Batch, Entity, Error, Schema, SchemaTransition};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Error, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use records_schema::OptionalLink;
 use std::ops::Bound;
@@ -86,7 +87,8 @@ fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage
 /// Exercises references to `Self` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "OptionalLink",
     pk(field = "id"),
     index(fields = ["next", "id"]),

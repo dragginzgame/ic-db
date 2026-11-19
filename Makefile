@@ -83,6 +83,7 @@ docs-check:
 .PHONY: schema-build-check
 schema-build-check:
 	perl scripts/check-schema-builds.pl
+	cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-schema-owner-producer -p ic-db-local-schema-test --test admission --test schema_build
 
 .PHONY: qualification-tooling-check
 toko-tooling-check: qualification-tooling-check
@@ -223,10 +224,10 @@ m1-records-artifact:
 	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/records-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
-m1-records:
+m1-records: schema-build-check
 	cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m1-records-canister --lib
 	cargo test --locked -p ic-db --test enum_collections
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test cardinality --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --test schema_build --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test cardinality --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact

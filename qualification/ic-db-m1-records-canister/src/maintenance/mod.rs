@@ -4,12 +4,13 @@
 mod jobs;
 
 use crate::{
-    Document, Entry, KEY, compiled,
+    Document, Entry, KEY, RecordsStore,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
     runtime,
     schema::ManagedRow,
 };
-use ic_db::{Batch, Entity, EntitySchema, Error, QueryCursor, Schema, SchemaTransition, Timestamp};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, EntitySchema, Error, QueryCursor, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableCell};
 
 // maintenance_control
@@ -230,7 +231,8 @@ pub const COPY_NEXT: &str = "m1.copy.next.v1";
 /// Exercises an alternate `Entry` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "Entry",
     pk(field = "id"),
     index(fields = ["category", "id"]),
@@ -255,7 +257,7 @@ fn widen_entry(row: Entry, _: &[u8]) -> Result<EntryV2, Error> {
 }
 
 fn declaration(inputs: &[u8]) -> Result<(Schema, SchemaTransition), String> {
-    let source = compiled();
+    let source = RecordsStore::compiled();
     let entities: Vec<_> = source
         .entities()
         .iter()
@@ -366,7 +368,8 @@ type CopyEntries = (bool, Vec<(Vec<u8>, Vec<u8>)>);
 /// Exercises an alternate `ManagedRow` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "ManagedRow",
     pk(field = "id"),
     index(field = "body", unique),
@@ -489,7 +492,8 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
 /// Exercises references to `Entry` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "A_Mapping",
     pk(field = "id"),
     index(field = "entry"),
@@ -509,7 +513,8 @@ struct CopyMapping {}
 /// Exercises an alternate `Z_Empty` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "Z_Empty",
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -634,7 +639,8 @@ fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
 /// Exercises an alternate `Entry` declaration under the same logical identity.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = records_schema::RecordsStore,
     name = "Entry",
     pk(field = "id"),
     index(fields = ["category", "id"]),

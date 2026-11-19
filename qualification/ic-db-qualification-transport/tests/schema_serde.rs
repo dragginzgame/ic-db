@@ -1,6 +1,7 @@
 //! Public schema value representations at the Wire and JSON boundaries.
 
-use ic_db::{Date, Decimal, Duration, Float32, Float64, Timestamp, U256, Ulid};
+use ic_db::design::prelude::*;
+
 use ic_wire::{Encoding, Limits};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -40,7 +41,7 @@ fn bare_ulid_accepts_the_existing_fixed_array_endpoint_payload() {
 /// Exercises endpoint serialization for database scalar values.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "date", value(item(prim = "Date"))),
     field(name = "decimal", value(item(prim = "Decimal", scale = 2))),
     field(name = "wide", value(item(prim = "U256"))),
@@ -89,7 +90,8 @@ fn wire_and_row_codecs_choose_their_own_timestamp_bytes() {
     /// Provides one timestamp for comparison across Wire and row encodings.
     ///
 
-    #[ic_db::entity(
+    #[entity(
+        store = crate::TestStore,
         pk(field = "id"),
         fields(
             field(name = "id", value(item(prim = "Nat8"))),
@@ -109,3 +111,11 @@ fn wire_and_row_codecs_choose_their_own_timestamp_bytes() {
     assert_eq!(decode::<Event>(&[7, 2]).unwrap(), event);
     assert_eq!(Event::decode(&stored).unwrap(), event);
 }
+
+/// Logical owner of the TestStore allocation.
+#[canister]
+pub struct TestCanister {}
+
+/// Store using the existing fixture.records.v1 allocation key.
+#[store(canister = TestCanister, key = "fixture.records.v1")]
+pub struct TestStore {}

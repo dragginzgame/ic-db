@@ -1,5 +1,6 @@
 use strict;
 use warnings;
+use File::Find qw(find);
 use JSON::PP qw(decode_json);
 
 # These two fixtures exercise the complete producer/import-only consumer contract.
@@ -38,7 +39,7 @@ for my $name (sort keys %consumer_of) {
     die "$owner must generate its shared schema in its own build script\n" unless $owners{$owner};
     die "$name must import $owner as a normal dependency\n"
         unless grep { $_->{name} eq $owner && !defined $_->{kind} } @{$consumer->{dependencies}};
-    die "$name is an import-only fixture; remove the consumer build script and call compiled() from $owner\n"
+    die "$name is an import-only fixture; remove the consumer build script and import the typed store roster from $owner\n"
         if has_script($consumer);
 }
 
@@ -50,3 +51,20 @@ for my $package (values %packages) {
     }
 }
 print "Shared schema build ownership verified in both Cargo workspaces.\n";
+
+# The frozen comparison schema uses IcyDB's own prelude.
+my $attribute = qr/(?:canister|store|entity|enum_|list|map|newtype|record|set)\b/;
+find({ no_chdir => 1, wanted => sub {
+    if (-d) {
+        $File::Find::prune = 1 if m{(?:^|/)(?:target|ic-db-icydb-baseline-schema)$};
+        return;
+    }
+    return unless /\.rs$/;
+    open my $source, '<', $_ or die "$_: $!";
+    my $rust = do { local $/; <$source> };
+    die "$_: use unqualified IC DB schema attributes from the design prelude\n"
+        if $rust =~ /^\h*(?:\/\/[!\/]\h*(?:\#\h+)?)?\#\[\s*(?:::)?ic_db::$attribute/m;
+    return unless $rust =~ /^\h*\#\[\s*$attribute/m;
+    die "$_: import ic_db::design::prelude::* when declaring schema types\n"
+        unless $rust =~ /\buse\s+ic_db::(?:design::prelude::\*|\{[^;]*\bdesign::prelude::\*)/;
+}}, 'crates', 'qualification');

@@ -1,6 +1,7 @@
 //! Maps preserve scalar key identity without overwriting corrupt stored entries.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, entity, map};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -38,6 +39,7 @@ struct WiderRates {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -52,6 +54,7 @@ struct MapRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "MapRow",
     pk(field = "id"),
     fields(
@@ -67,6 +70,7 @@ struct WiderRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -93,6 +97,7 @@ struct Lists {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -115,6 +120,7 @@ struct Tree {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -141,6 +147,7 @@ struct Blobs {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -163,6 +170,7 @@ struct Empty {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

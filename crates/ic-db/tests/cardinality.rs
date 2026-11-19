@@ -1,6 +1,7 @@
 //! Maintained counts share the batch rollback and copy-publication boundaries.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, SchemaCopy, SchemaTransition, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, SchemaCopy, SchemaTransition};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -12,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Row",
     pk(field = "id"),
     fields(
@@ -27,6 +29,7 @@ struct Row {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Row",
     pk(field = "id"),
     fields(
@@ -42,6 +45,7 @@ struct Wide {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]

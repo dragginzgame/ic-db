@@ -5,7 +5,8 @@ use crate::{
     open,
     schema::{BinaryObject, Document, EnvelopeRow},
 };
-use ic_db::{Batch, GroupCursor, GroupOrder, JobHandle, JobOutcome, Timestamp};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, GroupCursor, GroupOrder, JobHandle, JobOutcome};
 
 // job_values_write
 // Populate the value and text inputs for retained aggregates.
@@ -137,7 +138,7 @@ fn job_values_advance(
 /// Carries the `Nat64` value of `id`.
 ///
 
-#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct Id {}
 
 ///
@@ -145,7 +146,7 @@ struct Id {}
 /// Groups `id` and `a` into one record.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "id", value(item(prim = "Nat64"))),
     field(name = "a", value(item(prim = "Text", max_bytes = 1024)))
 ))]
@@ -156,7 +157,7 @@ struct IdText {}
 /// Carries the `Text` value of `a`.
 ///
 
-#[ic_db::record(fields(field(name = "a", value(item(prim = "Text", max_bytes = 1024)))))]
+#[record(fields(field(name = "a", value(item(prim = "Text", max_bytes = 1024)))))]
 struct Text {}
 
 ///
@@ -164,7 +165,7 @@ struct Text {}
 /// Carries an optional `Text` value of `note`.
 ///
 
-#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
+#[record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 64)))))]
 struct Note {}
 
 ///
@@ -172,7 +173,7 @@ struct Note {}
 /// Carries the `Blob` value of `payload`.
 ///
 
-#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
+#[record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 struct Payload {}
 
 type WriteRequest = (Vec<(u64, u64, Option<String>)>, Vec<(u64, String)>);

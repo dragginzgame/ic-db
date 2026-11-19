@@ -5,6 +5,7 @@ use crate::{
     open, runtime,
     schema::{BinaryObject, DecimalRow, Document, Entry, ListRow},
 };
+use ic_db::design::prelude::*;
 use ic_db::{Comparison, IndexValue, QueryCursor};
 
 // fluent_query
@@ -408,7 +409,7 @@ fn measured_listing(
 /// Groups `id` and `amount` into one record.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "id", value(item(prim = "Nat64"))),
     field(name = "amount", value(item(prim = "Nat64")))
 ))]
@@ -419,7 +420,7 @@ pub(super) struct Summary {}
 /// Carries the `Nat64` value of `id`.
 ///
 
-#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 pub(super) struct IdOnly {}
 
 type Request = (Option<Vec<u8>>, bool, Option<u64>, u64, u32, u32, u32);

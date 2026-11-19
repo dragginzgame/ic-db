@@ -7,7 +7,8 @@ mod count_profile;
 
 use ic_db_qualification_transport as transport;
 
-use ic_db::{Batch, Database, Entity, Error, Schema, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, DefaultMemoryImpl, GenericAllocationPolicy, MemoryAuthority, MemoryRequest,
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
@@ -380,6 +381,7 @@ fn category_exists(category: u64) -> (bool, u64) {
 ///
 
 #[entity(
+    store = crate::RecordsStore,
     pk(field = "id"),
     index(fields = ["category", "id"]),
     fields(
@@ -390,7 +392,7 @@ fn category_exists(category: u64) -> (bool, u64) {
 )]
 struct Entry {}
 
-const KEY: &str = "m1.benchmark.records.v1";
+const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
 type Row = (u64, u64, u64);
 
 fn compiled() -> Schema {
@@ -441,7 +443,7 @@ fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
 ///
 
 #[cfg(feature = "aggregate-comparison")]
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "amount", value(item(prim = "Nat64")))))]
 struct AmountOnly {}
 
 ///
@@ -450,5 +452,13 @@ struct AmountOnly {}
 ///
 
 #[cfg(feature = "aggregate-comparison")]
-#[ic_db::record(fields(field(name = "category", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "category", value(item(prim = "Nat64")))))]
 struct CategoryOnly {}
+
+/// Logical owner of the RecordsStore allocation.
+#[canister]
+pub struct ProbeCanister {}
+
+/// Store using the existing m1.benchmark.records.v1 allocation key.
+#[store(canister = ProbeCanister, key = "m1.benchmark.records.v1")]
+pub struct RecordsStore {}

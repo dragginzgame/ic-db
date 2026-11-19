@@ -1,9 +1,7 @@
 //! Differential checks against SQLite for shared query semantics.
 
-use ic_db::{
-    AggregateJobs, Batch, Comparison, Database, Decimal, Entity, JobOutcome, QueryCursor, Schema,
-    Timestamp, entity, record,
-};
+use ic_db::design::prelude::*;
+use ic_db::{AggregateJobs, Batch, Comparison, Database, JobOutcome, QueryCursor};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -16,6 +14,7 @@ use rusqlite::{Connection, params};
 ///
 
 #[entity(
+    store = crate::TestStore,
     pk(field = "id"),
     index(fields = ["lane", "rank"]),
     index(fields = ["lane", "price", "id"], unique, present_only),
@@ -404,3 +403,11 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
     drop(db);
     check(&open(&host));
 }
+
+/// Logical owner of the TestStore allocation.
+#[canister]
+pub struct TestCanister {}
+
+/// Store using the existing fixture.records.v1 allocation key.
+#[store(canister = TestCanister, key = "fixture.records.v1")]
+pub struct TestStore {}

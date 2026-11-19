@@ -1,6 +1,7 @@
 //! Consumer with a renamed Cargo dependency and an ordinary Rust module alias.
 
 use accounts as directory;
+use ic_db::CompiledCanister;
 use ic_db_qualification_transport as transport;
 
 // schema_size
@@ -17,5 +18,8 @@ use ic_db_qualification_transport as transport;
     on_error = crate::transport::endpoint_error
 )]
 fn schema_size((): ()) -> u64 {
-    directory::compiled().entities().len() as u64
+    directory::model::Hub::STORES
+        .iter()
+        .map(|store| (store.schema)().entities().len() as u64)
+        .sum()
 }

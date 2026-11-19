@@ -1,7 +1,8 @@
 //! Raw-byte ordering shares one contract across index, filter and aggregate paths.
 
 use super::{C, host};
-use ic_db::{Batch, Database, Entity, Error, GroupOrder, IndexValue, Schema, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, GroupOrder, IndexValue};
 use ic_storage::{StableKey, VectorMemory, adapter::StableBTreeMap};
 
 ///
@@ -10,6 +11,7 @@ use ic_storage::{StableKey, VectorMemory, adapter::StableBTreeMap};
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["payload", "id"]),
     index(fields = ["optional", "id"]),
@@ -28,7 +30,7 @@ struct Binary {}
 /// Carries the `Blob` value of `payload`.
 ///
 
-#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
+#[record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 struct Payload {}
 
 ///
@@ -36,10 +38,7 @@ struct Payload {}
 /// Carries an optional `Blob` value of `optional`.
 ///
 
-#[ic_db::record(fields(field(
-    name = "optional",
-    value(opt, item(prim = "Blob", max_bytes = 1024))
-)))]
+#[record(fields(field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 1024)))))]
 struct Optional {}
 
 #[test]

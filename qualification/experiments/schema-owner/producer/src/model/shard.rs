@@ -1,9 +1,12 @@
+use ic_db::design::prelude::*;
+
 ///
 /// Entry
 /// Shard entry record.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = crate::model::Accounts,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]

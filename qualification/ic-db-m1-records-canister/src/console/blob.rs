@@ -2,14 +2,15 @@
 
 use super::{Page, display, display_groups, display_scalar, extremum, hex};
 use crate::{handles::Query, schema::BinaryObject};
-use ic_db::{Comparison, Entity, Error};
+use ic_db::design::prelude::*;
+use ic_db::{Comparison, Error};
 
 ///
 /// Payload
 /// Carries the `Blob` value of `payload`.
 ///
 
-#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
+#[record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 1024)))))]
 pub(super) struct Payload {}
 
 ///
@@ -17,10 +18,7 @@ pub(super) struct Payload {}
 /// Carries an optional `Blob` value of `optional`.
 ///
 
-#[ic_db::record(fields(field(
-    name = "optional",
-    value(opt, item(prim = "Blob", max_bytes = 32))
-)))]
+#[record(fields(field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 32)))))]
 pub(super) struct Optional {}
 
 pub(super) fn query(

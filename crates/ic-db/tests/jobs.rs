@@ -1,9 +1,7 @@
 //! Exact retained aggregates: independent results, retries, invalidation and reclamation.
 
-use ic_db::{
-    AggregateJobs, Batch, Comparison, Database, Entity, Error, GroupOrder, JobHandle, JobOutcome,
-    Schema, Timestamp, entity,
-};
+use ic_db::design::prelude::*;
+use ic_db::{AggregateJobs, Batch, Comparison, Database, Error, GroupOrder, JobHandle, JobOutcome};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -15,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "flag"),
     fields(
@@ -32,6 +31,7 @@ struct Row {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
@@ -42,7 +42,7 @@ struct Other {}
 /// Carries an optional `Int128` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Int128")))))]
+#[record(fields(field(name = "amount", value(opt, item(prim = "Int128")))))]
 struct Amount {}
 
 ///
@@ -50,7 +50,7 @@ struct Amount {}
 /// Carries the `Nat64` value of `id`.
 ///
 
-#[ic_db::record(fields(field(name = "id", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "id", value(item(prim = "Nat64")))))]
 struct Id {}
 
 ///
@@ -58,7 +58,7 @@ struct Id {}
 /// Carries the `Blob` value of `payload`.
 ///
 
-#[ic_db::record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 3500)))))]
+#[record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 3500)))))]
 struct Payload {}
 fn time(ms: i64) -> Timestamp {
     Timestamp::from_millis(ms)
@@ -422,6 +422,7 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(field = "bytes"),
         fields(
@@ -436,10 +437,7 @@ fn retained_optional_blob_groups_preserve_absence_across_chunks() {
     /// Carries an optional `Blob` value of `bytes`.
     ///
 
-    #[ic_db::record(fields(field(
-        name = "bytes",
-        value(opt, item(prim = "Blob", max_bytes = 16))
-    )))]
+    #[record(fields(field(name = "bytes", value(opt, item(prim = "Blob", max_bytes = 16)))))]
     struct Key {}
     let values = [
         None,
@@ -1745,6 +1743,7 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -1759,7 +1758,7 @@ struct NumericRow {}
 /// Carries the `Decimal` value of `price`.
 ///
 
-#[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "price", value(item(prim = "Decimal", scale = 2)))))]
 struct Price {}
 
 ///
@@ -1767,7 +1766,7 @@ struct Price {}
 /// Carries the `Decimal` value of `price`.
 ///
 
-#[ic_db::record(fields(field(name = "price", value(item(prim = "Decimal", scale = 3)))))]
+#[record(fields(field(name = "price", value(item(prim = "Decimal", scale = 3)))))]
 struct WrongScale {}
 
 ///
@@ -1775,7 +1774,7 @@ struct WrongScale {}
 /// Carries the `U256` value of `wide`.
 ///
 
-#[ic_db::record(fields(field(name = "wide", value(item(prim = "U256")))))]
+#[record(fields(field(name = "wide", value(item(prim = "U256")))))]
 struct Wide {}
 #[test]
 fn decimal_coefficients_and_full_width_unsigned_totals_survive_checkpoints() {
@@ -1842,7 +1841,7 @@ fn decimal_coefficients_and_full_width_unsigned_totals_survive_checkpoints() {
 /// Carries an optional `Decimal` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 0)))))]
+#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 0)))))]
 struct Average0 {}
 
 ///
@@ -1850,7 +1849,7 @@ struct Average0 {}
 /// Carries an optional `Decimal` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
+#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct Average2 {}
 
 ///
@@ -1858,7 +1857,7 @@ struct Average2 {}
 /// Carries an optional `Decimal` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 28)))))]
+#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 28)))))]
 struct Average28 {}
 
 ///
@@ -1866,7 +1865,7 @@ struct Average28 {}
 /// Carries the `Decimal` value of `wide`.
 ///
 
-#[ic_db::record(fields(field(name = "wide", value(item(prim = "Decimal", scale = 0)))))]
+#[record(fields(field(name = "wide", value(item(prim = "Decimal", scale = 0)))))]
 struct WideAverage {}
 
 #[test]
@@ -2188,7 +2187,7 @@ fn unsigned_average_checks_result_after_division_across_messages() {
 /// Carries the `Nat8` value of `flag`.
 ///
 
-#[ic_db::record(fields(field(name = "flag", value(item(prim = "Nat8")))))]
+#[record(fields(field(name = "flag", value(item(prim = "Nat8")))))]
 struct Flag {}
 
 ///
@@ -2196,7 +2195,7 @@ struct Flag {}
 /// Groups `amount` and `flag` into one record.
 ///
 
-#[ic_db::record(fields(
+#[record(fields(
     field(name = "amount", value(opt, item(prim = "Int128"))),
     field(name = "flag", value(item(prim = "Nat8")))
 ))]
@@ -2576,6 +2575,7 @@ fn grouped_job_cardinality_refuses_even_when_output_filters_hide_every_group() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -2589,7 +2589,7 @@ struct LabelRow {}
 /// Carries the `Text` value of `label`.
 ///
 
-#[ic_db::record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 1500)))))]
+#[record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 1500)))))]
 struct Label {}
 #[test]
 fn grouped_job_frame_bound_is_independent_of_output_and_synchronous_state_limits() {
@@ -3231,6 +3231,7 @@ fn retained_field_counts_distinguish_rows_presence_and_empty_values() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["note", "id"], unique, present_only),
     fields(
@@ -3247,7 +3248,7 @@ struct PresenceRow {}
 /// Carries an optional `Text` value of `note`.
 ///
 
-#[ic_db::record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 12)))))]
+#[record(fields(field(name = "note", value(opt, item(prim = "Text", max_bytes = 12)))))]
 struct PresenceNote {}
 
 #[test]
@@ -5052,6 +5053,7 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -5065,7 +5067,7 @@ struct WideLabelRow {}
 /// Carries the `Text` value of `label`.
 ///
 
-#[ic_db::record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 4000)))))]
+#[record(fields(field(name = "label", value(item(prim = "Text", max_bytes = 4000)))))]
 struct WideLabel {}
 
 #[test]
@@ -5603,7 +5605,7 @@ fn retained_group_text_extrema_restore_winners_and_apply_completed_order() {
 /// Gives `Decimal` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Decimal", scale = 2))]
+#[newtype(item(prim = "Decimal", scale = 2))]
 struct UnitPrice {}
 
 ///
@@ -5611,7 +5613,7 @@ struct UnitPrice {}
 /// Gives `Int16` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Int16"))]
+#[newtype(item(prim = "Int16"))]
 struct Quantity {}
 
 ///
@@ -5620,6 +5622,7 @@ struct Quantity {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -5698,7 +5701,7 @@ fn numeric_newtype_inputs_share_widening_and_retained_decimal_rounding() {
 /// Carries the `UnitPrice` value of `price`.
 ///
 
-#[ic_db::record(fields(field(name = "price", value(item(is = "UnitPrice")))))]
+#[record(fields(field(name = "price", value(item(is = "UnitPrice")))))]
 struct NamedPrice {}
 
 ///
@@ -5706,7 +5709,7 @@ struct NamedPrice {}
 /// Gives `Decimal` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Decimal", scale = 2))]
+#[newtype(item(prim = "Decimal", scale = 2))]
 struct Discount {}
 
 ///
@@ -5714,7 +5717,7 @@ struct Discount {}
 /// Carries the `Discount` value of `price`.
 ///
 
-#[ic_db::record(fields(field(name = "price", value(item(is = "Discount")))))]
+#[record(fields(field(name = "price", value(item(is = "Discount")))))]
 struct WrongUnit {}
 
 ///
@@ -5722,7 +5725,7 @@ struct WrongUnit {}
 /// Gives `Decimal` a distinct schema identity.
 ///
 
-#[ic_db::newtype(name = "UnitPrice", item(prim = "Decimal", scale = 3))]
+#[newtype(name = "UnitPrice", item(prim = "Decimal", scale = 3))]
 struct OtherScale {}
 
 ///
@@ -5730,7 +5733,7 @@ struct OtherScale {}
 /// Carries the `OtherScale` value of `price`.
 ///
 
-#[ic_db::record(fields(field(name = "price", value(item(is = "OtherScale")))))]
+#[record(fields(field(name = "price", value(item(is = "OtherScale")))))]
 struct ChangedUnit {}
 
 ///
@@ -5738,7 +5741,7 @@ struct ChangedUnit {}
 /// Carries an optional `Quantity` value of `amount`.
 ///
 
-#[ic_db::record(fields(field(name = "amount", value(opt, item(is = "Quantity")))))]
+#[record(fields(field(name = "amount", value(opt, item(is = "Quantity")))))]
 struct NamedAmount {}
 
 #[test]

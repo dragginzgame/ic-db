@@ -1,8 +1,9 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
 
+use ic_db::design::prelude::*;
 use ic_db::{
-    AggregateJobs, Batch, CopyStatus, Database, Entity, Error, JobOutcome, Maintenance,
-    RetiredSource, Schema, SchemaCopy, SchemaTransition, Timestamp, entity,
+    AggregateJobs, Batch, CopyStatus, Database, Error, JobOutcome, Maintenance, RetiredSource,
+    SchemaCopy, SchemaTransition,
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
@@ -15,6 +16,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Thing",
     pk(field = "id"),
     fields(
@@ -30,6 +32,7 @@ struct Source {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Thing",
     pk(field = "id"),
     index(field = "value", unique),
@@ -46,6 +49,7 @@ struct Target {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Thing",
     pk(field = "id"),
     fields(
@@ -65,6 +69,7 @@ struct ManagedSource {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Timed",
     pk(field = "id"),
     fields(
@@ -90,6 +95,7 @@ struct TimedSource {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Timed",
     pk(field = "id"),
     index(field = "changed"),
@@ -112,6 +118,7 @@ struct TimedTarget {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(field(name = "id", value(item(prim = "Nat64"))))
 )]
@@ -574,6 +581,7 @@ fn migrated_row_can_link_to_a_new_entity_after_publication() {
     ///
 
     #[entity(
+        store = ic_db::testing::FixtureStore,
         name = "Other",
         pk(field = "id"),
         index(field = "thing"),
@@ -1258,6 +1266,7 @@ fn timed_transform(row: TimedSource, _: &[u8]) -> Result<TimedTarget, Error> {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "A_Link",
     pk(field = "id"),
     index(field = "user"),
@@ -1284,6 +1293,7 @@ struct Link {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Z_User",
     pk(field = "id"),
     index(field = "link"),
@@ -1305,6 +1315,7 @@ struct UserOld {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Z_User",
     pk(field = "id"),
     index(field = "link"),

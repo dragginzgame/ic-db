@@ -1,8 +1,7 @@
 //! Durable source freezing, exact identity admission and pre-copy cancellation.
 
-use ic_db::{
-    Batch, Database, Entity, Error, Maintenance, QueryCursor, Schema, SchemaTransition, entity,
-};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, Maintenance, QueryCursor, SchemaTransition};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -14,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Thing",
     pk(field = "id"),
     index(field = "value"),
@@ -30,6 +30,7 @@ struct Source {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Thing",
     pk(field = "id"),
     index(field = "value"),

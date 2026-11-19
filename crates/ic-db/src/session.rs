@@ -10,8 +10,9 @@ use std::{
 ///
 /// All declared components are required.
 /// ```compile_fail,E0063
-/// # use ic_db::{entity, DatabaseSession};
-/// # #[entity(pk(field="id"), index(fields=["issuer","subject"], unique), fields(
+/// # use ic_db::design::prelude::*;
+/// # use ic_db::DatabaseSession;
+/// # #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), index(fields=["issuer","subject"], unique), fields(
 /// #   field(name="id", value(item(prim="Nat64"))), field(name="issuer", value(item(prim="Nat64"))),
 /// #   field(name="subject", value(item(prim="Nat64")))))]
 /// # struct User {}
@@ -20,8 +21,9 @@ use std::{
 ///
 /// Component types are exact.
 /// ```compile_fail,E0308
-/// # use ic_db::{entity, DatabaseSession};
-/// # #[entity(pk(field="id"), index(fields=["issuer","subject"], unique), fields(
+/// # use ic_db::design::prelude::*;
+/// # use ic_db::DatabaseSession;
+/// # #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), index(fields=["issuer","subject"], unique), fields(
 /// #   field(name="id", value(item(prim="Nat64"))), field(name="issuer", value(item(prim="Nat64"))),
 /// #   field(name="subject", value(item(prim="Nat64")))))]
 /// # struct User {}
@@ -30,8 +32,9 @@ use std::{
 ///
 /// The key determines the result entity.
 /// ```compile_fail,E0308
-/// # use ic_db::{entity, DatabaseSession};
-/// # #[entity(pk(field="id"), index(fields=["issuer","subject"], unique), fields(
+/// # use ic_db::design::prelude::*;
+/// # use ic_db::DatabaseSession;
+/// # #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), index(fields=["issuer","subject"], unique), fields(
 /// #   field(name="id", value(item(prim="Nat64"))), field(name="issuer", value(item(prim="Nat64"))),
 /// #   field(name="subject", value(item(prim="Nat64")))))]
 /// # struct User {}
@@ -42,8 +45,8 @@ use std::{
 ///
 /// Only unique indexes generate keys.
 /// ```compile_fail,E0422
-/// # use ic_db::entity;
-/// # #[entity(pk(field="id"), index(field="owner"), fields(
+/// # use ic_db::design::prelude::*;
+/// # #[entity(store = ic_db::testing::FixtureStore, pk(field="id"), index(field="owner"), fields(
 /// #   field(name="id", value(item(prim="Nat64"))), field(name="owner", value(item(prim="Nat64")))))]
 /// # struct User {}
 /// let _ = UserByOwner { owner: 1 };

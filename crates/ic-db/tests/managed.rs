@@ -1,6 +1,7 @@
 //! Frozen IcyDB time-policy regressions on the single typed commit path.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, Timestamp, entity};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -11,7 +12,7 @@ use ic_storage::{
 /// Gives `Timestamp` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Timestamp"))]
+#[newtype(item(prim = "Timestamp"))]
 struct CreatedAt {}
 
 ///
@@ -19,7 +20,7 @@ struct CreatedAt {}
 /// Gives `Timestamp` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Timestamp"))]
+#[newtype(item(prim = "Timestamp"))]
 struct UpdatedAt {}
 type Changed = UpdatedAt;
 
@@ -28,7 +29,7 @@ type Changed = UpdatedAt;
 /// Gives `Int64` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Int64"))]
+#[newtype(item(prim = "Int64"))]
 struct Counter {}
 
 ///
@@ -37,6 +38,7 @@ struct Counter {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "body", unique),
     index(field = "changed"),
@@ -63,6 +65,7 @@ struct Entry {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -78,6 +81,7 @@ struct CreationOnly {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

@@ -8,6 +8,7 @@ mod enumeration;
 mod field;
 mod insert;
 mod map;
+mod ownership;
 mod record;
 mod set;
 #[cfg(test)]
@@ -113,6 +114,48 @@ pub fn record(args: TokenStream, item: TokenStream) -> TokenStream {
     record::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Declare a logical database canister.
+#[proc_macro_attribute]
+pub fn canister(args: TokenStream, item: TokenStream) -> TokenStream {
+    ownership::expand(args.into(), item.into(), false)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Declare a store with a typed canister owner and an IC Storage allocation key.
+#[proc_macro_attribute]
+pub fn store(args: TokenStream, item: TokenStream) -> TokenStream {
+    ownership::expand(args.into(), item.into(), true)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn membership(name: &syn::Ident) -> Tokens {
+    quote! {
+            const _: () = {
+                if let ::std::option::Option::Some(root) = ::std::option_env!("IC_DB_SCHEMA_ROOT") {
+                    const PATH: &str = ::std::concat!(::std::module_path!(), "::", ::std::stringify!(#name));
+                    ::std::assert!(
+                        ::ic_db::__private::check_schema_member(
+                            PATH, root,
+                            ::std::option_env!(::std::concat!("IC_DB_SCHEMA_MEMBER_", ::std::stringify!(#name))),
+                        ),
+                        ::std::concat!("declaration missing from host schema: ", ::std::module_path!(), "::", ::std::stringify!(#name)),
+                    );
+                }
+            };
+    }
+}
+
+fn owner_path(meta: &Meta) -> syn::Result<syn::Path> {
+    if let Meta::NameValue(pair) = meta
+        && let Expr::Path(path) = &pair.value
+    {
+        return Ok(path.path.clone());
+    }
+    Err(syn::Error::new_spanned(meta, "expected a Rust type path"))
 }
 
 struct Index {
@@ -247,11 +290,14 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let item = declaration(item, "entity")?;
     let mut logical_name = None;
     let mut primary = None;
+    let mut store = None;
     let mut authored = None;
     let mut indexes = Vec::new();
     for meta in metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut logical_name, text(&meta)?, &meta)?;
+        } else if meta.path().is_ident("store") {
+            once(&mut store, owner_path(&meta)?, &meta)?;
         } else if meta.path().is_ident("pk") {
             let mut key = None;
             for part in meta_items(&meta)? {
@@ -311,6 +357,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     }
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let logical_name = declaration_name(logical_name, &item.ident, "entity")?;
+    let store = store.ok_or_else(|| fail("entity requires store = StoreType"))?;
     let primary = primary.ok_or_else(|| fail("entity requires pk"))?;
     let mut authored = authored.ok_or_else(|| fail("entity requires fields"))?;
     let names: BTreeSet<_> = authored.iter().map(|field| &field.name).collect();
@@ -521,6 +568,10 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
 
         quote!(::ic_db::__private::validate_managed_order([#(#values),*])?;)
     };
+    let membership = membership(name);
+    let reference_checks = authored.iter().filter_map(|field| field.reference.as_ref()).map(|(target,_)| quote! {
+        { fn same_store<T: ::ic_db::Entity<Store = #store>>() {} let _ = same_store::<#target>; }
+    });
     let validate_managed = managed_check(quote!(self));
     let decode_managed = managed_check(quote!(row));
 
@@ -534,8 +585,9 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         impl #name { #(#field_constants)* }
 
         impl ::ic_db::Entity for #name {
+            type Store = #store;
             type Key = #key_type;
-            fn declaration_path() -> &'static str { concat!(module_path!(), "::", stringify!(#name)) }
+            fn declaration_path() -> &'static str { #(#reference_checks)* concat!(module_path!(), "::", stringify!(#name)) }
             const SCHEMA: &'static ::ic_db::EntitySchema = &::ic_db::EntitySchema {
                 id: ::ic_db::__private::handle(#logical_name), name: #logical_name, fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
@@ -581,18 +633,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             const NAME: &'static str = #logical_name;
         }
 
-        const _: () = {
-            if let ::std::option::Option::Some(root) = ::std::option_env!("IC_DB_SCHEMA_ROOT") {
-                const PATH: &str = ::std::concat!(::std::module_path!(), "::", ::std::stringify!(#name));
-                ::std::assert!(
-                    ::ic_db::__private::check_schema_member(
-                        PATH, root,
-                        ::std::option_env!(::std::concat!("IC_DB_SCHEMA_MEMBER_", ::std::stringify!(#name))),
-                    ),
-                    ::std::concat!("entity missing from host schema: ", ::std::module_path!(), "::", ::std::stringify!(#name)),
-                );
-            }
-        };
+        #membership
         ::ic_db::__register_schema!(#name);
     })
 }

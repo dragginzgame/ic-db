@@ -1,6 +1,7 @@
 //! Nested values use a finite compiled graph and one shared bounded row traversal.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, Value, entity, enum_, record};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -48,6 +49,7 @@ struct Event {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "payload", value(item(is = "Event"))),
@@ -71,6 +73,7 @@ struct Node {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -93,6 +96,7 @@ struct Infinite {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -115,6 +119,7 @@ struct NoBase {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -351,6 +356,7 @@ struct ChangedContainer {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -365,6 +371,7 @@ struct Wrapped {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Wrapped",
     pk(field = "id"),
     fields(
@@ -431,6 +438,7 @@ struct BytesPayload {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -488,6 +496,7 @@ struct ReorderedContainer {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "Wrapped",
     pk(field = "id"),
     fields(
@@ -541,6 +550,7 @@ struct Empty {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "empty", value(item(is = "Empty"))),

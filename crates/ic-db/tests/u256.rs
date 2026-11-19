@@ -1,6 +1,7 @@
 //! Full-width U256 bytes, ordering, uniqueness and corruption boundaries.
 
-use ic_db::{Batch, Database, Entity, Error, IndexValue, Schema, U256, entity, map, set};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -13,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
     index(field = "maybe", unique, present_only),
@@ -31,6 +33,7 @@ struct BigNumbers {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "BigNumbers",
     pk(field = "id"),
     index(fields = ["zone", "value", "id"]),
@@ -66,6 +69,7 @@ struct Pairs {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -357,6 +361,7 @@ fn collections_keep_high_bits_and_validate_unindexed_payloads() {
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),

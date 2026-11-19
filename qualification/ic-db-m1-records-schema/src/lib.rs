@@ -4,4 +4,4 @@ mod model;
 
 pub use model::*;
 
-include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+ic_db::include_schema!();

@@ -278,7 +278,9 @@ Use an ordinary named record for selective output, with exact matching field
 names, types, optionality and bounds:
 
 ```rust
-#[ic_db::record(fields(
+use ic_db::design::prelude::*;
+
+#[record(fields(
     field(name="id", value(item(prim="Nat64"))),
     field(name="amount", value(item(prim="Nat64")))
 ))]
@@ -297,7 +299,9 @@ same selected fields; aliases, coercions and nested field paths are not implemen
 Add `.distinct()` to remove duplicate projected tuples across pages:
 
 ```rust
-#[ic_db::record(fields(field(name="category", value(item(prim="Nat64")))))]
+use ic_db::design::prelude::*;
+
+#[record(fields(field(name="category", value(item(prim="Nat64")))))]
 struct CategoryOnly {}
 
 let page = db.query::<Entry>()
@@ -610,7 +614,9 @@ widen the source within the same signed/unsigned family. Unsigned results may
 widen to U256. For example, a Nat64 amount can explicitly produce a Nat128 total:
 
 ```rust
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
+use ic_db::design::prelude::*;
+
+#[record(fields(field(name = "amount", value(item(prim = "Nat128")))))]
 struct TotalAmount {}
 let total = db.query::<Entry>().sum::<TotalAmount>()?;
 ```
@@ -649,7 +655,9 @@ widths (including U256) and Decimal inputs. The result record preserves the fiel
 name and optionality and declares a Decimal scale from 0 to 28:
 
 ```rust
-#[ic_db::record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
+use ic_db::design::prelude::*;
+
+#[record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 2)))))]
 struct AverageAmount {}
 let average = db.query::<Entry>().avg::<AverageAmount>()?;
 ```
@@ -933,6 +941,14 @@ original IC DB errors. For a test of your own IC Storage allocation setup, pass
 its lease-opening function to `Fixture::with_allocation`.
 [Runnable example](crates/ic-db/src/testing.rs)
 
+## Schema authoring rules
+
+Begin each module or example that declares IC DB schema types with
+`use ic_db::design::prelude::*;` in its import block. Write attributes such as
+`#[canister]`, `#[store(...)]`, `#[entity(...)]` and `#[record(...)]` without
+a crate prefix. Import query, write and host APIs separately when needed.
+Modules that only consume an existing schema can import the types they use.
+
 ## Build a shared schema in its owning crate
 
 The schema library owns the declarations, host build and generated assembly.
@@ -958,12 +974,34 @@ In its `src/lib.rs`:
 mod model;
 pub use model::*;
 
-include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+ic_db::include_schema!();
 ```
 
-The complete `src/model.rs` or `src/model/mod.rs` subtree forms one schema.
-A consuming canister declares the schema library under `[dependencies]` and
-calls `records_schema::compiled()`. When moving declarations into a shared
+In `src/model.rs`, name the owner of each allocation and entity:
+
+```rust
+use ic_db::design::prelude::*;
+
+#[canister]
+pub struct Hub {}
+
+#[store(canister = Hub, key = "app.accounts.v1")]
+pub struct Accounts {}
+
+#[entity(store = Accounts, pk(field = "id"),
+    fields(field(name = "id", value(item(prim = "Nat64")))))]
+pub struct User {}
+```
+
+The compiler resolves both links through ordinary Rust paths. The host imports
+`Hub` and `ic_db::CompiledCanister`. Each entry in `Hub::STORES` provides
+`store.key` for the IC Storage lease and `(store.schema)()` for
+`Database::create` or `Database::open`. A caller needing just the accounts
+schema can use `Accounts::compiled()`. Each store validates references and
+computes its own fingerprint. The generic bound
+`E: Entity<Store: Store<Canister = C>>` restricts a host API to entities of
+canister `C`. The database still takes one allocation lease per handle.
+ When moving declarations into a shared
 library, remove the former consumer-side generation and its build dependencies.
 
 The [schema build script](qualification/ic-db-m1-records-schema/build.rs),
@@ -997,7 +1035,7 @@ In `src/lib.rs`, declare the same module and include its validated assembly:
 
 ```rust
 mod schema;
-include!(concat!(env!("OUT_DIR"), "/schema.rs"));
+ic_db::include_schema!();
 ```
 
 Use `compiled()` to obtain the executable schema. Both compilations resolve

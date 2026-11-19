@@ -5,10 +5,8 @@ use crate::{
     handles::{AggregateJobs, Database, RetiredSource, SchemaCopy},
     runtime,
 };
-use ic_db::{
-    Batch, Comparison, CopyStatus, Entity, Error, JobHandle, JobOutcome, Schema, SchemaTransition,
-    Timestamp,
-};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Comparison, CopyStatus, Error, JobHandle, JobOutcome, SchemaTransition};
 use ic_db_qualification_transport::mixed::{
     Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
     Reply, Snapshot, Update,
@@ -71,7 +69,7 @@ mod endpoints {
 }
 
 pub(super) const KEYS: [&str; 3] = [
-    "m1.mixed.source.v1",
+    <MixedStore as ic_db::Store>::KEY,
     "m1.mixed.target.v1",
     "m1.mixed.jobs.v1",
 ];
@@ -81,7 +79,8 @@ pub(super) const KEYS: [&str; 3] = [
 /// Exercises indexed access by `code` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = self::MixedStore,
     pk(field = "id"),
     index(field = "code", unique),
     fields(
@@ -96,7 +95,8 @@ struct Parent {}
 /// Exercises references to `Parent` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = self::MixedStore,
     pk(field = "id"),
     index(fields = ["parent", "id"]),
     index(fields = ["score", "id"]),
@@ -113,7 +113,8 @@ struct Item {}
 /// Exercises references to `Parent` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = self::MixedStore,
     name = "Item",
     pk(field = "id"),
     index(fields = ["parent", "id"]),
@@ -131,7 +132,8 @@ struct TargetItem {}
 /// Exercises references to `Item` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = self::MixedStore,
     pk(field = "id"),
     index(fields = ["item", "id"]),
     fields(
@@ -146,7 +148,7 @@ struct Link {}
 /// Carries the `Nat64` value of `parent`.
 ///
 
-#[ic_db::record(fields(field(name = "parent", value(item(prim = "Nat64")))))]
+#[record(fields(field(name = "parent", value(item(prim = "Nat64")))))]
 struct ParentKey {}
 
 fn schema(target: bool) -> Schema {
@@ -564,3 +566,7 @@ fn migrate(operation: u8) -> Result<(u64, bool), Error> {
         _ => panic!("invalid migration control"),
     }
 }
+
+/// Store using the existing m1.mixed.source.v1 allocation key.
+#[store(canister = records_schema::RecordsCanister, key = "m1.mixed.source.v1")]
+pub struct MixedStore {}

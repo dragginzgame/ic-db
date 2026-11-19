@@ -1,6 +1,7 @@
 //! Bounded ordered lists: independent count framing and shared row limits.
 
-use ic_db::{Batch, Database, Entity, Error, Schema, entity, enum_, record};
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -12,6 +13,7 @@ use ic_storage::{
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -30,6 +32,7 @@ struct ListRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     name = "ListRow",
     pk(field = "id"),
     fields(
@@ -68,6 +71,7 @@ struct Forest {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -82,6 +86,7 @@ struct ForestRow {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "a", value(many, max_items = 256, item(prim = "Nat8"))),
@@ -105,6 +110,7 @@ struct Empty {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -119,6 +125,7 @@ struct EmptyItems {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -133,6 +140,7 @@ struct EmptyOnly {}
 ///
 
 #[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
@@ -398,7 +406,7 @@ fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
 /// Gives `Timestamp` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Timestamp"))]
+#[newtype(item(prim = "Timestamp"))]
 struct StartedAt {}
 
 ///
@@ -406,7 +414,7 @@ struct StartedAt {}
 /// Gives `Timestamp` a distinct schema identity.
 ///
 
-#[ic_db::newtype(item(prim = "Timestamp"))]
+#[newtype(item(prim = "Timestamp"))]
 struct ExpiresAt {}
 
 ///
@@ -414,7 +422,7 @@ struct ExpiresAt {}
 /// Stores up to 2 ordered `StartedAt` values.
 ///
 
-#[ic_db::list(item(is = "StartedAt"), max_items = 2)]
+#[list(item(is = "StartedAt"), max_items = 2)]
 struct Starts {}
 
 ///
@@ -422,7 +430,8 @@ struct Starts {}
 /// Exercises indexed access by `started` on rows keyed by `id`.
 ///
 
-#[ic_db::entity(
+#[entity(
+    store = ic_db::testing::FixtureStore,
     pk(field = "id"),
     index(field = "started", unique),
     fields(
@@ -547,13 +556,14 @@ fn named_list_reuses_its_bound_and_scalar_wrappers_keep_identity_after_reopen() 
 
 mod changed_bound {
     use super::{ExpiresAt, StartedAt};
+    use ic_db::design::prelude::*;
 
     ///
     /// Starts
     /// Stores up to 3 ordered `StartedAt` values.
     ///
 
-    #[ic_db::list(item(is = "StartedAt"), max_items = 3)]
+    #[list(item(is = "StartedAt"), max_items = 3)]
     struct Starts {}
 
     ///
@@ -561,7 +571,8 @@ mod changed_bound {
     /// Exercises indexed access by `started` on rows keyed by `id`.
     ///
 
-    #[ic_db::entity(
+    #[entity(
+        store = ic_db::testing::FixtureStore,
         pk(field = "id"),
         index(field = "started", unique),
         fields(

@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 accounts = { package = "ic-db-schema-owner-producer", path = "../producer" }
+ic-db.workspace = true
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 
