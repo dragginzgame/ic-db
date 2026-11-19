@@ -2,36 +2,33 @@
 
 ## [0.23.13] - Unreleased
 
-### 🔎 Queries
+### Schema and queries
 
-- `#[entity]` generates field constants such as `User::ID` and `User::NAME`.
-  Use them in filters and ordering. Physical schema metadata is available via
-  `<User as Entity>::SCHEMA.id` and `<User as Entity>::SCHEMA.name`.
-  Use `Entity::declaration_path()` for the Rust declaration path.
+- Use generated field constants such as `User::ID` and `User::NAME` in
+  filters and ordering. Read entity metadata through `<User as Entity>::SCHEMA`
+  and the Rust declaration path through `User::declaration_path()`.
+- Use `eq`, `ne`, `lt`, `lte`, `gt` and `gte` for literal comparisons,
+  for example `.gte(Entry::AMOUNT, lower).lt(Entry::AMOUNT, upper)`.
+  Use `filter` when the comparison is selected at runtime.
+- Chain sort fields in priority order with `.order_asc(Entry::CATEGORY).order_desc(Entry::ID)`.
+  The equivalent `order_by_each` list shares the same cursor.
+- Replace `Database::get_by_unique` with ordinary equality filters and
+  `.try_one()?`. A second match returns `MultipleMatches`; use `.first()?`
+  when the first match in order is sufficient. Keep schema uniqueness for
+  values that must have a single owner.
+- Load related rows with `db.get_many::<E>(&keys)?`. Up to 32 supplied
+  positions each receive an optional row, preserving duplicates and misses.
 
-- Removed `Database::get_by_unique`. Express the lookup with
-  `db.query::<UserRoute>().eq(UserRoute::ISSUER, issuer).eq(UserRoute::SUBJECT, subject).try_one()?`.
-  Keep the unique constraint on the schema when duplicate values must be refused.
-  `.try_one()` reports a second match; `.first()` selects the first in order.
-- Use `db.get_many::<E>(&keys)?` to load related rows for a page. It accepts
-  up to 32 keys and returns one optional row per position in the supplied order.
+### Query execution
 
-- Equality-filtered entity and projection pages can automatically use a
-  non-unique index while preserving default primary-key order in either
-  direction. Existing primary cursors continue on their original path.
-- For a non-unique index on `category`, a query for one category with
-  `id > last_id` now seeks directly past that ID. A covered `.count()`
-  uses the same range without fetching owner rows. When another filter needs
-  row data, count and existence checks can still seek to the ID boundary and
-  check that filter on the matching owners. An ID inside an OR filter also
-  permits an independent category equality to narrow the scan.
-- With a complete unique key and extra filters, automatic count and existence
-  checks can finish within a one-candidate work limit. When a compound index
-  also covers the same equality, count prefers the exact unique key and can
-  finish on the matching index entry without fetching its owner.
-
-- A query that requires the same field to be both absent and present now
-  finishes without examining rows, including under a one-candidate work limit.
+- Default-order entity and projection pages can use a non-unique equality
+  prefix in either direction. Existing primary cursors resume on primary storage.
+  Once all indexed fields are fixed, an ID range can seek on the owner key.
+- Counts and existence checks use these bounds with residual filters. Covered
+  counts can use index keys alone; complete unique keys can finish within a
+  one-candidate budget even when another index covers the same equality.
+  A separate indexed equality can narrow the scan when an ID occurs inside an OR.
+- A field required to be both present and absent yields an empty traversal.
 
 ## [0.23.12] - 2026-11-18
 

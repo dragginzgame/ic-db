@@ -8,9 +8,6 @@ repository.workspace = true
 publish.workspace = true
 description = "Experimental embedded Internet Computer database"
 
-[target.'cfg(any())'.dev-dependencies]
-toko-tooling.workspace = true
-
 [package.metadata.cargo-machete]
 ignored = ["toko-tooling"]
 
@@ -36,6 +33,7 @@ ulid.workspace = true
 
 [dev-dependencies]
 ic-db = { path = ".", features = ["test-support"] }
+toko-tooling.workspace = true
 
 [lints]
 workspace = true

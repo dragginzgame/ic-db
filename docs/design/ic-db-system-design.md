@@ -2798,6 +2798,10 @@ duplicates and a nonfinal primary key refuse. With an explicit index the same
 order proof checks that requested path. Without `order_by`, existing primary or
 explicit-index semantics and cursor bindings remain unchanged.
 
+As in Toko's typed query facade (`2f45ba193`) and frozen IcyDB's
+`6d421e3` `db/query/dynamic/mod.rs`, appending a sort field gives it lower
+priority than preceding fields. `order_asc(field)` and `order_desc(field)`
+append to the same order used by slice-based queries.
 `order_by_each(&[(field, SortDirection), ...])` replaces that field list with
 individual ascending/descending directions. An omitted primary key is appended
 ascending; `descending()` reverses all components. A physical index remains
@@ -2859,8 +2863,9 @@ for exact primary-key reads in `db/query/plan/covering/mod.rs`. The scanner vali
 checks residual predicates. Sparse indexes require present values in every
 optional component. A primary-key equality keeps its primary seek. Existing
 cursors continue on their admitted traversal. Partial keys and OR alternatives
-alone do not prove uniqueness. The `eq` method constructs the ordinary equality
-predicate. The `first` terminal returns an entity, a proven miss, or a work-limit
+alone do not prove uniqueness. The literal comparison methods `eq`, `ne`, `lt`, `lte`, `gt` and `gte` follow frozen
+IcyDB `6d421e3`'s `db/query/expr/filter/mod.rs` spellings and construct the same
+predicate as `filter(field, comparison, value)`. Both forms share cursor identity. The `first` terminal returns an entity, a proven miss, or a work-limit
 refusal when traversal stops before either outcome.
 
 Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys)`

@@ -239,8 +239,8 @@ fn range_read(
         .map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Entry>()
-        .filter(field, Comparison::Ge, lower)
-        .filter(field, Comparison::Le, upper)
+        .gte(field, lower)
+        .lte(field, upper)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
     if let Some(prefix) = index_prefix {
@@ -296,7 +296,7 @@ fn fluent_sparse_presence(
                 ic_db::IndexValue::Absent,
             ),
         ])
-        .order_by(&[DecimalRow::MAYBE])
+        .order_asc(DecimalRow::MAYBE)
         .work_limit(1)
         .test_output_limit(bytes as usize);
     if descending {
@@ -411,7 +411,7 @@ fn read(
             Entry::AMOUNT,
             &[minimum.into(), 20_u64.into(), minimum.into()],
         ),
-        _ => query.filter(Entry::AMOUNT, Comparison::Ge, minimum),
+        _ => query.gte(Entry::AMOUNT, minimum),
     }
     .limit(limit as usize)
     .work_limit(work as usize)
@@ -424,7 +424,7 @@ fn read(
         };
     }
     if matches!(shape, Shape::Ordered) {
-        query = query.order_by(&[Entry::CATEGORY]);
+        query = query.order_asc(Entry::CATEGORY);
     }
     if descending {
         query = query.descending();
@@ -490,9 +490,7 @@ fn fluent_binary_projection(projected: bool) -> (Vec<u64>, u32, u64) {
     let host = runtime();
     let db = open(&host);
     let start = crate::system::instruction_counter();
-    let query = db
-        .query::<BinaryObject>()
-        .filter(BinaryObject::ID, Comparison::Eq, 1_u64);
+    let query = db.query::<BinaryObject>().eq(BinaryObject::ID, 1_u64);
     let (rows, bytes) = if projected {
         let page = query.fetch_as::<IdOnly>().unwrap();
         (
@@ -539,8 +537,8 @@ fn measured_listing(
         .unwrap();
     let mut q = db
         .query::<Document>()
-        .filter(Document::ENTRY_ID, Comparison::Eq, 1_u64)
-        .filter(Document::PUBLISHED, Comparison::Eq, true)
+        .eq(Document::ENTRY_ID, 1_u64)
+        .eq(Document::PUBLISHED, true)
         .order_by(&[Document::SCORE, Document::ID])
         .descending()
         .limit(20)

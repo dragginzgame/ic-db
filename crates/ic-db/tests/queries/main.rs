@@ -131,6 +131,71 @@ fn entity_field_constants_keep_logical_names_separate_from_entity_metadata() {
 }
 
 #[test]
+fn fluent_comparisons_preserve_boundaries_and_cursor_identity() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let q = || db.query::<Entry>();
+    for (query, comparison, expected) in [
+        (q().ne(Entry::ID, 4_u64), C::Ne, vec![1, 2, 3, 5, 6, 7, 8]),
+        (q().lt(Entry::ID, 4_u64), C::Lt, vec![1, 2, 3]),
+        (q().lte(Entry::ID, 4_u64), C::Le, vec![1, 2, 3, 4]),
+        (q().gt(Entry::ID, 4_u64), C::Gt, vec![5, 6, 7, 8]),
+        (q().gte(Entry::ID, 4_u64), C::Ge, vec![4, 5, 6, 7, 8]),
+    ] {
+        let page = query.limit(1).fetch().unwrap();
+        let mut actual = ids(&page.rows);
+        let cursor = page.next.unwrap();
+        let rest = q()
+            .filter(Entry::ID, comparison, 4_u64)
+            .after(&cursor)
+            .fetch()
+            .unwrap();
+        actual.extend(ids(&rest.rows));
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn chained_sort_fields_preserve_precedence_and_page_bindings() {
+    use ic_db::SortDirection::{Ascending, Descending};
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let q = || db.query::<Entry>();
+    let mixed = q()
+        .order_asc(Entry::CATEGORY)
+        .order_desc(Entry::ID)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&mixed.rows), [8, 6, 4, 2, 7, 5, 3, 1]);
+
+    let page = q()
+        .eq(Entry::CATEGORY, 0_u8)
+        .order_asc(Entry::CATEGORY)
+        .order_desc(Entry::ID)
+        .limit(2)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [8, 6]);
+    let rest = q()
+        .eq(Entry::CATEGORY, 0_u8)
+        .order_by_each(&[(Entry::CATEGORY, Ascending), (Entry::ID, Descending)])
+        .after(&page.next.unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [4, 2]);
+    assert!(matches!(
+        q().order_asc(Entry::ID).order_desc(Entry::ID).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        q().order_by(&[Entry::CATEGORY, Entry::AMOUNT, Entry::MAYBE, Entry::ID])
+            .order_desc(Entry::ID)
+            .fetch(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
 fn single_match_requires_exhaustion() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

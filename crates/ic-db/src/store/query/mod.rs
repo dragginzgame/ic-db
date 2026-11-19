@@ -378,13 +378,23 @@ impl<'a> Request<'a> {
             self.over_limit = true;
             return;
         }
-        self.order = Some(fields.iter().map(|(name, _)| *name).collect());
-        self.order_descending = fields
-            .iter()
-            .enumerate()
-            .fold(0, |mask, (i, (_, direction))| {
-                mask | (u8::from(*direction == SortDirection::Descending) << i)
-            });
+        self.order = Some(Vec::with_capacity(fields.len()));
+        self.order_descending = 0;
+        for &(field, direction) in fields {
+            self.append_order(field, direction);
+        }
+    }
+
+    fn append_order(&mut self, field: &'a str, direction: SortDirection) {
+        let fields = self.order.get_or_insert_with(Vec::new);
+        if fields.len() == 4 {
+            self.over_limit = true;
+            return;
+        }
+        if direction == SortDirection::Descending {
+            self.order_descending |= 1 << fields.len();
+        }
+        fields.push(field);
     }
 
     fn primary_descending(&self, entity: &EntitySchema) -> bool {
@@ -485,6 +495,36 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn eq(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
         self.filter(field, Comparison::Eq, value)
+    }
+
+    /// Require a different value, including absent versus present.
+    #[must_use]
+    pub fn ne(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Ne, value)
+    }
+
+    /// Require a present field strictly below the supplied value.
+    #[must_use]
+    pub fn lt(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Lt, value)
+    }
+
+    /// Require a present field at or below the supplied value.
+    #[must_use]
+    pub fn lte(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Le, value)
+    }
+
+    /// Require a present field strictly above the supplied value.
+    #[must_use]
+    pub fn gt(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Gt, value)
+    }
+
+    /// Require a present field at or above the supplied value.
+    #[must_use]
+    pub fn gte(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
+        self.filter(field, Comparison::Ge, value)
     }
 
     /// Compare two top-level fields on the same row. Lists and sets support Contains
@@ -652,7 +692,23 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Order by 1..=4 distinct top-level ordered fields, then the primary key.
+    /// Append an ascending sort field. Earlier fields take precedence.
+    /// The same field, work and continuation rules as [`Self::order_by_each`] apply.
+    #[must_use]
+    pub fn order_asc(mut self, field: &'a str) -> Self {
+        self.request.append_order(field, SortDirection::Ascending);
+        self
+    }
+
+    /// Append a descending sort field. An implicit primary-key tie-breaker
+    /// stays ascending; append the primary key explicitly to choose its direction.
+    #[must_use]
+    pub fn order_desc(mut self, field: &'a str) -> Self {
+        self.request.append_order(field, SortDirection::Descending);
+        self
+    }
+
+    /// Replace the current order with 1..=4 distinct top-level ordered fields, then the primary key.
     /// An explicitly listed primary key must be last. All fields share one
     /// direction, reversed by `descending`. Prefer a complete ordered path.
     /// Otherwise scan to completion while retaining the best `limit` rows within

@@ -6,9 +6,6 @@ rust-version.workspace = true
 license-file.workspace = true
 publish.workspace = true
 
-[target.'cfg(any())'.dev-dependencies]
-toko-tooling.workspace = true
-
 [package.metadata.cargo-machete]
 ignored = ["toko-tooling"]
 
@@ -33,6 +30,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 ic-host-artifacts.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
+toko-tooling.workspace = true
 wasmparser.workspace = true
 
 [[test]]
