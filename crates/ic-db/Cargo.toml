@@ -15,17 +15,14 @@ ignored = ["toko-tooling"]
 build = ["dep:ctor"]
 test-support = []
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 ctor = { workspace = true, optional = true }
 getrandom.workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ic-platform-protocol = { workspace = true, features = ["raw-rand"] }
-ic-platform-runtime = { workspace = true, features = ["call-ic0"] }
 
 [dependencies]
 ethnum.workspace = true
 ic-db-macros.workspace = true
+ic-platform-runtime = { workspace = true, features = ["raw-rand"] }
 ic-platform-types.workspace = true
 ic-storage.workspace = true
 memchr.workspace = true

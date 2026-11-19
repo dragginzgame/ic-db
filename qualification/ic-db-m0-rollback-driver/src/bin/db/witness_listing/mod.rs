@@ -6,12 +6,12 @@ mod tests;
 
 use super::{CursorArg, parse_cursor, remote};
 use canic::db::RPC_LIMITS;
+use canic_wire::{Direction, Encoding};
 use clap::Args;
 use ic_host_text::bordered_table;
-use ic_wire::{Direction, Encoding};
 use serde::{Deserialize, Serialize};
 
-const QUERY: u64 = ic_wire::method_id("canic-db-witness.query.v1");
+const QUERY: u64 = canic_wire::method_id("canic-db-witness.query.v1");
 
 #[derive(Args)]
 #[command(
@@ -65,7 +65,7 @@ enum Refusal {
 }
 
 fn decode(bytes: &[u8], limit: u8, work: u8) -> Result<Page, String> {
-    let page = ic_wire::decode::<Result<Page, Refusal>>(
+    let page = canic_wire::decode::<Result<Page, Refusal>>(
         bytes,
         Encoding::Frame {
             method: QUERY,
@@ -95,7 +95,7 @@ pub(super) async fn run(options: &Options) -> Result<(), String> {
         work: options.work,
         after: options.after.as_ref().map(|v| v.0.as_slice()),
     };
-    let payload = ic_wire::encode(
+    let payload = canic_wire::encode(
         &request,
         Encoding::Frame {
             method: QUERY,

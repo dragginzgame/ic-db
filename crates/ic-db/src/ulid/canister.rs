@@ -1,26 +1,15 @@
 //! Update-call convenience API. Entropy is requested only by the async generator constructor.
 use super::UlidEntropyError;
 use crate::Principal;
-use ic_platform_protocol::raw_rand;
-use ic_platform_runtime::{
-    call::{Call, Outcome, Wait},
-    system,
-};
+use ic_platform_runtime::{raw_rand, system};
 
 pub(super) async fn fresh_suffix() -> Result<[u8; 10], UlidEntropyError> {
-    let call = Call::new(
-        Principal::management_canister(),
-        raw_rand::METHOD,
-        Wait::Bounded { seconds: 10 },
-    )
-    .args(raw_rand::encode(6).map_err(|_| UlidEntropyError::InvalidFrame)?)
-    .execute()
-    .await
-    .map_err(|_| UlidEntropyError::Unavailable)?;
-    let Outcome::Reply(reply) = call.into_parts().0 else {
-        return Err(UlidEntropyError::Unavailable);
-    };
-    let bytes = raw_rand::decode(&reply, 42).map_err(|_| UlidEntropyError::InvalidFrame)?;
+    let bytes = raw_rand::request(10).await.map_err(|error| match error {
+        raw_rand::Error::Frame(_) => UlidEntropyError::InvalidFrame,
+        raw_rand::Error::Submission(_)
+        | raw_rand::Error::Rejected(_)
+        | raw_rand::Error::OutcomeUnknown(_) => UlidEntropyError::Unavailable,
+    })?;
     Ok(std::array::from_fn(|i| bytes[i]))
 }
 

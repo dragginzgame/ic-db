@@ -26,11 +26,11 @@ async fn insert(
             canister,
             owner,
             "db_write",
-            ic_wire::encode(
+            canic_wire::encode(
                 &rows,
-                ic_wire::Encoding::Frame {
-                    method: ic_wire::method_id("canic-db-witness.write.v1"),
-                    direction: ic_wire::Direction::Request,
+                canic_wire::Encoding::Frame {
+                    method: canic_wire::method_id("canic-db-witness.write.v1"),
+                    direction: canic_wire::Direction::Request,
                 },
                 canic::db::RPC_LIMITS,
             )
@@ -41,11 +41,11 @@ async fn insert(
     let expected = Ok::<_, ()>((u32::try_from(rows.len()).unwrap(), String::new()));
     assert_eq!(
         reply,
-        ic_wire::encode(
+        canic_wire::encode(
             &expected,
-            ic_wire::Encoding::Frame {
-                method: ic_wire::method_id("canic-db-witness.write.v1"),
-                direction: ic_wire::Direction::Response,
+            canic_wire::Encoding::Frame {
+                method: canic_wire::method_id("canic-db-witness.write.v1"),
+                direction: canic_wire::Direction::Response,
             },
             canic::db::RPC_LIMITS
         )
@@ -259,11 +259,11 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
                 canister,
                 owner,
                 "db_test_control",
-                ic_wire::encode(
+                canic_wire::encode(
                     &2u8,
-                    ic_wire::Encoding::Frame {
+                    canic_wire::Encoding::Frame {
                         method: 991,
-                        direction: ic_wire::Direction::Request,
+                        direction: canic_wire::Direction::Request,
                     },
                     canic::db::RPC_LIMITS,
                 )
@@ -368,11 +368,11 @@ async fn explicit_application_inspection_preserves_authority_and_storage() {
                 canister,
                 owner,
                 "db_test_control",
-                ic_wire::encode(
+                canic_wire::encode(
                     &3_u8,
-                    ic_wire::Encoding::Frame {
+                    canic_wire::Encoding::Frame {
                         method: 991,
-                        direction: ic_wire::Direction::Request,
+                        direction: canic_wire::Direction::Request,
                     },
                     canic::db::RPC_LIMITS,
                 )

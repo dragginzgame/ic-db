@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.16] - Unreleased
+
+- IC DB’s qualification fixtures and local CLI use IC Wire 0.26.0. Calls to the
+  pinned Canic inspection and witness endpoints retain their 0.25 protocol dependency.
+- Canister ULID generators use Platform Runtime’s bounded entropy request. IC DB
+  requests entropy once per fresh generator with the existing ten-second wait.
+  Native generators continue to use OS entropy.
+
 ## [0.23.15] - 2026-11-19
 
 ### 🆔 ULIDs

@@ -150,11 +150,11 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
 }
 
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
+    canic_wire::encode(
         value,
-        Encoding::Frame {
+        canic_wire::Encoding::Frame {
             method,
-            direction: Direction::Request,
+            direction: canic_wire::Direction::Request,
         },
         canic::db::RPC_LIMITS,
     )
@@ -162,11 +162,11 @@ fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
 }
 
 fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
+    canic_wire::decode(
         bytes,
-        Encoding::Frame {
+        canic_wire::Encoding::Frame {
             method,
-            direction: Direction::Response,
+            direction: canic_wire::Direction::Response,
         },
         canic::db::RPC_LIMITS,
     )
