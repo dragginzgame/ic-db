@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.17] - Unreleased
+## [0.23.17] - 2026-11-19
 
 - Hosts can hand nested helpers a clone of `DatabaseSession` over one attachment.
   Typed lookups return owned rows, fluent queries use a read guard, and batch commits
