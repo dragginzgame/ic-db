@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.6 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -11,12 +11,18 @@ its checked inspection/listing scope from broader application qualification.
 The changelog and Git tags record releases.
 Application helpers can borrow a database directly or independently obtain a
 `DatabaseSession` clone from their host. One attachment owns the storage lease.
-A typed lookup returns an owned entity. A fluent builder borrows a read guard,
-and a batch takes exclusive access only for the commit. A conflicting borrow
+A session query owns a handle and observes committed data at execution.
+Explicit read-guard builders borrow their guard. A typed unique lookup uses a
+generated named key with present components in declaration order and returns
+an owned entity. Session insert, replace and delete each submit one batch.
+Changes that depend on each other share an explicit batch. A batch takes
+exclusive access only for the commit. A conflicting borrow
 returns `BorrowConflict` before mutation. The last handle can return the database
 to the host for maintenance. Frozen IcyDB `6d421e3` shared a store and request
 root across sessions in `icydb-core/src/db/session/mod.rs`. IC DB keeps its
-existing per-operation budgets. A host imposing cumulative accounting shares
+existing per-operation budgets. Like the predecessor’s `db/session/write/mod.rs`,
+the session owns write ergonomics. Batch still owns validation and atomic mutation.
+A host imposing cumulative accounting shares
 one request allowance across helpers; it owns the request boundary and accessor. Database, fluent query,
 maintenance and aggregate-job handles use IC Storage's target-default backing.
 This follows the concrete backing used in frozen IcyDB `6d421e3`,
@@ -1428,10 +1434,10 @@ name in the admitted schema. The CLI uses it for every listed entity; unknown
 names refuse. Typed calls retain full type-contract admission. This adds no
 dynamic query frontend, per-entity dispatch registry or persisted representation.
 Fluent `count()` admits the request before reading maintained cardinality for an
-unfiltered entity, counting physical index entries for a fully covered literal
-equality prefix and any representable literal bounds on the next index field with complete membership, or counting physical row keys when
-every predicate is a mandatory literal comparison represented by the primary-key
-interval. Other shapes execute against rows. As in frozen IcyDB's exact count
+unfiltered entity, counting index entries when the selected index range proves the
+full filter, or counting physical row keys when the primary-key interval proves
+the full filter. A fixed key can satisfy an entire OR clause. Any remaining
+row predicate requires reading the owner. As in frozen IcyDB's exact count
 admission (`6d421e3`, `db/session/query/exact_count.rs`), a shortcut requires
 proof for the full predicate. Primary intervals use the existing bounded
 traversal and require no maintained range counters. The [primary-range count measurements](../../qualification/README.md#primary-key-range-count-costs-0235) separate database opening and execution. Index scans retain the work budget. Metadata and index-only counts
@@ -2842,7 +2848,14 @@ literal equalities that require different values of one field prove empty input.
 The same proof applies when a mandatory equality disagrees with an explicitly
 fixed index component. Pages finish without a continuation and counts return
 zero with no candidate visits. Unvisited owners receive no integrity check.
-Only singleton equality clauses supply those values. This follows the validation
+A fixed value can also disprove an equality or inequality inside an OR clause.
+Skip traversal only if every alternative in that clause is false. This covers
+`filter_in` excluding a required value and `filter_not_in` forbidding it.
+For key-only counts, one alternative proven true by the selected index prefix
+or a mandatory primary-key equality satisfies its OR clause. Other mandatory clauses still need independent
+proof. If no alternative is proven true and one is unknown, the clause remains
+a row predicate. Only explicit
+prefix components and singleton literal equalities establish fixed values. This follows the validation
 precedence in frozen IcyDB `6d421e3`, `db/query/plan/planner/index_select/mod.rs`,
 using the existing bounded conjunction and index prefix. A mandatory
 absent equality produces an empty traversal when another mandatory clause
@@ -2876,7 +2889,10 @@ applies; an explicitly requested path still refuses an incompatible order.
 Sparse membership and execution share one absence rule: `Ne(Absent)`, present
 equality, ranges and text comparisons exclude absence; `Ne(present)` does not.
 An OR containing an absent member or a different field cannot prove presence.
-Each component of a compound sparse index is checked independently. This adapts
+When the next indexed component is optional, `filter_present` seeks to the
+present tag. The range includes present empty values and fully covers this
+filter for counting. Inequality against a present literal can still match
+absent rows. Each component of a compound sparse index is checked independently. This adapts
 IcyDB `6d421e3`'s nullable-guard lessons from
 `db/query/plan/planner/index_select` and its implication regression tests to the
 existing flat eight-comparison contract. It adds no recursive implication engine,

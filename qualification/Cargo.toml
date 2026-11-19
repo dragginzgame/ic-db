@@ -33,7 +33,7 @@ ic-db-m1-records-schema = { path = "ic-db-m1-records-schema" }
 ic-db-qualification-transport = { path = "ic-db-qualification-transport" }
 ic-host-artifacts = "0.80.1"
 ic-host-text = "0.77.2"
-ic-platform-runtime = { version = "0.23.13", default-features = false }
+ic-platform-runtime = { version = "0.23.21", default-features = false }
 ic-storage = "0.78.0"
 ic-testkit = { version = "0.110.0", default-features = false }
 ic-wire = "0.26.0"
@@ -45,7 +45,7 @@ serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 shlex = "2.0.1"
 tokio = "1.54.1"
-toko-tooling = "=0.45.18"
+toko-tooling = "=0.45.19"
 wasmparser = { version = "0.263.0", default-features = false, features = ["std", "features", "validate"] }
 
 [workspace.lints.cargo]

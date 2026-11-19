@@ -879,6 +879,38 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
             assert_eq!(page.examined, expected.len(), "{comparison:?} {operand:?}");
         }
     }
+    let present = input.iter().filter(|row| row.text.is_some()).count();
+    for explicit in [false, true] {
+        let query = || {
+            let q = db.query::<TextRow>().filter_present(TextRow::TEXT);
+            if explicit {
+                q.using_index("text,id", &[])
+            } else {
+                q
+            }
+        };
+        let count = query().count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (present as u64, present, 0)
+        );
+        let validated = query().count_validated().unwrap();
+        assert_eq!((validated.value, validated.fetched), (count.value, present));
+    }
+    // Inequality against a present value still includes absent rows.
+    let different = db
+        .query::<TextRow>()
+        .using_index("text,id", &[])
+        .ne(TextRow::TEXT, "")
+        .count()
+        .unwrap();
+    assert_eq!(
+        different.value,
+        input
+            .iter()
+            .filter(|r| r.text.as_deref() != Some(""))
+            .count() as u64
+    );
     let absent = db
         .query::<TextRow>()
         .using_index("text,id", &[])
@@ -4093,11 +4125,135 @@ fn conflicting_mandatory_equalities_finish_without_visiting_candidates() {
 }
 
 #[test]
+fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 10);
+    for explicit in [false, true] {
+        let fixed = || {
+            let query = db.query::<Entry>();
+            if explicit {
+                query.using_index("category", &[1_u8.into()])
+            } else {
+                query.eq(Entry::CATEGORY, 1_u8)
+            }
+        };
+        for impossible in [
+            fixed().filter_in(Entry::CATEGORY, &[0_u8, 2]),
+            fixed().filter_not_in(Entry::CATEGORY, &[1_u8, 2]),
+        ] {
+            let page = impossible.work_limit(1).fetch().unwrap();
+            assert!(page.rows.is_empty() && page.next.is_none());
+            assert_eq!(page.examined, 0);
+        }
+        for covered in [
+            fixed().filter_in(Entry::CATEGORY, &[0_u8, 1]),
+            fixed().filter_not_in(Entry::CATEGORY, &[0_u8, 2]),
+            fixed().filter_any(&[
+                (Entry::AMOUNT, C::Eq, 30_u64.into()),
+                (Entry::CATEGORY, C::Eq, 1_u8.into()),
+            ]),
+        ] {
+            let count = covered.count().unwrap();
+            assert_eq!((count.value, count.examined, count.fetched), (4, 4, 0));
+        }
+        let residual = fixed()
+            .filter_any(&[
+                (Entry::CATEGORY, C::Ne, 1_u8.into()),
+                (Entry::AMOUNT, C::Eq, 30_u64.into()),
+            ])
+            .count()
+            .unwrap();
+        assert_eq!((residual.value, residual.fetched), (1, 4));
+        let result = fixed()
+            .filter_any(&[
+                (Entry::CATEGORY, C::Ne, 1_u8.into()),
+                (Entry::ID, C::Eq, 3_u64.into()),
+            ])
+            .fetch()
+            .unwrap();
+        assert_eq!(ids(&result.rows), [3]);
+    }
+    let result = db
+        .query::<Entry>()
+        .filter_in(Entry::MAYBE, &[Some(2_u64), Some(4)])
+        .filter_absent(Entry::MAYBE)
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!((result.value, result.examined, result.fetched), (0, 0, 0));
+    let result = db
+        .query::<Entry>()
+        .filter_absent(Entry::MAYBE)
+        .filter_not_in(Entry::MAYBE, &[Some(2_u64), Some(4)])
+        .count()
+        .unwrap();
+    assert_eq!(result.value, 2);
+    assert!(matches!(
+        db.query::<Entry>()
+            .eq(Entry::CATEGORY, 1_u8)
+            .filter_not_in(Entry::CATEGORY, &[1_u8])
+            .eq("unknown", 1_u64)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn primary_point_counts_use_the_key_only_when_it_proves_every_clause() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 10);
+    for id in [3_u64, 9] {
+        let point = || db.query::<Entry>().eq(Entry::ID, id).work_limit(1);
+        let covered = point()
+            .filter_any(&[
+                (Entry::CATEGORY, C::Eq, 0_u8.into()),
+                (Entry::ID, C::Eq, id.into()),
+            ])
+            .filter_not_in(Entry::ID, &[1_u64, 2])
+            .count()
+            .unwrap();
+        let present = id == 3;
+        assert_eq!(
+            (covered.value, covered.examined, covered.fetched),
+            (u64::from(present), usize::from(present), 0)
+        );
+    }
+    for category in [0_u8, 1] {
+        let residual = db
+            .query::<Entry>()
+            .eq(Entry::ID, 3_u64)
+            .filter_any(&[
+                (Entry::ID, C::Eq, 4_u64.into()),
+                (Entry::CATEGORY, C::Eq, category.into()),
+            ])
+            .work_limit(1)
+            .count()
+            .unwrap();
+        assert_eq!((residual.value, residual.fetched), (u64::from(category), 1));
+    }
+    let gaps = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[2_u64, 5])
+        .count()
+        .unwrap();
+    assert_eq!((gaps.value, gaps.examined, gaps.fetched), (2, 4, 4));
+}
+
+#[test]
 fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let db = create(&runtime, 10);
     let before = backing.borrow().clone();
+    let present = db
+        .query::<Entry>()
+        .filter_present(Entry::MAYBE)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (present.value, present.examined, present.fetched),
+        (6, 6, 0)
+    );
     // The same field cannot be both absent and present, even with another usable index.
     let contradiction = db
         .query::<Entry>()

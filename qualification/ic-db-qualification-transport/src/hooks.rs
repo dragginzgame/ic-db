@@ -6,13 +6,21 @@ use ic_platform_runtime::{
 };
 use ic_wire::Error;
 
+// Native processes have no IC instruction meter. Only installed dispatch can
+// supply this capability; a measured request cannot report a native substitute.
+#[cfg(target_arch = "wasm32")]
+const METER: Option<fn() -> u64> = Some(raw::instruction_counter);
+#[cfg(not(target_arch = "wasm32"))]
+const METER: Option<fn() -> u64> = None;
+
 /// Decode the wire request and supply the installed instruction meter.
 /// # Errors
-/// Returns the same frame errors as the ordinary fixture decoder.
+/// Refuses invalid frames or an unavailable IC instruction meter.
 pub fn decode_measured<T: serde::de::DeserializeOwned, const ID: u64>(
     bytes: &[u8],
-) -> Result<super::Measured<T>, Error> {
-    Ok((super::decode::<T, ID>(bytes)?, raw::instruction_counter))
+) -> Result<super::Measured<T>, String> {
+    let request = super::decode::<T, ID>(bytes).map_err(|error| error.to_string())?;
+    Ok((request, METER.ok_or("IC instruction meter unavailable")?))
 }
 
 /// Capture the IC message time in nanoseconds for a decoded request.
@@ -50,12 +58,13 @@ fn admit_frame(id: u64) {
 }
 
 /// Refuse an endpoint failure through the enclosing message rollback boundary.
-pub fn endpoint_error(error: EndpointError<String, Error, Error>) -> ! {
+pub fn endpoint_error(
+    error: EndpointError<String, impl std::fmt::Display + std::fmt::Debug, Error>,
+) -> ! {
     match error {
         EndpointError::Admission(AdmissionError::Guard(error)) => system::trap(&error),
-        EndpointError::Admission(AdmissionError::Decode(error)) | EndpointError::Encode(error) => {
-            trap_error(error)
-        }
+        EndpointError::Admission(AdmissionError::Decode(error)) => system::trap(&error.to_string()),
+        EndpointError::Encode(error) => trap_error(error),
         other => system::trap(&format!("Platform endpoint: {other:?}")),
     }
 }

@@ -177,30 +177,47 @@ fn unique_lookup<'a>(
 }
 
 // Only supplied prefix components have a fixed value.
-pub(super) fn prefix_value<'a>(
-    index: &IndexSchema,
+fn prefix_value<'a>(
+    fields: &[&str],
     values: &[IndexValue<'a>],
     field: &str,
 ) -> Option<IndexValue<'a>> {
-    index
-        .fields
+    fields
         .iter()
         .zip(values)
         .find_map(|(name, value)| (*name == field).then_some(*value))
 }
 
 /// Select the aggregate input path and report whether its keys prove every predicate.
-pub(super) fn select_aggregate_prefix<'a>(
+pub(super) fn select_aggregate_path<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
 ) -> Result<bool, Error> {
     if let Some((_, values)) = &request.index {
         return Ok(plan.index.is_some_and(|index| {
-            covers_index(entity, request, plan, index, values, plan.prefix.len())
+            covers_keys(
+                entity,
+                request,
+                plan,
+                Some(index),
+                values,
+                plan.prefix.len(),
+            )
         }));
     }
-    let exact_id = equality(request, entity.primary_key).is_some();
+    let primary = equality(request, entity.primary_key);
+    if covers_keys(
+        entity,
+        request,
+        plan,
+        None,
+        primary.as_slice(),
+        plan.prefix.len(),
+    ) {
+        return Ok(true);
+    }
+    let exact_id = primary.is_some();
     let mut best = None;
     for index in entity.indexes {
         let values = leading_equalities(request, index);
@@ -210,7 +227,14 @@ pub(super) fn select_aggregate_prefix<'a>(
         let Some(path) = automatic_prefix(entity, index, &values)? else {
             continue;
         };
-        let covered = covers_index(entity, request, plan, index, &values, path.prefix.len());
+        let covered = covers_keys(
+            entity,
+            request,
+            plan,
+            Some(index),
+            &values,
+            path.prefix.len(),
+        );
         let single_owner = index.is_unique_lookup(path.fixed);
         // The exact key proves exhaustion in one visit. If it also covers
         // every predicate, no other candidate can improve the work bound.
@@ -242,21 +266,32 @@ pub(super) fn select_aggregate_prefix<'a>(
 }
 
 // Plan admission emits one encoded term per predicate, in request order.
-fn covers_index(
+fn covers_keys(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &super::Plan<'_>,
-    index: &IndexSchema,
+    index: Option<&IndexSchema>,
     values: &[IndexValue<'_>],
     prefix_len: usize,
 ) -> bool {
-    request.predicates.iter().zip(&plan.terms).all(|(p, term)| {
-        let fixed_equality = p.comparison == Comparison::Eq
-            && matches!(p.operand, QueryOperand::Literal(v) if prefix_value(index, values, p.field) == Some(v));
-        !p.or_next
-            && (fixed_equality
-                || super::range::bounds_index_term(entity, index, values.len(), term, prefix_len))
-    })
+    let fields = index.map_or(std::slice::from_ref(&entity.primary_key), |index| {
+        index.fields
+    });
+    request
+        .clauses()
+        .zip(plan.clauses())
+        .all(|(clause, terms)| {
+            let prefix_proves_clause = clause
+                .iter()
+                .any(|p| fixed_comparison(p, prefix_value(fields, values, p.field)) == Some(true));
+            prefix_proves_clause
+                || match terms {
+                    [term] => {
+                        super::range::bounds_key_term(entity, index, values.len(), term, prefix_len)
+                    }
+                    _ => false,
+                }
+        })
 }
 
 fn leading_equalities<'a>(request: &Request<'a>, index: &IndexSchema) -> Vec<IndexValue<'a>> {
@@ -387,7 +422,7 @@ fn satisfies(
 // must not restrict an index prefix or prove that an ordering field is constant.
 pub(super) fn literal_equalities<'r, 'a>(
     request: &'r Request<'a>,
-) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + Clone + 'r {
+) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
     request.clauses().filter_map(|clause| {
         if let [predicate] = clause
             && predicate.comparison == Comparison::Eq
@@ -397,6 +432,47 @@ pub(super) fn literal_equalities<'r, 'a>(
         } else {
             None
         }
+    })
+}
+
+// An admitted equality or inequality is decidable when the field value is fixed.
+fn fixed_comparison(predicate: &Predicate<'_>, fixed: Option<IndexValue<'_>>) -> Option<bool> {
+    let QueryOperand::Literal(operand) = predicate.operand else {
+        return None;
+    };
+    match predicate.comparison {
+        Comparison::Eq => Some(fixed? == operand),
+        Comparison::Ne => Some(fixed? != operand),
+        _ => None,
+    }
+}
+
+// A mandatory clause is impossible only if every alternative is disproved.
+pub(super) fn has_conflicting_predicates(
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    index: Option<&IndexSchema>,
+) -> bool {
+    if request.index.is_none()
+        && (request.predicates.len() < 2 || literal_equalities(request).next().is_none())
+    {
+        return false;
+    }
+    if literal_equalities(request).any(|(field, value)| {
+        value == IndexValue::Absent && requires_present_field(entity, request, field)
+    }) {
+        return true;
+    }
+    request.clauses().any(|clause| {
+        clause.iter().all(|predicate| {
+            // Prefer the supplied prefix so a conflicting equality cannot prove itself.
+            let fixed = request
+                .index
+                .as_ref()
+                .and_then(|(_, values)| prefix_value(index?.fields, values, predicate.field))
+                .or_else(|| equality(request, predicate.field));
+            fixed_comparison(predicate, fixed) == Some(false)
+        })
     })
 }
 

@@ -223,7 +223,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             job.binding,
-            self.db.revision_by_id(E::SCHEMA.id)?,
+            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Groups(&mut job.groups),
@@ -274,7 +274,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
         prepare(
-            self.db,
+            &*self.db.read()?,
             E::SCHEMA,
             self.request,
             &plan,

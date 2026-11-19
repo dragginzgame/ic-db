@@ -16,7 +16,12 @@ use crate::{
 };
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
-use std::marker::PhantomData;
+use std::{
+    cell::{Ref, RefCell},
+    marker::PhantomData,
+    ops::Deref,
+    rc::Rc,
+};
 
 const MAX_TERMS: usize = 8;
 const MAX_WORK: usize = 512;
@@ -308,7 +313,7 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
-    fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> + Clone {
+    fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> {
         self.predicates.split_inclusive(|p| !p.or_next)
     }
 
@@ -442,11 +447,44 @@ pub(super) fn source_page<M: Memory>(
     execute(map, entity, &request, &plan, None)
 }
 
+enum QuerySource<'a, M: Memory> {
+    Direct(&'a Database<M>),
+    Session(Rc<RefCell<Database<M>>>),
+}
+
+enum QueryRead<'a, M: Memory> {
+    Direct(&'a Database<M>),
+    Session(Ref<'a, Database<M>>),
+}
+
+impl<M: Memory> Deref for QueryRead<'_, M> {
+    type Target = Database<M>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Direct(db) => db,
+            Self::Session(db) => db,
+        }
+    }
+}
+
+impl<M: Memory> QuerySource<'_, M> {
+    fn read(&self) -> Result<QueryRead<'_, M>, Error> {
+        match self {
+            Self::Direct(db) => Ok(QueryRead::Direct(db)),
+            Self::Session(db) => db
+                .try_borrow()
+                .map(QueryRead::Session)
+                .map_err(|_| Error::BorrowConflict),
+        }
+    }
+}
+
 /// Fluent exact predicates over one entity. No callback executor is generated.
 /// Ordering uses primary order, an explicit index, a proven automatic path or
 /// bounded complete sorting. Work exhaustion never returns a sorted prefix.
 pub struct Query<'a, E, M: Memory> {
-    db: &'a Database<M>,
+    db: QuerySource<'a, M>,
     request: Request<'a>,
     entity: PhantomData<E>,
 }
@@ -455,13 +493,21 @@ impl<M: Memory> Database<M> {
     #[must_use]
     pub fn query<E: Entity>(&self) -> Query<'_, E, M> {
         Query {
-            db: self,
+            db: QuerySource::Direct(self),
             entity: PhantomData,
             request: Request::default(),
         }
     }
 }
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
+    pub(crate) fn from_session(db: Rc<RefCell<Database<M>>>) -> Self {
+        Self {
+            db: QuerySource::Session(db),
+            request: Request::default(),
+            entity: PhantomData,
+        }
+    }
+
     /// Remove duplicate output records. Proven leading index tuples use live
     /// pages; identity projections need no duplicate tracking. Other projections scan to
     /// completion in one call, retaining at most 32 tuples within 128 KiB.
@@ -801,7 +847,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch(self) -> Result<QueryPage<E>, Error> {
-        fetch_rows(self.db, E::SCHEMA, self.request, None)?.decode_entities()
+        fetch_rows(&*self.db.read()?, E::SCHEMA, self.request, None)?.decode_entities()
     }
 
     /// Return the first matching entity in query order, or `None` on a proven miss.
@@ -854,7 +900,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch_as<R: Value>(self) -> Result<QueryPage<R>, Error> {
-        let raw = fetch_rows(self.db, E::SCHEMA, self.request, Some(R::definition()))?;
+        let raw = fetch_rows(
+            &*self.db.read()?,
+            E::SCHEMA,
+            self.request,
+            Some(R::definition()),
+        )?;
         raw.decode_projection()
     }
 }

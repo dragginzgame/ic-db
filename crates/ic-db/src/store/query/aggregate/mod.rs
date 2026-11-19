@@ -247,7 +247,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         mut reducer: Reducer,
     ) -> Result<Aggregate<Option<R>>, Error> {
         let page = execute(
-            &self.db.map,
+            &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
             plan,
@@ -355,7 +355,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.select_aggregate_row_path(&mut plan)?;
         let mut found = false;
         let page = execute(
-            &self.db.map,
+            &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
             &plan,
@@ -390,15 +390,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let mut plan = self.aggregate_plan(None, false)?;
         if self.request.predicates.is_empty() && self.request.index.is_none() {
             return Ok(Aggregate {
-                value: self.db.cardinality::<E>()?,
+                value: self.db.read()?.cardinality::<E>()?,
                 examined: 0,
                 fetched: 0,
                 output_bytes: 8,
             });
         }
-        if super::range::covers_primary(&plan)
-            || super::order::select_aggregate_prefix(E::SCHEMA, &self.request, &mut plan)?
-        {
+        if super::order::select_aggregate_path(E::SCHEMA, &self.request, &mut plan)? {
             return self.count_keys(&plan);
         }
         let reducer = self.count_reducer(None)?;
@@ -440,7 +438,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let mut examined = 0;
         if let Some(range) = bounds {
             let terminal = super::range::terminal_key(&range, false);
-            let entries = self.db.map.range((range.0.as_ref(), range.1.as_ref()));
+            let db = self.db.read()?;
+            let entries = db.map.range((range.0.as_ref(), range.1.as_ref()));
             for entry in entries.take(self.request.work) {
                 examined += 1;
                 if examined == self.request.work && terminal.is_none_or(|end| end != entry.key()) {
@@ -491,8 +490,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
-        if plan.index.is_none() && !super::range::covers_primary(plan) {
-            super::order::select_aggregate_prefix(E::SCHEMA, &self.request, plan)?;
+        if plan.index.is_none() {
+            super::order::select_aggregate_path(E::SCHEMA, &self.request, plan)?;
         }
         Ok(())
     }
@@ -513,7 +512,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         mut reducer: Reducer,
     ) -> Result<Aggregate<u64>, Error> {
         let page = execute(
-            &self.db.map,
+            &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
             plan,
@@ -638,7 +637,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         }
         let mut groups = self.admit_groups(plan, initial)?;
         let page = execute(
-            &self.db.map,
+            &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
             plan,
@@ -669,12 +668,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         {
             return Err(Error::InvalidQuery);
         }
-        self.db.schema.admits(E::SCHEMA)?;
+        let db = self.db.read()?;
+        db.schema.admits(E::SCHEMA)?;
         let mut plan = Plan::admit(
             E::SCHEMA,
             &self.request,
-            self.db.schema.fingerprint(),
-            self.db.incarnation,
+            db.schema.fingerprint(),
+            db.incarnation,
             output,
             super::PlanOutput::Aggregate {
                 grouped: group_output,

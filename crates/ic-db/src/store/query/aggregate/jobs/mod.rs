@@ -172,7 +172,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             field_binding(binding(&plan, &reducer)?, field),
-            self.db.revision_by_id(E::SCHEMA.id)?,
+            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
@@ -231,7 +231,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let expected = field_binding(binding(&plan, &reducer)?, field);
         let bytes = self.request.bytes;
         prepare(
-            self.db,
+            &*self.db.read()?,
             E::SCHEMA,
             self.request,
             &plan,
@@ -326,7 +326,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             binding(&plan, &reducer)?,
-            self.db.revision_by_id(E::SCHEMA.id)?,
+            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
@@ -358,7 +358,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let expected = binding(&plan, &reducer)?;
         let limit = self.request.bytes;
         prepare(
-            self.db,
+            &*self.db.read()?,
             E::SCHEMA,
             self.request,
             &plan,

@@ -86,7 +86,7 @@ pub use ulid::{
 /// Owned binary bytes. The database codec enforces authored limits and row bounds.
 pub type Blob = Vec<u8>;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
-pub use session::DatabaseSession;
+pub use session::{DatabaseSession, UniqueKey};
 pub use store::{
     Aggregate, Batch, Comparison, CopyStep, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage,

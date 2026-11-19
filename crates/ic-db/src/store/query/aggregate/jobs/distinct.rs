@@ -29,7 +29,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             binding(plan.binding),
-            self.db.revision_by_id(E::SCHEMA.id)?,
+            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
@@ -56,7 +56,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut record = jobs.load(handle)?;
         let bytes = self.request.bytes;
         prepare(
-            self.db,
+            &*self.db.read()?,
             E::SCHEMA,
             self.request,
             &plan,

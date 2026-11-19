@@ -12,10 +12,8 @@ ignored = ["toko-tooling"]
 [package.metadata.toko-tooling.loc]
 category = "tests"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
-
 [dependencies]
+ic-platform-runtime = { workspace = true, features = ["call-ic0", "system-raw"] }
 ic-wire.workspace = true
 serde = { workspace = true, features = ["derive"] }
 

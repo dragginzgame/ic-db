@@ -184,8 +184,12 @@ impl Field {
     }
 
     pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
+        self.index_operand(ident, self.optional)
+    }
+
+    pub fn index_operand(&self, ident: &syn::Ident, optional: bool) -> TokenStream {
         if let Kind::Named(_, indirect) = &self.kind {
-            return match (self.optional, indirect) {
+            return match (optional, indirect) {
                 (true, true) => {
                     quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
                 }
@@ -196,7 +200,7 @@ impl Field {
                 (false, false) => quote!(::ic_db::IndexValue::from(&row.#ident)),
             };
         }
-        if self.optional {
+        if optional {
             if matches!(self.kind, Kind::Text(_) | Kind::Blob(_)) {
                 quote!(row.#ident.as_deref().map(::ic_db::IndexValue::from).unwrap_or(::ic_db::IndexValue::Absent))
             } else {
@@ -212,7 +216,21 @@ impl Field {
     }
 
     pub fn rust_type(&self) -> TokenStream {
-        let base = match &self.kind {
+        let base = self.item_type();
+        let base = if self.many.is_some() {
+            quote!(::std::vec::Vec<#base>)
+        } else {
+            base
+        };
+        if self.optional {
+            quote!(::std::option::Option<#base>)
+        } else {
+            base
+        }
+    }
+
+    pub fn item_type(&self) -> TokenStream {
+        match &self.kind {
             Kind::Named(path, indirect) => {
                 if *indirect {
                     quote!(::std::boxed::Box<#path>)
@@ -244,16 +262,6 @@ impl Field {
             Kind::Principal => quote!(::ic_db::Principal),
             Kind::Text(_) => quote!(::std::string::String),
             Kind::Blob(_) => quote!(::ic_db::Blob),
-        };
-        let base = if self.many.is_some() {
-            quote!(::std::vec::Vec<#base>)
-        } else {
-            base
-        };
-        if self.optional {
-            quote!(::std::option::Option<#base>)
-        } else {
-            base
         }
     }
 

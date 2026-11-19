@@ -49,13 +49,15 @@ impl Endpoint {
 // Report the actual encoded operand used to tighten this path. A residual
 // operand may exceed the physical key bound even when its query is valid.
 fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Option<&[u8]>, Error> {
-    let TermOperand::Literal { bytes, .. } = &term.operand else {
+    let TermOperand::Literal { bytes, absent } = &term.operand else {
         return Ok(None);
     };
     let operand = match term.comparison {
         Comparison::Eq | Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
             bytes.as_slice()
         }
+        // All present optional components start with 01, including empty values.
+        Comparison::Ne if secondary && *absent => &[1][..],
         // Drop the terminator but retain escaping and the optional-present tag.
         Comparison::StartsWith if secondary => {
             bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
@@ -84,14 +86,14 @@ fn next_field<'a>(
 }
 
 // Both path ranking and key-only counting use the same encodable range proof.
-pub(super) fn bounds_index_term(
+pub(super) fn bounds_key_term(
     entity: &EntitySchema,
-    index: &IndexSchema,
+    index: Option<&IndexSchema>,
     fixed: usize,
     term: &Term,
     prefix_len: usize,
 ) -> bool {
-    next_field(entity, Some(index), fixed).is_some_and(|(name, secondary)| {
+    next_field(entity, index, fixed).is_some_and(|(name, secondary)| {
         name == entity.fields[term.position].name
             && matches!(bound_operand(term, secondary, prefix_len), Ok(Some(_)))
     })
@@ -103,7 +105,13 @@ fn bounds_index_clause(
     clause: &[Term],
 ) -> bool {
     if let [term] = clause {
-        return bounds_index_term(entity, path.index, path.fixed, term, path.prefix.len());
+        return bounds_key_term(
+            entity,
+            Some(path.index),
+            path.fixed,
+            term,
+            path.prefix.len(),
+        );
     }
     next_field(entity, Some(path.index), path.fixed).is_some_and(|(field, _)| {
         membership_interval(entity, field, clause, path.prefix.len()).is_some()
@@ -165,36 +173,13 @@ pub(super) fn preserves_primary_bounds(
     })
 }
 
-// Every predicate must independently constrain this same primary-key interval.
-pub(super) fn covers_primary(plan: &Plan<'_>) -> bool {
-    plan.index.is_none()
-        && plan.terms.iter().all(|term| {
-            !term.or_next
-                && term.position == plan.primary
-                && matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
-        })
-}
-
 pub(super) fn bounds(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &Plan<'_>,
 ) -> Result<Option<Bounds>, Error> {
-    let mut equalities = super::order::literal_equalities(request);
-    while let Some((field, value)) = equalities.next() {
-        let prefix_value = request
-            .index
-            .as_ref()
-            .and_then(|(_, values)| super::order::prefix_value(plan.index?, values, field));
-        if prefix_value.is_some_and(|fixed| fixed != value)
-            || equalities
-                .clone()
-                .any(|(other, operand)| other == field && operand != value)
-            || (value == crate::IndexValue::Absent
-                && super::order::requires_present_field(entity, request, field))
-        {
-            return Ok(None);
-        }
+    if super::order::has_conflicting_predicates(entity, request, plan.index) {
+        return Ok(None);
     }
     let mut lower = Endpoint {
         key: StoreKey::new(plan.prefix.clone())?,
@@ -268,7 +253,7 @@ pub(super) fn bounds(
                     upper.tighten(end, !secondary, Ordering::Less);
                 }
                 Comparison::Gt => lower.tighten(end, secondary, Ordering::Greater),
-                Comparison::Ge => lower.tighten(key, true, Ordering::Greater),
+                Comparison::Ge | Comparison::Ne => lower.tighten(key, true, Ordering::Greater),
                 Comparison::Lt => upper.tighten(key, false, Ordering::Less),
                 Comparison::Le => upper.tighten(end, !secondary, Ordering::Less),
                 _ => {}

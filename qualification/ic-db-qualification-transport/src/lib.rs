@@ -1,10 +1,8 @@
-//! Shared private fixture requests and codecs. Platform ingress and traps require Wasm.
+//! Shared private fixture requests, codecs and Platform dispatch hooks.
 #![forbid(unsafe_code)]
 
-#[cfg(target_arch = "wasm32")]
 mod hooks;
 pub mod mixed;
-#[cfg(target_arch = "wasm32")]
 pub use hooks::*;
 
 use ic_wire::{Direction, Encoding, Error, Limits};

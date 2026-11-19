@@ -11,6 +11,7 @@
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
 use ic_db_qualification_transport as transport;
+use ic_platform_runtime::system;
 
 #[cfg(test)]
 mod tests;
@@ -40,7 +41,6 @@ mod migration_references;
 mod mixed_lifecycle;
 mod principal_keys;
 mod queries;
-mod system;
 
 use crate::handles::Database;
 use ic_db::{Batch, Entity, FieldType, Principal};

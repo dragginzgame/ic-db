@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.23.18] - Unreleased
+
+- Start a fluent query with `session.query::<User>()`. It sees data at
+  execution. Look up a declared unique index with a generated named key,
+  for example `session.get_unique(&UserByIssuerAndSubject { issuer, subject })?`.
+  Use `session.insert(&row)`, `session.replace(&row)` or
+  `session.delete::<User>(id)` for one-operation batches.
+
+- `filter_present` on the next indexed field can seek directly to present values,
+  including empty text. A count covered by that range fetches zero owner rows.
+
+- A fluent query with a fixed field value finishes with zero candidate visits
+  when `filter_in` excludes that value or `filter_not_in` forbids it. This
+  applies to equality filters and explicit index prefixes. When the selected
+  prefix proves a membership filter true, `.count()` can count matching
+  index entries without fetching their owner rows. A primary-key lookup also
+  skips the row read when the ID proves every remaining filter.
+
+- Adopt Toko Tooling 0.45.19 in both workspaces. The records qualification
+  fixture now uses Platform Runtime’s trap directly on native and Wasm.
+
 ## [0.23.17] - 2026-11-19
 
 - Hosts can hand nested helpers a clone of `DatabaseSession` over one attachment.

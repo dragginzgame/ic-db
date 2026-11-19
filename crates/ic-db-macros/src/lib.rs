@@ -12,6 +12,7 @@ mod record;
 mod set;
 #[cfg(test)]
 mod tests;
+mod unique;
 mod wrapped;
 
 use proc_macro::TokenStream;
@@ -32,6 +33,9 @@ use field::Field;
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Entity names default to the type name; `name = "StableName"` overrides it.
 /// Index names default to comma-separated ordered fields; `name` overrides them.
+/// A unique index on `User(issuer, subject)` generates `UserByIssuerAndSubject`
+/// with named fields for `session.get_unique(&key)`. A sparse unique key takes
+/// the present component types. Equivalent unique indexes share a key type.
 /// Required or optional supported key fields may declare `references(entity = "path::Target")`;
 /// select the sole unfiltered index leading with this field, or use `index = "name"`.
 /// `None` has no target; every `Some(id)` requires that target in the final batch state.
@@ -338,6 +342,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             *selected = Some(index.name.clone());
         }
     }
+    let mut unique_keys = unique::Keys::default();
     for index in indexes {
         let unique_fields: BTreeSet<_> = index.fields.iter().collect();
         if index.fields.is_empty()
@@ -386,11 +391,15 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 quote!((#value, #optional))
             })
             .collect();
+        if unique {
+            unique_keys.add(&item, &index_name, &fields, &authored, &index.fields);
+        }
         let names = index.fields;
         descriptions.push(quote! { ::ic_db::IndexSchema { id: ::ic_db::__private::handle(#index_name), name: #index_name, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
         encoded_indexes
             .push(quote! { ::ic_db::__private::encode_index(&[#(#operands),*], #present_only) });
     }
+    let lookup_keys = unique_keys.declarations;
     let name = &item.ident;
     let attrs = &item.attrs;
     let visibility = &item.vis;
@@ -470,6 +479,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let decode_managed = managed_check(quote!(row));
     Ok(quote! {
         #insert_input
+        #(#lookup_keys)*
         #(#attrs)*
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
