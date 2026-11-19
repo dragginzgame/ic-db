@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.18] - Unreleased
+## [0.23.18] - 2026-11-19
 
 - Start a fluent query with `session.query::<User>()`. It sees data at
   execution. Look up a declared unique index with a generated named key,
