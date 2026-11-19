@@ -123,7 +123,9 @@ scan, `first()` returns `Error::Limit` if work runs out before finding a match
 or proving the range empty. Use `fetch()` to resume such scans.
 
 Omit `using_index` for default primary-key result order. Filter operands must match the exact
-declared type. `page.next` resumes the same query through `.after(&cursor)`;
+declared type. Pass a borrowed `String` or `Vec<u8>` directly, such as
+`.eq(Document::TITLE, &title)`. A byte literal such as `b"abc"` is a Blob operand.
+`page.next` resumes the same query through `.after(&cursor)`;
 an empty page can still carry a continuation. IC DB automatically caps each
 query response at 128 KiB of encoded rows. Transport framing remains host-owned. This first slice supports AND
 clauses over top-level ordered scalar/unit-enum comparisons. `make m2-queries` checks its native/Wasm
@@ -153,7 +155,7 @@ Presence filters also work on optional blobs, lists, records, enums, sets and ma
 
 ```rust
 let page = db.query::<ListRow>()
-    .ne(ListRow::LABELS, ic_db::IndexValue::Absent)
+    .filter_present(ListRow::LABELS)
     .fetch()?;
 ```
 
@@ -165,19 +167,21 @@ For membership on one field, use the equivalent equality shorthand:
 
 ```rust
 let page = db.query::<Entry>()
-    .filter_in(Entry::ID, &[1_u64.into(), 3_u64.into()])
+    .filter_in(Entry::ID, &[1_u64, 3])
     .fetch()?;
 ```
 
 The list must be nonempty and shares the same eight-comparison budget. Duplicate
 members count toward that bound but never duplicate results. Optional absence
-matches only an explicit `IndexValue::Absent` member. No member is coerced or
+can be included directly, for example
+`.filter_in(Document::PRIORITY, &[None, Some(3_u64)])`. No member is coerced or
 discarded before validation. The supplied order binds cursors/jobs, and the same
-ordered equality clause can resume work started through `filter_in`.
+ordered equality clause can resume work started through `filter_in`. When the field is the next component of the selected key,
+the scan covers the requested interval including all tied owners. Intervening candidates still consume work.
 
-Use `filter_not_in("id", &[1_u64.into(), 3_u64.into()])` to exclude listed values.
+Use `filter_not_in(Entry::ID, &[1_u64, 3])` to exclude listed values.
 It is equivalent to consecutive `Ne` filters, including their cursor/job identity.
-Absent fields remain eligible unless the list includes `IndexValue::Absent`.
+Absent fields remain eligible unless the list includes absence.
 The list must be nonempty; every member consumes the same comparison budget and
 undergoes exact admission. Reordering it changes continuation identity.
 

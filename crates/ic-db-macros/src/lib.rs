@@ -516,13 +516,6 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 Ok(row)
             }
         }
-        ::ic_db::__register_schema! {
-            const _: () = {
-                #[::ic_db::build::__ctor::ctor(unsafe, anonymous, crate_path = ::ic_db::build::__ctor)]
-                fn register() {
-                    ::ic_db::build::__register(<#name as ::ic_db::Entity>::declaration_path(), <#name as ::ic_db::Entity>::SCHEMA);
-                }
-            };
-        }
+        ::ic_db::__register_schema!(#name);
     })
 }

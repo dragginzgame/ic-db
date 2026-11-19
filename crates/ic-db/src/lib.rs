@@ -61,10 +61,10 @@ pub mod build;
 pub mod testing;
 
 #[doc(hidden)]
-#[cfg(not(all(feature = "build", not(target_arch = "wasm32"))))]
+#[cfg(any(rust_analyzer, not(feature = "build"), target_arch = "wasm32"))]
 #[macro_export]
 macro_rules! __register_schema {
-    ($($item:item)*) => {};
+    ($entity:ident) => {};
 }
 
 pub use date::Date;

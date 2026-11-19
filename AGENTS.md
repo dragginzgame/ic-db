@@ -62,7 +62,9 @@ This overlay owns local authority, product boundaries and qualification choices.
   product-engine dependency or sibling implementation authority.
 - Keep two-stage schema expansion: Rust resolves paths, host-only registration
   collects declarations, then validation seals the graph and emits target data.
-  Registration and `ctor` stay out of deployed Wasm.
+  Emit target-independent schema Rust. A generated `cfg` or `cfg_attr` needs a
+  specific target-exclusive operation. IC DB owns the host registration gate
+  so registration and `ctor` stay out of deployed Wasm.
 - Hours-long maintenance and source-plus-target space are accepted. Preserve
   source/target identity, closed ordinary access during maintenance, rollback,
   supported cancellation, validated publication and retired-source custody.

@@ -3,6 +3,12 @@ use ic_db::entity;
 
 pub(crate) mod destination {
     use super::*;
+
+    ///
+    /// Target
+    /// Provides the destination for cross-module references.
+    ///
+
     #[entity(
         pk(field = "id"),
         fields(field(name = "id", value(item(prim = "Nat64"))))
@@ -12,6 +18,12 @@ pub(crate) mod destination {
 pub(crate) mod source {
     use super::*;
     use crate::schema::destination::Target as ImportedTarget;
+
+    ///
+    /// Link
+    /// Refers to a destination entity through a Rust import alias.
+    ///
+
     #[entity(
         name = "SourceLink",
         pk(field = "id"),
@@ -29,6 +41,12 @@ pub(crate) mod source {
 }
 pub(crate) mod cycle {
     use super::*;
+
+    ///
+    /// Link
+    /// Models an optional self-reference resolved during schema assembly.
+    ///
+
     #[entity(
         name = "CycleLink",
         pk(field = "id"),

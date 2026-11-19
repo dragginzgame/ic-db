@@ -838,7 +838,10 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
         .fetch()
         .unwrap();
     assert_eq!(ids(&page.rows), [1, 2, 6, 7]);
-    assert_eq!(page.examined, 8);
+    assert_eq!(
+        page.examined,
+        input.iter().filter(|r| r.amount <= 20).count()
+    );
 }
 
 #[test]
@@ -1871,10 +1874,6 @@ fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
     for excluded in [vec![Some(1), Some(1)], vec![None], vec![None, Some(1)]] {
-        let values: Vec<_> = excluded
-            .iter()
-            .map(|value| value.map_or(IndexValue::Absent, IndexValue::Nat64))
-            .collect();
         let expected: Vec<_> = (1..=8)
             .map(row)
             .filter(|r| !excluded.contains(&r.maybe))
@@ -1886,7 +1885,7 @@ fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
             for step in 0..16 {
                 let mut query = db
                     .query::<Entry>()
-                    .filter_not_in("maybe", &values)
+                    .filter_not_in("maybe", &excluded)
                     .work_limit(1);
                 if descending {
                     query = query.descending();
@@ -1914,14 +1913,14 @@ fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
         }
         assert_eq!(
             db.query::<Entry>()
-                .filter_not_in("maybe", &values)
+                .filter_not_in("maybe", &excluded)
                 .count()
                 .unwrap()
                 .value,
             expected.len() as u64
         );
     }
-    let values = [1_u64.into(), 3_u64.into(), 3_u64.into()];
+    let values = [1_u64, 3, 3];
     let first = db
         .query::<Entry>()
         .filter_not_in("id", &values)
@@ -1952,7 +1951,7 @@ fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
 fn exclusion_admits_every_member_and_shares_the_filter_budget() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
-    for values in [vec![], vec![1_u64.into(); 9]] {
+    for values in [vec![], vec![1_u64; 9]] {
         assert!(matches!(
             db.query::<Entry>().filter_not_in("id", &values).fetch(),
             Err(Error::Limit)
@@ -1960,7 +1959,7 @@ fn exclusion_admits_every_member_and_shares_the_filter_budget() {
     }
     assert_eq!(
         db.query::<Entry>()
-            .filter_not_in("id", &[1_u64.into(); 8])
+            .filter_not_in("id", &[1_u64; 8])
             .count()
             .unwrap()
             .value,
@@ -1969,7 +1968,7 @@ fn exclusion_admits_every_member_and_shares_the_filter_budget() {
     assert!(matches!(
         db.query::<Entry>()
             .filter("amount", C::Ge, 0_u64)
-            .filter_not_in("id", &[1_u64.into(); 8])
+            .filter_not_in("id", &[1_u64; 8])
             .fetch(),
         Err(Error::Limit)
     ));
@@ -1985,7 +1984,7 @@ fn exclusion_admits_every_member_and_shares_the_filter_budget() {
     }
     assert!(matches!(
         db.query::<Entry>()
-            .filter_not_in("missing", &[1_u64.into()])
+            .filter_not_in("missing", &[1_u64])
             .fetch(),
         Err(Error::InvalidQuery)
     ));
@@ -2172,10 +2171,95 @@ fn outside_ranges_admit_both_operands_and_share_the_filter_budget() {
 }
 
 #[test]
+fn secondary_membership_seeks_the_interval_and_keeps_every_owner_at_its_end() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    let mut batch = Batch::new();
+    batch
+        .insert(&Entry {
+            amount: 80,
+            ..row(9)
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    let members = [80_u64, 60];
+    let query = || db.query::<Entry>().filter_in(Entry::AMOUNT, &members);
+    let page = query()
+        .order_asc(Entry::AMOUNT)
+        .work_limit(4)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [6, 8, 9]);
+    assert_eq!((page.examined, page.fetched), (4, 4));
+    let count = query().work_limit(5).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (3, 4, 4));
+    let first = query()
+        .order_asc(Entry::AMOUNT)
+        .descending()
+        .limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&first.rows), [9]);
+    let rest = query()
+        .order_asc(Entry::AMOUNT)
+        .descending()
+        .after(&first.next.unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [8, 6]);
+}
+
+#[test]
+fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let members = [8_u64, 6, 6];
+    let query = || {
+        db.query::<Entry>()
+            .filter_in(Entry::ID, &members)
+            .work_limit(3)
+    };
+    let page = query().fetch().unwrap();
+    assert_eq!(ids(&page.rows), [6, 8]);
+    assert_eq!((page.examined, page.fetched), (3, 3));
+    assert!(page.next.is_none());
+    let count = query().count().unwrap();
+    assert_eq!((count.value, count.examined), (2, 3));
+    let first = query().descending().limit(1).fetch().unwrap();
+    assert_eq!(ids(&first.rows), [8]);
+    let rest = query()
+        .descending()
+        .after(&first.next.unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&rest.rows), [6]);
+
+    let indexed = query()
+        .eq(Entry::CATEGORY, 0_u8)
+        .work_limit(2)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (indexed.value, indexed.examined, indexed.fetched),
+        (2, 2, 2)
+    );
+
+    let mixed = db
+        .query::<Entry>()
+        .filter_any(&[
+            (Entry::ID, C::Eq, 8_u64.into()),
+            (Entry::AMOUNT, C::Eq, 20_u64.into()),
+        ])
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&mixed.rows), [2, 8]);
+}
+
+#[test]
 fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
-    let values = [IndexValue::Absent, 1_u64.into(), 1_u64.into()];
+    let values = [None, Some(1_u64), Some(1)];
     let expected: Vec<_> = (1..=8)
         .map(row)
         .filter(|r| r.maybe.is_none() || r.maybe == Some(1))
@@ -2211,7 +2295,7 @@ fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
     );
     assert_eq!(
         db.query::<Entry>()
-            .filter_in("id", &[1_u64.into(); 8])
+            .filter_in("id", &[1_u64; 8])
             .count()
             .unwrap()
             .value,
@@ -2263,19 +2347,17 @@ fn membership_admits_every_member_and_charges_duplicates_before_execution() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
     assert!(matches!(
-        db.query::<Entry>().filter_in("id", &[]).fetch(),
+        db.query::<Entry>().filter_in("id", &[] as &[u64]).fetch(),
         Err(Error::Limit)
     ));
     assert!(matches!(
-        db.query::<Entry>()
-            .filter_in("id", &[1_u64.into(); 9])
-            .fetch(),
+        db.query::<Entry>().filter_in("id", &[1_u64; 9]).fetch(),
         Err(Error::Limit)
     ));
     assert!(matches!(
         db.query::<Entry>()
             .filter("id", C::Ge, 0_u64)
-            .filter_in("id", &[1_u64.into(); 8])
+            .filter_in("id", &[1_u64; 8])
             .fetch(),
         Err(Error::Limit)
     ));
@@ -2294,14 +2376,12 @@ fn membership_admits_every_member_and_charges_duplicates_before_execution() {
         ));
     }
     assert!(matches!(
-        db.query::<Entry>()
-            .filter_in("missing", &[1_u64.into()])
-            .fetch(),
+        db.query::<Entry>().filter_in("missing", &[1_u64]).fetch(),
         Err(Error::InvalidQuery)
     ));
     assert_eq!(
         db.query::<Entry>()
-            .filter_in("category", &[0_u8.into(), 1_u8.into()])
+            .filter_in("category", &[0_u8, 1])
             .order_by(&["id"])
             .fetch()
             .unwrap()
@@ -4080,7 +4160,7 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
             }
         }
     }
-    let values = [1_u64.into(), 4_u64.into(), 4_u64.into()];
+    let values = [1_u64, 4, 4];
     let distinct = db
         .query::<Entry>()
         .filter_in("maybe", &values)

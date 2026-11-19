@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.23.14] - Unreleased
+
+- Fix rust-analyzer marking active schema entities as inactive on non-UEFI
+  hosts. Editor analysis skips the host linker constructor and resolves the
+  generated fields and field constants.
+
+- Text and Blob filters can borrow application fields directly, for example
+  `.eq(Document::TITLE, &title)` for a `String` or
+  `.eq(BinaryObject::PAYLOAD, b"abc")` for a byte literal.
+- Optional filter operands accept Rust `Option` values. For example,
+  `.filter_in(Document::PRIORITY, &[None, Some(3_u64)])` matches absent
+  priorities and priority 3.
+- Pass typed slices directly to `filter_in` and `filter_not_in`, for example
+  `.filter_in(Entry::AMOUNT, &[60_u64, 80])`. Remove redundant element
+  conversions from existing calls so Rust can infer the slice type.
+- `filter_in(field, &values)` can seek between the smallest and largest members
+  when the field is the next primary or secondary key component. Every owner
+  tied at the upper end is included. Interior candidates still consume work.
+  Automatic count and existence checks can select this indexed interval.
+
 ## [0.23.13] - 2026-11-19
 
 ### Schema and queries

@@ -303,6 +303,12 @@ pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Op
     Some(bytes)
 }
 
+impl<'a, T: Into<IndexValue<'a>>> From<Option<T>> for IndexValue<'a> {
+    fn from(value: Option<T>) -> Self {
+        value.map_or(Self::Absent, Into::into)
+    }
+}
+
 impl From<u8> for IndexValue<'_> {
     fn from(value: u8) -> Self {
         Self::Nat8(value)
@@ -532,6 +538,24 @@ impl From<bool> for IndexValue<'_> {
 impl<'a> From<&'a str> for IndexValue<'a> {
     fn from(value: &'a str) -> Self {
         Self::Text(value)
+    }
+}
+
+impl<'a> From<&'a String> for IndexValue<'a> {
+    fn from(value: &'a String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl<'a> From<&'a Vec<u8>> for IndexValue<'a> {
+    fn from(value: &'a Vec<u8>) -> Self {
+        Self::Blob(value)
+    }
+}
+
+impl<'a, const N: usize> From<&'a [u8; N]> for IndexValue<'a> {
+    fn from(value: &'a [u8; N]) -> Self {
+        Self::Blob(value)
     }
 }
 

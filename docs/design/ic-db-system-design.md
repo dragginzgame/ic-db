@@ -369,7 +369,11 @@ compiler-resolved declaration path; typed reference spelling such as
 `references(entity = "Entry")` uses the target’s macro-private logical name and its derived
 handle, independently of the target descriptor, so self/cyclic relationships do
 not create recursive constant evaluation. Numeric target IDs are no longer accepted. The optional native-only `ic-db/build` feature collects nodes
-using `ctor`; `build::generate(source_module, target_module)` selects a module
+using `ctor`. The registration helper expands to a constructor in a compiled
+host build. During rust-analyzer analysis it expands to nothing: linker startup
+is a build-time operation, and ctor’s internal target branches otherwise mark
+active entity declarations as inactive. Generated fields and codecs are shared.
+`build::generate(source_module, target_module)` selects a module
 subtree, validates it through the existing `Schema::new`, seals registration and
 emits typed schema assembly with an expected fingerprint. The target compiler
 resolves the generated paths; target admission refuses host/target contract drift.
@@ -2653,6 +2657,16 @@ Clause boundaries enter cursor/job identity only when a clause has multiple
 alternatives, preserving existing conjunction-only bindings and singleton-clause
 equivalence with `filter`. Changed structure or operands refuse continuation.
 
+Both membership methods accept typed slices and convert each member at the fluent
+boundary. Rust `Option<T>` operands map `None` to the existing absent operand
+and `Some` to the underlying value, following IcyDB `6d421e3`’s
+`crates/icydb-core/src/value/input/mod.rs`. Existing field admission checks apply.
+Frozen IcyDB `6d421e3` accepted application strings and byte vectors in the same
+input module. IC DB borrows their contents for the query lifetime, including
+fixed-size byte arrays as Blob literals.
+Typed membership follows frozen IcyDB `6d421e3`’s `in_list` in
+`db/query/expr/filter/mod.rs`. The shared term budget is checked before conversion.
+
 `filter_in(field, values)` lowers directly to that same OR clause of exact
 equalities. It accepts a nonempty list under the shared eight-comparison budget;
 duplicates consume budget but never duplicate rows. Optional absence matches an
@@ -2876,7 +2890,15 @@ the positional contract of frozen IcyDB `6d421e3`,
 32-position bound matches an entity page; repeated positions currently repeat
 the direct lookup. Toko's asset/thumbnail flow at `2f45ba193` illustrates why
 the order of the input page matters. A query's `filter_in` instead selects
-matching entities once in query order.
+matching entities once in query order. When every alternative in one OR clause
+is a literal equality on the next traversal component, the shared scanner
+can seek between the smallest and largest encoded members. For a secondary
+field the exclusive upper bound is the successor of the greatest member’s
+full prefix, preserving every tied owner. Primary keys and owner suffixes
+use inclusive endpoints. Aggregate path selection uses the same range proof. Interior nonmembers consume work and are
+checked against the original clause. This extends the inclusive-range principle
+in frozen IcyDB `6d421e3`, `db/query/plan/planner/range/extract.rs`, without
+a second traversal or a new cursor representation.
 
 For a filtered lookup, `try_one()` verifies at most one match across the whole
 query. Like Toko's terminal, it probes for two even after `limit(1)`; IC DB
@@ -2908,7 +2930,7 @@ bytes encode the owner primary key. A comparison on that ID tightens the
 physical range, including strict last-ID boundaries in either direction.
 A fully covered count can count those keys directly. A synchronous aggregate
 with additional row predicates can still use the prefix when it preserves every usable primary-key bound.
-An ID inside an OR clause supplies no independent bound. The scanner checks remaining predicates on each visited owner.
+An individual ID alternative supplies no independent bound; an all-ID literal equality clause can bound the interval as a whole. The scanner checks remaining predicates on each visited owner.
 A unique index has
 no owner suffix. Frozen IcyDB `6d421e3` also relies on primary-key suffix
 order for fixed secondary prefixes in `db/query/plan/planner/predicate/mod.rs`.

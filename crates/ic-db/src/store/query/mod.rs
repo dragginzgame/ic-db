@@ -343,12 +343,16 @@ impl<'a> Request<'a> {
     }
 
     #[inline(never)]
-    fn filter_not_in(&mut self, field: &'a str, values: &[IndexValue<'a>]) {
-        if values.is_empty() || values.len() > MAX_TERMS - self.predicates.len() {
+    fn filter_not_in(
+        &mut self,
+        field: &'a str,
+        values: impl ExactSizeIterator<Item = IndexValue<'a>>,
+    ) {
+        if values.len() == 0 || values.len() > MAX_TERMS - self.predicates.len() {
             self.over_limit = true;
             return;
         }
-        for &value in values {
+        for value in values {
             self.filter(field, Comparison::Ne, QueryOperand::Literal(value));
         }
     }
@@ -653,18 +657,24 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Match a field against any supplied exact value, ANDed with other filters.
     /// Equivalent to `filter_any` with equality comparisons in the supplied order.
-    /// Absence matches only an explicit `IndexValue::Absent` member on an optional field.
+    /// Include `None` in a slice of optional values to match an absent field.
+    /// When the field is the next traversal key component, seek between the smallest
+    /// and largest member, including all tied owners. Interior candidates still consume work.
     /// Repeated members never repeat rows, but each counts toward the shared
     /// eight-comparison limit. Empty or oversized lists refuse with `Error::Limit`.
     /// Every member is admitted before reading; there is no coercion, sorting or
     /// deduplication of operands. Reordering members changes cursor/job identity.
     #[must_use]
-    pub fn filter_in(mut self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
+    pub fn filter_in(
+        mut self,
+        field: &'a str,
+        values: &[impl Copy + Into<IndexValue<'a>>],
+    ) -> Self {
         self.request.or_clause(
             values
                 .iter()
                 .copied()
-                .map(|value| (field, Comparison::Eq, QueryOperand::Literal(value))),
+                .map(|value| (field, Comparison::Eq, QueryOperand::Literal(value.into()))),
         );
         self
     }
@@ -677,8 +687,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// The equivalent inequality chain shares cursor/job identity; reordering
     /// the list changes that identity. No coercion or deduplication is performed.
     #[must_use]
-    pub fn filter_not_in(mut self, field: &'a str, values: &[IndexValue<'a>]) -> Self {
-        self.request.filter_not_in(field, values);
+    pub fn filter_not_in(
+        mut self,
+        field: &'a str,
+        values: &[impl Copy + Into<IndexValue<'a>>],
+    ) -> Self {
+        self.request
+            .filter_not_in(field, values.iter().copied().map(Into::into));
         self
     }
 

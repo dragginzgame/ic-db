@@ -2106,8 +2106,8 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
     for row in &expected {
         assert_eq!(
             db.query::<TextIndex>()
-                .eq("first", row.first.as_str())
-                .eq("second", row.second.as_str())
+                .eq(TextIndex::FIRST, &row.first)
+                .eq(TextIndex::SECOND, &row.second)
                 .first()
                 .unwrap()
                 .as_ref(),

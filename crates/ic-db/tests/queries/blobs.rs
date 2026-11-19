@@ -146,9 +146,7 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
                 _ => unreachable!(),
             };
             for indexed in [false, true] {
-                let mut query =
-                    db.query::<Binary>()
-                        .filter("payload", comparison, operand.as_slice());
+                let mut query = db.query::<Binary>().filter("payload", comparison, operand);
                 let source = if indexed {
                     query = query.using_index("payload,id", &[]);
                     &expected
@@ -273,7 +271,7 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
     let groups = db
         .query::<Binary>()
         .order_groups(GroupOrder::AggregateDescending)
-        .filter_groups(C::Ge, [0_u8].as_slice())
+        .filter_groups(C::Ge, &[0_u8])
         .group_max::<Payload, Optional>()
         .unwrap()
         .value;
@@ -443,7 +441,7 @@ fn blob_suffixes_and_substrings_match_raw_bytes_without_matching_inside_zero_esc
     }
     let groups = db
         .query::<Binary>()
-        .filter_groups(C::EndsWith, [255].as_slice())
+        .filter_groups(C::EndsWith, b"\xff")
         .group_max::<Payload, Optional>()
         .unwrap()
         .value;

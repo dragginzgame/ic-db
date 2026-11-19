@@ -97,6 +97,19 @@ pub(super) fn bounds_index_term(
     })
 }
 
+fn bounds_index_clause(
+    entity: &EntitySchema,
+    path: &super::order::IndexPath<'_>,
+    clause: &[Term],
+) -> bool {
+    if let [term] = clause {
+        return bounds_index_term(entity, path.index, path.fixed, term, path.prefix.len());
+    }
+    next_field(entity, Some(path.index), path.fixed).is_some_and(|(field, _)| {
+        membership_interval(entity, field, clause, path.prefix.len()).is_some()
+    })
+}
+
 // Rank only bounds the traversal can actually encode on the next index field.
 pub(super) fn has_secondary_bound(
     entity: &EntitySchema,
@@ -105,11 +118,32 @@ pub(super) fn has_secondary_bound(
 ) -> bool {
     plan.terms
         .split_inclusive(|term| !term.or_next)
-        .any(|clause| {
-            matches!(clause, [term] if bounds_index_term(
-                entity, path.index, path.fixed, term, path.prefix.len()
-            ))
-        })
+        .any(|clause| bounds_index_clause(entity, path, clause))
+}
+
+// A disjunction of literal equalities on one key component fits one inclusive scan between
+// its extrema. The original predicate still rejects every gap in that scan.
+fn membership_interval<'a>(
+    entity: &EntitySchema,
+    field: &str,
+    clause: &'a [Term],
+    prefix_len: usize,
+) -> Option<(&'a [u8], &'a [u8])> {
+    let mut operands = clause.iter().map(|term| {
+        if entity.fields[term.position].name == field && term.comparison == Comparison::Eq {
+            bound_operand(term, false, prefix_len).ok().flatten()
+        } else {
+            None
+        }
+    });
+    let mut low = operands.next()??;
+    let mut high = low;
+    for operand in operands {
+        let key = operand?;
+        low = low.min(key);
+        high = high.max(key);
+    }
+    Some((low, high))
 }
 
 // A secondary candidate must retain every bound the primary scan could seek.
@@ -121,10 +155,15 @@ pub(super) fn preserves_primary_bounds(
     plan.terms
         .split_inclusive(|term| !term.or_next)
         .all(|clause| {
-            let [term] = clause else { return true };
-            term.position != plan.primary
-                || !matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
-                || bounds_index_term(entity, path.index, path.fixed, term, path.prefix.len())
+            let primary_bound = match clause {
+                [term] => {
+                    term.position == plan.primary
+                        && matches!(bound_operand(term, false, plan.prefix.len()), Ok(Some(_)))
+                }
+                _ => membership_interval(entity, entity.primary_key, clause, plan.prefix.len())
+                    .is_some(),
+            };
+            !primary_bound || bounds_index_clause(entity, path, clause)
         })
 }
 
@@ -169,7 +208,23 @@ pub(super) fn bounds(
     };
     if let Some((field, secondary)) = next_field(entity, plan.index, plan.fixed_components) {
         for clause in plan.terms.split_inclusive(|term| !term.or_next) {
-            let [term] = clause else { continue };
+            let [term] = clause else {
+                if let Some((low, high)) =
+                    membership_interval(entity, field, clause, plan.prefix.len())
+                {
+                    lower.tighten(
+                        StoreKey::new([plan.prefix.as_slice(), low].concat())?,
+                        true,
+                        Ordering::Greater,
+                    );
+                    // Secondary components can have trailing fields and owner IDs.
+                    // Stop after all keys sharing the greatest member's prefix.
+                    let end = [plan.prefix.as_slice(), high].concat();
+                    let end = if secondary { successor(end)? } else { end };
+                    upper.tighten(StoreKey::new(end)?, !secondary, Ordering::Less);
+                }
+                continue;
+            };
             if entity.fields[term.position].name != field {
                 continue;
             }

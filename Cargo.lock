@@ -57,7 +57,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea691ed9f36489d087419b8b2ba3ef27d89621380b4178c73e2445a379e4e0f4"
 dependencies = [
  "link-section",
- "linktime-proc-macro",
 ]
 
 [[package]]
@@ -198,9 +197,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.3"
+version = "0.78.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71f944acc53d41720d70856cb5f81b0b3af9491833b70d22e836772899ac12de"
+checksum = "3b35e5c997073a48c5cb4a232f4b2cce89f24bf856ce6fd5798866be84b2ad8f"
 dependencies = [
  "ic-platform",
  "ic-platform-runtime",
@@ -236,12 +235,6 @@ name = "link-section"
 version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d9aae57673c1a235149777a74d152f3210ebd3e3b13346d2cdb6809e566bd3c"
-
-[[package]]
-name = "linktime-proc-macro"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e57c38c1e860fd37c604281cdfb1dd2216977fd76a50f85ba2f388ef3219616"
 
 [[package]]
 name = "memchr"
@@ -369,9 +362,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.45.13"
+version = "0.45.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e5ed346b3e29656bd1521a24ec326e40236bd1ba9101e807684cfd77d8dcbe9"
+checksum = "047d160b116c300b7dfadae595c5c7b1f184257937b7d8541b1abc3aac6b6a52"
 
 [[package]]
 name = "typenum"

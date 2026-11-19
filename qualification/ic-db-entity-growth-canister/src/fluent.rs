@@ -50,7 +50,7 @@ pub(super) fn operate<E: Entity<Key = u64>>(
             .fetch(),
         #[cfg(feature = "fluent-shapes")]
         17 => query
-            .filter_not_in("category", &[input.1.into(), input.2.into()])
+            .filter_not_in("category", &[input.1, input.2])
             .order_by(&["id"])
             .fetch(),
         #[cfg(feature = "fluent-maps")]

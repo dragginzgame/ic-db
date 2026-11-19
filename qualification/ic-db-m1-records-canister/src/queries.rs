@@ -168,7 +168,7 @@ fn fluent_text_seek(
     let mut query = db
         .query::<Document>()
         .using_index("published,title", &[false.into()])
-        .filter(Document::TITLE, Comparison::StartsWith, needle.as_str())
+        .filter(Document::TITLE, Comparison::StartsWith, &needle)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
     if descending {
@@ -371,7 +371,7 @@ fn text_match(
         .map_err(|error| query_error(&error))?;
     let mut query = db
         .query::<Document>()
-        .filter(Document::NOTE, comparison, needle.as_str())
+        .filter(Document::NOTE, comparison, &needle)
         .limit(1)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
@@ -407,10 +407,7 @@ fn read(
             (Entry::AMOUNT, Comparison::Ge, minimum.into()),
             (Entry::AMOUNT, Comparison::Le, 20_u64.into()),
         ]),
-        Shape::Membership => query.filter_in(
-            Entry::AMOUNT,
-            &[minimum.into(), 20_u64.into(), minimum.into()],
-        ),
+        Shape::Membership => query.filter_in(Entry::AMOUNT, &[minimum, 20, minimum]),
         _ => query.gte(Entry::AMOUNT, minimum),
     }
     .limit(limit as usize)

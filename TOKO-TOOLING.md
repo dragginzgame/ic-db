@@ -739,6 +739,11 @@ storage allocation, admission, backing access or persistence integrations.
 
 These rules apply to handwritten and generated Rust.
 
+- In repositories with a documented design, give every macro-defined type,
+  including private types, its own `///` block above its attributes or defining
+  macro. Start with a bare `///`, put the exact type name alone on the next
+  line, then describe its role on one or more lines. Close with a bare `///`
+  and leave one blank source line before the code.
 - Start with module comments and inner attributes, then child module declarations
   (including `mod tests;`), then imports. Leave one blank line before the import
   block and one before the following item. Prefer one nested `use` per crate
@@ -748,13 +753,18 @@ These rules apply to handwritten and generated Rust.
   to their item. Give each named argument its own line in multi-argument endpoint
   mounts and attributes. Document each mount’s role, each guard’s access policy
   and each endpoint’s caller-visible purpose.
-- Compile shared logic on all supported targets. Use a target guard only for an
+- Compile shared logic on all supported targets. Within that logic, use a target guard only for an
   operation that requires a target-exclusive API or a different implementation.
   Prefer an existing portable API. For example, isolate IC-specific clock or
   entropy acquisition and keep the callers unconditional.
   The same rule applies to `#[cfg(any(test, target_arch = "wasm32"))]`.
   A helper having only test and canister callers is insufficient reason to
   hide it from ordinary host builds.
+- A Wasm-only canister may guard its private state module with
+  `#[cfg(any(target_arch = "wasm32", test))]` when native unit tests exercise
+  the same implementation and an ordinary host build has no state API.
+  Put the guard on the module declaration so storage dependencies can stay
+  scoped to Wasm builds and tests.
 - Use ordinary module discovery. The prohibition on `#[path]` includes
   conditional path overrides. Use either `foo.rs` or `foo/mod.rs` for a module.
   When adding a `foo/` directory for children, tests or fixtures, move `foo.rs`
@@ -765,12 +775,12 @@ These rules apply to handwritten and generated Rust.
   `tests/`. Move their references with them, retain the test module’s existing
   conditional attributes and declare fixture-only package roles explicitly.
 
-For examples, test layout and endpoint documentation, see the [Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/a716b501274678a8ebf163ef576bbb549e974acd/docs/principles/rust-code-hygiene.md).
+For examples, test layout and endpoint documentation, see the [Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md).
 
 Prefer `#[expect(..., reason = "...")]` over `#[allow(...)]` for Rust lint
 suppressions. Repositories must review every `allow` for conversion and retain
 one only with a concrete reason why an expectation cannot work. Follow the
-[lint suppression rule](https://github.com/dragginzgame/toko-tooling/blob/a716b501274678a8ebf163ef576bbb549e974acd/docs/principles/rust-code-hygiene.md#lint-suppressions).
+[lint suppression rule](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md#lint-suppressions).
 
 ### Common Rust lint policy
 
@@ -975,7 +985,7 @@ framework dependencies on core development. Follow the
 Do not add Python tooling. Read the applicable
 [workspace/tooling contracts](https://github.com/dragginzgame/toko-tooling/blob/a716b501274678a8ebf163ef576bbb549e974acd/rules/engineering-details.md#rust-workspaces-and-portable-tooling)
 for manifests, dependencies, hooks, installers or shared snapshots, and the
-[Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/a716b501274678a8ebf163ef576bbb549e974acd/docs/principles/rust-code-hygiene.md) for Rust implementation.
+[Rust hygiene guide](https://github.com/dragginzgame/toko-tooling/blob/4c6e6165b422ef3c68cd2e14b59bedb14852bacd/docs/principles/rust-code-hygiene.md) for Rust implementation.
 
 ## Host support
 

@@ -13,11 +13,26 @@ use std::{fmt::Write, sync::Mutex};
 #[doc(hidden)]
 pub use ctor as __ctor;
 
-/// Emit constructor registration only in explicitly selected host schema builds.
+/// Emit the linker constructor for compiled host schema builds.
+/// Editor analysis only needs the schema types. Expanding the linker machinery
+/// there attributes ctor's inactive UEFI branch to the authored entity.
 #[doc(hidden)]
+#[cfg(not(rust_analyzer))]
 #[macro_export]
 macro_rules! __register_schema {
-    ($($item:item)*) => { $($item)* };
+    ($entity:ident) => {
+        const _: () = {
+            $crate::build::__ctor::declarative::ctor! {
+                #[ctor(unsafe, anonymous)]
+                fn register() {
+                    $crate::build::__register(
+                        <$entity as $crate::Entity>::declaration_path(),
+                        <$entity as $crate::Entity>::SCHEMA,
+                    );
+                }
+            }
+        };
+    };
 }
 
 /// Refusal to generate a schema from host declarations.
