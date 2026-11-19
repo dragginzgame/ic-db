@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.23.22] - Unreleased
+## [0.23.22] - 2026-11-19
 
 - Document schema fixture types and generated insert and unique-key types.
   Qualification endpoints now identify their frame guards and byte limits.
