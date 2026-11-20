@@ -374,6 +374,251 @@ fn grouped_decimal_averages_agree_across_reopen_and_work_limits() {
 }
 
 #[test]
+fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
+    use ic_db::{SortDirection, SummaryMeasure};
+    let (sql, host) = fixture();
+    let mut db = open(&host);
+    // Lane 3 has a larger total than lane 1 but ties lane 0 after rounding.
+    // Lane 4 exercises negative half-even rounding.
+    let mut batch = Batch::new();
+    for (offset, (lane, cents)) in [
+        (3u8, 125i64),
+        (3, 124),
+        (3, 124),
+        (3, 124),
+        (4, -125),
+        (4, -126),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 20 + offset as u64;
+        batch
+            .insert(&Item {
+                id,
+                lane,
+                rank: 0,
+                visible: true,
+                price: Decimal::try_new(i128::from(cents), 2),
+            })
+            .unwrap();
+        sql.execute(
+            "INSERT INTO items VALUES (?1,?2,0,1,?3)",
+            params![i64::try_from(id).unwrap(), lane, cents],
+        )
+        .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let mut jobs = AggregateJobs::open(
+        host.open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let now = Timestamp::from_millis(0);
+    let values = |g: ic_db::GroupSummary<Lane, Price, Price>| {
+        let cents = |r: Option<Price>| {
+            r.and_then(|r| r.price)
+                .map(|p| p.coefficient_at_scale(2).unwrap())
+        };
+        (g.key.lane, g.count, cents(g.sum), cents(g.average))
+    };
+    for (measure, column) in [
+        (SummaryMeasure::Count, "n"),
+        (SummaryMeasure::Sum, "total"),
+        (SummaryMeasure::Average, "mean"),
+    ] {
+        for (direction, keyword) in [
+            (SortDirection::Ascending, "ASC"),
+            (SortDirection::Descending, "DESC"),
+        ] {
+            for filtered in [false, true] {
+                let condition = if filtered {
+                    "WHERE n >= 2 AND total >= 249 AND mean <= 124"
+                } else {
+                    ""
+                };
+                // SQLite's integer quotient truncates toward zero. Apply the declared
+                // ties-to-even rule in integer cents before SQLite orders the groups.
+                let stmt = format!(
+                "WITH sums AS (
+                SELECT lane, COUNT(cents) AS n, SUM(cents) AS total FROM items GROUP BY lane
+            ), parts AS (
+                SELECT *, total/n AS q, 2*abs(total%n) AS twice_remainder FROM sums
+            ), summaries AS (SELECT lane,n,total,q + CASE
+                WHEN twice_remainder > n OR (twice_remainder = n AND q%2 != 0)
+                THEN CASE WHEN total < 0 THEN -1 ELSE 1 END ELSE 0 END AS mean
+              FROM parts) SELECT lane,n,total,mean FROM summaries {condition} ORDER BY {column} {keyword}, lane ASC LIMIT 4"
+            );
+                let expected = sql
+                    .prepare(&stmt)
+                    .unwrap()
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, u8>(0)?,
+                            u64::try_from(row.get::<_, i64>(1)?).unwrap(),
+                            row.get::<_, Option<i64>>(2)?.map(i128::from),
+                            row.get::<_, Option<i64>>(3)?.map(i128::from),
+                        ))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                let build = |last_measure| {
+                    let q = db
+                        .query::<Item>()
+                        .order_groups(GroupOrder::Summary(measure, direction))
+                        .limit(4);
+                    if filtered {
+                        q.filter_summary(SummaryMeasure::Count, Comparison::Ge, 2_u64)
+                            .filter_summary(
+                                SummaryMeasure::Sum,
+                                Comparison::Ge,
+                                Decimal::try_new(249, 2).unwrap(),
+                            )
+                            .filter_summary(
+                                last_measure,
+                                Comparison::Le,
+                                Decimal::try_new(124, 2).unwrap(),
+                            )
+                    } else {
+                        q
+                    }
+                };
+                let query = || build(SummaryMeasure::Average);
+                let sync = query().group_summary::<Lane, Price, Price>().unwrap();
+                assert_eq!(
+                    sync.value.into_iter().map(values).collect::<Vec<_>>(),
+                    expected
+                );
+                let handle = query()
+                    .start_group_summary::<Lane, Price, Price>(
+                        &mut jobs,
+                        now,
+                        Timestamp::from_millis(100),
+                    )
+                    .unwrap();
+                if filtered {
+                    assert!(matches!(
+                        build(SummaryMeasure::Sum)
+                            .resume_group_summary::<Lane, Price, Price>(&mut jobs, &handle, 0, now),
+                        Err(ic_db::Error::InvalidJob)
+                    ));
+                }
+                let mut sequence = 0;
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                for _ in 0..16 {
+                    let step = query()
+                        .work_limit(3)
+                        .group_page(1, cursor.as_ref())
+                        .resume_group_summary::<Lane, Price, Price>(
+                            &mut jobs, &handle, sequence, now,
+                        )
+                        .unwrap();
+                    sequence = step.sequence;
+                    match step.outcome {
+                        JobOutcome::Running => continue,
+                        JobOutcome::Complete(page) => {
+                            assert_eq!(page.rows.len(), 1);
+                            actual.extend(page.rows.into_iter().map(values));
+                            cursor = page.next;
+                            if cursor.is_none() {
+                                break;
+                            }
+                        }
+                        _ => panic!("unexpected summary outcome"),
+                    }
+                }
+                assert!(cursor.is_none());
+                assert_eq!(actual, expected);
+                jobs.cancel(&handle).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn summary_alternatives_match_sqlite_and_bind_retained_clause_boundaries() {
+    use ic_db::{
+        IndexValue,
+        SummaryMeasure::{Count, Sum},
+    };
+    let (sql, host) = fixture();
+    let expected = sql
+        .prepare(
+            "SELECT lane FROM items GROUP BY lane HAVING (COUNT(cents)=0 OR SUM(cents)>=250)
+         AND COUNT(cents)<=2 ORDER BY lane",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, u8>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(expected, [1, 2]);
+    let db = open(&host);
+    let alternatives = [
+        (Count, Comparison::Eq, 0_u64.into()),
+        (
+            Sum,
+            Comparison::Ge,
+            Decimal::try_new(250, 2).unwrap().into(),
+        ),
+    ];
+    let query = || {
+        db.query::<Item>()
+            .filter_summary_any(&alternatives)
+            .filter_summary(Count, Comparison::Le, 2_u64)
+    };
+    let rows = query().group_summary::<Lane, Price, Price>().unwrap().value;
+    assert_eq!(
+        rows.iter().map(|g| g.key.lane).collect::<Vec<_>>(),
+        expected
+    );
+
+    let mut jobs = AggregateJobs::open(
+        host.open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let now = Timestamp::from_millis(0);
+    let handle = query()
+        .start_group_summary::<Lane, Price, Price>(&mut jobs, now, Timestamp::from_millis(100))
+        .unwrap();
+    // Same measures, comparisons and operands, but three AND clauses.
+    let mut changed = db.query::<Item>();
+    for (measure, comparison, value) in alternatives {
+        changed = changed.filter_summary(measure, comparison, value);
+    }
+    assert!(matches!(
+        changed
+            .filter_summary(Count, Comparison::Le, 2_u64)
+            .resume_group_summary::<Lane, Price, Price>(&mut jobs, &handle, 0, now),
+        Err(ic_db::Error::InvalidJob)
+    ));
+    let step = query()
+        .resume_group_summary::<Lane, Price, Price>(&mut jobs, &handle, 0, now)
+        .unwrap();
+    let JobOutcome::Complete(page) = step.outcome else {
+        panic!("expected complete groups")
+    };
+    assert_eq!(
+        page.rows.iter().map(|g| g.key.lane).collect::<Vec<_>>(),
+        expected
+    );
+    for invalid in [
+        db.query::<Item>().filter_summary_any(&[]),
+        db.query::<Item>()
+            .filter_summary(Count, Comparison::Ge, 0_u64)
+            .filter_summary_any(&[(Count, Comparison::Eq, IndexValue::Nat64(0)); 8]),
+    ] {
+        assert!(matches!(
+            invalid.group_summary::<Lane, Price, Price>(),
+            Err(ic_db::Error::Limit)
+        ));
+    }
+}
+
+#[test]
 fn automatic_counts_follow_committed_index_membership_across_reopen() {
     let (sql, host) = fixture();
     let mut db = open(&host);

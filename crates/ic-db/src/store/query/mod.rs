@@ -7,7 +7,8 @@ mod range;
 mod sort;
 
 pub use aggregate::{
-    Aggregate, GroupCount, GroupOrder, GroupValue,
+    Aggregate, GroupCount, GroupOrder, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue,
+    SummaryMeasure,
     jobs::{AggregateJobs, GroupCursor, GroupPage, JobHandle, JobOutcome, JobStep},
 };
 
@@ -1118,9 +1119,22 @@ fn contains_member(
     Ok(false)
 }
 
+// Admission sets bits only for fields in this entity. Consuming the lowest
+// bit first preserves the canonical field order of projected records and keys.
+fn projection_positions(mut mask: u16) -> impl Iterator<Item = usize> {
+    std::iter::from_fn(move || {
+        if mask == 0 {
+            return None;
+        }
+        let position = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        Some(position)
+    })
+}
+
 fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
-    for (i, field) in entity.fields.iter().enumerate() {
-        if mask & (1 << i) != 0 && !key::supports(field.value) {
+    for i in projection_positions(mask) {
+        if !key::supports(entity.fields[i].value) {
             return Err(Error::InvalidQuery);
         }
     }
@@ -1133,26 +1147,27 @@ fn comparison_key(
     entity: &EntitySchema,
     mask: u16,
     values: &[IndexValue<'_>],
-) -> Result<Vec<u8>, Error> {
-    build_comparison_key(entity, mask, |i, _| Ok(values[i]))
+    scratch: &mut Vec<u8>,
+) -> Result<(), Error> {
+    build_comparison_key(entity, mask, scratch, |i, _| Ok(values[i]))
 }
 
 fn build_comparison_key<'a>(
     entity: &EntitySchema,
     mask: u16,
+    key: &mut Vec<u8>,
     mut value: impl FnMut(usize, &crate::FieldSchema) -> Result<IndexValue<'a>, Error>,
-) -> Result<Vec<u8>, Error> {
-    let mut key = Vec::new();
-    for (i, field) in entity.fields.iter().enumerate() {
-        if mask & (1 << i) != 0 {
-            value(i, field)?.append_component(field.optional, &mut key);
-            if key.len() > MAX_COMPARISON_KEY {
-                return Err(Error::Limit);
-            }
+) -> Result<(), Error> {
+    key.clear();
+    for i in projection_positions(mask) {
+        let field = &entity.fields[i];
+        value(i, field)?.append_component(field.optional, key);
+        if key.len() > MAX_COMPARISON_KEY {
+            return Err(Error::Limit);
         }
     }
 
-    Ok(key)
+    Ok(())
 }
 
 fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error> {
@@ -1169,20 +1184,19 @@ fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error
 
 // Size and copy already validated projection spans using the same field mask.
 fn projection_size(spans: &[(u16, u16)], mask: u16) -> usize {
-    spans
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| mask & (1 << i) != 0)
-        .map(|(_, (start, end))| usize::from(end - start))
+    projection_positions(mask)
+        .map(|i| {
+            let (start, end) = spans[i];
+            usize::from(end - start)
+        })
         .sum()
 }
 
 fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -> Vec<u8> {
     let mut output = Vec::with_capacity(size);
-    for (i, &(start, end)) in spans.iter().enumerate() {
-        if mask & (1 << i) != 0 {
-            output.extend_from_slice(&bytes[usize::from(start)..usize::from(end)]);
-        }
+    for i in projection_positions(mask) {
+        let (start, end) = spans[i];
+        output.extend_from_slice(&bytes[usize::from(start)..usize::from(end)]);
     }
 
     output
@@ -1758,7 +1772,7 @@ fn execute_inner<M: Memory>(
                 return Ok(page);
             }
         } else if matches && let Some(collection) = collected.as_mut() {
-            collection.push(entity, request, &values, &bytes, &spans)?;
+            collection.push(entity, request, &values, &bytes, &spans, &mut component)?;
             // This path emits first occurrences in traversal order. A single-result
             // terminal has its answer after one class (first) or two (non-unique).
             if request.single_result_probe && collection.rows.len() == request.rows {

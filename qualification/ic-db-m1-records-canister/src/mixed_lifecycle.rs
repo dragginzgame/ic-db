@@ -14,6 +14,7 @@ use ic_db_qualification_transport::mixed::{
 use ic_storage::{RuntimeMemory, StableKey};
 
 // Drive one explicit maintenance step for the installed qualification workload.
+
 // mixed_migrate
 // Run one migration operation in the mixed-history fixture.
 // guard  : validates the request frame for method 244.

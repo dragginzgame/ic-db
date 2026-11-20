@@ -177,6 +177,8 @@ fn start_entry(
         "category,distinct-count:amount" => {
             query.start_group_count_distinct::<CategoryOnly, AmountOnly>(jobs, now, expires)
         }
+        "category,summary:amount" => query
+            .start_group_summary::<CategoryOnly, TotalAmount, AverageAmount>(jobs, now, expires),
         "category,sum:amount" => {
             query.start_group_sum::<CategoryOnly, TotalAmount>(jobs, now, expires)
         }
@@ -212,6 +214,17 @@ fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> Output) -> Response {
         step.output_bytes as u64,
         output,
     )
+}
+
+fn display_summary<T>(
+    step: JobStep<GroupPage<T>>,
+    key: &str,
+    render: fn(T) -> Vec<String>,
+) -> Response {
+    display(step, |p| {
+        let (columns, rows) = super::summary_table(p.rows, key, render);
+        (columns, rows, p.next.map(|c| c.to_bytes()))
+    })
 }
 
 fn scalar(label: &str, value: Option<String>) -> Output {
@@ -505,6 +518,11 @@ fn resume_entry<'a>(
         "category,distinct-count:amount" => query
             .resume_group_count_distinct::<CategoryOnly, AmountOnly>(jobs, handle, sequence, now)
             .map(|s| display(s, |p| counts(p, "category", |k| k.category.to_string()))),
+        "category,summary:amount" => query
+            .resume_group_summary::<CategoryOnly, TotalAmount, AverageAmount>(
+                jobs, handle, sequence, now,
+            )
+            .map(|s| display_summary(s, "category", super::entry_summary_row)),
         "category,sum:amount" => query
             .resume_group_sum::<CategoryOnly, TotalAmount>(jobs, handle, sequence, now)
             .map(|s| {
@@ -765,6 +783,11 @@ fn start_decimal(
         "max:maybe" => query.start_max::<OptionalDecimal>(jobs, now, expires),
         "zone,max:maybe" => query.start_group_max::<ZoneOnly, OptionalDecimal>(jobs, now, expires),
         "sum:value" => query.start_sum::<TotalDecimal>(jobs, now, expires),
+        "zone,summary:value" => {
+            query.start_group_summary::<ZoneOnly, TotalDecimal, TotalDecimal>(jobs, now, expires)
+        }
+        "zone,summary:maybe" => query
+            .start_group_summary::<ZoneOnly, OptionalDecimal, OptionalDecimal>(jobs, now, expires),
         "zone,sum:value" => query.start_group_sum::<ZoneOnly, TotalDecimal>(jobs, now, expires),
         "avg:value" => query.start_avg::<TotalDecimal>(jobs, now, expires),
         "zone,avg:value" => query.start_group_avg::<ZoneOnly, TotalDecimal>(jobs, now, expires),
@@ -785,6 +808,16 @@ fn resume_decimal(
     select: &str,
 ) -> Result<Response, Error> {
     match select {
+        "zone,summary:value" => query
+            .resume_group_summary::<ZoneOnly, TotalDecimal, TotalDecimal>(
+                jobs, handle, sequence, now,
+            )
+            .map(|s| display_summary(s, "zone", super::decimal_summary_row)),
+        "zone,summary:maybe" => query
+            .resume_group_summary::<ZoneOnly, OptionalDecimal, OptionalDecimal>(
+                jobs, handle, sequence, now,
+            )
+            .map(|s| display_summary(s, "zone", super::optional_summary_row)),
         "count:value" => query
             .resume_count_field("value", jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),

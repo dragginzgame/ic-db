@@ -8,6 +8,7 @@ use std::cell::Cell;
 // first=0 changes two entries and repoints their dependent. Otherwise insert
 // one maximum-cardinality batch. Arm only after open and typed batch construction,
 // so the counted backing writes belong to Database::commit and its supplier.
+
 // fault_batch
 // Run a batch with the selected supplier-write, growth or instruction failure.
 // guard  : validates the request frame for method 6.

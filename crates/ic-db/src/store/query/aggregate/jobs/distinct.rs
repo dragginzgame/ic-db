@@ -59,7 +59,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             let page_size = self.request.rows;
             let query = self.group_page(page_size, after);
             let plan = query.aggregate_plan(Some(K::definition()), true)?;
-            let job = query.retained_groups(plan, Reducer::Keys(0), None)?;
+            let job = query.retained_groups(plan, Reducer::Keys(0), None, None)?;
             query.resume_groups(jobs, handle, sequence, now, job, |bytes, result| {
                 if !matches!(result, Completed::Key) {
                     return Err(Error::Corrupt);
@@ -182,7 +182,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         observe!(resume, {
             let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-            let job = self.retained_groups(plan, reducer, None)?;
+            let job = self.retained_groups(plan, reducer, None, None)?;
 
             self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
         })

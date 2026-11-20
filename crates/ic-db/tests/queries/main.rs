@@ -5952,19 +5952,30 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
     assert!(empty.rows.is_empty() && empty.next.is_none());
     assert_eq!(empty.examined, 8);
     assert_eq!(*backing.borrow(), before);
-    for id in 9..=33 {
+    for id in 9..=32 {
         let mut batch = Batch::new();
         batch.insert(&row(id)).unwrap();
         db.commit(batch).unwrap();
     }
+    let mut duplicate = Batch::new();
+    duplicate
+        .insert(&Entry {
+            amount: 10,
+            ..row(33)
+        })
+        .unwrap();
+    db.commit(duplicate).unwrap();
     let at_cap = db
         .query::<Entry>()
-        .filter("id", C::Le, 32_u64)
         .distinct()
         .fetch_as::<AmountOnly>()
         .unwrap();
     assert_eq!(at_cap.rows.len(), 32);
     assert!(at_cap.next.is_none());
+    assert_eq!(at_cap.examined, 33);
+    let mut new_tuple = Batch::new();
+    new_tuple.insert(&row(34)).unwrap();
+    db.commit(new_tuple).unwrap();
     assert!(matches!(
         db.query::<Entry>().distinct().fetch_as::<AmountOnly>(),
         Err(Error::Limit)
@@ -8733,22 +8744,24 @@ fn sum_finalization_obeys_group_state_budget_before_selection() {
     )
     .unwrap();
     let mut batch = Batch::new();
-    for id in 0..19 {
+    // Each group retains a 2706-byte comparison key and a 2708-byte record.
+    // All 24 fit with 32-byte totals. A completed U256 key/value pair needs 64 bytes.
+    for id in 0..24 {
         batch
             .insert(&GroupText {
                 id,
-                label: format!("{id:02}{}", "x".repeat(2742)),
+                label: format!("{id:02}{}", "x".repeat(2702)),
             })
             .unwrap();
     }
     db.commit(batch).unwrap();
     assert_eq!(
         db.query::<GroupText>()
-            .group_count::<TextKey>()
+            .group_sum::<TextKey, PresenceId>()
             .unwrap()
             .value
             .len(),
-        19
+        24
     );
     assert!(matches!(
         db.query::<GroupText>()
@@ -9100,6 +9113,106 @@ fn averages_round_once_to_declared_scale_with_signed_even_ties() {
             .to_string(),
         "0.3333333333333333333333333333"
     );
+}
+
+#[test]
+fn grouped_summary_orders_completed_measures_before_limit() {
+    use ic_db::{
+        GroupOrder,
+        SortDirection::{Ascending, Descending},
+        SummaryMeasure::{Average, Count, Sum},
+    };
+    let db = decimal_sales(&[
+        (0, None),
+        (1, Some(-125)),
+        (2, Some(120)),
+        (2, Some(130)),
+        (3, Some(126)),
+    ]);
+    // At whole-unit scale groups 2 and 3 have the same rounded mean.
+    for (measure, direction, expected) in [
+        (Count, Ascending, [0, 1, 3]),
+        (Count, Descending, [2, 1, 3]),
+        (Sum, Ascending, [0, 1, 3]),
+        (Sum, Descending, [2, 3, 1]),
+        (Average, Ascending, [0, 1, 2]),
+        (Average, Descending, [2, 3, 1]),
+    ] {
+        let rows = db
+            .query::<DecimalSale>()
+            .limit(3)
+            .order_groups(GroupOrder::Summary(measure, direction))
+            .group_summary::<CategoryOnly, OptionalPrice, WholePrice>()
+            .unwrap()
+            .value;
+        assert_eq!(
+            rows.into_iter()
+                .map(|row| row.key.category)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .order_groups(GroupOrder::Summary(Sum, Ascending))
+            .group_count::<CategoryOnly>(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn grouped_summary_shares_input_and_checks_every_group() {
+    let db = decimal_sales(&[(0, Some(124)), (0, None), (0, Some(125)), (1, None)]);
+    let result = db
+        .query::<DecimalSale>()
+        .order_groups(ic_db::GroupOrder::KeyDescending)
+        .group_summary::<CategoryOnly, OptionalPrice, OptionalPrice>()
+        .unwrap();
+    assert_eq!((result.examined, result.fetched), (4, 4));
+    assert_eq!(result.output_bytes, 2 + 16 + 36);
+    let [absent, present] = result.value.as_slice() else {
+        panic!("expected two groups")
+    };
+    assert_eq!((absent.key.category, absent.count), (1, 0));
+    assert!(absent.sum.is_none() && absent.average.is_none());
+    assert_eq!((present.key.category, present.count), (0, 2));
+    assert_eq!(
+        present.sum.as_ref().unwrap().price.unwrap().to_string(),
+        "2.49"
+    );
+    assert_eq!(
+        present.average.as_ref().unwrap().price.unwrap().to_string(),
+        "1.24"
+    );
+    let absent = db
+        .query::<DecimalSale>()
+        .filter_summary(
+            ic_db::SummaryMeasure::Average,
+            C::Eq,
+            ic_db::IndexValue::Absent,
+        )
+        .group_summary::<CategoryOnly, OptionalPrice, OptionalPrice>()
+        .unwrap();
+    assert_eq!(absent.value.len(), 1);
+    assert_eq!(absent.value[0].key.category, 1);
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .filter_summary(
+                ic_db::SummaryMeasure::Count,
+                C::Eq,
+                ic_db::IndexValue::Absent
+            )
+            .group_summary::<CategoryOnly, OptionalPrice, OptionalPrice>(),
+        Err(Error::InvalidOperand)
+    ));
+    let db = decimal_sales(&[(0, None), (1, Some(i128::MAX)), (1, Some(i128::MAX))]);
+    assert!(matches!(
+        db.query::<DecimalSale>()
+            .filter_summary(ic_db::SummaryMeasure::Count, C::Eq, 0_u64)
+            .limit(1)
+            .group_summary::<CategoryOnly, OptionalPrice, OptionalPrice>(),
+        Err(Error::ArithmeticOverflow)
+    ));
 }
 
 #[test]
@@ -9572,7 +9685,24 @@ fn distinct_count_keys_share_the_query_byte_budget_and_key_bound() {
             .value,
         24
     );
-    // Neither group exceeds 32 values, but their combined comparison keys exceed 128 KiB.
+    // Each 3000-byte label has a 3002-byte comparison key. Together the groups
+    // fit 43 keys under 128 KiB. The next distinct key crosses the shared bound.
+    let within = db
+        .query::<GroupedText>()
+        .lt(GroupedText::ID, 43_u64)
+        .group_count_distinct::<CategoryOnly, TextKey>()
+        .unwrap();
+    assert_eq!(
+        within.value.iter().map(|g| g.count).collect::<Vec<_>>(),
+        [24, 19]
+    );
+    assert!(matches!(
+        db.query::<GroupedText>()
+            .lt(GroupedText::ID, 44_u64)
+            .group_count_distinct::<CategoryOnly, TextKey>(),
+        Err(Error::Limit)
+    ));
+
     assert!(matches!(
         db.query::<GroupedText>()
             .filter_groups(C::Eq, 0_u64)

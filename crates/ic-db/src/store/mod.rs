@@ -17,8 +17,8 @@ pub use maintenance::{
 };
 pub use query::{
     Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
-    GroupValue, JobHandle, JobOutcome, JobStep, Query, QueryCursor, QueryOperand, QueryPage,
-    SortDirection,
+    GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome, JobStep,
+    Query, QueryCursor, QueryOperand, QueryPage, SortDirection, SummaryMeasure,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

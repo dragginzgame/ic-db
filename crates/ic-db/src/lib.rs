@@ -116,8 +116,9 @@ pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSch
 pub use session::{DatabaseSession, QuerySession, UniqueKey};
 pub use store::{
     Aggregate, Batch, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor, GroupOrder,
-    GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand,
-    QueryPage, SchemaTransition, SortDirection,
+    GroupPage, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome,
+    JobStep, Page, QueryCursor, QueryOperand, QueryPage, SchemaTransition, SortDirection,
+    SummaryMeasure,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 pub use time::{Duration, TimeParseError, Timestamp};

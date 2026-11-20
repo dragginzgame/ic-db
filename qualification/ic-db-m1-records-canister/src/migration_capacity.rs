@@ -14,6 +14,7 @@ use std::ops::Bound;
 
 // Counts include host reopen/allocation admission, product work and supplier calls.
 // Typed refusal is returned normally; it must not be turned into a trap by the probe.
+
 // migration_capacity
 // Run a bounded migration operation under the selected supplier limits.
 // guard  : validates the request frame for method 140.

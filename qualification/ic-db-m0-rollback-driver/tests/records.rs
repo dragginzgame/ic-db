@@ -821,7 +821,7 @@ fn console_inspects_and_queries() {
         );
         // One console session exercises every retained selector. More than 16 jobs
         // proves successful commands release slots instead of leaking capacity.
-        let cases: [ConsoleCase<'_>; 15] = [
+        let cases: [ConsoleCase<'_>; 16] = [
             ("count", &[&["6"]]),
             ("count:amount", &[&["6"]]),
             ("distinct-count:amount", &[&["6"]]),
@@ -838,6 +838,10 @@ fn console_inspects_and_queries() {
             (
                 "category,distinct-count:amount",
                 &[&["0", "3"], &["1", "3"]],
+            ),
+            (
+                "category,summary:amount",
+                &[&["0", "3", "120", "40"], &["1", "3", "93", "31"]],
             ),
             ("category,sum:amount", &[&["0", "120"], &["1", "93"]]),
             ("category,avg:amount", &[&["0", "40"], &["1", "31"]]),
@@ -1185,6 +1189,16 @@ fn console_inspects_and_queries() {
                     ("zone,count:maybe", &[&["true", "0"]]),
                     ("zone,distinct-count:value", &[&["true", "3"]]),
                     ("zone,distinct-count:maybe", &[&["true", "1"]]),
+                    (
+                        "zone,summary:value --group-min sum:2.99 --group-max avg:1.00",
+                        &[&["true", "3", "3", "1"]],
+                    ),
+                    ("zone,summary:value --group-min sum:3.01", &[]),
+                    (
+                        "zone,summary:maybe --group-max count:0 --group-order avg:desc",
+                        &[&["true", "0", "—", "—"]],
+                    ),
+                    ("zone,summary:maybe --group-min avg:0", &[]),
                     ("zone,count:maybe --group-max 0", &[&["true", "0"]]),
                     (
                         "zone,distinct-count:maybe --group-min 1 --group-max 1",
@@ -1226,6 +1240,14 @@ fn console_inspects_and_queries() {
             (
                 "Entry",
                 &[
+                    (
+                        "category,summary:amount --group-min count:3 --group-order avg:asc",
+                        &[&["1", "3", "93", "31"], &["0", "3", "120", "40"]],
+                    ),
+                    (
+                        "category,summary:amount --group-min avg:31.5 --group-max sum:120",
+                        &[&["0", "3", "120", "40"]],
+                    ),
                     ("category,avg:amount --group-min 31.50", &[&["0", "40"]]),
                     ("category,sum:amount --group-min 18446744073709551616", &[]),
                     (

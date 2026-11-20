@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.26.3] - Unreleased
+
+### Queries
+
+- `group_summary::<Key, Sum, Average>()` returns the present count, sum and
+  average of one numeric field per group in a single synchronous scan.
+  Use `start_group_summary` and `resume_group_summary` for bounded steps and
+  pages over the completed groups. Use `order_groups(GroupOrder::Summary(measure,
+  direction))` to rank by count, sum or rounded average. Ties use ascending
+  group keys. Chain `filter_summary(measure, comparison, value)` to filter
+  completed measures before ranking and limiting. Use `filter_summary_any`
+  for alternatives, such as a minimum count or a minimum total.
+
+- Grouped aggregates now discard each result that fails its group filter as soon
+  as it is finalized. Every group still undergoes overflow and resource checks.
+- Rows joining an existing group reuse the scan buffer for key lookup. Each
+  new group retains exactly its encoded key bytes under the 128 KiB state limit.
+- Scalar and grouped DISTINCT counts also reuse the scan buffer on duplicates.
+  Each new tuple is charged its encoded length, including any escaped bytes.
+- Complete DISTINCT projections now use the same bounded key representation as
+  DISTINCT counts. Duplicate rows reuse the scan buffer, and results retain
+  their first-occurrence order.
+- Group keys, DISTINCT tuples and projected output now visit only the fields
+  selected by the query after row validation.
+
+The local console supports summaries for both `DecimalRow.value` and
+`DecimalRow.maybe`. A group with no present values displays count zero and
+a dash for each absent measure.
+
+To compare grouped summaries in the local fixture:
+
+```sh
+db query Entry --select category,summary:amount --group-min count:3 --group-order avg:desc
+db aggregate Entry --select category,summary:amount --group-max sum:120 --page-size 1
+db query DecimalRow --select zone,summary:maybe --group-max count:0
+```
+
+### Qualification
+
+- Updated the product and qualification workspaces and the shared tooling snapshot to Toko Tooling 0.46.0.
+- Compared synchronous and retained Decimal summaries against SQLite for all
+  six combinations of measure and sort direction.
+
+- Verified that an interrupted Float64 grouped summary resumes after a canister
+  upgrade and that a completed page cursor survives a second upgrade.
+
 ## [0.26.2] - 2026-11-20
 
 ### Logging

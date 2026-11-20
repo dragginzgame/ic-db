@@ -5,7 +5,9 @@ use super::{
     admit_output, comparison_key, consume_index_component, copy_projection, projection_size,
 };
 use crate::{EntitySchema, Error, IndexSchema, IndexValue};
-use std::collections::BTreeSet;
+
+// Sorted lookup keys. Inserting a new tuple moves at most 31 handles.
+pub(super) type DistinctKeys = Vec<Box<[u8]>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Strategy {
@@ -152,7 +154,7 @@ pub(super) fn boundary<'a>(
 // No full entities, replay positions or retained job payloads are introduced.
 pub(super) struct Collection {
     mask: u16,
-    seen: BTreeSet<Vec<u8>>,
+    seen: DistinctKeys,
     pub(super) rows: Vec<Vec<u8>>,
     state_bytes: usize,
     pub(super) output_bytes: usize,
@@ -161,7 +163,7 @@ impl Collection {
     pub(super) fn new(mask: u16) -> Self {
         Self {
             mask,
-            seen: BTreeSet::new(),
+            seen: DistinctKeys::new(),
             rows: Vec::new(),
             state_bytes: 0,
             output_bytes: 0,
@@ -175,26 +177,30 @@ impl Collection {
         values: &[IndexValue<'_>],
         bytes: &[u8],
         spans: &[(u16, u16)],
+        scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
-        let key = comparison_key(entity, self.mask, values)?;
-        if self.seen.contains(&key) {
+        comparison_key(entity, self.mask, values, scratch)?;
+        let Err(position) = self
+            .seen
+            .binary_search_by(|key| key.as_ref().cmp(scratch.as_slice()))
+        else {
             return Ok(());
-        }
+        };
         if self.rows.len() == MAX_DISTINCT_VALUES || self.rows.len() == request.rows {
             return Err(Error::Limit);
         }
         let size = projection_size(spans, self.mask);
         admit_output(size, request.bytes, &mut self.output_bytes)?;
-        if self.state_bytes + key.capacity() + size > MAX_STATE_BYTES {
+        if self.state_bytes + scratch.len() + size > MAX_STATE_BYTES {
             return Err(Error::Limit);
         }
         let row = copy_projection(bytes, spans, self.mask, size);
-        let charge = key.capacity() + row.capacity();
+        let charge = scratch.len() + row.capacity();
         if self.state_bytes + charge > MAX_STATE_BYTES {
             return Err(Error::Limit);
         }
         self.state_bytes += charge;
-        self.seen.insert(key);
+        self.seen.insert(position, Box::from(scratch.as_slice()));
         self.rows.push(row);
 
         Ok(())

@@ -15,7 +15,10 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
 };
 
-/// Initialize the fixture’s stable state at installation.
+// initialize
+// Initialize the fixture’s stable state at installation.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -33,6 +36,7 @@ fn initialize((): ()) {
 
 // Mode 6 intentionally violates the candidate contract: it returns Err after a row write.
 // This negative control proves that an application error is not a rollback instruction.
+
 // mutate
 // Exercise rollback at the selected row or mapping write boundary.
 // guard  : validates the request frame for method 1.

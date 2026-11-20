@@ -312,6 +312,7 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
 }
 
 // Same source, predicate, result and warm open; only materialization differs.
+
 // fluent_binary_projection
 // Measure entity and ID-only reads of the binary fixture.
 // guard  : validates the request frame for method 97.

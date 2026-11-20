@@ -51,7 +51,10 @@ fn measure<T>(operation: impl FnOnce() -> T) -> (T, u64) {
     )
 }
 
-/// Measure one startup step and report whether the database is ready.
+// advance_startup
+// Measure one startup step and report whether the database is ready.
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "advance_startup",
@@ -76,7 +79,10 @@ fn advance_startup((): ()) -> (bool, u64) {
     )
 }
 
-/// Insert a benchmark row and report its instruction cost.
+// insert
+// Insert a benchmark row and report its instruction cost.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "insert",
@@ -101,7 +107,10 @@ fn insert((id, category, amount): Row) -> (bool, u64) {
     })
 }
 
-/// Look up a benchmark row by ID and report its instruction cost.
+// lookup
+// Look up a benchmark row by ID and report its instruction cost.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "lookup",
@@ -121,7 +130,10 @@ fn lookup(id: u64) -> (Option<Row>, u64) {
     })
 }
 
-/// Measure the complete journey from lookup through replacement.
+// read_modify_write
+// Measure the complete journey from lookup through replacement.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime,
     name = "read_modify_write",
@@ -150,7 +162,10 @@ fn read_modify_write((id, category, amount): Row) -> (Option<Row>, u64) {
     })
 }
 
-/// List rows in the requested category for the engine comparison.
+// listing
+// Return up to ten category rows in ascending ID order and report instruction cost.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
     name = "listing",
@@ -177,7 +192,10 @@ fn listing(category: u64) -> (Vec<Row>, u64) {
     })
 }
 
-/// Read two matches after the last emitted ID on fixed benchmark input.
+// keyset_listing
+// Return up to two matching rows after the supplied ID and report instruction cost.
+// guard  : validates the request frame for method 11.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "keyset-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -208,7 +226,10 @@ fn keyset_listing((after, category): (Option<u64>, u64)) -> (Vec<Row>, u64) {
     })
 }
 
-/// Run the selected filtered listing and report its result and instruction cost.
+// fluent_listing
+// Return the filtered rows up to the requested limit or an error code, with instruction cost.
+// guard  : validates the request frame for method 6.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "fluent-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -250,7 +271,10 @@ fn fluent_listing(
     })
 }
 
-/// Measure the requested aggregate over matching benchmark entries.
+// grouped_aggregate
+// Measure the selected aggregate with a four-group limit and a 64 KiB group budget.
+// guard  : validates the request frame for method 7.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "aggregate-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -325,7 +349,10 @@ fn grouped_aggregate(
     })
 }
 
-/// Count all benchmark rows or the selected category under the work limit.
+// count_rows
+// Return the exact whole-table or category count and its instruction cost.
+// guard  : validates the request frame for method 8.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "count-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,
@@ -348,7 +375,10 @@ fn count_rows(category: Option<u64>) -> (Option<u64>, u64) {
     })
 }
 
-/// Check whether the benchmark category has an owner and measure the lookup.
+// category_exists
+// Check whether the benchmark category has an owner and measure the lookup.
+// guard  : validates the request frame for method 10.
+// limits : 64 KiB request, 64 KiB reply.
 #[cfg(feature = "exists-comparison")]
 #[ic_platform_runtime::query(
     runtime = ic_platform_runtime,

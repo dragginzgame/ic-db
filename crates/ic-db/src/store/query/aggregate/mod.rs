@@ -4,6 +4,7 @@ mod float_sum;
 pub(super) mod jobs;
 mod numeric;
 
+use super::distinct::DistinctKeys;
 use super::{
     Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan, Query,
     QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
@@ -14,9 +15,21 @@ use crate::{
     codec::Decoder, key,
 };
 use ic_storage::Memory;
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use std::collections::BTreeMap;
 
 const MAX_GROUPS: usize = 32;
+
+/// Numeric result used to order completed summary groups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SummaryMeasure {
+    /// Number of present operands.
+    Count = 0,
+    /// Completed sum.
+    Sum = 1,
+    /// Average after rounding to the declared result type.
+    Average = 2,
+}
 
 /// Completed-group ordering. Aggregate ties always use ascending canonical keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,12 +45,20 @@ pub enum GroupOrder {
     KeyDescending,
     /// Retained DISTINCT keys in first matching input order.
     FirstOccurrence,
+    /// Order a grouped numeric summary by one completed measure.
+    Summary(SummaryMeasure, super::SortDirection),
+}
+
+struct GroupPredicate<T> {
+    measure: Option<SummaryMeasure>,
+    comparison: Comparison,
+    operand: T,
+    or_next: bool,
 }
 
 #[derive(Default)]
 pub(super) struct GroupRequest<'a> {
-    // The final bool joins this term to the next alternative in one OR clause.
-    predicates: Vec<(Comparison, IndexValue<'a>, bool)>,
+    predicates: Vec<GroupPredicate<IndexValue<'a>>>,
     order: Option<GroupOrder>,
     page: Option<jobs::pages::PageRequest<'a>>,
 }
@@ -46,7 +67,12 @@ impl GroupRequest<'_> {
         self.predicates.is_empty() && self.order.is_none() && self.page.is_none()
     }
 
-    fn admit(&self, entity: &EntitySchema, reducer: &Reducer) -> Result<Selection, Error> {
+    fn admit(
+        &self,
+        entity: &EntitySchema,
+        reducer: &Reducer,
+        summary_sum: Option<ValueSchema>,
+    ) -> Result<Selection, Error> {
         if self
             .page
             .is_some_and(|page| !(1..=MAX_GROUPS).contains(&page.size))
@@ -93,29 +119,54 @@ impl GroupRequest<'_> {
         let predicates = self
             .predicates
             .iter()
-            .map(|&(comparison, value, or_next)| {
-                if match value {
-                    IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
-                    IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
-                    _ => false,
-                } {
-                    return Err(Error::Limit);
-                }
-                comparison.admit(field.value, absent_result, value)?;
-                let key = if value == IndexValue::Absent {
-                    None
-                } else {
-                    let mut key = Vec::new();
-                    value.append_component(field.optional, &mut key);
-                    if key.len() > MAX_COMPARISON_KEY {
+            .map(
+                |&GroupPredicate {
+                     comparison,
+                     operand: value,
+                     or_next,
+                     measure,
+                 }| {
+                    let (field, absent_result) = match (measure, summary_sum) {
+                        (None, None) => (field, absent_result),
+                        (Some(SummaryMeasure::Count), Some(_)) => (
+                            ValueSchema {
+                                value: FieldType::Nat64,
+                                optional: false,
+                            },
+                            false,
+                        ),
+                        (Some(SummaryMeasure::Sum), Some(sum)) => (sum, true),
+                        (Some(SummaryMeasure::Average), Some(_)) => (field, true),
+                        _ => return Err(Error::InvalidQuery),
+                    };
+                    if match value {
+                        IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
+                        IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
+                        _ => false,
+                    } {
                         return Err(Error::Limit);
                     }
+                    comparison.admit(field.value, absent_result, value)?;
+                    let key = if value == IndexValue::Absent {
+                        None
+                    } else {
+                        let mut key = Vec::new();
+                        value.append_component(field.optional, &mut key);
+                        if key.len() > MAX_COMPARISON_KEY {
+                            return Err(Error::Limit);
+                        }
 
-                    Some(key)
-                };
+                        Some(key)
+                    };
 
-                Ok((comparison, key, or_next))
-            })
+                    Ok(GroupPredicate {
+                        measure,
+                        comparison,
+                        operand: key,
+                        or_next,
+                    })
+                },
+            )
             .collect::<Result<_, Error>>()?;
 
         Ok(Selection {
@@ -127,10 +178,26 @@ impl GroupRequest<'_> {
 }
 
 struct Selection {
-    predicates: Vec<(Comparison, Option<Vec<u8>>, bool)>,
+    predicates: Vec<GroupPredicate<Option<Vec<u8>>>>,
     order: GroupOrder,
     // Physical comparison-key framing, distinct from an absent aggregate result.
     optional: bool,
+}
+
+impl Selection {
+    fn accepts<'a>(&self, key: impl Fn(Option<SummaryMeasure>) -> Option<&'a [u8]>) -> bool {
+        self.predicates
+            .split_inclusive(|term| !term.or_next)
+            .all(|clause| {
+                clause.iter().any(|term| {
+                    term.comparison.accepts(
+                        key(term.measure),
+                        term.operand.as_deref(),
+                        self.optional && term.measure != Some(SummaryMeasure::Count),
+                    )
+                })
+            })
+    }
 }
 
 /// A completed aggregate and its execution costs. No partial result or cursor.
@@ -153,6 +220,25 @@ pub struct GroupCount<K> {
     pub key: K,
     /// Matching rows, or present operand values for `group_count_field`.
     pub count: u64,
+}
+
+/// Completed numeric summaries and the work of their shared scan.
+pub type GroupSummaries<K, S, A> = Aggregate<Vec<GroupSummary<K, S, A>>>;
+
+/// A page of completed retained numeric summaries.
+pub type GroupSummaryPage<K, S, A> = jobs::GroupPage<GroupSummary<K, S, A>>;
+
+/// Count, sum and average of one numeric operand in a completed group.
+#[derive(Debug)]
+pub struct GroupSummary<K, S, A> {
+    /// Grouping record.
+    pub key: K,
+    /// Number of present operands (the average denominator).
+    pub count: u64,
+    /// Exact sum converted to the declared sum result.
+    pub sum: Option<S>,
+    /// Average rounded once to the declared average result.
+    pub average: Option<A>,
 }
 
 /// One complete group's aggregate value, preserving all-absent groups.
@@ -183,21 +269,35 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// EndsWith and Contains.
     /// Only grouped terminals accept this modifier, even for empty input.
     #[must_use]
-    pub fn filter_groups(
-        mut self,
+    pub fn filter_groups(self, comparison: Comparison, value: impl Into<IndexValue<'a>>) -> Self {
+        self.add_group_clause(std::iter::once((None, comparison, value.into())))
+    }
+
+    /// Require a completed summary measure to satisfy the comparison before ordering or limiting.
+    /// Calls are ANDed. Count uses Nat64; sum and average use their declared result types.
+    #[must_use]
+    pub fn filter_summary(
+        self,
+        measure: SummaryMeasure,
         comparison: Comparison,
         value: impl Into<IndexValue<'a>>,
     ) -> Self {
-        if self.request.groups.predicates.len() == MAX_TERMS {
-            self.request.over_limit = true;
-        } else {
-            self.request
-                .groups
-                .predicates
-                .push((comparison, value.into(), false));
-        }
+        self.add_group_clause(std::iter::once((Some(measure), comparison, value.into())))
+    }
 
-        self
+    /// Require at least one comparison on a completed count, sum or rounded average.
+    /// Alternatives can name different measures. Separate clauses are ANDed.
+    /// A clause must be nonempty and all group predicates share the eight-term limit.
+    #[must_use]
+    pub fn filter_summary_any(
+        self,
+        alternatives: &[(SummaryMeasure, Comparison, IndexValue<'a>)],
+    ) -> Self {
+        self.add_group_clause(
+            alternatives
+                .iter()
+                .map(|&(measure, comparison, value)| (Some(measure), comparison, value)),
+        )
     }
 
     /// Add an OR clause on completed aggregate values, ANDed with other group
@@ -207,17 +307,30 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// and validate before selection, ordering and output limits. Clause boundaries
     /// bind retained jobs; a singleton clause is equivalent to `filter_groups`.
     #[must_use]
-    pub fn filter_groups_any(mut self, alternatives: &[(Comparison, IndexValue<'a>)]) -> Self {
-        let count = alternatives.len();
+    pub fn filter_groups_any(self, alternatives: &[(Comparison, IndexValue<'a>)]) -> Self {
+        self.add_group_clause(
+            alternatives
+                .iter()
+                .map(|&(comparison, value)| (None, comparison, value)),
+        )
+    }
+
+    fn add_group_clause(
+        mut self,
+        terms: impl ExactSizeIterator<Item = (Option<SummaryMeasure>, Comparison, IndexValue<'a>)>,
+    ) -> Self {
+        let count = terms.len();
         if count == 0 || count > MAX_TERMS - self.request.groups.predicates.len() {
             self.request.over_limit = true;
         } else {
-            self.request.groups.predicates.extend(
-                alternatives
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &(comparison, value))| (comparison, value, i + 1 != count)),
-            );
+            self.request.groups.predicates.extend(terms.enumerate().map(
+                |(i, (measure, comparison, operand))| GroupPredicate {
+                    measure,
+                    comparison,
+                    operand,
+                    or_next: i + 1 != count,
+                },
+            ));
         }
 
         self
@@ -363,7 +476,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         initial: Reducer,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
-        let (groups, page) = self.grouped(&plan, initial)?;
+        let (groups, page) = self.grouped(&plan, initial, None)?;
         let (value, output_bytes) = group_output(
             groups,
             self.request.rows,
@@ -698,7 +811,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         reducer: Reducer,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         self.select_aggregate_row_path(&mut plan)?;
-        let (groups, page) = self.grouped(&plan, reducer)?;
+        let (groups, page) = self.grouped(&plan, reducer, None)?;
         let (value, output_bytes) = group_output(
             groups,
             self.request.rows,
@@ -728,11 +841,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         &self,
         plan: &Plan<'_>,
         initial: Reducer,
+        summary_sum: Option<ValueSchema>,
     ) -> Result<(Groups, QueryPage<Vec<u8>>), Error> {
         if self.request.groups.page.is_some() {
             return Err(Error::InvalidQuery);
         }
-        let mut groups = self.admit_groups(plan, initial)?;
+        let mut groups = self.admit_groups(plan, initial, summary_sum)?;
         let page = execute(
             &self.db.read()?.map,
             E::SCHEMA,
@@ -744,9 +858,23 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok((groups, page))
     }
 
-    fn admit_groups(&self, plan: &Plan<'_>, initial: Reducer) -> Result<Groups, Error> {
+    fn admit_groups(
+        &self,
+        plan: &Plan<'_>,
+        initial: Reducer,
+        summary_sum: Option<ValueSchema>,
+    ) -> Result<Groups, Error> {
+        if summary_sum.is_none()
+            && matches!(self.request.groups.order, Some(GroupOrder::Summary(..)))
+        {
+            return Err(Error::InvalidQuery);
+        }
         Ok(Groups {
-            selection: self.request.groups.admit(E::SCHEMA, &initial)?,
+            selection: self
+                .request
+                .groups
+                .admit(E::SCHEMA, &initial, summary_sum)?,
+            summary_sum,
             mask: plan.projection.ok_or(Error::InvalidQuery)?,
             initial,
             rows: BTreeMap::new(),
@@ -883,7 +1011,7 @@ pub(super) enum Reducer {
     Numeric(numeric::NumericAggregate),
     Distinct {
         mask: u16,
-        seen: BTreeSet<Vec<u8>>,
+        seen: DistinctKeys,
         key_bytes: usize,
     },
     Count {
@@ -900,7 +1028,7 @@ impl Reducer {
     fn distinct(mask: u16) -> Self {
         Self::Distinct {
             mask,
-            seen: BTreeSet::new(),
+            seen: DistinctKeys::new(),
             key_bytes: 0,
         }
     }
@@ -960,15 +1088,16 @@ impl Reducer {
                 seen,
                 key_bytes,
             } => {
-                let key = comparison_key(entity, *mask, values)?;
-                let capacity = key.capacity();
-                if seen.len() == MAX_DISTINCT_VALUES || 8 + *key_bytes + capacity > allowance {
-                    // A full set can still admit a duplicate without allocating a node.
-                    if !seen.contains(&key) {
+                comparison_key(entity, *mask, values, scratch)?;
+                if let Err(position) =
+                    seen.binary_search_by(|key| key.as_ref().cmp(scratch.as_slice()))
+                {
+                    let size = scratch.len();
+                    if seen.len() == MAX_DISTINCT_VALUES || 8 + *key_bytes + size > allowance {
                         return Err(Error::Limit);
                     }
-                } else if seen.insert(key) {
-                    *key_bytes += capacity;
+                    seen.insert(position, Box::from(scratch.as_slice()));
+                    *key_bytes += size;
                 }
             }
             Self::Count { presence, total } => {
@@ -1026,6 +1155,12 @@ impl Reducer {
 
 // Completed results cannot be advanced. All numeric range checks precede selection.
 enum Completed {
+    Summary {
+        count: u64,
+        sum: Option<Box<[u8]>>,
+        average: Option<Box<[u8]>>,
+        sort_key: Option<Box<[u8]>>,
+    },
     Key,
     Count(u64),
     Value(Option<(Vec<u8>, Vec<u8>)>),
@@ -1033,6 +1168,10 @@ enum Completed {
 impl Completed {
     fn encoded_len(&self) -> usize {
         match self {
+            Self::Summary { sum, average, .. } => {
+                8 + sum.as_deref().map_or(0, <[u8]>::len)
+                    + average.as_deref().map_or(0, <[u8]>::len)
+            }
             Self::Key => 0,
             Self::Count(_) => 8,
             Self::Value(value) => value.as_ref().map_or(0, |(_, bytes)| bytes.len()),
@@ -1041,6 +1180,7 @@ impl Completed {
     // Counts need only eight stack bytes; extrema borrow their retained ordered key.
     fn result_key<'a>(&'a self, scratch: &'a mut [u8; 8]) -> Option<&'a [u8]> {
         match self {
+            Self::Summary { sort_key, .. } => sort_key.as_deref(),
             Self::Key => None,
             Self::Count(total) => {
                 *scratch = total.to_be_bytes();
@@ -1053,6 +1193,9 @@ impl Completed {
 
     fn retained_bytes(&self) -> usize {
         match self {
+            Self::Summary { sort_key, .. } => {
+                self.encoded_len() + sort_key.as_deref().map_or(0, <[u8]>::len)
+            }
             Self::Key => 0,
             Self::Count(_) => 8,
             Self::Value(value) => value
@@ -1077,11 +1220,12 @@ impl Completed {
 }
 
 pub(super) struct Groups {
+    summary_sum: Option<ValueSchema>,
     selection: Selection,
     mask: u16,
     // Never advanced: each new group receives its own empty reducer state.
     initial: Reducer,
-    rows: BTreeMap<Vec<u8>, (Vec<u8>, Reducer)>,
+    rows: BTreeMap<Box<[u8]>, (Vec<u8>, Reducer)>,
     state_bytes: usize,
 }
 impl Groups {
@@ -1108,33 +1252,29 @@ impl Groups {
     fn into_output(self) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
         // Accumulation has completed. Output filtering cannot relax input/state bounds.
         let mut state_bytes = self.state_bytes;
-        let mut rows = self
-            .rows
-            .into_values()
-            .map(|(record, reducer)| {
-                let previous = reducer.retained_bytes();
+        let mut rows = Vec::with_capacity(self.rows.len());
+        for (record, reducer) in self.rows.into_values() {
+            let previous = reducer.retained_bytes();
+            let (result, accepted) = if let Some(sum) = self.summary_sum {
+                let Reducer::Numeric(state) = reducer else {
+                    return Err(Error::Corrupt);
+                };
+                state.finish_summary(sum, &self.selection)?
+            } else {
                 let result = reducer.finish()?;
-                state_bytes = state_bytes - previous + result.retained_bytes();
-                if state_bytes > MAX_STATE_BYTES {
-                    return Err(Error::Limit);
-                }
-
-                Ok((record, result))
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        rows.retain(|(_, result)| {
-            let mut scratch = [0; 8];
-            let actual = result.result_key(&mut scratch);
-
-            self.selection
-                .predicates
-                .split_inclusive(|(_, _, or_next)| !or_next)
-                .all(|clause| {
-                    clause.iter().any(|(comparison, operand, _)| {
-                        comparison.accepts(actual, operand.as_deref(), self.selection.optional)
-                    })
-                })
-        });
+                let mut scratch = [0; 8];
+                let key = result.result_key(&mut scratch);
+                let accepted = self.selection.accepts(|_| key);
+                (result, accepted)
+            };
+            state_bytes = state_bytes - previous + result.retained_bytes();
+            if state_bytes > MAX_STATE_BYTES {
+                return Err(Error::Limit);
+            }
+            if accepted {
+                rows.push((record, result));
+            }
+        }
         if self.selection.order == GroupOrder::KeyDescending {
             // BTreeMap supplied ascending canonical keys; reverse the completed,
             // filtered rows before any output limit or page is selected.
@@ -1144,7 +1284,11 @@ impl Groups {
             rows.sort_by(|(_, a), (_, b)| {
                 let (mut sa, mut sb) = ([0; 8], [0; 8]);
                 let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
-                if self.selection.order == GroupOrder::AggregateDescending {
+                if matches!(
+                    self.selection.order,
+                    GroupOrder::AggregateDescending
+                        | GroupOrder::Summary(_, super::SortDirection::Descending)
+                ) {
                     order.reverse()
                 } else {
                     order
@@ -1163,27 +1307,23 @@ impl Groups {
         spans: &[(u16, u16)],
         scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
-        let key = comparison_key(entity, self.mask, values)?;
-        let count = self.rows.len();
-        let max_keys = self.max_keys();
+        comparison_key(entity, self.mask, values, scratch)?;
         let available = MAX_STATE_BYTES - self.state_bytes;
-        let entry = match self.rows.entry(key) {
-            Entry::Occupied(mut entry) => {
-                let (_, reducer) = entry.get_mut();
-                let previous = reducer.retained_bytes();
-                reducer.push(entity, values, bytes, spans, scratch, available + previous)?;
-                self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
+        if let Some((_, reducer)) = self.rows.get_mut(scratch.as_slice()) {
+            let previous = reducer.retained_bytes();
+            reducer.push(entity, values, bytes, spans, scratch, available + previous)?;
+            self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
+            return Ok(());
+        }
 
-                return Ok(());
-            }
-            Entry::Vacant(entry) => entry,
-        };
-
+        let count = self.rows.len();
         let size = projection_size(spans, self.mask);
-        let base = entry.key().capacity() + size;
-        if count == max_keys || base + self.initial.retained_bytes() > available {
+        let base = scratch.len() + size;
+        if count == self.max_keys() || base + self.initial.retained_bytes() > available {
             return Err(Error::Limit);
         }
+        // The reducer can reuse scratch as soon as the new group's key is owned.
+        let key = Box::<[u8]>::from(scratch.as_slice());
         let mut reducer = self.initial.clone();
         if let Reducer::Keys(position) = &mut reducer {
             *position = count as u8;
@@ -1192,12 +1332,12 @@ impl Groups {
         let output = copy_projection(bytes, spans, self.mask, size);
         // Map/set nodes and fixed bookkeeping are independently bounded by the
         // group and per-group distinct cardinality caps.
-        let retained = entry.key().capacity() + output.capacity() + reducer.retained_bytes();
+        let retained = key.len() + output.capacity() + reducer.retained_bytes();
         if retained > available {
             return Err(Error::Limit);
         }
         self.state_bytes += retained;
-        entry.insert((output, reducer));
+        self.rows.insert(key, (output, reducer));
 
         Ok(())
     }

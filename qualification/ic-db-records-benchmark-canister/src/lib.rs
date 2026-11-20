@@ -14,7 +14,10 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey,
 };
 
-/// Initialize the fixture’s stable state at installation.
+// initialize
+// Initialize the fixture’s stable state at installation.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,

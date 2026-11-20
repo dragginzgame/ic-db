@@ -167,7 +167,8 @@ enum Command {
         entity: String,
         /// Entry: distinct:amount pages distinct values with --page-size; --group-order first accepts --order-by and --desc;
         /// count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
-        /// prefix with category, for groups. Document: count/count:note/count:priority,
+        /// Entry supports category,summary:amount; DecimalRow supports zone,summary:value and zone,summary:maybe.
+        /// For single measures, prefix with category, for Entry groups. Document: count/count:note/count:priority,
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
         /// prefix with entry_id, for groups. DecimalRow: count, count/distinct-count/min/max/sum/avg
         /// of :value or :maybe; prefix with zone, for groups. Unknown entity/selector pairs refuse.
@@ -191,6 +192,7 @@ enum Command {
         /// Maximum completed groups across all pages, not an input-row limit.
         #[arg(long, default_value_t=32, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
+        /// For grouped summaries, prefix each bound with count:, sum: or avg:.
         /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
         /// Signed sums accept negatives; Decimal results accept fractions at their scale.
         /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
@@ -201,8 +203,9 @@ enum Command {
         /// Both bounds are inclusive and apply before ordering or output limits.
         #[arg(long, allow_hyphen_values = true)]
         group_max: Option<String>,
+        /// For grouped summaries use count:asc, sum:desc, avg:desc or the opposite direction.
         /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
-        #[arg(long, value_parser=["key", "key-desc", "first", "asc", "desc"])]
+        #[arg(long, value_parser=["key", "key-desc", "first", "asc", "desc", "count:asc", "count:desc", "sum:asc", "sum:desc", "avg:asc", "avg:desc"])]
         group_order: Option<String>,
         #[command(flatten)]
         order: OrderArgs,
@@ -247,6 +250,7 @@ enum Command {
         /// min:amount/max:amount for Entry; min:note/max:note and
         /// min:priority/max:priority for Document. Extrema ignore absence.
         /// sum:amount for Entry; sum:priority/sum:score for Document (128-bit results).
+        /// category,summary:amount and zone,summary:value or zone,summary:maybe return count, sum and average.
         /// value/maybe project DecimalRow fields, optionally with --distinct.
         /// DecimalRow supports count/distinct-count/min/max/sum:value or :maybe,
         /// optionally grouped by zone. DISTINCT includes one absent value.
@@ -263,6 +267,7 @@ enum Command {
         /// Deduplicate projections using live indexed pages or a bounded complete result.
         #[arg(long)]
         distinct: bool,
+        /// For grouped summaries, prefix each bound with count:, sum: or avg:.
         /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
         /// Signed sums accept negatives; Decimal results accept fractions at their scale.
         /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
@@ -273,8 +278,9 @@ enum Command {
         /// Both bounds are inclusive and apply before ordering or output limits.
         #[arg(long, allow_hyphen_values = true)]
         group_max: Option<String>,
+        /// For grouped summaries use count:asc, sum:desc, avg:desc or the opposite direction.
         /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
-        #[arg(long, value_parser=["key", "key-desc", "asc", "desc"])]
+        #[arg(long, value_parser=["key", "key-desc", "asc", "desc", "count:asc", "count:desc", "sum:asc", "sum:desc", "avg:asc", "avg:desc"])]
         group_order: Option<String>,
     },
     /// Display command help.

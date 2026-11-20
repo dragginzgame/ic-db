@@ -1,7 +1,10 @@
 //! Exact integer, decimal and finite float totals, with rounding at completion.
 
 use super::float_sum::{Binary32Sum, Binary64Sum};
-use super::{super::Plan, Aggregate, Completed, GroupValue, Query, Reducer};
+use super::{
+    super::Plan, Aggregate, Completed, GroupOrder, GroupSummaries, GroupSummary, GroupValue, Query,
+    Reducer,
+};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
     ValueSchema, codec::Encoder,
@@ -92,6 +95,59 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
+    /// Compute present count, sum and average for one numeric field in one scan.
+    /// S and A name the same operand and follow the result rules of sum and avg.
+    /// All-absent groups have count zero and two absent results. Supports key order or an explicit summary measure
+    /// in either direction. The row limit applies after every group is checked.
+    /// # Errors
+    /// Refuses unnamed group predicates, unspecified aggregate-value ordering and paging. Ordinary
+    /// grouped numeric type, overflow, work, state and output bounds apply.
+    /// # Panics
+    /// Supplier corruption traps without repair.
+    pub fn group_summary<K: Value, S: Value, A: Value>(
+        self,
+    ) -> Result<GroupSummaries<K, S, A>, Error> {
+        observe!(query, {
+            let (mut plan, initial, sum) = self.summary_plan::<K, S, A>()?;
+            super::super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
+            let (groups, page) = self.grouped(&plan, initial, Some(sum))?;
+            let (value, output_bytes) = super::group_output(
+                groups,
+                self.request.rows,
+                self.request.bytes,
+                decode_summary,
+            )?;
+            Ok(Aggregate {
+                value,
+                output_bytes,
+                examined: page.examined,
+                fetched: page.fetched,
+            })
+        })
+    }
+
+    pub(super) fn summary_plan<K: Value, S: Value, A: Value>(
+        &self,
+    ) -> Result<(Plan<'static>, Reducer, ValueSchema), Error> {
+        let request = &self.request.groups;
+        let order = request.order.unwrap_or_default();
+        if !matches!(
+            order,
+            GroupOrder::Key | GroupOrder::KeyDescending | GroupOrder::Summary(..)
+        ) {
+            return Err(Error::InvalidQuery);
+        }
+        let (plan, initial) = self.numeric_plan::<A>(Some(K::definition()), Operation::Average)?;
+        let sum = NumericAggregate::admit(E::SCHEMA, S::definition(), Operation::Sum)?;
+        let Reducer::Numeric(average) = &initial else {
+            return Err(Error::Corrupt);
+        };
+        if sum.position != average.position {
+            return Err(Error::InvalidQuery);
+        }
+        Ok((plan, initial, sum.output))
+    }
+
     // One admission path for synchronous, grouped and retained numeric terminals.
     pub(super) fn numeric_plan<R: Value>(
         &self,
@@ -104,6 +160,27 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
         Ok((plan, Reducer::Numeric(state)))
     }
+}
+
+pub(super) fn decode_summary<K: Value, S: Value, A: Value>(
+    key: &[u8],
+    result: Completed,
+) -> Result<GroupSummary<K, S, A>, Error> {
+    let Completed::Summary {
+        count,
+        sum,
+        average,
+        ..
+    } = result
+    else {
+        return Err(Error::Corrupt);
+    };
+    Ok(GroupSummary {
+        key: super::decode_record(key)?,
+        count,
+        sum: sum.as_deref().map(super::decode_record).transpose()?,
+        average: average.as_deref().map(super::decode_record).transpose()?,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -139,6 +216,8 @@ impl Total {
         }
     }
 }
+
+type EncodedValue = (Vec<u8>, Vec<u8>);
 
 impl NumericAggregate {
     fn admit(
@@ -306,30 +385,77 @@ impl NumericAggregate {
         self.output
     }
 
-    pub(super) fn finish(mut self) -> Result<Completed, Error> {
+    pub(super) fn finish_summary(
+        self,
+        output: ValueSchema,
+        selection: &super::Selection,
+    ) -> Result<(Completed, bool), Error> {
+        let (sum_key, sum) = self.encode_result(output, Operation::Sum)?.unzip();
+        let (avg_key, average) = self.encode_result(self.output, Operation::Average)?.unzip();
+        let count_key = self.count.to_be_bytes();
+        let accepted = selection.accepts(|measure| match measure {
+            Some(super::SummaryMeasure::Count) => Some(&count_key),
+            Some(super::SummaryMeasure::Sum) => sum_key.as_deref(),
+            Some(super::SummaryMeasure::Average) => avg_key.as_deref(),
+            None => None,
+        });
+        let sort_key = match selection.order {
+            GroupOrder::Summary(super::SummaryMeasure::Count, _) => {
+                Some(self.count.to_be_bytes().to_vec())
+            }
+            GroupOrder::Summary(super::SummaryMeasure::Sum, _) => sum_key,
+            GroupOrder::Summary(super::SummaryMeasure::Average, _) => avg_key,
+            _ => None,
+        };
+        Ok((
+            Completed::Summary {
+                count: self.count,
+                sum: sum.map(Vec::into_boxed_slice),
+                average: average.map(Vec::into_boxed_slice),
+                sort_key: sort_key.map(Vec::into_boxed_slice),
+            },
+            accepted,
+        ))
+    }
+
+    pub(super) fn finish(self) -> Result<Completed, Error> {
+        self.encode_result(self.output, self.operation)
+            .map(Completed::Value)
+    }
+
+    fn encode_result(
+        &self,
+        schema: ValueSchema,
+        operation: Operation,
+    ) -> Result<Option<EncodedValue>, Error> {
         if self.count == 0 {
-            return Ok(Completed::Value(None));
+            return Ok(None);
         }
-        let result_type = crate::key::operand_type(self.output.value);
-        if let (Operation::Average, FieldType::Decimal { scale }) = (self.operation, result_type) {
-            let numerator = match self.total {
-                Total::Float32(_) | Total::Float64(_) => return Err(Error::Corrupt),
-                Total::Signed(n) => n,
-                // A nonnegative integer total this large cannot produce a Decimal
-                // coefficient fitting i128 even after division by the retained
-                // job's maximum one million inputs (synchronous scans use 512).
-                Total::Unsigned(n) => n.try_into().map_err(|_| Error::ArithmeticOverflow)?,
+        let result_type = crate::key::operand_type(schema.value);
+        let rounded;
+        let total =
+            if let (Operation::Average, FieldType::Decimal { scale }) = (operation, result_type) {
+                let numerator = match self.total {
+                    Total::Float32(_) | Total::Float64(_) => return Err(Error::Corrupt),
+                    Total::Signed(n) => n,
+                    // A nonnegative integer total this large cannot produce a Decimal
+                    // coefficient fitting i128 even after division by the retained
+                    // job's maximum one million inputs (synchronous scans use 512).
+                    Total::Unsigned(n) => n.try_into().map_err(|_| Error::ArithmeticOverflow)?,
+                };
+                rounded = Total::Signed(rounded_average(
+                    numerator,
+                    self.count,
+                    self.source_scale,
+                    scale,
+                )?);
+                &rounded
+            } else {
+                &self.total
             };
-            self.total = Total::Signed(rounded_average(
-                numerator,
-                self.count,
-                self.source_scale,
-                scale,
-            )?);
-        }
         let mut output = Encoder::new();
         let mut key = Vec::new();
-        if self.output.optional {
+        if schema.optional {
             output.boolean(true)?;
         }
         // The ordinary owned codec supplies result bytes; checked conversion occurs
@@ -338,48 +464,48 @@ impl NumericAggregate {
             ($method:ident, $variant:ident, $value:expr) => {{
                 let value = $value.try_into().map_err(|_| Error::ArithmeticOverflow)?;
                 output.$method(value)?;
-                IndexValue::$variant(value).append_component(self.output.optional, &mut key);
+                IndexValue::$variant(value).append_component(schema.optional, &mut key);
             }};
         }
-        let divisor = match self.operation {
+        let divisor = match operation {
             Operation::Sum => 1,
             Operation::Average => self.count,
         };
-        match (self.total, result_type) {
+        match (total, result_type) {
             (Total::Float32(sum), FieldType::Float32) => {
                 let value = sum.finish(divisor)?;
                 output.float32(value)?;
-                IndexValue::Float32(value).append_component(self.output.optional, &mut key);
+                IndexValue::Float32(value).append_component(schema.optional, &mut key);
             }
             (Total::Float64(sum), FieldType::Float64) => {
                 let value = sum.finish(divisor)?;
                 output.float64(value)?;
-                IndexValue::Float64(value).append_component(self.output.optional, &mut key);
+                IndexValue::Float64(value).append_component(schema.optional, &mut key);
             }
-            (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, n),
-            (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, n),
-            (Total::Signed(n), FieldType::Int32) => encode!(int32, Int32, n),
-            (Total::Signed(n), FieldType::Int64) => encode!(int64, Int64, n),
-            (Total::Signed(n), FieldType::Int128) => encode!(int128, Int128, n),
+            (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, *n),
+            (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, *n),
+            (Total::Signed(n), FieldType::Int32) => encode!(int32, Int32, *n),
+            (Total::Signed(n), FieldType::Int64) => encode!(int64, Int64, *n),
+            (Total::Signed(n), FieldType::Int128) => encode!(int128, Int128, *n),
             (Total::Signed(n), FieldType::Decimal { scale }) => {
-                let coefficient = n.try_into().map_err(|_| Error::ArithmeticOverflow)?;
+                let coefficient = (*n).try_into().map_err(|_| Error::ArithmeticOverflow)?;
                 let value = Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)?;
                 output.decimal(value, scale)?;
-                IndexValue::Decimal(value).append_component(self.output.optional, &mut key);
+                IndexValue::Decimal(value).append_component(schema.optional, &mut key);
             }
-            (Total::Unsigned(n), FieldType::Nat8) => encode!(nat8, Nat8, n),
-            (Total::Unsigned(n), FieldType::Nat16) => encode!(nat16, Nat16, n),
-            (Total::Unsigned(n), FieldType::Nat32) => encode!(nat32, Nat32, n),
-            (Total::Unsigned(n), FieldType::Nat64) => encode!(nat64, Nat64, n),
-            (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, Nat128, n),
+            (Total::Unsigned(n), FieldType::Nat8) => encode!(nat8, Nat8, *n),
+            (Total::Unsigned(n), FieldType::Nat16) => encode!(nat16, Nat16, *n),
+            (Total::Unsigned(n), FieldType::Nat32) => encode!(nat32, Nat32, *n),
+            (Total::Unsigned(n), FieldType::Nat64) => encode!(nat64, Nat64, *n),
+            (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, Nat128, *n),
             (Total::Unsigned(n), FieldType::U256) => {
-                output.u256(n)?;
-                IndexValue::U256(n).append_component(self.output.optional, &mut key);
+                output.u256(*n)?;
+                IndexValue::U256(*n).append_component(schema.optional, &mut key);
             }
             _ => return Err(Error::Corrupt),
         }
 
-        Ok(Completed::Value(Some((key, output.finish()))))
+        Ok(Some((key, output.finish())))
     }
 }
 

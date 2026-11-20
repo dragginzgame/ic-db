@@ -512,6 +512,16 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 .unwrap();
         }
         let backing = pic.get_stable_memory(canister).await;
+        // Primary-key order interleaves the two categories, so DISTINCT must
+        // collect both first occurrences and finish scanning the input.
+        for (order, expected) in [("id", ["0", "1"]), ("id:desc", ["1", "0"])] {
+            let page = query(order, false, Some(20), 2, 512, 16, None, true)
+                .await
+                .unwrap();
+            assert_eq!(page.1, [vec![expected[0]], vec![expected[1]]]);
+            assert_eq!((page.3, page.4, page.5), (511, 511, 16));
+            assert!(page.2.is_none());
+        }
         // Duplicate rows consume scan work but only two retained tuple slots.
         for descending in [false, true] {
             let page = query("category:desc", descending, None, 2, 512, 16, None, true)

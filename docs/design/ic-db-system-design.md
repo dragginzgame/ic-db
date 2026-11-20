@@ -1662,6 +1662,22 @@ rows returned and work per continuation. A small query language should not need
 an elaborate weighted accounting framework. A bound must stop work before the
 protected resource is exceeded, not merely count afterward.
 
+The synchronous `group_summary::<K, S, A>()` terminal returns one key, present
+operand count, sum and average per group. S and A must name the same numeric
+field. Their normal widening and rounding rules apply independently. Frozen
+IcyDB `6d421e3`'s `grouped_fold/bundle/mod.rs` shares grouping across aggregate
+slots. Here a single exact total and denominator suffice for all three results.
+Summary ordering accepts either key direction or an explicit count, sum or
+rounded average. Equal measures retain ascending canonical key order. Sorting
+precedes output limits and paging. A summary filter names count, sum or rounded average. Chained comparisons
+are ANDed before ordering. A nonempty `filter_summary_any` clause accepts a
+group if any of its measure comparisons succeeds. Each comparison uses the selected measure's result type and
+participates in the existing eight-term limit. Retained summary jobs bind
+the predicate measures and operands, both output contracts and the summary operation.
+They checkpoint the existing grouped average's exact total and present count.
+Both synchronous results and completed retained pages use the same group
+finalizer, including range checks on groups beyond the requested page.
+
 ### Constrained resumable aggregation
 
 Aggregation must support bounded advancement across calls, not only refusal when
@@ -3128,7 +3144,9 @@ from `db/executor/projection/materialize/distinct` and
 For ordered scalar/unit-enum projections without the adjacency proof, the same
 scanner collects all matching input in one synchronous operation. A bounded
 comparison-key set detects nonadjacent duplicates using the same exact tuple
-encoding as grouping and DISTINCT counts. Keep only the first matching projected
+encoding as grouping and DISTINCT counts. The scanner searches a sorted vector
+of owned keys by borrowing its scratch buffer. Only a newly seen tuple retains
+a key and a projected row. Keep only the first matching projected
 record per key, in physical traversal order (reversed for descending queries).
 Every examined row/index is validated, even when its projected key was seen.
 Optional absence is a value; Decimal equality uses declared-scale semantics.
@@ -3136,7 +3154,7 @@ Unsupported comparison types refuse before traversal.
 
 Complete collection admits no input cursor and returns one page with `next: None`.
 Cap distinct tuples at 32, comparison keys at 4096 bytes and combined retained
-key/projected-row buffer capacities at 128 KiB; collection metadata is separately
+encoded key lengths and projected-row buffer capacities at 128 KiB; collection metadata is separately
 bounded by the tuple cap. The query's output count and bytes must fit the complete
 result. Work exhaustion, including a boundary where exhaustion is not yet observed,
 returns `Limit`, as do cardinality/state/combined-output exhaustion. A single
@@ -3170,6 +3188,11 @@ These explicit queries expose their scan costs and use existing predicates and j
 For an unknown domain, `start_distinct::<K>` and `resume_distinct::<K>`
 scan scattered input once using the retained-job revision, sequence and expiry
 contract. The grouping table retains one projected record per canonical key.
+Lookup borrows the scanner's comparison buffer. Only a new group takes ownership
+of a fixed-length key, so its byte charge is identical during accumulation and
+checkpoint restore. Frozen IcyDB `6d421e3` uses the same ownership rule in
+`grouped_fold/utils/path_key::materialize_path_group_key`. IC DB keeps the ordered
+map and its existing canonical byte comparison.
 Its versioned job binding selects a checkpoint containing the one-byte
 tuple count and the record bytes for each tuple. The one-byte
 tuple count permits up to 255 keys; key, memory and 16 KiB whole-frame limits can
@@ -3312,9 +3335,12 @@ all-absent group counts one. This remains separate from present-field counting.
 Scalar distinct counting no longer retains a group map and projected-record copies.
 
 Each set admits at most 32 distinct keys, independently of the 32-group cap. The
-128-KiB query state budget charges every retained key capacity, plus the existing
-group keys, output records and reducer payloads. Set/map node counts are bounded
-separately by those cardinalities. Duplicate values add no retained charge, even
+128-KiB query state budget charges each owned tuple’s encoded length, plus the existing
+group keys, output records and reducer payloads. The set is a sorted vector of
+key handles. Binary search locates a duplicate or its insertion position in one
+lookup, and insertion moves at most 31 handles. The lookup borrows the scan buffer. Only a new
+tuple acquires an owned key. Checkpoint restore validates ordered tuple bytes
+before copying them and applies the same charge. Duplicate values add no retained charge, even
 after reaching the set cap. New distinct values that exhaust a bound refuse before
 group filtering/order/output limits; final counts use the ordinary Nat64 selection
 and output path. No cursors, durable seen-set or new schema representation is added.
@@ -3404,8 +3430,11 @@ cursor or implicit retry; retained jobs keep their completed-output pagination.
 At most 32 aggregate groups reach finalization. The grouping map yields records
 in canonical key order, so finalization can release each encoded comparison key.
 Filtering keeps that order. A stable sort by completed value preserves it for
-ties in either aggregate direction. Every group still finalizes and passes its
-state check before filtering or applying the output limit.
+ties in either aggregate direction. Each group finalizes and passes its state check before its predicate is tested.
+Only qualifying records and results enter the output buffer. This follows frozen
+IcyDB `6d421e3` at `grouped_fold/generic/page_finalize::push_candidate`. IC DB
+finishes every remaining group even after enough results qualify for the output limit;
+a later overflow still refuses the query.
 Admitted predicate keys are separately bounded to eight keys of at most 4096
 logical bytes; source literals also retain the row-byte bound before encoding.
 
@@ -3589,6 +3618,12 @@ contract above.
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed
 values; matching rows copy only selected field bytes into the output record codec.
+Projection admission resolves the named fields to a 16-bit mask. Group keys,
+DISTINCT tuples, projected output and restored keys visit its set bits from
+lowest to highest. This keeps the declared tuple order and full-row validation.
+Frozen IcyDB `6d421e3` likewise traverses resolved grouping fields in
+`grouped_fold/utils/path_key::resolve_path_group_values`; top-level IC DB
+projections already carry every selected position in their mask.
 The root record adds no extra nesting level to the original entity's budget.
 Full-row validation remains mandatory, including omitted structured values and
 shared depth/node/item bounds. The supplier still fetches the whole row; this is

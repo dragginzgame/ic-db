@@ -6,6 +6,7 @@ use ic_storage::{DefaultMemoryImpl, StableKey, adapter::StableBTreeMap};
 
 // Start/reset or copy at most two rows. Width is an explicit fixed probe input.
 // Errors reuse the fixture's closed-phase=3 and invalid-bounds=5 codes.
+
 // capacity_step
 // Advance the allocation probe with the selected size and failure point.
 // guard  : validates the request frame for method 5.
@@ -70,6 +71,7 @@ fn capacity_step((start, width, failure): (bool, u64, u8)) -> Result<(), u8> {
 }
 
 // Full row bytes are independently checked in <=8 KiB pieces by the driver.
+
 // capacity_inspect
 // Inspect the allocation state and bytes at the requested offset.
 // guard  : validates the request frame for method 6.

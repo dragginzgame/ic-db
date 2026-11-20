@@ -161,3 +161,62 @@ async fn committed_writes_invalidate_running_averages_and_preserve_completed_res
     );
     owned.drop().await;
 }
+
+#[tokio::test]
+async fn retained_summary_pages_survive_interrupted_scan_and_completed_upgrade() {
+    type Page = (Vec<(String, u64, u64, u64)>, Option<Vec<u8>>);
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_FLOAT64_SUM_WASM").expect("run make m2-float64-sum"))
+            .unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 2_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    for round in 0..5_u8 {
+        wire_call::call::<()>(&pic, canister, "seed", 1, &(2_u16, round)).await;
+    }
+    let handle: Vec<u8> = wire_call::call(&pic, canister, "start_summary", 4, &()).await;
+    let advance =
+        async |sequence: u64, work: u16, cursor: Option<Vec<u8>>| -> (u64, u64, Option<Page>) {
+            wire_call::call(
+                &pic,
+                canister,
+                "advance_summary",
+                5,
+                &(&handle, sequence, work, cursor),
+            )
+            .await
+        };
+    // Each group has accumulated two maxima and a tiny term, before cancellation.
+    let checkpoint = advance(0, 96, None).await;
+    assert_eq!(checkpoint, (1, 96, None));
+    upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(advance(0, 1, None).await, checkpoint);
+
+    let mut expected: Vec<_> = (0..32)
+        .map(|i| (format!("{i:02}"), 5, i + 1, (i + 3) / 5))
+        .collect();
+    // The stable sort preserves ascending group keys when rounded averages tie.
+    expected.sort_by_key(|row| std::cmp::Reverse(row.3));
+    let mut cursor = None;
+    for page in 0..5 {
+        let sequence = if page == 0 { 1 } else { 2 };
+        let (seq, examined, result) = advance(sequence, 128, cursor.take()).await;
+        assert_eq!((seq, examined), (2, 160));
+        let (rows, next) = result.expect("completed summary");
+        // The large terms cancel. The sum is (i+1) subnormal units and the
+        // average is that integer divided by five, rounded to the nearest unit.
+        assert_eq!(rows, expected[page * 7..((page + 1) * 7).min(32)]);
+        assert_eq!(next.is_some(), page < 4);
+        cursor = next;
+        if page == 0 {
+            upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+    }
+    pic.drop().await;
+}

@@ -11,7 +11,10 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
 };
 
-/// Initialize the fixture’s stable state at installation.
+// initialize
+// Initialize the fixture’s stable state at installation.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -40,6 +43,7 @@ fn initialize((): ()) {
 
 // Commands: start, advance(job, sequence), put(id, value), cancel(job), delete(id).
 // Errors: input bound, wrong job, future sequence, not running, capacity, contract.
+
 // command
 // Advance the selected operation and return the resulting fixture state.
 // guard  : validates the request frame for method 1.

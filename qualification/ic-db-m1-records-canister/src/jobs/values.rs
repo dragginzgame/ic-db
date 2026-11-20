@@ -69,6 +69,7 @@ fn job_values_write((documents, texts): WriteRequest) -> Result<(), String> {
 
 // 0/1: optional-text min/max; 2: wide text; 3: Blob max. These are compiled
 // fixture operations, not a schema-driven dynamic frontend.
+
 // job_values_start
 // Start the selected retained value aggregate.
 // guard  : validates the request frame for method 119.

@@ -13,7 +13,10 @@ use ic_storage::{
     MemoryRuntime, SealedDeclarationSnapshot, StableKey, adapter::StableBTreeMap,
 };
 
-/// Initialize the fixture’s stable state at installation.
+// initialize
+// Initialize the fixture’s stable state at installation.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -44,7 +47,10 @@ fn initialize((): ()) {
     }
 }
 
-/// Trap during upgrade when the bad-upgrade fixture is installed.
+// post_upgrade
+// Trap during upgrade when the bad-upgrade fixture is installed.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::post_upgrade(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -99,6 +105,7 @@ fn schema((): ()) -> (Status, String) {
 }
 
 // Three candidates maximum per page, including residual nonmatches; IDs are bounded.
+
 // query
 // Read the requested bounded result from the local fixture.
 // guard  : validates the request frame for method 3.
@@ -152,6 +159,7 @@ fn query((after, limit, minimum): (u64, u64, u64)) -> Result<Page, u8> {
 // start, copy, publish, cleanup, cancel, cancel-cleanup, source-write, damage-manifest.
 // Errors: missing manifest=1, incompatible schema=2, closed phase=3,
 // unsupported transformation=4, invalid bounds=5, unique/validation refusal=6.
+
 // command
 // Advance the selected operation and return the resulting fixture state.
 // guard  : validates the request frame for method 4.

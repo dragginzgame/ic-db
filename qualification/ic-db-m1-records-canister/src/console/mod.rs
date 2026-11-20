@@ -19,7 +19,7 @@ use crate::{
 use ic_db::design::prelude::*;
 use ic_db::{
     Aggregate, Comparison, Error, GroupCount, GroupOrder, GroupValue, QueryCursor, QueryPage,
-    SortDirection,
+    SortDirection, SummaryMeasure,
 };
 use std::fmt::Write;
 
@@ -54,6 +54,7 @@ fn cardinality(entity: String) -> Result<u64, String> {
 // Measure the exact console path, including open/admission/result formatting.
 // An update permits complete-call cycle accounting; the driver verifies that
 // both successful and refused reads preserve the backing bytes.
+
 // measured_query
 // Execute a console query and report its instruction count.
 // guard  : validates the request frame for method 147.
@@ -504,6 +505,15 @@ fn apply_order<'a, E: Entity>(
     query
 }
 
+fn summary_measure(name: &str) -> Result<SummaryMeasure, String> {
+    match name {
+        "count" => Ok(SummaryMeasure::Count),
+        "sum" => Ok(SummaryMeasure::Sum),
+        "avg" => Ok(SummaryMeasure::Average),
+        _ => Err("summary measure must be count, sum or avg".into()),
+    }
+}
+
 fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> {
     match order {
         None => Ok(None),
@@ -512,6 +522,17 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
         Some("key-desc") => Ok(Some(GroupOrder::KeyDescending)),
         Some("asc") => Ok(Some(GroupOrder::AggregateAscending)),
         Some("desc") => Ok(Some(GroupOrder::AggregateDescending)),
+        Some(value) if let Some((measure, direction)) = value.split_once(':') => {
+            let direction = match direction {
+                "asc" => SortDirection::Ascending,
+                "desc" => SortDirection::Descending,
+                _ => return Err("summary order direction must be asc or desc".into()),
+            };
+            Ok(Some(GroupOrder::Summary(
+                summary_measure(measure)?,
+                direction,
+            )))
+        }
         _ => Err("unsupported group order".into()),
     }
 }
@@ -580,6 +601,27 @@ fn select_groups<'a, E: Entity>(
             return Err(message(Error::InvalidOperand));
         }
         query = match select {
+            "category,summary:amount" | "zone,summary:value" | "zone,summary:maybe" => {
+                let (name, threshold) = value
+                    .split_once(':')
+                    .ok_or("summary bound requires count:VALUE, sum:VALUE or avg:VALUE")?;
+                let measure = summary_measure(name)?;
+                let invalid = |_| message(Error::InvalidOperand);
+                let operand = match measure {
+                    SummaryMeasure::Count => {
+                        ic_db::IndexValue::Nat64(threshold.parse().map_err(invalid)?)
+                    }
+                    SummaryMeasure::Sum if select == "category,summary:amount" => {
+                        ic_db::IndexValue::Nat128(threshold.parse().map_err(invalid)?)
+                    }
+                    SummaryMeasure::Sum | SummaryMeasure::Average => ic_db::IndexValue::Decimal(
+                        threshold
+                            .parse()
+                            .map_err(|_| message(Error::InvalidOperand))?,
+                    ),
+                };
+                query.filter_summary(measure, comparison, operand)
+            }
             "entry_id,min:note" | "entry_id,max:note" => query.filter_groups(comparison, value),
             "category,sum:amount" | "entry_id,sum:priority" => query.filter_groups(
                 comparison,
@@ -650,6 +692,15 @@ fn execute<'a, E: Entity>(
         "avg:amount" => query
             .avg::<AverageAmount>()
             .map(|r| display_value(r, "amount", |r| r.amount.to_string())),
+        "category,summary:amount" => query
+            .group_summary::<CategoryOnly, TotalAmount, AverageAmount>()
+            .map(|r| display_summary(r, "category", entry_summary_row)),
+        "zone,summary:value" => query
+            .group_summary::<ZoneOnly, TotalDecimal, TotalDecimal>()
+            .map(|r| display_summary(r, "zone", decimal_summary_row)),
+        "zone,summary:maybe" => query
+            .group_summary::<ZoneOnly, OptionalDecimal, OptionalDecimal>()
+            .map(|r| display_summary(r, "zone", optional_summary_row)),
         "category,avg:amount" => query.group_avg::<CategoryOnly, AverageAmount>().map(|r| {
             display_group_values(
                 r,
@@ -867,6 +918,71 @@ fn grouped_extremum<E: Entity, K: Value, R: Value>(
     };
 
     Ok(display_group_values(r, columns, key, render))
+}
+
+fn summary_cells(
+    key: String,
+    count: u64,
+    sum: Option<impl ToString>,
+    average: Option<impl ToString>,
+) -> Vec<String> {
+    vec![key, count.to_string(), optional(sum), optional(average)]
+}
+
+fn entry_summary_row(
+    g: ic_db::GroupSummary<CategoryOnly, TotalAmount, AverageAmount>,
+) -> Vec<String> {
+    summary_cells(
+        g.key.category.to_string(),
+        g.count,
+        g.sum.map(|r| r.amount),
+        g.average.map(|r| r.amount),
+    )
+}
+
+fn decimal_summary_row(
+    g: ic_db::GroupSummary<ZoneOnly, TotalDecimal, TotalDecimal>,
+) -> Vec<String> {
+    summary_cells(
+        g.key.zone.to_string(),
+        g.count,
+        g.sum.map(|r| r.value),
+        g.average.map(|r| r.value),
+    )
+}
+
+fn optional_summary_row(
+    g: ic_db::GroupSummary<ZoneOnly, OptionalDecimal, OptionalDecimal>,
+) -> Vec<String> {
+    summary_cells(
+        g.key.zone.to_string(),
+        g.count,
+        g.sum.and_then(|r| r.maybe),
+        g.average.and_then(|r| r.maybe),
+    )
+}
+
+fn summary_table<T>(
+    groups: Vec<T>,
+    key: &str,
+    render: fn(T) -> Vec<String>,
+) -> (Vec<String>, Vec<Vec<String>>) {
+    (
+        [key, "count", "sum", "avg"].map(String::from).into(),
+        groups.into_iter().map(render).collect(),
+    )
+}
+
+fn display_summary<T>(r: Aggregate<Vec<T>>, key: &str, render: fn(T) -> Vec<String>) -> Page {
+    let (columns, rows) = summary_table(r.value, key, render);
+    (
+        columns,
+        rows,
+        None,
+        r.examined as u32,
+        r.fetched as u32,
+        r.output_bytes as u32,
+    )
 }
 
 fn display_group_values<K, R>(

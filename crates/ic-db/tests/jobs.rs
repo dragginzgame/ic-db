@@ -3135,6 +3135,110 @@ fn grouped_jobs_handle_empty_sparse_and_corrupt_checkpoints() {
 }
 
 #[test]
+fn retained_summary_binds_both_outputs_and_pages_after_reopen() {
+    #[record(fields(field(name = "id", value(item(prim = "Nat128")))))]
+    struct WideId {}
+    #[record(fields(field(name = "id", value(item(prim = "Decimal", scale = 2)))))]
+    struct MeanId {}
+    #[record(fields(field(name = "id", value(item(prim = "Decimal", scale = 0)))))]
+    struct WholeId {}
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[None; 4], 0);
+    let query = || {
+        db.query::<Row>().order_groups(GroupOrder::Summary(
+            ic_db::SummaryMeasure::Sum,
+            ic_db::SortDirection::Descending,
+        ))
+    };
+    let handle = query()
+        .start_group_summary::<Flag, Id, MeanId>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query()
+        .work_limit(1)
+        .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    drop(jobs);
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let before = backing.borrow().clone();
+    for (measure, direction) in [
+        (
+            ic_db::SummaryMeasure::Count,
+            ic_db::SortDirection::Descending,
+        ),
+        (ic_db::SummaryMeasure::Sum, ic_db::SortDirection::Ascending),
+    ] {
+        assert!(matches!(
+            db.query::<Row>()
+                .order_groups(GroupOrder::Summary(measure, direction))
+                .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, 1, time(2)),
+            Err(Error::InvalidJob)
+        ));
+    }
+    assert!(matches!(
+        query().resume_group_summary::<Flag, WideId, MeanId>(&mut jobs, &handle, 1, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    assert!(matches!(
+        query().resume_group_summary::<Flag, Id, WholeId>(&mut jobs, &handle, 1, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    assert!(matches!(
+        db.query::<Row>()
+            .resume_group_avg::<Flag, MeanId>(&mut jobs, &handle, 1, time(2)),
+        Err(Error::InvalidJob)
+    ));
+    let retry = query()
+        .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert_eq!((retry.sequence, retry.examined), (1, 1));
+    assert!(matches!(
+        query()
+            .group_page(1, None)
+            .test_output_limit(1)
+            .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, 1, time(2)),
+        Err(Error::RowTooLarge)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let completed = query()
+        .group_page(1, None)
+        .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, 1, time(2))
+        .unwrap();
+    let JobOutcome::Complete(first) = completed.outcome else {
+        panic!("expected completed summary")
+    };
+    let cursor = first.next.unwrap();
+    let last = query()
+        .group_page(1, Some(&cursor))
+        .resume_group_summary::<Flag, Id, MeanId>(&mut jobs, &handle, completed.sequence, time(3))
+        .unwrap();
+    let JobOutcome::Complete(last) = last.outcome else {
+        panic!("expected final page")
+    };
+    assert!(last.next.is_none());
+    for (page, flag, sum, average) in [(first.rows, 1, 4, 2), (last.rows, 0, 2, 1)] {
+        let [row] = page.as_slice() else {
+            panic!("one group per page")
+        };
+        assert_eq!(
+            (row.key.flag, row.count, row.sum.as_ref().unwrap().id),
+            (flag, 2, sum)
+        );
+        assert_eq!(
+            row.average.as_ref().unwrap().id.coefficient_at_scale(0),
+            Some(average)
+        );
+    }
+}
+
+#[test]
 fn grouped_numeric_jobs_complete_large_inputs_with_absent_groups_and_exact_totals() {
     let host = host(VectorMemory::default());
     let (mut db, mut jobs) = create_stores(&host, schema());

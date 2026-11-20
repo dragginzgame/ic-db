@@ -308,6 +308,7 @@ fn job_advance(
 // Measurements wrap the same fixture operations, including reopen and refusals.
 // Transport decoding/encoding is outside the instruction interval; balance
 // deltas in the driver include the whole update. No product telemetry is added.
+
 // job_advance_cost
 // Measure one retained job advancement.
 // guard  : validates the request frame for method 115.
@@ -404,6 +405,7 @@ fn job_control((operation, bytes, now, limit): ControlRequest) -> Result<u64, St
 
 // Observe the existing lifecycle operations and inject rollback faults only in
 // this qualification host. Cleanup policy stays in AggregateJobs.
+
 // job_control_cost
 // Measure the selected retained-job control operation under fault injection.
 // guard  : validates the request frame for method 117.

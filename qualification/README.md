@@ -317,13 +317,44 @@ compared. Settling follows the harness's explicit per-write policy, not a measur
 production scheduler. Smaller mechanisms and narrower reachable obligations both
 contribute; this is not evidence of blanket feature parity or SQL-removal savings.
 
+### Wasm size snapshot (0.26.3 worktree)
+
+Uncompressed release builds for `wasm32-unknown-unknown`, using the locked
+qualification workspace on Rust 1.100.0. Each row selects the same benchmark
+feature on the records host and the frozen IcyDB host (`6d421e3`). These are
+linked canister sizes for the reachable workload. This pass measured artifacts
+only; earlier receipts cover execution.
+
+| Benchmark feature | IC DB bytes | Frozen IcyDB bytes | Reduction |
+| --- | ---: | ---: | ---: |
+| Scalar records (default) | 268,224 | 3,092,380 | 91.3% |
+| `aggregate-comparison` | 346,807 | 3,267,278 | 89.4% |
+| `query-matrix` | 370,432 | 3,297,679 | 88.8% |
+
+The aggregate host built from the `v0.26.2` source tag is 348,908 bytes on the
+same toolchain. The 0.26.3 worktree saves 2,101 bytes on that host.
+
+The entity-growth canister uses one endpoint and the `retained-host` feature.
+Fluent variants also enable `fluent-shapes` (eight shapes per entity).
+Sizes include generated codecs, schema information and reachable typed operations.
+
+| Reachable operations | 1 entity | 8 entities | 32 entities | Bytes per added entity, 1–8 | Bytes per added entity, 8–32 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct | 267,563 | 285,393 | 349,556 | 2,547 | 2,673 |
+| Direct and fluent | 317,671 | 346,797 | 454,719 | 4,161 | 4,497 |
+
+The fluent slope exceeds the roughly 4 KB comparison ceiling, especially at
+32 entities. The roughly 2 KB objective and a matched legacy per-entity build
+remain open. These controlled fixtures do not measure a production schema or
+the optional logging and metrics integrations.
+
 ### Current coverage and comparison gaps
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | 4,015 raw / 3,955 code bytes per additional entity in the 0.22.3 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Near the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#application-workload-and-wasm-growth-on-storage-078) |
+| Added reachable entity size | 4,161 raw bytes per added entity from 1 to 8; 4,497 from 8 to 32 in the 0.26.3 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0263-worktree) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
@@ -588,6 +619,17 @@ absent note contributes one distinct tuple. The CLI selectors are
 `category,distinct-count:amount`, `category,distinct-count:category` and
 `entry_id,distinct-count:note`; all execute through the fluent engine.
 
+In the 0.26.3 worktree, a scalar DISTINCT job scanning 93 rows (32 different
+categories) used 2,154,580 instructions, down from 2,275,467 in the preceding
+group-key build. Restoring and finishing it after upgrade used 934,430, down
+from 1,023,725. The first 512-row grouped DISTINCT step in the job-capacity
+fixture fell from 11,470,703 to 10,681,410 instructions. These calls include job
+handling. The job fixture grew by 244 raw Wasm bytes. A scalar DISTINCT job
+started under the `v0.26.2` fixture resumed under the new reducer. The older
+scalar-DISTINCT predecessor predates the current Storage directory format and
+refused admission before its checkpoint could be exercised. A grouped native witness retains 43 distinct 3,002-byte
+keys across two groups; a 44th exceeds the shared 128 KiB state allowance.
+
 Synchronous minima/maxima use the same query probe: exact single-field projection,
 absence versus zero, empty input, decimal ordering, owned text winners and final
 output admission after scanning. Work/key exhaustion, malformed source rows and
@@ -638,6 +680,10 @@ when divided by its present count. Wasm repeats averages after upgrade, checks
 positive/negative ties and a valid average with an overflowing sum, and compares
 stable bytes around queries. CLI demos use `avg:amount`/`category,avg:amount` for
 Entry and `avg:value`/`avg:maybe` with optional `zone,` grouping for DecimalRow.
+The console also compares synchronous and retained `zone,summary:value` and
+`zone,summary:maybe` results. The seeded zone has three present values totaling
+3 and no present optional values. An inclusive sum bound of 3.01 excludes the
+first group, and a count bound of zero keeps the all-absent group.
 
 The blob witness returns identical IDs with 1,037 encoded bytes for full entities
 versus 8 for projected records. Its measured execution after opening is 74,795
@@ -1852,6 +1898,15 @@ before and after upgrade. Build inputs and full observations are retained in
 `qualification/target/evidence/m2/sort-costs-build.jsonl`, `sort-costs.wasm` and
 `sort-costs.log`.
 
+A 0.26.3 comparison also exercises complete DISTINCT collection in primary-key
+order. Of 511 rows, 510 meet the amount filter and collapse to two interleaved
+categories. Ascending traversal returns `[0, 1]`, descending returns `[1, 0]`.
+Both inspect all 511 candidates and produce 16 output bytes. Using the scanner
+buffer and sorted key handles lowered pre-upgrade instructions from 7,691,064
+to 7,596,835 ascending and from 7,702,690 to 7,621,134 descending. Both orders
+also passed after upgrade. The measured records host shrank from 1,174,174 to
+1,171,715 raw Wasm bytes (2,491 fewer code-section bytes).
+
 This carries the cost-envelope lesson from frozen IcyDB `6d421e3`'s
 `bounded_large_window_stays_within_sort_comparison_budget` regression into IC
 execution measurements. It does not copy IcyDB's heap index or resource tracker:
@@ -2147,6 +2202,35 @@ relative to the extrema-buffer build. The aggregate benchmark Wasm shrank by
 32 groups with tied counts produced 25 qualifying groups. Its first successful
 three-row page took 1,281,492 instructions versus 1,313,935, and replay after
 upgrade preserved the same page. The measured calls include job handling.
+
+The next finalization pass filters each checked group before buffering it.
+Compared with the preceding recorded build, the same aggregate benchmark Wasm
+fell from 349,254 to 348,798 raw bytes (455 fewer code-section bytes).
+The four full-input grouped queries used 2,089–2,302 fewer instructions;
+the largest increase among all 32 selections was 32 instructions.
+On the separate 32-group job witness, the first successful filtered three-row
+page took 1,258,211 instructions, down from 1,281,492.
+
+Iterating the admitted projection mask in field order reduced the four-group
+count and sum by another 3,405 instructions each, and minimum and maximum by
+3,981 each. Of the 32 settled cases, 20 improved and 12 cost three additional
+instructions each. The aggregate benchmark grew by 103 raw Wasm bytes (66 code
+bytes). The 32-group job's first successful page took 1,257,971 instructions.
+These figures compare directly with the finalization pass above.
+
+Borrowing the scanner's key buffer to find existing groups reduced the same
+four-group count and sum by a further 11,485 instructions each, and both extrema
+by 11,398. Twenty settled selections improved; the other twelve added 12
+instructions each. The benchmark Wasm grew from 348,901 to 349,345 raw bytes
+(442 additional code-section bytes). The native state-bound witness now uses
+24 text groups: all 24 fit with a Nat64 sum result, while the larger completed
+U256 results exceed 128 KiB even when the output filter rejects every group.
+
+A discarded experiment also selected non-unique equality prefixes for synchronous
+value aggregates. On this population, the missing-category sum fell from
+884,516 to 537,049 instructions, but the seven-match sum rose from 911,260
+to 1,169,214. Fewer candidates can still cost more when every secondary entry
+requires a separate owner read. This experiment leaves the shipped planner intact.
 
 Measured 2026-11-16. Query instruction intervals include open/session creation,
 admission, execution and output mapping, excluding transport encode/decode.
@@ -5018,6 +5102,14 @@ after upgrade. The scalar mean rounds 528 / 160 to three subnormal units,
 and each group rounds its own total divided by five. The fixture also checks
 the same sums and averages in Float32 subnormal units across upgrade.
 
+The Float64 grouped summary requires five present values per group and saves a
+checkpoint after 96 of 160 rows, when each group has only three. An
+upgrade to the same Wasm preserves the retry sequence and examined count.
+The job then completes, returns seven groups, and upgrades again. The saved
+output cursor retrieves the other 25 groups. All five pages match independent
+integer expectations for count, sum bits and rounded average bits, ordered by
+descending rounded average with ascending label ties across pages.
+
 The write-contention case starts a Float32 scalar average and then a grouped
 average. Each scans 16 candidates and replays its checkpoint before the next
 32-row insert commits. Each then reports invalidation on both resume and retry.
@@ -5057,6 +5149,10 @@ crate and introduces no product or CLI dependency.
   cents. Hand-calculated IC DB averages at scale two are 1.24, 1.26 and absent.
   Check synchronous results and reopen both stores between retained steps with
   work limits of one, three and five candidates.
+- Compare ranked summaries by count, sum and rounded average in both directions.
+  SQLite computes ties-to-even with integer cents, orders by measure and lane,
+  and limits to four groups. Repeat with count, sum and rounded-average filters together. Check every result field in one synchronous call
+  and across single-group retained pages.
 
 The frozen predecessor also checked cursor suffixes and used a native SQLite
 reference for shared semantics. [IcyDB continuation regression](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/session/tests/cardinality_tiebreak/seek_intersection.rs#L195) ·

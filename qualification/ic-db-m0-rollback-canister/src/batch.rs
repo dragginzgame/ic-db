@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 // Kinds: insert user, delete user, put mapping, delete mapping.
 // Errors: bounds=1, duplicate target=2, existence=3, uniqueness=4, reference=5.
 // Success reports examined reverse-index candidates, independently of row count.
+
 // batch
 // Apply a bounded command batch with the selected failure injection.
 // guard  : validates the request frame for method 3.

@@ -89,6 +89,7 @@ fn change_read_row((id, replacement): (u64, Option<(u64, u64)>)) -> Result<(), u
 }
 
 // Errors: bounds=1, cursor mismatch=2, oversized row=3, unsupported order/path=4.
+
 // bounded_page
 // Read one ordered page under the candidate and response budgets.
 // guard  : validates the request frame for method 6.
@@ -219,6 +220,7 @@ fn bounded_page(
 }
 
 // Only the unfiltered ordered-key DISTINCT witness is admitted here.
+
 // distinct_page
 // Read one bounded page of distinct optional values.
 // guard  : validates the request frame for method 7.

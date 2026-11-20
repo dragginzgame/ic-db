@@ -3,8 +3,9 @@
 use super::{
     super::super::Plan,
     super::{
-        Accumulator, Completed, GroupCount, GroupOrder, GroupValue, Groups, Query, Reducer,
-        decode_group_count, decode_group_value, numeric::Operation,
+        Accumulator, Completed, GroupCount, GroupOrder, GroupSummaryPage, GroupValue, Groups,
+        Query, Reducer, decode_group_count, decode_group_value,
+        numeric::{Operation, decode_summary},
     },
     AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start,
 };
@@ -124,7 +125,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         field: Option<&str>,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let job = self.retained_groups(plan, self.count_reducer(field)?, field)?;
+        let job = self.retained_groups(plan, self.count_reducer(field)?, field, None)?;
 
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
@@ -204,6 +205,58 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
+    /// Start a retained numeric summary using one exact total and present count per group.
+    /// # Errors
+    /// Refuses unsupported summary shapes, paging at creation, expiry or capacity.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn start_group_summary<K: Value, S: Value, A: Value>(
+        self,
+        jobs: &mut AggregateJobs<M>,
+        now: Timestamp,
+        expires: Timestamp,
+    ) -> Result<JobHandle, Error> {
+        observe!(start, {
+            if self.request.groups.page.is_some() {
+                return Err(Error::InvalidQuery);
+            }
+            let job = self.summary_job::<K, S, A>()?;
+            self.start_group_job(jobs, now, expires, job)
+        })
+    }
+
+    /// Advance or page a retained summary bound to both numeric result contracts.
+    /// # Errors
+    /// Ordinary grouped resume, overflow, and page bounds apply. Both results in
+    /// every group must fit their declared types before any completed page is returned.
+    /// # Panics
+    /// Supplier mutation failures trap the enclosing message.
+    pub fn resume_group_summary<K: Value, S: Value, A: Value>(
+        self,
+        jobs: &mut AggregateJobs<M>,
+        handle: &JobHandle,
+        sequence: u64,
+        now: Timestamp,
+    ) -> Result<JobStep<GroupSummaryPage<K, S, A>>, Error> {
+        observe!(resume, {
+            let job = self.summary_job::<K, S, A>()?;
+            self.resume_groups(jobs, handle, sequence, now, job, decode_summary)
+        })
+    }
+
+    fn summary_job<K: Value, S: Value, A: Value>(&self) -> Result<GroupJob<'static>, Error> {
+        let (plan, reducer, sum) = self.summary_plan::<K, S, A>()?;
+        let mut job = self.retained_groups(plan, reducer, None, Some(sum))?;
+        let mut encoded = Vec::new();
+        crate::schema::encode_type(&mut encoded, sum.value, sum.optional, false)?;
+        let mut hash = Sha256::new();
+        hash.update(b"ic-db:group-summary:v1\0");
+        hash.update(job.binding);
+        hash.update(encoded);
+        job.binding = hash.finalize().into();
+        Ok(job)
+    }
+
     fn start_group_numeric<K: Value, R: Value>(
         self,
         jobs: &mut AggregateJobs<M>,
@@ -240,8 +293,17 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         reducer: Reducer,
         field: Option<&str>,
     ) -> Result<JobHandle, Error> {
-        let mut job = self.retained_groups(plan, reducer, field)?;
+        let job = self.retained_groups(plan, reducer, field, None)?;
+        self.start_group_job(jobs, now, expires, job)
+    }
 
+    fn start_group_job(
+        &self,
+        jobs: &mut AggregateJobs<M>,
+        now: Timestamp,
+        expires: Timestamp,
+        mut job: GroupJob<'_>,
+    ) -> Result<JobHandle, Error> {
         start(
             jobs,
             job.binding,
@@ -274,7 +336,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         admitted: (Plan<'_>, Reducer),
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = admitted;
-        let job = self.retained_groups(plan, reducer, None)?;
+        let job = self.retained_groups(plan, reducer, None, None)?;
 
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_value)
     }
@@ -319,8 +381,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         plan: Plan<'p>,
         reducer: Reducer,
         field: Option<&str>,
+        summary_sum: Option<crate::ValueSchema>,
     ) -> Result<GroupJob<'p>, Error> {
-        let groups = self.admit_groups(&plan, reducer)?;
+        let groups = self.admit_groups(&plan, reducer, summary_sum)?;
         let binding = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
 
         Ok(GroupJob {
@@ -367,14 +430,20 @@ fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 3
             GroupOrder::AggregateAscending => 1,
             GroupOrder::AggregateDescending => 2,
             GroupOrder::KeyDescending => 3,
+            GroupOrder::Summary(measure, direction) => {
+                4 + 2 * measure as u8 + u8::from(direction == crate::SortDirection::Descending)
+            }
             GroupOrder::FirstOccurrence => return Err(Error::InvalidQuery),
         },
     ]);
     hash.update([groups.selection.predicates.len() as u8]);
-    for (comparison, operand, _) in &groups.selection.predicates {
-        hash.update([*comparison as u8]);
+    for term in &groups.selection.predicates {
+        if let Some(measure) = term.measure {
+            hash.update([measure as u8]);
+        }
+        hash.update([term.comparison as u8]);
         // Frame admitted operands so binding never relies on implicit widths.
-        let bytes = operand.as_deref().unwrap_or_default();
+        let bytes = term.operand.as_deref().unwrap_or_default();
         hash.update((bytes.len() as u32).to_le_bytes());
         hash.update(bytes);
     }
@@ -384,9 +453,7 @@ fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 3
         .predicates
         .iter()
         .enumerate()
-        .fold(0_u8, |mask, (i, (_, _, or_next))| {
-            mask | (u8::from(*or_next) << i)
-        });
+        .fold(0_u8, |mask, (i, term)| mask | (u8::from(term.or_next) << i));
     if clauses != 0 {
         hash.update(b"group-or-clauses\0");
         hash.update([clauses]);

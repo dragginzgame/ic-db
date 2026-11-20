@@ -57,7 +57,10 @@ use schema::{
     WideNumbers,
 };
 
-/// Initialize the fixture’s stable state at installation.
+// initialize
+// Initialize the fixture’s stable state at installation.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
 #[ic_platform_runtime::init(
     runtime = ic_platform_runtime,
     guard = crate::transport::allow,
@@ -736,6 +739,7 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
 }
 
 // Private decoder probe: transport carries opaque bytes, never decodes a row.
+
 // binary_decodes
 // Validate the supplied bytes with the `BinaryObject` row decoder.
 // guard  : validates the request frame for method 15.
@@ -1221,6 +1225,7 @@ fn optional_references(target: Option<u64>) -> (OptionalLinks, Vec<u64>, u64) {
 
 // Private enum qualification controls. Transport uses ordinals solely to exercise
 // the typed database boundary; it does not define the persisted enum codec.
+
 // enum_write
 // Exercise bounded enum encoding and storage for the requested fixture case.
 // guard  : validates the request frame for method 29.

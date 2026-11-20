@@ -49,8 +49,17 @@ fn schema() -> Schema {
     Schema::new(&[Sample::SCHEMA]).unwrap()
 }
 
-#[ic_platform_runtime::init(runtime = ic_platform_runtime, guard = crate::transport::allow,
-    decode = crate::transport::empty, max_bytes = 0, on_error = crate::transport::lifecycle_error)]
+// init
+// Create the sample database and its retained aggregate job store.
+// guard  : allow accepts lifecycle calls and installs the fixture panic hook.
+// limits : 0 bytes request, no reply.
+#[ic_platform_runtime::init(
+    runtime = ic_platform_runtime,
+    guard = crate::transport::allow,
+    decode = crate::transport::empty,
+    max_bytes = 0,
+    on_error = crate::transport::lifecycle_error
+)]
 fn init((): ()) {
     let host = host();
     Database::create(
@@ -78,10 +87,19 @@ fn stores() -> (Database, AggregateJobs) {
     )
 }
 
-// seed: insert one 32-row batch, bounded to five rounds.
-#[ic_platform_runtime::update(runtime = ic_platform_runtime, name = "seed",
-    guard = crate::transport::admit::<1>, decode = crate::transport::decode::<_, 1>,
-    encode = crate::transport::encode::<_, 1>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
+// seed
+// Insert one batch of 32 samples for the selected round (0 through 4).
+// guard  : validates the request frame for method 1.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "seed",
+    guard = crate::transport::admit::<1>,
+    decode = crate::transport::decode::<_, 1>,
+    encode = crate::transport::encode::<_, 1>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
 fn seed((width, round): (u16, u8)) {
     assert!((2..=256).contains(&width) && round < 5);
     let (mut db, _) = stores();
@@ -109,9 +127,19 @@ fn seed((width, round): (u16, u8)) {
     db.commit(batch).unwrap();
 }
 
-#[ic_platform_runtime::update(runtime = ic_platform_runtime, name = "start",
-    guard = crate::transport::admit::<2>, decode = crate::transport::decode::<_, 2>,
-    encode = crate::transport::encode::<_, 2>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
+// start
+// Start a scalar or grouped sum or average and return its job handle.
+// guard  : validates the request frame for method 2.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "start",
+    guard = crate::transport::admit::<2>,
+    decode = crate::transport::decode::<_, 2>,
+    encode = crate::transport::encode::<_, 2>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
 fn start((grouped, average, small): (bool, bool, bool)) -> Vec<u8> {
     if small {
         start_job::<SmallReading>(grouped, average)
@@ -136,9 +164,19 @@ fn start_job<R: Value>(grouped: bool, average: bool) -> Vec<u8> {
 }
 
 type Reply = (u64, u64, Option<Vec<(String, u64)>>);
-#[ic_platform_runtime::update(runtime = ic_platform_runtime, name = "advance",
-    guard = crate::transport::admit::<3>, decode = crate::transport::decode::<_, 3>,
-    encode = crate::transport::encode::<_, 3>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
+// advance
+// Examine up to the requested work limit and return progress or completed float results.
+// guard  : validates the request frame for method 3.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "advance",
+    guard = crate::transport::admit::<3>,
+    decode = crate::transport::decode::<_, 3>,
+    encode = crate::transport::encode::<_, 3>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
 fn advance(
     (grouped, average, small, handle, sequence, work): (bool, bool, bool, Vec<u8>, u64, u16),
 ) -> Result<Reply, String> {
@@ -211,4 +249,98 @@ fn advance_job<R: Value>(
         )
     };
     Ok(step)
+}
+
+// start_summary
+// Start a Float64 summary for up to 32 groups and return its job handle.
+// guard  : validates the request frame for method 4.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "start_summary",
+    guard = crate::transport::admit::<4>,
+    decode = crate::transport::decode::<_, 4>,
+    encode = crate::transport::encode::<_, 4>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn start_summary((): ()) -> Vec<u8> {
+    let (db, mut jobs) = stores();
+    db.query::<Sample>()
+        .limit(32)
+        .filter_summary(ic_db::SummaryMeasure::Count, ic_db::Comparison::Eq, 5_u64)
+        .order_groups(ic_db::GroupOrder::Summary(
+            ic_db::SummaryMeasure::Average,
+            ic_db::SortDirection::Descending,
+        ))
+        .start_group_summary::<Label, Reading, Reading>(
+            &mut jobs,
+            Timestamp::from_millis(0),
+            Timestamp::from_millis(100),
+        )
+        .unwrap()
+        .to_bytes()
+}
+
+type SummaryPage = (Vec<(String, u64, u64, u64)>, Option<Vec<u8>>);
+type SummaryReply = (u64, u64, Option<SummaryPage>);
+
+// advance_summary
+// Advance within the requested work limit or return up to seven completed groups after the cursor.
+// guard  : validates the request frame for method 5.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "advance_summary",
+    guard = crate::transport::admit::<5>,
+    decode = crate::transport::decode::<_, 5>,
+    encode = crate::transport::encode::<_, 5>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn advance_summary(
+    (handle, sequence, work, after): (Vec<u8>, u64, u16, Option<Vec<u8>>),
+) -> SummaryReply {
+    let (db, mut jobs) = stores();
+    let cursor = after
+        .as_deref()
+        .map(ic_db::GroupCursor::from_bytes)
+        .transpose()
+        .unwrap();
+    let step = db
+        .query::<Sample>()
+        .limit(32)
+        .filter_summary(ic_db::SummaryMeasure::Count, ic_db::Comparison::Eq, 5_u64)
+        .order_groups(ic_db::GroupOrder::Summary(
+            ic_db::SummaryMeasure::Average,
+            ic_db::SortDirection::Descending,
+        ))
+        .work_limit(usize::from(work))
+        .group_page(7, cursor.as_ref())
+        .resume_group_summary::<Label, Reading, Reading>(
+            &mut jobs,
+            &JobHandle::from_bytes(&handle).unwrap(),
+            sequence,
+            Timestamp::from_millis(1),
+        )
+        .unwrap();
+    let page = match step.outcome {
+        JobOutcome::Running => None,
+        JobOutcome::Complete(page) => Some((
+            page.rows
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.key.label,
+                        row.count,
+                        row.sum.unwrap().value.get().to_bits(),
+                        row.average.unwrap().value.get().to_bits(),
+                    )
+                })
+                .collect(),
+            page.next.map(|c| c.to_bytes()),
+        )),
+        other => panic!("unexpected summary outcome: {other:?}"),
+    };
+    (step.sequence, step.examined, page)
 }
