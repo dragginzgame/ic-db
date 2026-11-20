@@ -527,6 +527,29 @@ fn optional_membership_is_explicit_and_cannot_hide_reverse_references() {
 fn names_and_reverse_selection_are_unambiguous() {
     let field = quote!(field(name = "id", value(item(prim = "Nat64"))));
     let reference = quote!(fields(#field,field(name="target",value(item(prim="Nat64")),references(entity="Target"))));
+    for (args, message) in [
+        (
+            quote!(pk(field="id"), index(fields=["id","target"]), #reference),
+            r#"reference Row.target requires one matching index; declare an unfiltered index beginning with "target""#,
+        ),
+        (
+            quote!(pk(field="id"), index(fields=["target","id"]), index(field="target"), #reference),
+            r#"reference Row.target requires one matching index; select one with `index = ...` from ["target", "target,id"]"#,
+        ),
+        (
+            quote!(pk(field="id"), index(field="id"), index(field="target"), fields(#field,field(name="target",value(item(prim="Nat64")),references(entity="Target",index="id")))),
+            r#"reference Row.target cannot use index "id"; select one with `index = ...` from ["target"]"#,
+        ),
+    ] {
+        let error = expand(
+            args,
+            quote!(
+                struct Row {}
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), message);
+    }
     for args in [
         quote!(id=1, pk(field="id"), fields(#field)),
         quote!(pk(field="id"), index(id=1,field="id"), fields(#field)),
@@ -534,8 +557,6 @@ fn names_and_reverse_selection_are_unambiguous() {
         quote!(pk(field="id"), index(name="",field="id"), fields(#field)),
         quote!(pk(field="id"), index(field="id"), index(field="id",unique), fields(#field)),
         quote!(pk(field="id"), index(name="same",field="id"), index(name="same",field="id",unique), fields(#field)),
-        quote!(pk(field="id"), #reference),
-        quote!(pk(field="id"), index(field="target"), index(fields=["target","id"]), #reference),
         quote!(
             pk(field = "id"),
             index(field = "id"),

@@ -14,35 +14,37 @@ async fn selected_schema_on_replica() {
         pic.add_cycles(id, 2_000_000_000_000).await;
         pic.install_canister(id, std::fs::read(path).unwrap(), vec![], None)
             .await;
-        let request = ic_wire::encode(
-            &(),
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
-        let reply = pic.query_call(id, id, "schema_size", request).await;
-
-        if let Some(size) = expected {
-            let result: u64 = ic_wire::decode(
-                &reply.unwrap(),
+        for (hub, size) in [(true, expected), (false, Some(1))] {
+            let request = ic_wire::encode(
+                &hub,
                 Encoding::Frame {
                     method: 1,
-                    direction: Direction::Response,
+                    direction: Direction::Request,
                 },
                 LIMITS,
             )
             .unwrap();
-            assert_eq!(result, size, "{artifact}");
-        } else {
-            assert!(
-                reply
-                    .unwrap_err()
-                    .reject_message
-                    .contains("host/target schema mismatch")
-            );
+            let reply = pic.query_call(id, id, "schema_size", request).await;
+
+            if let Some(size) = size {
+                let result: u64 = ic_wire::decode(
+                    &reply.unwrap(),
+                    Encoding::Frame {
+                        method: 1,
+                        direction: Direction::Response,
+                    },
+                    LIMITS,
+                )
+                .unwrap();
+                assert_eq!(result, size, "{artifact}");
+            } else {
+                assert!(
+                    reply
+                        .unwrap_err()
+                        .reject_message
+                        .contains("host/target schema mismatch")
+                );
+            }
         }
     }
     pic.drop().await;

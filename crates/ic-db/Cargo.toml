@@ -33,7 +33,7 @@ sha2.workspace = true
 ulid.workspace = true
 
 [dev-dependencies]
-ic-db = { path = ".", features = ["test-support"] }
+ic-db = { workspace = true, features = ["test-support"] }
 toko-tooling.workspace = true
 
 [lints]

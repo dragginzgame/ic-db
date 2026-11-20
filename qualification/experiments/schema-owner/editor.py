@@ -1,6 +1,5 @@
 """Check schema diagnostics with the caller's rust-analyzer LSP executable."""
 import json
-import os
 from pathlib import Path
 import shutil
 import signal
@@ -92,8 +91,7 @@ ic-db = {{ path = {json.dumps(str(DB))}, features = ["build"] }}
         file = root / "src/model/mod.rs"
         with file.open("a") as output:
             output.write("\n#[cfg(any())]\npub struct InactiveControl;\n")
-        with subprocess.Popen([binary], cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                              env={**os.environ, "CARGO_NET_OFFLINE": "true"}) as server:
+        with subprocess.Popen([binary], cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as server:
             try:
                 signal.alarm(120)
                 check(server, root, file)

@@ -11,7 +11,7 @@ my %consumer_of = (
 my %packages;
 for my $manifest ('Cargo.toml', 'qualification/Cargo.toml') {
     open my $metadata, '-|', 'cargo', 'metadata', '--format-version', '1',
-        '--no-deps', '--locked', '--offline', '--manifest-path', $manifest
+        '--no-deps', '--locked', '--manifest-path', $manifest
         or die "cargo metadata: $!";
     my $workspace = decode_json(do { local $/; <$metadata> });
     close $metadata or die "cargo metadata failed for $manifest\n";

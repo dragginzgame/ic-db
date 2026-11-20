@@ -253,6 +253,9 @@ adds a current PocketIC rerun and matched native timings for SQLite.
 The [indexed existence comparison](#indexed-existence-0237) covers the subsequent
 fluent equality-prefix change.
 
+The [installed restricted-delete comparison](#restricted-delete-phases-against-frozen-icydb) measures
+open/session access, batch construction and commit on both engines.
+
 Reviewed 2026-11-16. This is the summary matrix for IC DB versus frozen
 IcyDB `6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac` (package 0.310.2).
 Keep measured comparisons, historical reference points and unmeasured gaps
@@ -4102,8 +4105,9 @@ recorded manifest in the discarded allocation.
 
 After successful publication and pair deletion, the same probe repoints the
 remaining 254 rows to one target (253 dependants and its self-reference). A
-32-command batch deleting that target and the first 31 dependants must refuse
-without a backing write: a later surviving reference still blocks deletion.
+32-command batch deleting that target and 31 dependants must refuse without a
+backing write. Two calls start from identical backing. One leaves the first
+reverse-index entry live, and the other stages removal of the first 31 entries.
 Eight explicit batches then remove the dependants, with the target included only
 in the final batch. Literal row/index oracles check every intermediate result;
 a late application trap restores a deletion batch, and deletion continues after
@@ -4128,6 +4132,22 @@ Both fixture endpoints are gated by `maintenance-faults`; inspection of the norm
 record artifact confirms neither export is present. `make m3-maintenance-wasm`
 also selects this test.
 
+The 2026-11-20 rerun of `make m3-references` used Storage 0.78.7 and
+fault-enabled Wasm SHA-256
+`529984b6fd593925b58cfffed613be6e2b653a924543b32a77d8ac826f5a917a`.
+The two refused batches issued zero stable writes and preserved every backing byte.
+
+| Ordinary delete batch after publication | IC instructions |
+| --- | ---: |
+| Refused with the first reverse-index entry still live | 13,052,773 |
+| Refused after skipping 31 staged removals | 13,298,805 |
+| Accepted final 32-row batch, including the target | 28,046,233 |
+| Maximum across all eight accepted batches | 41,471,561 |
+
+These counters cover the complete fixture operation including reopen and batch
+preparation. The refused batches address different row keys, so their difference
+does not isolate index traversal cost.
+
 This carries forward IcyDB's target-existence and final-batch deletion invariants
 using the existing IC DB maintenance mechanism, without its general relationship
 framework. Migration qualifies one entity with small Nat64 rows and one incoming
@@ -4135,6 +4155,51 @@ reference per row; post-publication deletion additionally checks 254 incoming
 references on one target. Nested references, larger populations, arbitrary payload
 sizes and allocation reuse remain outside this result. It introduces no product
 API or durable state.
+
+### Restricted delete phases against frozen IcyDB
+
+On 2026-11-20 the installed IC DB fixture and frozen SQL-disabled IcyDB
+`6d421e3` performed the same ten delete requests. Each started the deletion
+sequence with 254 Nat64 rows (IDs 0 and 128 absent), an optional self-reference
+to 255, a compound reference/ID index and a unique rank. Both refused the two
+target deletions, then removed all rows in eight batches, upgrading after the
+first accepted batch. The legacy harness checked the expected presence,
+reference and rank for every ID after each call and verified the relation
+constraint diagnostic. IC DB checked raw row/index entries, backing
+preservation and zero supplier writes on refusal.
+
+| Workload | Engine | Fixture setup | Open/session | Build | Commit | Whole call |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| First survivor live | IC DB | 0.36 | 0.30 | 0.02 | 12.37 | 13.05 |
+| First survivor live | IcyDB | — | 0.53 | 0.29 | 13.80 | 14.65 |
+| First 31 removed | IC DB | 0.36 | 0.30 | 0.02 | 12.64 | 13.32 |
+| First 31 removed | IcyDB | — | 0.53 | 0.29 | 14.57 | 15.57 |
+| Final 32 rows | IC DB | 0.36 | 0.33 | 0.02 | 27.33 | 28.05 |
+| Final 32 rows | IcyDB | — | 0.68 | 0.28 | 39.35 | 40.40 |
+| Eight accepted batches combined | IC DB | 3.00 | 2.22 | 0.19 | 291.64 | 297.07 |
+| Eight accepted batches combined | IcyDB | — | 4.99 | 2.29 | 338.59 | 346.48 |
+
+Units are millions of IC instructions inside the handler. Totals include
+unattributed wrapper work and exclude transport encoding/decoding. IC DB setup
+includes constructing both schemas and the transition, acquiring allocations
+and arming fault instrumentation. Open measures target admission alone. IcyDB
+uses its post-startup session accessor and binds the entity while constructing
+typed delete intents. Its commit executes the trusted typed batch. The legacy
+harness separately drove startup once after each accepted write, costing another
+458.80M instructions combined. That includes readiness checks and journal work.
+It is excluded from the timing table for both the individual calls and their sum.
+
+The legacy host seeded the matching logical rows directly. IC DB reached them
+through migration and repointing. Their B-tree histories, host schemas,
+instrumentation and reopen paths differ. Neither the historical cost increase
+nor its cause can be inferred from these two binaries. The [per-call counters](measurements/0.24.2-restricted-delete.csv)
+record all ten requests. IC DB Wasm SHA-256 was
+`3bab1a8746617a48d90b5ef194245fbf0e9dd2e88aed8fe1c55c6919001b16b5`;
+legacy was `d9dd9d116236e33cd6e309d6944cf826b00264825c957df9f16e723190c797a1`.
+The one-off compatibility harness, binaries and output were retained locally in
+`qualification/target/evidence/restricted-delete-comparison/`. Routine legacy
+qualification continues to select query comparisons. Run `make m3-references`
+for the instrumented IC DB workload.
 
 ### Retained jobs during maintenance (0.18)
 

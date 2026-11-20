@@ -1005,8 +1005,24 @@ fn user(db: &CanisterSession<Hub>, id: u64) -> Result<Option<User>, Error> {
 ```
 
 `db.query::<User>()` and `db.insert(&user)` select the same store. A query for
-another canister’s entity fails to compile. Explicit batches still commit through
-one store’s `DatabaseSession`.
+another canister’s entity fails to compile. Group dependent writes with
+`db.batch()`. Rust infers the store from the entity types and rejects a second
+store in the same batch.
+
+```rust
+use directory::model::{Hub, User};
+use ic_db::{CanisterSession, Error};
+
+fn register_pair(db: &CanisterSession<Hub>, first: &User, second: &User) -> Result<(), Error> {
+    let mut batch = db.batch();
+    batch.insert(first)?;
+    batch.insert(second)?;
+    batch.commit()
+}
+```
+
+Use `db.batch_at(time)` to supply the operation timestamp for managed fields.
+Prepared changes become visible together when the store accepts the commit.
 
 When moving declarations into a shared
 library, remove the former consumer-side generation and its build dependencies.

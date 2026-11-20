@@ -80,7 +80,7 @@ docs-check:
 .PHONY: schema-build-check
 schema-build-check:
 	perl scripts/check-schema-builds.pl
-	cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-schema-owner-producer -p ic-db-local-schema-test --test admission --test schema_build
+	python3 qualification/experiments/schema-owner/probe.py --admission
 
 .PHONY: qualification-tooling-check
 toko-tooling-check: qualification-tooling-check

@@ -62,7 +62,7 @@ mod build;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 pub mod testing;
 
-pub use canister_session::{CanisterSession, MountedStore};
+pub use canister_session::{CanisterSession, MountedStore, StoreBatch};
 pub use date::Date;
 pub use decimal::{Decimal, ParseDecimalError};
 pub use defaults::{InsertInput, LiteralDefault};

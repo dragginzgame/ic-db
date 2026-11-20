@@ -30,6 +30,7 @@ syn = "3.0.10"
 ulid = { version = "3.0.0", default-features = false }
 
 # Tests and tooling
+ic-db = { path = "crates/ic-db" }
 toko-tooling = "=0.45.22"
 
 [workspace.lints.cargo]

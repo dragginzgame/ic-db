@@ -6,7 +6,7 @@ The generator validates each store and writes a roster per declared canister. On
 the [producer library](producer/src/lib.rs) includes that output with `ic_db::include_schema!()`. The
 [canister](consumer/src/lib.rs) selects the hub roster through a renamed Cargo dependency. The hub has two
 stores and the shard has one. The native host test installs and reopens both hub
-stores on a shared stable-memory backing. It has no schema build step.
+stores on a shared stable-memory backing, and checks single-store shard reopen through the same session API. It has no schema build step.
 
 The mutation probe verifies that entities in different modules can belong to the same declared store, that a
 reference between children is valid, and that an incompatible reference key or
@@ -28,9 +28,9 @@ targets declaring entities under the same top-level module name are subject to
 the same membership check.
 
 ```sh
-cargo test --offline --locked --manifest-path qualification/Cargo.toml -p ic-db-schema-owner-producer --test admission
+make schema-build-check
 python3 qualification/experiments/schema-owner/probe.py
-IC_DB_SCHEMA_OWNER_ARTIFACTS="$PWD/qualification/target/schema-owner" bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test schema_owner
+IC_DB_SCHEMA_OWNER_ARTIFACTS="$PWD/qualification/target/schema-owner" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test schema_owner
 ```
 
 Run `python3 qualification/experiments/schema-owner/editor.py /path/to/rust-analyzer`

@@ -1229,7 +1229,8 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
         batch.delete::<Node>(id).unwrap();
     }
     db.commit(batch).unwrap();
-    // The longest valid dependent removal batch: 31 skips and the parent delete.
+    // Put the surviving dependent just beyond 31 staged reverse-index removals.
+    // Also fill the adjacent parent prefix, which must not block deletion of 3.
     let mut batch = Batch::new();
     batch.insert(&Parent { id: 3 }).unwrap();
     for id in 100..131 {
@@ -1237,11 +1238,49 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     }
     db.commit(batch).unwrap();
     let mut batch = Batch::new();
-    batch.delete::<Parent>(3).unwrap();
-    for id in 100..131 {
-        batch.delete::<Child>(id).unwrap();
-    }
+    batch
+        .insert(&Child {
+            id: 131,
+            parent_id: 3,
+        })
+        .unwrap();
+    batch.insert(&Parent { id: 4 }).unwrap();
     db.commit(batch).unwrap();
+    for chunk in 0..8 {
+        let mut batch = Batch::new();
+        for offset in 0..32 {
+            batch
+                .insert(&Child {
+                    id: 200 + chunk * 32 + offset,
+                    parent_id: 4,
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    let remove_family = || {
+        let mut batch = Batch::new();
+        batch.delete::<Parent>(3).unwrap();
+        for id in 100..131 {
+            batch.delete::<Child>(id).unwrap();
+        }
+        batch
+    };
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        db.commit(remove_family()),
+        Err(Error::ReferenceViolation)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let mut batch = Batch::new();
+    batch
+        .replace(&Child {
+            id: 131,
+            parent_id: 4,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    db.commit(remove_family()).unwrap();
     drop(db);
     drop(runtime);
     let runtime = host(backing.clone());
@@ -1255,7 +1294,33 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     batch.delete::<Parent>(2).unwrap();
     batch.delete::<Child>(1).unwrap();
     db.commit(batch).unwrap();
-    assert!(db.page::<Child>(None, 32).unwrap().rows.is_empty());
+    assert!(db.get::<Parent>(3).unwrap().is_none());
+    assert!(
+        db.index_prefix::<Child>("parent_id,id", &[3_u64.into()], 32)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.cardinality::<Child>().unwrap(), 257);
+    let prefix = [4_u64.into()];
+    let children = || {
+        db.query::<Child>()
+            .using_index("parent_id,id", &prefix)
+            .limit(32)
+    };
+    let mut page = children().fetch().unwrap();
+    let mut ids = Vec::new();
+    loop {
+        for child in page.rows {
+            assert_eq!(child.parent_id, 4);
+            ids.push(child.id);
+        }
+        let Some(cursor) = page.next else { break };
+        page = children().after(&cursor).fetch().unwrap();
+    }
+    assert_eq!(
+        ids,
+        std::iter::once(131).chain(200..456).collect::<Vec<_>>()
+    );
 }
 
 #[test]

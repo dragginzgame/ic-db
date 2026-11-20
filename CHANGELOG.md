@@ -9,10 +9,25 @@
   Rust rejects entities declared for a different canister. A generic helper can
   accept `&impl QuerySession<E>` to read through either kind of session.
 
+- `CanisterSession::batch()` groups dependent writes in the store inferred from
+  their entity types. Rust rejects a batch that mixes stores. `batch_at(time)`
+  supplies one timestamp for managed fields.
+
 - Store and canister sessions now expose `get_many::<E>(&keys)` for up to
   32 primary keys. Each input position receives its row or `None`.
 
+- Schema declaration errors now identify the referencing field and show which declared
+  indexes can serve it, or which leading field a new index needs.
+
 ### Qualification
+
+- Qualified restricted deletion with a full 32-mutation batch. One surviving child
+  refuses the batch intact. After repointing that child, the same delete succeeds
+  and the adjacent parent’s 257 children remain reachable after reopen.
+  `make m3-references` also measures early and late refusal against an installed
+  self-referencing schema, separates setup, open, batch construction and commit,
+  and checks that both refusals preserve stable memory. The qualification matrix
+  includes a one-off comparison with frozen IcyDB.
 
 - Remote inspection moves to `canic db inspect`. The fixture-specific `db witness-list`
   command is retired. Inspect the local database with these commands.
@@ -26,6 +41,12 @@
   frozen IcyDB query comparison. Standalone legacy startup and write benchmarks
   are retired. Use `make m2-query-matrix` for query comparisons and
   `make m1-write-envelope` for IC DB write qualification.
+
+- Schema qualification inherits the caller’s Cargo network mode. The public CI
+  test resolves the schema fixtures independently of the private legacy benchmark.
+- Verified the single-store shard reopens populated data through the same typed
+  root API as the two-store hub. Qualified dependency requirements are inherited
+  from their workspaces, including the consumer’s renamed schema dependency.
 
 ### 🧪 Testing
 

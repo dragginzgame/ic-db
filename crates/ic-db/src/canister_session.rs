@@ -1,8 +1,8 @@
 //! Route typed operations to the single-store session admitted by the host.
 
 use crate::{
-    CompiledCanister, CompiledStore, DatabaseSession, Entity, Error, Query, QuerySession, Store,
-    UniqueKey,
+    Batch, CompiledCanister, CompiledStore, DatabaseSession, Entity, Error, InsertInput, Query,
+    QuerySession, Store, Timestamp, UniqueKey,
 };
 use std::{marker::PhantomData, rc::Rc};
 
@@ -50,14 +50,34 @@ impl<C: CompiledCanister> CanisterSession<C> {
         })
     }
 
-    fn session<E: Entity<Store: MountedStore<Canister = C>>>(&self) -> &DatabaseSession {
-        &self.stores[E::Store::SLOT]
+    fn session<S: MountedStore<Canister = C>>(&self) -> &DatabaseSession {
+        &self.stores[S::SLOT]
+    }
+
+    /// Prepare dependent changes in one store, inferred from the entities added.
+    #[must_use]
+    pub fn batch<S: MountedStore<Canister = C>>(&self) -> StoreBatch<'_, S> {
+        self.bind_batch(Batch::new())
+    }
+
+    /// Prepare a batch with one host-captured timestamp for managed fields.
+    #[must_use]
+    pub fn batch_at<S: MountedStore<Canister = C>>(&self, time: Timestamp) -> StoreBatch<'_, S> {
+        self.bind_batch(Batch::at(time))
+    }
+
+    fn bind_batch<S: MountedStore<Canister = C>>(&self, batch: Batch) -> StoreBatch<'_, S> {
+        StoreBatch {
+            session: self.session::<S>(),
+            batch,
+            store: PhantomData,
+        }
     }
 
     /// Build a live query in the entity's declared store.
     #[must_use]
     pub fn query<'a, E: Entity<Store: MountedStore<Canister = C>>>(&self) -> Query<'a, E> {
-        self.session::<E>().query()
+        self.session::<E::Store>().query()
     }
 
     /// Read an entity by its primary key.
@@ -67,7 +87,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         key: E::Key,
     ) -> Result<Option<E>, Error> {
-        self.session::<E>().get::<E>(key)
+        self.session::<E::Store>().get::<E>(key)
     }
 
     /// Read up to 32 primary keys in input order, preserving duplicates and missing slots.
@@ -77,7 +97,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         keys: &[E::Key],
     ) -> Result<Vec<Option<E>>, Error> {
-        self.session::<E>().get_many::<E>(keys)
+        self.session::<E::Store>().get_many::<E>(keys)
     }
 
     /// Read an entity using its generated unique key.
@@ -87,7 +107,8 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         key: &K,
     ) -> Result<Option<K::Entity>, Error> {
-        self.session::<K::Entity>().get_unique(key)
+        self.session::<<K::Entity as Entity>::Store>()
+            .get_unique(key)
     }
 
     /// Insert one row in its declared store.
@@ -97,7 +118,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         row: &E,
     ) -> Result<(), Error> {
-        self.session::<E>().insert(row)
+        self.session::<E::Store>().insert(row)
     }
 
     /// Replace one row in its declared store.
@@ -107,7 +128,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         row: &E,
     ) -> Result<(), Error> {
-        self.session::<E>().replace(row)
+        self.session::<E::Store>().replace(row)
     }
 
     /// Delete one row from its declared store by primary key.
@@ -117,7 +138,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
         &self,
         key: E::Key,
     ) -> Result<(), Error> {
-        self.session::<E>().delete::<E>(key)
+        self.session::<E::Store>().delete::<E>(key)
     }
 }
 
@@ -126,5 +147,52 @@ impl<C: CompiledCanister, E: Entity<Store: MountedStore<Canister = C>>> QuerySes
 {
     fn entity_query<'a>(&self) -> Query<'a, E> {
         self.query()
+    }
+}
+
+/// A synchronous batch bound to one mounted store. Dropping it discards its prepared changes.
+pub struct StoreBatch<'a, S: Store> {
+    session: &'a DatabaseSession,
+    batch: Batch,
+    store: PhantomData<fn() -> S>,
+}
+
+impl<S: Store> StoreBatch<'_, S> {
+    /// Queue an insertion in this store.
+    /// # Errors
+    /// Propagates [`Batch::insert`] admission errors.
+    pub fn insert<E: Entity<Store = S>>(&mut self, row: &E) -> Result<(), Error> {
+        self.batch.insert(row)
+    }
+
+    /// Queue an insertion using the entity's generated input and return the prepared row.
+    /// # Errors
+    /// Propagates [`Batch::insert_input`] admission errors.
+    pub fn insert_input<I: InsertInput<Entity: Entity<Store = S>>>(
+        &mut self,
+        input: I,
+    ) -> Result<I::Entity, Error> {
+        self.batch.insert_input(input)
+    }
+
+    /// Queue a replacement in this store.
+    /// # Errors
+    /// Propagates [`Batch::replace`] admission errors.
+    pub fn replace<E: Entity<Store = S>>(&mut self, row: &E) -> Result<(), Error> {
+        self.batch.replace(row)
+    }
+
+    /// Queue a deletion in this store.
+    /// # Errors
+    /// Propagates [`Batch::delete`] admission errors.
+    pub fn delete<E: Entity<Store = S>>(&mut self, key: E::Key) -> Result<(), Error> {
+        self.batch.delete::<E>(key)
+    }
+
+    /// Apply the prepared changes through the owning store session.
+    /// # Errors
+    /// Propagates [`DatabaseSession::commit`] borrow and commit errors.
+    pub fn commit(self) -> Result<(), Error> {
+        self.session.commit(self.batch)
     }
 }

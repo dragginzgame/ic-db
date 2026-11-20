@@ -16,7 +16,7 @@ ARTIFACTS.mkdir(exist_ok=True, parents=True)
 
 def check_variant(root, args, refusal=None):
     env = dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target"), CARGO_PROFILE_RELEASE_STRIP="none")
-    run = subprocess.run(["cargo", *args, "--offline", "-p", PACKAGE], cwd=root,
+    run = subprocess.run(["cargo", *args, "--locked", "-p", PACKAGE], cwd=root,
                          env=env, capture_output=True, text=True)
     if refusal is None and run.returncode == 0:
         return run.stdout
@@ -25,24 +25,40 @@ def check_variant(root, args, refusal=None):
     sys.exit(run.stderr or "expected refusal: " + str(refusal))
 
 
-def probe(root):
+def prepare(root):
     shutil.copy(QUAL.parent / "LICENSE.md", root / "LICENSE.md")
     shutil.copytree(HERE / "producer", root / "producer")
     shutil.copytree(HERE / "consumer", root / "consumer")
+    shutil.copytree(HERE / "local", root / "local")
     manifest = (QUAL / "Cargo.toml").read_text()
-    manifest = re.sub(r"members = \[.*?\]", 'members = ["producer", "consumer"]',
+    manifest = re.sub(r"members = \[.*?\]", 'members = ["producer", "consumer", "local"]',
                       manifest, count=1, flags=re.S)
     manifest = re.sub(r'path = "([^"]+)"', lambda m: f'path = "{(QUAL / m[1]).resolve()}"',
                       manifest)
+    manifest = manifest.replace(str(HERE / "producer"), str(root / "producer"))
     manifest = manifest.replace('license-file = "../LICENSE.md"', 'license-file = "LICENSE.md"')
     deps, rest = manifest.split("[workspace.dependencies]\n")
     entries, lints = rest.split("[workspace.lints.cargo]")
     selected = [line for line in entries.splitlines() if line.split(" = ")[0] in {
-        "ic-db", "ic-storage", "ic-platform-runtime", "ic-db-qualification-transport", "toko-tooling"
+        "accounts", "ic-db", "ic-storage", "ic-platform-runtime", "ic-db-qualification-transport", "toko-tooling"
     }]
     manifest = deps + "[workspace.dependencies]\n" + "\n".join(selected) + "\n[workspace.lints.cargo]" + lints
     (root / "Cargo.toml").write_text(manifest)
     shutil.copy(QUAL / "Cargo.lock", root / "Cargo.lock")
+    # Cargo prunes workspace-only packages when opening the smaller public graph.
+    # Verify that pruning did not introduce or update a resolved dependency.
+    lock = root / "Cargo.lock"
+    original = lock.read_text()
+    subprocess.run(["cargo", "metadata", "--format-version", "1"], cwd=root,
+                   stdout=subprocess.DEVNULL, check=True)
+    def identities(text):
+        return {block.split("dependencies = [", 1)[0].strip()
+                for block in text.split("[[package]]")[1:]}
+    if not identities(lock.read_text()) <= identities(original):
+        sys.exit("schema fixture resolved a package outside qualification/Cargo.lock")
+
+
+def probe(root):
     model_dir = root / "producer/src/model"
     hub = model_dir / "hub.rs"
     original = hub.read_text()
@@ -81,6 +97,15 @@ const _: fn(&ic_db::CanisterSession<directory::model::Hub>) = |db| {
     example.write_text(consumer + owner_check)
     assert check_variant(root, native) == baseline
     example.write_text(consumer + owner_check.replace("model::Hub>", "model::Shard>"))
+    check_variant(root, native, "type mismatch")
+    batch_check = """
+const _: fn(&ic_db::CanisterSession<directory::model::Hub>) = |db| {
+    let mut batch = db.batch();
+    batch.delete::<directory::model::hub::User>(1).unwrap();
+    batch.delete::<directory::model::AuditEvent>(1).unwrap();
+};
+"""
+    example.write_text(consumer + batch_check)
     check_variant(root, native, "type mismatch")
     example.write_text(consumer)
 
@@ -170,4 +195,13 @@ pub struct OtherUser {}
 
 
 with tempfile.TemporaryDirectory(prefix="schema-owner-") as temp:
-    probe(Path(temp))
+    root = Path(temp)
+    prepare(root)
+    if sys.argv[1:] == ["--admission"]:
+        subprocess.run(["cargo", "test", "--locked", "-p", "ic-db-schema-owner-producer",
+                        "-p", "ic-db-local-schema-test", "--test", "admission", "--test", "schema_build"],
+                       cwd=root, env=dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target")), check=True)
+    elif not sys.argv[1:]:
+        probe(root)
+    else:
+        sys.exit("usage: probe.py [--admission]")

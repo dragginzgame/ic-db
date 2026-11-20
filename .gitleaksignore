@@ -1,0 +1,10 @@
+# Synthetic stable allocation names and two PEM fixtures used for identity and redaction tests.
+057423435e85b39921b00277cf862c3cc1b08483:qualification/ic-db-m0-rollback-driver/tests/inspection.rs:private-key:30
+4dd7e0c00cfcbcce41a19c40968cdff7ddb52d36:scripts/tests/ci-setup.t:private-key:30
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/experiments/schema-owner/local/src/schema.rs:generic-api-key:67
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/experiments/schema-owner/producer/src/model/mod.rs:generic-api-key:56
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/experiments/schema-owner/producer/tests/admission.rs:generic-api-key:43
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/ic-db-entity-growth-canister/src/lib.rs:generic-api-key:273
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/ic-db-icydb-baseline-canister/tests/native_matrix.rs:generic-api-key:759
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/ic-db-qualification-transport/tests/schema_serde.rs:generic-api-key:120
+8749b7433e8ddcec23e59db2201ad92254f6eb8c:qualification/ic-db-sqlite-reference/tests/queries.rs:generic-api-key:412

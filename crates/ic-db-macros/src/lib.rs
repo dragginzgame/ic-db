@@ -415,22 +415,33 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let mut encoded_indexes = Vec::new();
     for field in &mut authored {
         if let Some((_, selected)) = &mut field.reference {
-            let mut candidates = indexes.iter().filter(|index| {
-                !index.present_only
-                    && index.fields.first() == Some(&field.name)
-                    && selected.as_ref().is_none_or(|name| *name == index.name)
-            });
-            let Some(index) = candidates.next() else {
-                return Err(fail(
-                    "reference requires an unfiltered declared index beginning with its field",
-                ));
-            };
-            if candidates.next().is_some() {
-                return Err(fail(
-                    "ambiguous reference access path; select an index by name",
-                ));
+            let candidates: Vec<_> = indexes
+                .iter()
+                .filter(|index| !index.present_only && index.fields.first() == Some(&field.name))
+                .map(|index| index.name.as_str())
+                .collect();
+            match (selected.as_deref(), candidates.as_slice()) {
+                (Some(name), _) if candidates.contains(&name) => {}
+                (None, [name]) => *selected = Some((*name).to_owned()),
+                (requested, eligible) => {
+                    let reason = match requested {
+                        Some(name) => format!("cannot use index {name:?}"),
+                        None => "requires one matching index".to_owned(),
+                    };
+                    let hint = if eligible.is_empty() {
+                        format!(
+                            "declare an unfiltered index beginning with {:?}",
+                            field.name
+                        )
+                    } else {
+                        format!("select one with `index = ...` from {eligible:?}")
+                    };
+                    return Err(fail(&format!(
+                        "reference {}.{} {reason}; {hint}",
+                        item.ident, field.name
+                    )));
+                }
             }
-            *selected = Some(index.name.clone());
         }
     }
     let mut unique_keys = unique::Keys::default();

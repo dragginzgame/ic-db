@@ -14,7 +14,7 @@ A session query owns a handle and observes committed data at execution.
 Explicit read-guard builders borrow their guard. A typed unique lookup uses a
 generated named key with present components in declaration order and returns
 an owned entity. Session insert, replace and delete each submit one batch.
-Changes that depend on each other share an explicit batch. A batch takes
+Changes that depend on each other share an explicit batch. A mounted canister session binds the batch to the store inferred from its entities. As in frozen IcyDB’s typed batch, generated inputs carry entity identity into preparation. The IC DB store type constrains every queued operation at compile time, and the existing store commit validates their combined final state. A batch takes
 exclusive access only for the commit. A conflicting borrow
 returns `BorrowConflict` before mutation. The last handle can return the database
 to the host for maintenance. Frozen IcyDB `6d421e3` shared a store and request
@@ -2434,7 +2434,9 @@ metadata. IcyDB's journal-overlay deltas and planner-selected prefix-count paths
 are not copied; the CLI does not imply row/index integrity validation or remote
 application support. The existing prefix-count experiment stays parked.
 
-Only query comparisons run the frozen IcyDB engine. Their writes seed data or change indexed membership for read checks. Earlier standalone startup and write measurements are historical receipts. Canic inspection uses its released protocol.
+Routine comparisons run the frozen IcyDB engine only for queries. A [one-off restricted-delete comparison](../../qualification/README.md#restricted-delete-phases-against-frozen-icydb) measured the same deletion schedule on both engines. Query-comparison writes seed data or change indexed membership for read checks. Earlier standalone startup and write measurements are historical receipts. Canic inspection uses its released protocol.
+
+The native records witness exercises restricted deletion with 31 staged child removals and one surviving reference. After repointing the survivor, the same batch succeeds. Reopen and indexed enumeration recover all 257 children of the adjacent parent. A separate [installed self-reference workload](../../qualification/README.md#cross-chunk-reference-migration-018) measures full-batch refusal with the first or 32nd reverse-index entry still live, followed by bounded deletes across upgrade.
 
 The next qualification emphasis is realistic combinations and operational bounds:
 larger/reference-heavy datasets, aggregate contention, entity/query/endpoint

@@ -75,6 +75,9 @@ This overlay owns local authority, product boundaries and qualification choices.
   fixture, record its consumer/owner pair in [the ownership check](scripts/check-schema-builds.pl).
   Run `make schema-build-check` after changing build scripts or their dependencies. The [shared schema example](README.md#build-a-shared-schema-in-its-owning-crate)
   shows the producer and consumer files.
+- The runtime and `ic-db-macros` publish in lockstep because generated code calls
+  the runtime's hidden codec and schema helpers. Review the version-specific
+  dependency-pinning exception when preparing a new product version.
 - Keep two-stage schema expansion: Rust resolves paths, host-only registration
   collects declarations, then validation seals the graph and emits target data.
   Emit target-independent schema Rust. A generated `cfg` or `cfg_attr` needs a

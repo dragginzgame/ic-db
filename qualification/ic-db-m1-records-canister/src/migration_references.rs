@@ -12,6 +12,8 @@ use ic_storage::{StableKey, adapter::StableBTreeMap};
 use records_schema::OptionalLink;
 use std::ops::Bound;
 
+type ReferenceReply = (Result<(u32, bool), u8>, u64, u64, [u64; 4]);
+
 // migration_references
 // Advance the reference migration probe with optional failure injection.
 // guard  : validates the request frame for method 144.
@@ -33,10 +35,19 @@ fn migration_references(
         bool,
         u64,
     )>,
-) -> (Result<(u32, bool), u8>, u64, u64) {
+) -> ReferenceReply {
     let start = counter();
     faults::arm(if stop == u64::MAX { 0 } else { stop }, false, false);
-    let result = control(operation, first, limit, bad).map_err(|error| match error {
+    // Mark setup, Database::open, batch construction, and commit separately.
+    let mut previous = start;
+    let mut phases = [0; 4];
+    let mut slots = phases.iter_mut();
+    let mut mark = || {
+        let now = counter();
+        *slots.next().unwrap() = now - previous;
+        previous = now;
+    };
+    let result = control(operation, first, limit, bad, &mut mark).map_err(|error| match error {
         Error::ReferenceViolation => 1,
         Error::Maintenance => 2,
         Error::InvalidTransition => 3,
@@ -48,7 +59,7 @@ fn migration_references(
     }
     let (writes, _) = faults::finish();
 
-    (result, writes, counter() - start)
+    (result, writes, counter() - start, phases)
 }
 
 // migration_references_raw
@@ -101,7 +112,13 @@ fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage
 )]
 struct Target {}
 
-fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool), Error> {
+fn control(
+    operation: u8,
+    first: u16,
+    limit: u8,
+    bad: bool,
+    mark: &mut impl FnMut(),
+) -> Result<(u32, bool), Error> {
     let source = Schema::new(&[OptionalLink::SCHEMA])?;
     let target = Schema::new(&[Target::SCHEMA])?;
     let transition =
@@ -174,12 +191,15 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
         return Ok((0, true));
     }
     if matches!(operation, 13..=15) {
+        mark();
         let mut db = Database::open(target_memory, target)?;
+        mark();
         let mut batch = Batch::new();
         if operation == 14 {
             // These 31 dependants do not include every surviving reference.
             batch.delete::<Target>(255)?;
-            for id in 1..32 {
+            assert!(matches!(first, 1 | 224));
+            for id in u64::from(first)..u64::from(first) + 31 {
                 batch.delete::<Target>(id)?;
             }
         } else {
@@ -201,7 +221,10 @@ fn control(operation: u8, first: u16, limit: u8, bad: bool) -> Result<(u32, bool
                 }
             }
         }
-        db.commit(batch)?;
+        mark();
+        let result = db.commit(batch);
+        mark();
+        result?;
 
         return Ok((0, true));
     }

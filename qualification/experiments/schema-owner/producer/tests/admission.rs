@@ -90,7 +90,15 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         })
         .unwrap();
         let events = db.query::<AuditEvent>();
-        db.insert(&User { id: 42 }).unwrap();
+        let mut batch = db.batch();
+        batch.insert_input(User::insert().id(42)).unwrap();
+        batch.insert(&Entry { id: 42 }).unwrap();
+        assert!(db.get::<User>(42).unwrap().is_none());
+        batch.commit().unwrap();
+        let mut refused = db.batch();
+        refused.delete::<Entry>(42).unwrap();
+        refused.insert(&User { id: 42 }).unwrap();
+        assert!(matches!(refused.commit(), Err(ic_db::Error::Exists)));
         db.insert(&AuditEvent {
             id: 42,
             revision: Revision(9),
@@ -120,6 +128,7 @@ fn host_reopens_only_the_selected_canisters_allocations() {
     });
     assert!(matches!(failed, Err(ic_db::Error::Maintenance)));
     let db = CanisterSession::<Hub>::try_attach(reopen).unwrap();
+    assert_eq!(db.get::<Entry>(42).unwrap().unwrap().id, 42);
     assert_eq!(db.query::<User>().try_one().unwrap().unwrap().id, 42);
     assert_eq!(
         db.get::<AuditEvent>(42).unwrap().unwrap().revision,
@@ -158,4 +167,36 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         db.get::<AuditEvent>(42).unwrap().unwrap().revision,
         Revision(10)
     );
+}
+
+#[test]
+fn single_store_root_reopens_its_original_key_and_row() {
+    use ic_db::{CanisterSession, CompiledCanister, DatabaseSession};
+    use ic_db_schema_owner_producer::model::{Revision, Shard, ShardRecord};
+
+    let [store] = Shard::STORES else {
+        panic!("expected one shard store")
+    };
+    let fixture = Fixture::new(store.key);
+    let reopen = || {
+        CanisterSession::<Shard>::try_attach(|store| {
+            fixture.open((store.schema)()).map(DatabaseSession::new)
+        })
+    };
+    assert!(reopen().is_err());
+    let session = CanisterSession::<Shard>::try_attach(|store| {
+        fixture
+            .create((store.schema)(), [3; 16])
+            .map(DatabaseSession::new)
+    })
+    .unwrap();
+    session
+        .insert(&ShardRecord {
+            id: 42,
+            revision: Revision(7),
+        })
+        .unwrap();
+    drop(session);
+    let stored = reopen().unwrap().get::<ShardRecord>(42).unwrap().unwrap();
+    assert_eq!(stored.revision, Revision(7));
 }

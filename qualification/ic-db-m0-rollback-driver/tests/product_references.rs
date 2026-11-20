@@ -4,7 +4,7 @@ use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
 
-type Reply = (Result<(u32, bool), u8>, u64, u64);
+type Reply = (Result<(u32, bool), u8>, u64, u64, [u64; 4]);
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
 type Entries = BTreeMap<Vec<u8>, Vec<u8>>;
 
@@ -160,7 +160,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
         let mut complete = false;
         let mut maximum_copy = 0;
         for _ in 0..16 {
-            let (result, _, instructions) = decode(call(5, 0, 32, 0).await.unwrap());
+            let (result, _, instructions, _) = decode(call(5, 0, 32, 0).await.unwrap());
             maximum_copy = maximum_copy.max(instructions);
             let (rows, done) = result.unwrap();
             total += rows;
@@ -198,7 +198,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
         let mut maximum_validation = 0;
         for step in 0..64 {
             let before = pic.get_stable_memory(canister).await;
-            let (result, writes, instructions) = decode(call(6, 0, 32, 0).await.unwrap());
+            let (result, writes, instructions, _) = decode(call(6, 0, 32, 0).await.unwrap());
             maximum_validation = maximum_validation.max(instructions);
             if result == Err(1) {
                 assert!(
@@ -241,7 +241,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
         let mut cleaned = false;
         let mut maximum_cleanup = 0;
         for _ in 0..32 {
-            let (result, _, instructions) =
+            let (result, _, instructions, _) =
                 decode(call(if bad { 9 } else { 8 }, 0, 32, 0).await.unwrap());
             maximum_cleanup = maximum_cleanup.max(instructions);
             if result.unwrap().1 {
@@ -276,19 +276,35 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
             }
             assert_eq!(data(raw(true).await), expected(true, remaining(), true));
             let before = pic.get_stable_memory(canister).await;
-            let (result, writes, refusal_instructions) = decode(call(14, 0, 32, 0).await.unwrap());
-            assert_eq!(result, Err(1));
-            assert_eq!(writes, 0);
-            assert_eq!(pic.get_stable_memory(canister).await, before);
+            // Same backing and batch size. Removing 224..255 leaves the first
+            // entry live; removing 1..32 makes the 32nd entry the first survivor.
+            for (first, skipped) in [(224, 0), (1, 31)] {
+                let (result, writes, instructions, phases) =
+                    decode(call(14, first, 32, 0).await.unwrap());
+                assert_eq!(result, Err(1));
+                assert_eq!(writes, 0);
+                assert!(phases.iter().all(|&work| work > 0));
+                assert!(phases.iter().sum::<u64>() <= instructions);
+                assert_eq!(pic.get_stable_memory(canister).await, before);
+                println!(
+                    "restricted delete: skipped={skipped} instructions={instructions} phases={phases:?}"
+                );
+            }
 
             // A later application trap rolls back a successful deletion batch.
             assert!(call(15, 0, 32, u64::MAX).await.is_err());
             assert_eq!(pic.get_stable_memory(canister).await, before);
             let mut maximum_delete = 0;
             for first in (0..256).step_by(32) {
-                let (result, _, instructions) = decode(call(15, first, 32, 0).await.unwrap());
+                let (result, _, instructions, phases) =
+                    decode(call(15, first, 32, 0).await.unwrap());
                 result.unwrap();
                 maximum_delete = maximum_delete.max(instructions);
+                assert!(phases.iter().all(|&work| work > 0));
+                assert!(phases.iter().sum::<u64>() <= instructions);
+                println!(
+                    "accepted delete: first={first} instructions={instructions} phases={phases:?}"
+                );
                 let survivors = remaining().filter(|id| *id >= u64::from(first) + 32);
                 assert_eq!(data(raw(true).await), expected(true, survivors, true));
                 if first == 0 {
@@ -308,7 +324,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
             // The final 32-row batch removes the target and every remaining edge.
             decode(call(11, 0, 32, 0).await.unwrap()).0.unwrap();
             println!(
-                "post-migration fan-in: refusal={refusal_instructions} delete={maximum_delete} maximum measured instructions"
+                "post-migration fan-in: delete={maximum_delete} maximum measured instructions"
             );
         }
         println!(

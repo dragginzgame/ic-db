@@ -17,8 +17,13 @@ use ic_db_qualification_transport as transport;
     max_bytes = 128,
     on_error = crate::transport::endpoint_error
 )]
-fn schema_size((): ()) -> u64 {
-    directory::model::Hub::STORES
+fn schema_size(hub: bool) -> u64 {
+    let stores = if hub {
+        directory::model::Hub::STORES
+    } else {
+        directory::model::Shard::STORES
+    };
+    stores
         .iter()
         .map(|store| (store.schema)().entities().len() as u64)
         .sum()
