@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.24.4] - Unreleased
+## [0.24.4] - 2026-11-20
 
 ### Queries
 
