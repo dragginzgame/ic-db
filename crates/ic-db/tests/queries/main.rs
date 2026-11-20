@@ -300,6 +300,60 @@ fn single_match_requires_exhaustion() {
 }
 
 #[test]
+fn projected_single_matches_share_page_and_cardinality_bounds() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let category = || db.query::<Entry>().eq(Entry::CATEGORY, 0_u8);
+    let first = category()
+        .test_output_limit(16)
+        .first_as::<Summary>()
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.id, first.amount), (2, 20));
+    let cursor = category()
+        .limit(1)
+        .fetch_as::<Summary>()
+        .unwrap()
+        .next
+        .unwrap();
+    assert_eq!(
+        category()
+            .after(&cursor)
+            .first_as::<Summary>()
+            .unwrap()
+            .unwrap()
+            .id,
+        4
+    );
+    assert!(matches!(
+        category().after(&cursor).try_one_as::<Summary>(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        category().limit(1).try_one_as::<Summary>(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        category().work_limit(1).try_one_as::<Summary>(),
+        Err(Error::Limit)
+    ));
+    for (id, expected) in [(5_u64, Some(50)), (9, None)] {
+        let query = || db.query::<Entry>().eq(Entry::ID, id);
+        assert_eq!(
+            query()
+                .try_one_as::<Summary>()
+                .unwrap()
+                .map(|row| row.amount),
+            expected
+        );
+        assert!(matches!(
+            query().first_as::<WrongWidth>(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+}
+
+#[test]
 fn batch_get_preserves_the_listing_order_and_missing_related_rows() {
     let runtime = host(VectorMemory::default());
     let mut db = create(&runtime, 1);
@@ -808,10 +862,18 @@ fn distinct_checks_a_field_operand_that_varies_within_an_index_class() {
             .filter_fields("amount", C::Lt, "id")
             .distinct()
     };
-    assert!(matches!(
-        query().work_limit(4).fetch_as::<AmountOnly>(),
-        Err(Error::Limit)
-    ));
+    let skipped = query().work_limit(4).fetch_as::<AmountOnly>().unwrap();
+    assert!(skipped.rows.is_empty());
+    let cursor = skipped.next.unwrap();
+    let resumed = query().after(&cursor).fetch_as::<AmountOnly>().unwrap();
+    assert_eq!(
+        resumed
+            .rows
+            .into_iter()
+            .map(|row| row.amount)
+            .collect::<Vec<_>>(),
+        [4]
+    );
     let page = query().fetch_as::<AmountOnly>().unwrap();
     assert_eq!(page.examined, 8);
     assert!(page.next.is_none());
@@ -929,7 +991,7 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
 }
 
 #[test]
-fn field_equality_counts_use_both_fixed_components() {
+fn field_comparison_counts_use_both_fixed_components() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
     let prefix = [20_u64.into(), 2_u64.into()];
@@ -947,6 +1009,16 @@ fn field_equality_counts_use_both_fixed_components() {
         let count = differs().count().unwrap();
         assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
         assert_eq!(differs().count_validated().unwrap().value, count.value);
+        for (op, expected) in [(C::Gt, 1), (C::Ge, 1), (C::Lt, 0), (C::Le, 0)] {
+            let ordered = fixed()
+                .filter_fields(Entry::AMOUNT, op, Entry::ID)
+                .count()
+                .unwrap();
+            assert_eq!(
+                (ordered.value, ordered.examined, ordered.fetched),
+                (expected, expected as usize, 0)
+            );
+        }
         let empty = fixed()
             .filter_fields(Entry::ID, C::Eq, Entry::AMOUNT)
             .count()
@@ -1340,6 +1412,10 @@ fn text_prefix_seeks_cover_unicode_boundaries_and_empty_required_text() {
         (C::StartsWith, "é", 1),
         (C::EndsWith, "\u{10ffff}", 1),
         (C::Contains, "e\u{301}", 0),
+        (C::Lt, "é", 0),
+        (C::Le, "é\u{10ffff}", 1),
+        (C::Gt, "e\u{301}", 1),
+        (C::Ge, "é\u{10ffff}x", 0),
     ] {
         let count = fixed().filter(WideRange::TEXT, op, needle).count().unwrap();
         assert_eq!(
@@ -1645,6 +1721,17 @@ fn primary_range_encoding_handles_signed_extremes_and_variable_width_keys() {
     );
     assert_eq!(page.examined, 3);
     for (i, &id) in principals.iter().enumerate() {
+        // A one-byte FF principal precedes a two-byte 0000 principal.
+        let count = db
+            .query::<PrincipalRange>()
+            .eq(PrincipalRange::ID, id)
+            .filter(PrincipalRange::ID, C::Gt, principals[2])
+            .count()
+            .unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (u64::from(i > 2), usize::from(i > 2), 0)
+        );
         let page = db
             .query::<PrincipalRange>()
             .filter("id", C::Ge, id)
@@ -5881,6 +5968,71 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
 }
 
 #[test]
+fn distinct_single_result_probes_stop_on_proof() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || db.query::<Entry>().distinct();
+    assert_eq!(
+        query()
+            .work_limit(1)
+            .first_as::<AmountOnly>()
+            .unwrap()
+            .unwrap()
+            .amount,
+        10
+    );
+    assert_eq!(
+        query()
+            .descending()
+            .work_limit(1)
+            .first_as::<AmountOnly>()
+            .unwrap()
+            .unwrap()
+            .amount,
+        80
+    );
+    assert!(matches!(
+        query().work_limit(2).try_one_as::<AmountOnly>(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        query().work_limit(1).try_one_as::<AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    // Every row has the same payload. A second row need not mean a second result.
+    assert!(matches!(
+        query().work_limit(2).try_one_as::<PayloadOnly>(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        query()
+            .try_one_as::<PayloadOnly>()
+            .unwrap()
+            .unwrap()
+            .payload,
+        vec![7; 100]
+    );
+    assert!(matches!(
+        query()
+            .order_desc(Entry::AMOUNT)
+            .order_asc(Entry::ID)
+            .work_limit(1)
+            .first_as::<AmountOnly>(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        query()
+            .order_desc(Entry::AMOUNT)
+            .order_asc(Entry::ID)
+            .first_as::<AmountOnly>()
+            .unwrap()
+            .unwrap()
+            .amount,
+        80
+    );
+}
+
+#[test]
 fn complete_distinct_optional_text_matches_first_occurrence_oracle() {
     let runtime = host(VectorMemory::default());
     let (db, input) = text_rows(&runtime);
@@ -5961,17 +6113,6 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
         .unwrap();
     assert!(empty.rows.is_empty());
     assert_eq!(empty.examined, 0);
-    // With a varying predicate, the first row of a class may fail and a later
-    // duplicate may match. A one-candidate cursor cannot carry that distinction.
-    assert!(matches!(
-        db.query::<Entry>()
-            .order_by(&["category"])
-            .filter("id", C::Ge, 4_u64)
-            .distinct()
-            .work_limit(1)
-            .fetch_as::<CategoryOnly>(),
-        Err(Error::Limit)
-    ));
     // Exact operand admission still precedes the DISTINCT proof.
     assert!(matches!(
         db.query::<Entry>()
@@ -5981,6 +6122,54 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
             .fetch_as::<CategoryOnly>(),
         Err(Error::InvalidOperand)
     ));
+}
+
+#[test]
+fn adjacent_distinct_resumes_before_and_after_the_first_matching_owner() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    // Each class has four owners; only the two middle owners match.
+    for category in 0_u8..40 {
+        let mut batch = Batch::new();
+        for ordinal in 0..4_u64 {
+            let id = 9 + u64::from(category) * 4 + ordinal;
+            let mut entry = row(id);
+            entry.category = category;
+            entry.amount = u64::from(ordinal == 1 || ordinal == 2);
+            batch.insert(&entry).unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    for reverse in [false, true] {
+        let mut cursor = None;
+        let mut output = Vec::new();
+        let mut examined = 0;
+        loop {
+            let mut query = db
+                .query::<Entry>()
+                .distinct()
+                .order_by(&[Entry::CATEGORY])
+                .eq(Entry::AMOUNT, 1_u64)
+                .work_limit(1);
+            if reverse {
+                query = query.descending();
+            }
+            if let Some(after) = &cursor {
+                query = query.after(after);
+            }
+            let page = query.fetch_as::<CategoryOnly>().unwrap();
+            examined += page.examined;
+            assert!(examined <= 168);
+            output.extend(page.rows.into_iter().map(|row| row.category));
+            let Some(next) = page.next else { break };
+            cursor = Some(QueryCursor::from_bytes(&next.to_bytes()).unwrap());
+        }
+        let mut expected: Vec<_> = (0..40).collect();
+        if reverse {
+            expected.reverse();
+        }
+        assert_eq!(output, expected);
+    }
 }
 
 #[test]

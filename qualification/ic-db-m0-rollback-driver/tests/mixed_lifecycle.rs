@@ -459,6 +459,17 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     assert_eq!(measured_page("after-first-update").await, cursor);
     measured_batch("after-first-update").await;
     assert_eq!(pic.get_stable_memory(canister).await, backing);
+    // Inspection authorization must run before even a malformed frame is decoded.
+    let refused = pic
+        .query_call(canister, anonymous, "db_inspect", vec![])
+        .await
+        .unwrap_err();
+    assert!(
+        refused
+            .reject_message
+            .contains("mixed workload caller denied"),
+        "{refused:?}"
+    );
     let inspected = pic
         .query_call(
             canister,

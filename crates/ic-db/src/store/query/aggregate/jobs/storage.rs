@@ -163,7 +163,16 @@ impl<M: Memory> AggregateJobs<M> {
         Ok(inspect(record))
     }
 
-    pub(super) fn save(&mut self, handle: &JobHandle, record: &Record) -> Result<(), Error> {
+    pub(super) fn save_if_changed(
+        &mut self,
+        handle: &JobHandle,
+        record: &Record,
+        changed: bool,
+    ) -> Result<(), Error> {
+        if !changed && !self.legacy {
+            return Ok(());
+        }
+
         let bytes = record.encode()?;
         // Prepare every refusal before publishing the wider bound. Both writes
         // share the enclosing message's rollback boundary, just like insertion.

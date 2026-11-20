@@ -821,10 +821,14 @@ fn console_inspects_and_queries() {
         );
         // One console session exercises every retained selector. More than 16 jobs
         // proves successful commands release slots instead of leaking capacity.
-        let cases: [ConsoleCase<'_>; 14] = [
+        let cases: [ConsoleCase<'_>; 15] = [
             ("count", &[&["6"]]),
             ("count:amount", &[&["6"]]),
             ("distinct-count:amount", &[&["6"]]),
+            (
+                "distinct:amount",
+                &[&["11"], &["20"], &["31"], &["40"], &["51"], &["60"]],
+            ),
             ("sum:amount", &[&["213"]]),
             ("avg:amount", &[&["35.5"]]),
             ("min:amount", &[&["11"]]),
@@ -884,7 +888,8 @@ fn console_inspects_and_queries() {
         commands.push_str("quit\n");
         let stdout = run_console(&binary, &commands);
         let sections = stdout.split("Entry — ").skip(1).collect::<Vec<_>>();
-        assert_eq!(sections.len(), 17 + controls.len());
+        let control_start = cases.len() + 3;
+        assert_eq!(sections.len(), control_start + controls.len());
         for ((select, expected), section) in cases.iter().zip(&sections) {
             assert!(section.starts_with(&format!("{select}\n")));
             assert!(section.contains("Running; sequence 1; 2 examined"));
@@ -895,16 +900,9 @@ fn console_inspects_and_queries() {
             );
             let actual = result_table_rows(section);
             assert_eq!(&actual, expected, "{select}: {section}");
-            assert_eq!(
-                section.matches("Complete;").count(),
-                if select.starts_with("category,") {
-                    2
-                } else {
-                    1
-                }
-            );
+            assert_eq!(section.matches("Complete;").count(), expected.len().max(1));
         }
-        for ((options, expected), section) in controls.iter().zip(&sections[17..]) {
+        for ((options, expected), section) in controls.iter().zip(&sections[control_start..]) {
             assert_eq!(
                 &result_table_rows(section),
                 expected,

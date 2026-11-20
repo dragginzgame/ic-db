@@ -14,6 +14,13 @@ const METER: Option<fn() -> u64> = Some(raw::instruction_counter);
 #[cfg(not(target_arch = "wasm32"))]
 const METER: Option<fn() -> u64> = None;
 
+/// Obtain the IC instruction counter for a measured qualification handler.
+/// # Errors
+/// A native process has no IC instruction meter.
+pub fn instruction_meter() -> Result<fn() -> u64, &'static str> {
+    METER.ok_or("IC instruction meter unavailable")
+}
+
 /// Decode the wire request and supply the installed instruction meter.
 /// # Errors
 /// Refuses invalid frames or an unavailable IC instruction meter.
@@ -22,7 +29,7 @@ pub fn decode_measured<T: serde::de::DeserializeOwned, const ID: u64>(
 ) -> Result<super::Measured<T>, String> {
     let request = super::decode::<T, ID>(bytes).map_err(|error| error.to_string())?;
 
-    Ok((request, METER.ok_or("IC instruction meter unavailable")?))
+    Ok((request, instruction_meter()?))
 }
 
 /// Capture the IC message time in nanoseconds for a decoded request.

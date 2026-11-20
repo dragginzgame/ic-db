@@ -29,7 +29,7 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | The released Canic mount and Platform's canister identity read require Wasm. Only the mount and its caller check are conditional. The native fixture test still compiles the inspection, query and mutation handlers. |
+| Mixed-lifecycle endpoints | Canic 0.242.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -463,10 +463,38 @@ No input-prefix sort or statistics-based planner is qualified.
 Ordered DISTINCT adds an independent tuple-set oracle, duplicate-only pages,
 optional values, fixed prefixes, reverse traversal, byte retries and deleted
 cursor rows. Filters on projected/fixed-prefix fields cover all six comparisons,
-absence, contradictory prefixes and empty pages. Non-leading projections and
-filters varying within a duplicate class refuse. The Wasm probe resumes filtered
+absence, contradictory prefixes and empty pages. The native residual-filter witness visits 40 indexed classes in both directions
+with one candidate per page and transports each cursor between calls. The Wasm probe resumes filtered
 and unfiltered DISTINCT cursors after upgrade and scans duplicate pages to
 completion without changing backing bytes. There is no durable seen-set.
+
+Retained DISTINCT enumeration uses the shared job checkpoint and completed-page
+machinery. The native fixture scans 521 rows once, reopens during accumulation,
+then returns 255 scattered values, including absence, in canonical key order.
+Separate witnesses exhaust the one-byte key count and the 16 KiB frame, check
+backing preservation, and exercise invalidation, cancellation and a smaller retry.
+The installed console fixture enumerates 40 values from 80 rows and upgrades
+after returning the first 33. Its next cursor resumes the same completed job.
+Run `make m2-cli` for the installed path or try
+`db aggregate Entry --select distinct:amount --work 2 --page-size 2` locally.
+
+The local 0.24.3 retained-console builds before and after direct DISTINCT
+page selection used the same 80-row fixture, 17-candidate steps and 11-row
+pages. PocketIC balance deltas measure the complete update, including transport
+and checkpoint handling. These are individual matched observations.
+
+| Completed output | Prior cycles | Direct selection cycles |
+| --- | ---: | ---: |
+| First 11 keys, including the last input step | 8,653,632 | 8,614,399 |
+| Next 11 keys, warm | 8,345,337 | 8,317,566 |
+| Following 11 keys, warm | 8,343,133 | 8,332,230 |
+| Final 7 keys after upgrade | 9,565,694 | 9,561,662 |
+
+Total uncompressed fixture Wasm went from 1,390,830 to 1,387,427 bytes;
+its code section went from 1,330,462 to 1,327,061 bytes. The page reader still
+restores and validates the full bounded checkpoint on every call. It takes
+the selected keys directly from their canonical order and shares the selection
+code across typed outputs. Instruction counts were not measured here.
 
 Exact synchronous counts and grouped counts reuse this probe. Native cases cover
 independent tuple-count oracles, interleaved groups, absence, empty input, output

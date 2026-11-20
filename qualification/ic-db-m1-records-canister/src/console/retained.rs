@@ -90,6 +90,9 @@ fn configured<'a, E: Entity>(
     selection: &'a Selection,
 ) -> Result<Query<'a, E>, String> {
     let (_, select, _, limit, (group_min, group_max), group_order, filters) = selection;
+    if select == "distinct:amount" && *limit != 32 {
+        return Err("use --page-size for retained DISTINCT".into());
+    }
     let query = super::filter_rows(query, filters)?;
 
     select_groups(
@@ -167,6 +170,7 @@ fn start_entry(
     match select {
         "count" => query.start_count(jobs, now, expires),
         "count:amount" => query.start_count_field("amount", jobs, now, expires),
+        "distinct:amount" => query.start_distinct::<AmountOnly>(jobs, now, expires),
         "distinct-count:amount" => query.start_count_distinct::<AmountOnly>(jobs, now, expires),
         "sum:amount" => query.start_sum::<TotalAmount>(jobs, now, expires),
         "avg:amount" => query.start_avg::<AverageAmount>(jobs, now, expires),
@@ -281,6 +285,7 @@ pub(super) fn resume_at(
             sequence,
             now,
             select,
+            cursor.as_ref(),
         ),
         "Document" => resume_document(
             resume_query(
@@ -443,6 +448,8 @@ fn resume_query<'a, E: Entity>(
         .test_output_limit(bytes as usize);
     if select.contains(',') {
         query = query.group_page(page_size as usize, cursor);
+    } else if select == "distinct:amount" {
+        query = query.limit(page_size as usize);
     } else if cursor.is_some() {
         return Err("scalar aggregates have no page cursor".into());
     }
@@ -450,13 +457,14 @@ fn resume_query<'a, E: Entity>(
     Ok(query)
 }
 
-fn resume_entry(
-    query: Query<'_, Entry>,
+fn resume_entry<'a>(
+    query: Query<'a, Entry>,
     jobs: &mut AggregateJobs,
     handle: &JobHandle,
     sequence: u64,
     now: Timestamp,
     select: &str,
+    after: Option<&'a GroupCursor>,
 ) -> Result<Response, Error> {
     match select {
         "count" => query
@@ -465,6 +473,20 @@ fn resume_entry(
         "count:amount" => query
             .resume_count_field("amount", jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct:amount" => query
+            .resume_distinct::<AmountOnly>(jobs, handle, sequence, now, after)
+            .map(|s| {
+                display(s, |p| {
+                    (
+                        vec!["amount".into()],
+                        p.rows
+                            .into_iter()
+                            .map(|r| vec![r.amount.to_string()])
+                            .collect(),
+                        p.next.map(|c| c.to_bytes()),
+                    )
+                })
+            }),
         "distinct-count:amount" => query
             .resume_count_distinct::<AmountOnly>(jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),

@@ -262,15 +262,26 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         (1, 2, 0, None)
     );
 
-    // A replay rewrites the same-sized checkpoint; use its observed supplier
-    // write count rather than assuming how many backing writes an update needs.
-    let checkpoint_writes = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap()).6;
-    assert!(checkpoint_writes > 0);
+    // Interrupt successive writes on the same slot until its forward step completes.
+    let probe = handle(start(1, 0).await.unwrap());
+    decode(advance(&probe, 1, 0, 1, 0, false).await.unwrap());
     let before = pic.get_stable_memory(canister).await;
-    for fault in 1..=checkpoint_writes {
-        assert!(advance(&sum, 1, 1, 2, fault, false).await.is_err());
-        assert_eq!(pic.get_stable_memory(canister).await, before);
+    for fault in 1.. {
+        match advance(&probe, 1, 1, 2, fault, false).await {
+            Ok(reply) => {
+                let writes = decode(reply).6;
+                assert!(writes > 0);
+                assert_eq!(writes + 1, fault);
+                break;
+            }
+            Err(error) => {
+                assert!(fault < 256, "checkpoint never completed: {error:?}");
+                assert_eq!(pic.get_stable_memory(canister).await, before);
+            }
+        }
     }
+    controlled(control(0, &probe, 2, 0).await.unwrap());
+    let before = pic.get_stable_memory(canister).await;
     assert!(advance(&sum, 1, 1, 2, 0, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(&average, 2, 1, 2, 1, false).await.is_err());
@@ -366,7 +377,10 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         (&group_distinct, 9),
     ] {
         let retry = decode(advance(job, operation, 0, 1, 0, false).await.unwrap());
-        assert_eq!((retry.0, retry.2, retry.4, retry.5), (1, 2, 0, None));
+        assert_eq!(
+            (retry.0, retry.2, retry.4, retry.5, retry.6),
+            (1, 2, 0, None, 0)
+        );
     }
     let retry = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap());
     let retry_average = decode(advance(&average, 2, 0, 1, 0, false).await.unwrap());
@@ -703,7 +717,22 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
         (old.0, 1, vec![(0, 3)], old.1)
     );
     let cursor = first.3.unwrap();
+    // A different output page can share the same checkpoint and observed time.
+    // Arm the first supplier write: this replay must finish without hitting it.
+    let replay = decode(
+        page(&handle, old.0, Some(cursor.clone()), 2, 1, false)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(replay, (old.0, 1, vec![(1, 3)], None, old.1));
     let before = pic.get_stable_memory(canister).await;
+    // A later clock observation must still be saved, even on this completed job.
+    assert!(
+        page(&handle, old.0, Some(cursor.clone()), 3, 1, false)
+            .await
+            .is_err()
+    );
+    assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(
         page(&handle, old.0, Some(cursor.clone()), 3, 0, true)
             .await

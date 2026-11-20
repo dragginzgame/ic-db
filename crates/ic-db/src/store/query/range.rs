@@ -333,9 +333,13 @@ pub(super) fn bounds(
 
         // Old or caller-selected positions must never widen the predicate range.
         if plan.descending {
-            upper.tighten(key, cursor.inclusive, Ordering::Less);
+            upper.tighten(key, cursor.resume == super::Resume::Retry, Ordering::Less);
         } else {
-            lower.tighten(key, cursor.inclusive, Ordering::Greater);
+            lower.tighten(
+                key,
+                cursor.resume == super::Resume::Retry,
+                Ordering::Greater,
+            );
         }
     }
     // Do not hand contradictory or equal-exclusive bounds to the supplier.

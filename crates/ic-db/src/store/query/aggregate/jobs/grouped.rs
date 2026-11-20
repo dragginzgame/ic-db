@@ -281,7 +281,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let page = self.request.groups.page;
         pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
-        prepare(
+        let changed = prepare(
             &*self.db.read()?,
             E::SCHEMA,
             self.request,
@@ -293,7 +293,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             now,
         )?;
 
-        record.finish_and_save(jobs, handle, bytes, || {
+        record.finish_and_save(jobs, handle, changed, bytes, || {
             pages::group_page(groups, rows, bytes, page, handle, decode)
         })
     }
@@ -318,6 +318,12 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 32], Error> {
     let mut hash = Sha256::new();
     match &groups.initial {
+        Reducer::Keys => {
+            hash.update(b"ic-db:distinct-keys-job:v1\0");
+            hash.update(plan.binding);
+
+            return Ok(hash.finalize().into());
+        }
         Reducer::Numeric(_) => {
             hash.update(b"ic-db:group-numeric-job:v1\0");
             hash.update(super::binding(plan, &groups.initial)?);

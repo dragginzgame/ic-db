@@ -2,8 +2,8 @@
 
 use super::{
     super::{
-        Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_GROUPS, MAX_STATE_BYTES,
-        Reducer, comparison_key,
+        Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Reducer,
+        comparison_key,
     },
     storage::{MAX_JOB_BYTES, Record},
 };
@@ -136,7 +136,9 @@ impl Groups {
         // the existing codec on resume, rather than persisting two key representations.
         for (bytes, reducer) in self.rows.values() {
             writer.bytes(bytes)?;
-            let present = if let Reducer::Distinct { seen, .. } = reducer {
+            let present = if matches!(reducer, Reducer::Keys) {
+                1
+            } else if let Reducer::Distinct { seen, .. } = reducer {
                 write_distinct(&mut writer, seen)?;
 
                 seen.len() as u64
@@ -165,14 +167,16 @@ impl Groups {
     fn restore(&mut self, entity: &EntitySchema, record: &Record) -> Result<(), Error> {
         let mut reader = Decoder::with_byte_limit(&record.state, MAX_JOB_BYTES)?;
         let length = usize::from(reader.nat8()?);
-        if length > MAX_GROUPS || length as u64 > record.examined {
+        if length > self.max_keys() || length as u64 > record.examined {
             return Err(Error::Corrupt);
         }
         let mut count = 0_u64;
         for _ in 0..length {
             let bytes = reader.blob(MAX_ROW_BYTES)?;
             let mut reducer = self.initial.clone();
-            let present = if let Reducer::Distinct { mask, seen } = &mut reducer {
+            let present = if matches!(reducer, Reducer::Keys) {
+                1
+            } else if let Reducer::Distinct { mask, seen } = &mut reducer {
                 *seen = read_distinct(&mut reader, entity, *mask)?;
                 if seen.is_empty() {
                     return Err(Error::Corrupt);

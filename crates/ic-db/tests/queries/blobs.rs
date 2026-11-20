@@ -421,6 +421,23 @@ fn blob_suffixes_and_substrings_match_raw_bytes_without_matching_inside_zero_esc
             vec![0; 600],
         ])
         .collect::<Vec<_>>();
+    for (op, bound, expected) in [
+        (C::Gt, &[0][..], 1),
+        (C::Lt, &[0, 255][..], 0),
+        (C::Le, &[0, 255][..], 1),
+        (C::Ge, &[255][..], 0),
+    ] {
+        let count = db
+            .query::<Binary>()
+            .eq(Binary::PAYLOAD, &[0_u8, 255])
+            .filter(Binary::PAYLOAD, op, bound)
+            .count()
+            .unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, expected as usize, 0)
+        );
+    }
     for optional in [false, true] {
         let field = if optional { "optional" } else { "payload" };
         let index = if optional {

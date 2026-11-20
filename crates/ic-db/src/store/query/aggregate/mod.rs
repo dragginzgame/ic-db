@@ -51,6 +51,17 @@ impl GroupRequest<'_> {
             return Err(Error::Limit);
         }
         let field = match reducer {
+            Reducer::Keys => {
+                if !self.predicates.is_empty() || self.order.is_some() {
+                    return Err(Error::InvalidQuery);
+                }
+
+                return Ok(Selection {
+                    predicates: Vec::new(),
+                    order: GroupOrder::Key,
+                    optional: false,
+                });
+            }
             Reducer::Count { .. } | Reducer::Distinct { .. } => ValueSchema {
                 value: FieldType::Nat64,
                 optional: false,
@@ -841,6 +852,7 @@ impl Accumulator<'_> {
 
 #[derive(Clone)]
 pub(super) enum Reducer {
+    Keys,
     Numeric(numeric::NumericAggregate),
     Distinct {
         mask: u16,
@@ -882,6 +894,7 @@ impl Reducer {
 
     fn retained_bytes(&self) -> usize {
         match self {
+            Self::Keys => 0,
             Self::Numeric(state) => state.retained_bytes(),
             Self::Count { .. } => 8,
             Self::Distinct { seen, .. } => 8 + seen.iter().map(Vec::capacity).sum::<usize>(),
@@ -893,6 +906,7 @@ impl Reducer {
 
     fn finish(self) -> Result<Completed, Error> {
         match self {
+            Self::Keys => Ok(Completed::Key),
             Self::Count { total, .. } => Ok(Completed::Count(total)),
             Self::Distinct { seen, .. } => Ok(Completed::Count(seen.len() as u64)),
             Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
@@ -909,6 +923,7 @@ impl Reducer {
         allowance: usize,
     ) -> Result<(), Error> {
         match self {
+            Self::Keys => {}
             Self::Numeric(state) => state.push(values)?,
             Self::Distinct { mask, seen } => {
                 let key = comparison_key(entity, *mask, values)?;
@@ -963,12 +978,14 @@ impl Reducer {
 
 // Completed results cannot be advanced. All numeric range checks precede selection.
 enum Completed {
+    Key,
     Count(u64),
     Value(Option<(Vec<u8>, Vec<u8>)>),
 }
 impl Completed {
     fn encoded_len(&self) -> usize {
         match self {
+            Self::Key => 0,
             Self::Count(_) => 8,
             Self::Value(value) => value.as_ref().map_or(0, |(_, bytes)| bytes.len()),
         }
@@ -976,6 +993,7 @@ impl Completed {
     // Counts need only eight stack bytes; extrema borrow their retained ordered key.
     fn result_key<'a>(&'a self, scratch: &'a mut [u8; 8]) -> Option<&'a [u8]> {
         match self {
+            Self::Key => None,
             Self::Count(total) => {
                 *scratch = total.to_be_bytes();
 
@@ -987,6 +1005,7 @@ impl Completed {
 
     fn retained_bytes(&self) -> usize {
         match self {
+            Self::Key => 0,
             Self::Count(_) => 8,
             Self::Value(value) => value
                 .as_ref()
@@ -1018,6 +1037,14 @@ pub(super) struct Groups {
     state_bytes: usize,
 }
 impl Groups {
+    fn max_keys(&self) -> usize {
+        if matches!(self.initial, Reducer::Keys) {
+            usize::from(u8::MAX)
+        } else {
+            MAX_GROUPS
+        }
+    }
+
     fn into_output(self) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
         // Accumulation has completed. Output filtering cannot relax input/state bounds.
         let mut state_bytes = self.state_bytes;
@@ -1093,7 +1120,7 @@ impl Groups {
         }
         let base = key.capacity() + size;
         let available = MAX_STATE_BYTES - self.state_bytes;
-        if self.rows.len() == MAX_GROUPS || base + self.initial.retained_bytes() > available {
+        if self.rows.len() == self.max_keys() || base + self.initial.retained_bytes() > available {
             return Err(Error::Limit);
         }
         let mut reducer = self.initial.clone();

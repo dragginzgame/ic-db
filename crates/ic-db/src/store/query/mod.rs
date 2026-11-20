@@ -194,7 +194,14 @@ fn contains_component(actual: &[u8], needle: &[u8]) -> bool {
 pub struct QueryCursor {
     binding: [u8; 32],
     position: Vec<u8>,
-    inclusive: bool,
+    resume: Resume,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resume {
+    After = 0,
+    Retry = 1,
+    AfterUnemittedClass = 2,
 }
 impl QueryCursor {
     pub(super) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
@@ -202,7 +209,7 @@ impl QueryCursor {
     /// Encode the bounded continuation for an application's transport.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![1, u8::from(self.inclusive)];
+        let mut bytes = vec![1, self.resume as u8];
         bytes.extend(self.binding);
         bytes.extend(&self.position);
 
@@ -213,14 +220,19 @@ impl QueryCursor {
     /// # Errors
     /// Refuses unsupported versions, flags and oversized or incomplete frames.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if !(35..=Self::MAX_ENCODED_BYTES).contains(&bytes.len()) || bytes[0] != 1 || bytes[1] > 1 {
+        if !(35..=Self::MAX_ENCODED_BYTES).contains(&bytes.len()) || bytes[0] != 1 {
             return Err(Error::InvalidCursor);
         }
 
         Ok(Self {
             binding: bytes[2..34].try_into().map_err(|_| Error::InvalidCursor)?,
             position: bytes[34..].to_vec(),
-            inclusive: bytes[1] == 1,
+            resume: match bytes[1] {
+                0 => Resume::After,
+                1 => Resume::Retry,
+                2 => Resume::AfterUnemittedClass,
+                _ => return Err(Error::InvalidCursor),
+            },
         })
     }
 }
@@ -306,6 +318,7 @@ struct Request<'a> {
     order_descending: u8,
     descending: bool,
     distinct: bool,
+    single_result_probe: bool,
     rows: usize,
     work: usize,
     bytes: usize,
@@ -323,6 +336,7 @@ impl Default for Request<'_> {
             order_descending: 0,
             descending: false,
             distinct: false,
+            single_result_probe: false,
             rows: 32,
             work: 128,
             bytes: MAX_OUTPUT,
@@ -903,7 +917,21 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and storage errors as `fetch`. Returns `Limit`
     /// if the work budget ends before a match or exhaustion is established.
     pub fn first(self) -> Result<Option<E>, Error> {
-        let mut page = self.probe_matches(1)?;
+        self.first_with(Self::fetch)
+    }
+
+    /// Return the first projected record in query order.
+    /// # Errors
+    /// Applies the projection checks of [`Self::fetch_as`] and the work bound of [`Self::first`].
+    pub fn first_as<R: Value>(self) -> Result<Option<R>, Error> {
+        self.first_with(Self::fetch_as::<R>)
+    }
+
+    fn first_with<R>(
+        self,
+        fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
+    ) -> Result<Option<R>, Error> {
+        let mut page = fetch(self.probe_matches(1)?)?;
 
         match page.rows.pop() {
             None if page.next.is_some() => Err(Error::Limit),
@@ -918,10 +946,24 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns `MultipleMatches` on a second match and `Limit` if the page is
     /// incomplete before cardinality is known. Ordinary fetch errors apply.
     pub fn try_one(self) -> Result<Option<E>, Error> {
+        self.try_one_with(Self::fetch)
+    }
+
+    /// Return the sole projected result, or `None` on a proven miss.
+    /// # Errors
+    /// Applies the projection checks of [`Self::fetch_as`] and the cardinality checks of [`Self::try_one`].
+    pub fn try_one_as<R: Value>(self) -> Result<Option<R>, Error> {
+        self.try_one_with(Self::fetch_as::<R>)
+    }
+
+    fn try_one_with<R>(
+        self,
+        fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
+    ) -> Result<Option<R>, Error> {
         if self.request.cursor.is_some() {
             return Err(Error::InvalidQuery);
         }
-        let mut page = self.probe_matches(2)?;
+        let mut page = fetch(self.probe_matches(2)?)?;
         if page.rows.len() == 2 {
             return Err(Error::MultipleMatches);
         }
@@ -932,12 +974,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok(page.rows.pop())
     }
 
-    fn probe_matches(self, rows: usize) -> Result<QueryPage<E>, Error> {
+    fn probe_matches(mut self, rows: usize) -> Result<Self, Error> {
         if !(1..=32).contains(&self.request.rows) {
             return Err(Error::Limit);
         }
 
-        self.limit(rows).fetch()
+        self.request.single_result_probe = true;
+
+        Ok(self.limit(rows))
     }
 
     /// Project matching top-level fields into an existing `#[record]` type.
@@ -1408,14 +1452,20 @@ impl<'a> Plan<'a> {
             if cursor.binding != plan.binding {
                 return Err(Error::InvalidCursor);
             }
-            plan.validate_position(entity, &cursor.position)
+            plan.validate_position(entity, cursor)
                 .map_err(|_| Error::InvalidCursor)?;
         }
 
         Ok(plan)
     }
 
-    fn validate_position(&self, entity: &EntitySchema, bytes: &[u8]) -> Result<(), Error> {
+    fn validate_position(&self, entity: &EntitySchema, cursor: &QueryCursor) -> Result<(), Error> {
+        if cursor.resume == Resume::AfterUnemittedClass
+            && !matches!(self.distinct, distinct::Strategy::Adjacent(_))
+        {
+            return Err(Error::InvalidCursor);
+        }
+        let bytes = cursor.position.as_slice();
         if bytes.len() > crate::MAX_INDEX_KEY_BYTES || !bytes.starts_with(&self.prefix) {
             return Err(Error::InvalidCursor);
         }
@@ -1444,11 +1494,11 @@ impl<'a> Plan<'a> {
         Ok(())
     }
 
-    fn cursor(&self, position: &[u8], inclusive: bool) -> QueryCursor {
+    fn cursor(&self, position: &[u8], resume: Resume) -> QueryCursor {
         QueryCursor {
             binding: self.binding,
             position: position.to_vec(),
-            inclusive,
+            resume,
         }
     }
 }
@@ -1539,9 +1589,8 @@ fn execute_inner<M: Memory>(
         .map(|_| sort::Collection::new(request, plan.distinct));
     let mut component = Vec::new();
     let mut right_component = Vec::new();
-    // Each processed equivalence class is either wholly rejected or already
-    // emitted. Inclusive byte retries point at an unreturned class instead.
-    let mut previous = if let Some(cursor) = request.cursor.filter(|c| !c.inclusive) {
+    // Only suppress a class already emitted by this traversal.
+    let mut previous = if let Some(cursor) = request.cursor.filter(|c| c.resume == Resume::After) {
         distinct::boundary(entity, plan.index, plan.distinct, &cursor.position)?.map(<[u8]>::to_vec)
     } else {
         None
@@ -1687,6 +1736,11 @@ fn execute_inner<M: Memory>(
             }
         } else if matches && let Some(collection) = collected.as_mut() {
             collection.push(entity, request, &values, &bytes, &spans)?;
+            // This path emits first occurrences in traversal order. A single-result
+            // terminal has its answer after one class (first) or two (non-unique).
+            if request.single_result_probe && collection.rows.len() == request.rows {
+                break;
+            }
         } else if matches && let Some(collection) = sorted.as_mut() {
             collection.push(entity, plan, &values, &bytes, &spans)?;
         } else if matches && !duplicate {
@@ -1697,7 +1751,7 @@ fn execute_inner<M: Memory>(
                 return Err(Error::RowTooLarge);
             }
             if size > request.bytes - page.output_bytes {
-                page.next = Some(plan.cursor(stored_key, true));
+                page.next = Some(plan.cursor(stored_key, Resume::Retry));
 
                 return Ok(page);
             }
@@ -1728,7 +1782,12 @@ fn execute_inner<M: Memory>(
                 // an exact-boundary scan may conservatively require more budget.
                 return Err(Error::Limit);
             }
-            page.next = Some(plan.cursor(stored_key, false));
+            let resume = if boundary.is_some_and(|key| previous.as_deref() != Some(key)) {
+                Resume::AfterUnemittedClass
+            } else {
+                Resume::After
+            };
+            page.next = Some(plan.cursor(stored_key, resume));
 
             return Ok(page);
         }

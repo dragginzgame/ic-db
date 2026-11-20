@@ -361,6 +361,62 @@ struct SortRow {}
 struct LabelOnly {}
 
 #[test]
+fn sorted_distinct_can_seek_after_the_last_projected_value() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[SortRow::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let labels: Vec<Option<String>> = (0..64)
+        .map(|i| (i != 0).then(|| format!("label-{i:02}")))
+        .collect();
+    // Two copies of each key, interleaved out of sort order. Only ID is indexed.
+    for batch_number in 0..4 {
+        let mut batch = Batch::new();
+        for ordinal in 0..32 {
+            let id = batch_number * 32 + ordinal;
+            batch
+                .insert(&SortRow {
+                    id: id as u64,
+                    label: labels[(id * 17) % 64].clone(),
+                    payload: vec![],
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    for page_size in [1, 7] {
+        let mut output = Vec::<Option<String>>::new();
+        for _ in 0..=labels.len() {
+            let query = db
+                .query::<SortRow>()
+                .order_asc(SortRow::LABEL)
+                .distinct()
+                .limit(page_size)
+                .work_limit(129);
+            let query = match output.last() {
+                Some(Some(last)) => query.gt(SortRow::LABEL, last.as_str()),
+                Some(None) => query.filter_present(SortRow::LABEL),
+                None => query,
+            };
+            let page = query.fetch_as::<LabelOnly>().unwrap();
+            assert_eq!(page.examined, 128);
+            assert!(page.next.is_none());
+            let finished = page.rows.len() < page_size;
+            output.extend(page.rows.into_iter().map(|r| r.label));
+            if finished {
+                break;
+            }
+        }
+        assert_eq!(output, labels);
+    }
+}
+
+#[test]
 fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());

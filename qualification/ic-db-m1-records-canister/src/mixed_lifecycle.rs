@@ -34,8 +34,6 @@ fn mixed_migrate((operation, counter): crate::transport::Measured<u8>) -> (u64, 
     (rows, complete, counter() - start)
 }
 
-// Canic exports its endpoint mount and Platform exposes caller identity only on Wasm.
-#[cfg(target_arch = "wasm32")]
 mod endpoints {
     // Mount the fixture’s inspection, reads and updates through Canic.
     canic::mount_db_endpoints! {
@@ -47,14 +45,17 @@ mod endpoints {
     }
 
     fn query(_: ic_db::Principal, request: super::Query) -> super::QueryReply {
-        super::query(request, ic_platform_runtime::raw::instruction_counter)
+        super::query(
+            request,
+            crate::transport::instruction_meter().expect("installed Canic endpoint"),
+        )
     }
 
     fn apply_update(_: ic_db::Principal, request: super::Update, time_ns: u64) -> super::Reply {
         super::apply_update(
             request,
             time_ns,
-            ic_platform_runtime::raw::instruction_counter,
+            crate::transport::instruction_meter().expect("installed Canic endpoint"),
         )
     }
 

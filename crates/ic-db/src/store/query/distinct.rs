@@ -96,20 +96,6 @@ pub(super) fn admit(
     let Some(index) = index else {
         return complete(request);
     };
-    // Every predicate must have the same answer throughout a projected class.
-    // A class is then either wholly rejected or emitted before an exclusive
-    // continuation can advance into it. Other filters use the complete collection.
-    for predicate in &request.predicates {
-        let right = match predicate.operand {
-            super::QueryOperand::Field(name) => Some(name),
-            super::QueryOperand::Literal(_) | super::QueryOperand::Length(_) => None,
-        };
-        for name in std::iter::once(predicate.field).chain(right) {
-            if remaining & (1 << position(name)?) == 0 && !index.fields[..fixed].contains(&name) {
-                return complete(request);
-            }
-        }
-    }
     for name in &index.fields[..fixed] {
         remaining &= !(1 << position(name)?);
     }

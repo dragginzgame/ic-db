@@ -1519,7 +1519,7 @@ fn foreign_database_and_job_store_cannot_resume_a_handle() {
 #[test]
 fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save() {
     use ic_storage::adapter::StableBTreeMap;
-    for action in 0..4 {
+    for action in 0..5 {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
         let (db, mut jobs) = create(&runtime, &[Some(1); 4], 0);
@@ -1572,12 +1572,20 @@ fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save()
             }
             2 => jobs.cancel(&handle).unwrap(),
             3 => assert_eq!(jobs.cleanup_expired(time(100), 1).unwrap(), 1),
+            4 => {
+                let retry = db
+                    .query::<Row>()
+                    .resume_count(&mut jobs, &handle, 0, time(1))
+                    .unwrap();
+                assert_eq!(retry.sequence, 1);
+                assert!(matches!(retry.outcome, JobOutcome::Running));
+            }
             _ => unreachable!(),
         }
         drop(jobs);
         let raw: StableBTreeMap<u8, Vec<u8>, _> =
             StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        if action < 2 {
+        if matches!(action, 0 | 1 | 4) {
             header[..8].copy_from_slice(b"ICDBAJ02");
         }
         if action == 1 {
@@ -2314,6 +2322,265 @@ fn descending_group_keys_select_and_page_after_complete_accumulation() {
     }
     assert_eq!(actual, expected);
     assert!(cursor.is_none());
+}
+
+#[test]
+fn retained_distinct_scans_once_and_pages_all_keys_after_reopen() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    // A stride coprime to 255 interleaves all classes, including absence.
+    let values: Vec<_> = (0..521)
+        .map(|i| {
+            let key = (i * 19) % 255;
+            (key != 0).then_some(key)
+        })
+        .collect();
+    let expected: Vec<_> = values
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    assert_eq!(expected.len(), 255);
+    let (db, mut jobs) = create(&runtime, &values, 0);
+    let handle = db
+        .query::<Row>()
+        .start_distinct::<Amount>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = db
+        .query::<Row>()
+        .work_limit(29)
+        .resume_distinct::<Amount>(&mut jobs, &handle, 0, time(1), None)
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert_eq!(first.examined, 29);
+    drop((db, jobs, runtime));
+    let runtime = host(backing);
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        schema(),
+    )
+    .unwrap();
+    let mut jobs = AggregateJobs::open(
+        runtime
+            .open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        db.query::<Row>()
+            .resume_group_count::<Amount>(&mut jobs, &handle, first.sequence, time(1)),
+        Err(Error::InvalidJob)
+    ));
+    let mut sequence = first.sequence;
+    let mut cursor = None;
+    let mut actual = Vec::new();
+    for _ in 0..64 {
+        let page_size = if cursor.is_some() { 17 } else { 5 };
+        let step = db
+            .query::<Row>()
+            .work_limit(37)
+            .limit(page_size)
+            .resume_distinct::<Amount>(&mut jobs, &handle, sequence, time(1), cursor.as_ref())
+            .unwrap();
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => assert_eq!(step.output_bytes, 0),
+            JobOutcome::Complete(page) => {
+                assert_eq!(step.examined, 521);
+                assert!(page.rows.len() <= page_size);
+                let size: usize = page
+                    .rows
+                    .iter()
+                    .map(|r| if r.amount.is_some() { 17 } else { 1 })
+                    .sum();
+                assert_eq!(step.output_bytes, size);
+                actual.extend(page.rows.into_iter().map(|row| row.amount));
+                let Some(next) = page.next else { break };
+                cursor = Some(ic_db::GroupCursor::from_bytes(&next.to_bytes()).unwrap());
+            }
+            other => panic!("unexpected job outcome: {other:?}"),
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn retained_distinct_frame_refusal_preserves_checkpoint_and_cleanup() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (mut db, mut jobs) = create_stores(&runtime, schema());
+    let mut batch = Batch::new();
+    for id in 1..=6 {
+        batch
+            .insert(&Row {
+                id,
+                flag: 0,
+                amount: None,
+                payload: vec![id as u8; 3400],
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let handle = db
+        .query::<Row>()
+        .start_distinct::<Payload>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let step = db
+        .query::<Row>()
+        .work_limit(4)
+        .resume_distinct::<Payload>(&mut jobs, &handle, 0, time(1), None)
+        .unwrap();
+    assert_eq!(step.examined, 4);
+    assert!(matches!(step.outcome, JobOutcome::Running));
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Row>().work_limit(1).resume_distinct::<Payload>(
+            &mut jobs,
+            &handle,
+            step.sequence,
+            time(1),
+            None
+        ),
+        Err(Error::Limit)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    jobs.cancel(&handle).unwrap();
+    let smaller = || db.query::<Row>().lte(Row::ID, 4_u64);
+    let handle = smaller()
+        .start_distinct::<Payload>(&mut jobs, time(1), time(100))
+        .unwrap();
+    let step = smaller()
+        .limit(2)
+        .test_output_limit(4000)
+        .resume_distinct::<Payload>(&mut jobs, &handle, 0, time(2), None)
+        .unwrap();
+    let JobOutcome::Complete(page) = step.outcome else {
+        panic!("expected completed page")
+    };
+    assert_eq!(page.rows[0].payload, vec![1; 3400]);
+    assert_eq!(page.rows.len(), 1);
+    let after = page.next.unwrap();
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        smaller()
+            .test_output_limit(3000)
+            .resume_distinct::<Payload>(&mut jobs, &handle, step.sequence, time(3), Some(&after)),
+        Err(Error::RowTooLarge)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let retry = smaller()
+        .limit(2)
+        .resume_distinct::<Payload>(&mut jobs, &handle, step.sequence, time(3), Some(&after))
+        .unwrap();
+    let JobOutcome::Complete(page) = retry.outcome else {
+        panic!("expected retry to complete")
+    };
+    assert_eq!(
+        page.rows.iter().map(|r| r.payload[0]).collect::<Vec<_>>(),
+        [2, 3]
+    );
+}
+
+#[test]
+fn retained_distinct_refuses_the_256th_key_without_advancing() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let values: Vec<_> = (0..256).map(Some).collect();
+    let (mut db, mut jobs) = create(&runtime, &values, 0);
+    let handle = db
+        .query::<Row>()
+        .start_distinct::<Amount>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let mut sequence = 0;
+    loop {
+        let before = backing.borrow().clone();
+        let result = db.query::<Row>().work_limit(32).resume_distinct::<Amount>(
+            &mut jobs,
+            &handle,
+            sequence,
+            time(1),
+            None,
+        );
+        match result {
+            Ok(step) => {
+                assert!(matches!(step.outcome, JobOutcome::Running));
+                assert!(step.sequence > sequence);
+                sequence = step.sequence;
+            }
+            Err(Error::Limit) => {
+                assert_eq!(*backing.borrow(), before);
+                break;
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+    let mut batch = Batch::new();
+    batch.delete::<Row>(255).unwrap();
+    db.commit(batch).unwrap();
+    let step = db
+        .query::<Row>()
+        .resume_distinct::<Amount>(&mut jobs, &handle, sequence, time(2), None)
+        .unwrap();
+    assert!(matches!(step.outcome, JobOutcome::Invalidated));
+    jobs.cancel(&handle).unwrap();
+}
+
+#[test]
+fn scattered_distinct_keys_page_after_scanning_more_than_one_call() {
+    let runtime = host(VectorMemory::default());
+    // This fixture's domain is exactly 0..64, with no absent amounts.
+    let values: Vec<_> = (0..521).map(|i| Some(i % 64)).collect();
+    let (db, mut jobs) = create(&runtime, &values, 0);
+    assert!(matches!(
+        db.query::<Row>()
+            .distinct()
+            .work_limit(512)
+            .fetch_as::<Amount>(),
+        Err(Error::Limit)
+    ));
+    let revision = db.revision::<Row>().unwrap();
+    let mut actual = Vec::new();
+    let mut examined = 0;
+    for lower in [0_i128, 32] {
+        let query = || {
+            db.query::<Row>()
+                .filter_between(Row::AMOUNT, lower, lower + 31)
+        };
+        let handle = query()
+            .start_group_count::<Amount>(&mut jobs, time(0), time(100))
+            .unwrap();
+        let mut sequence = 0;
+        let mut cursor = None;
+        for _ in 0..32 {
+            let step = query()
+                .work_limit(37)
+                .group_page(5, cursor.as_ref())
+                .resume_group_count::<Amount>(&mut jobs, &handle, sequence, time(1))
+                .unwrap();
+            assert_eq!(step.source_revision, revision);
+            sequence = step.sequence;
+            match step.outcome {
+                JobOutcome::Running => assert_eq!(step.output_bytes, 0),
+                JobOutcome::Complete(page) => {
+                    assert!(page.rows.len() <= 5);
+                    actual.extend(page.rows.into_iter().map(|row| row.key.amount));
+                    cursor = page.next;
+                    if cursor.is_none() {
+                        examined += step.examined;
+                        break;
+                    }
+                }
+                other => panic!("unexpected job outcome: {other:?}"),
+            }
+        }
+        jobs.cancel(&handle).unwrap();
+    }
+    assert_eq!(actual, (0..64).map(Some).collect::<Vec<_>>());
+    // No amount index: each range scans the entire source exactly once.
+    assert_eq!(examined, 2 * 521);
 }
 
 #[test]

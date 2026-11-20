@@ -478,12 +478,30 @@ fn fixed_comparison<'a>(
     match predicate.comparison {
         Comparison::Eq => Some(left == right),
         Comparison::Ne => Some(left != right),
+        Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
+            if left == IndexValue::Absent || right == IndexValue::Absent {
+                return Some(false);
+            }
+            // Text and Blob already have the declared byte order. For every
+            // other admitted scalar, compare the same components as a row filter.
+            let mut encoded = Vec::new();
+            let (left, right) =
+                if let (Some(l), Some(r)) = (literal_bytes(left), literal_bytes(right)) {
+                    (l, r)
+                } else {
+                    left.append_component(false, &mut encoded);
+                    let split = encoded.len();
+                    right.append_component(false, &mut encoded);
+                    encoded.split_at(split)
+                };
+
+            Some(predicate.comparison.accepts(Some(left), Some(right), false))
+        }
         Comparison::StartsWith => Some(literal_bytes(left)?.starts_with(literal_bytes(right)?)),
         Comparison::EndsWith => Some(literal_bytes(left)?.ends_with(literal_bytes(right)?)),
         Comparison::Contains => {
             Some(memchr::memmem::find(literal_bytes(left)?, literal_bytes(right)?).is_some())
         }
-        _ => None,
     }
 }
 

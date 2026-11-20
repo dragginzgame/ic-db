@@ -57,6 +57,89 @@ async fn call<T: DeserializeOwned>(
 }
 
 #[tokio::test]
+async fn distinct_keys_page_past_32_after_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    for id in 1_u64..=80 {
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "write",
+            4,
+            &(id, 0_u64, id % 40, u8::from(id > 6)),
+        )
+        .await
+        .unwrap();
+    }
+    let selection: Selection = (
+        "Entry".into(),
+        "distinct:amount".into(),
+        (None, None, None),
+        32,
+        (None, None),
+        None,
+        RowFilters::default(),
+    );
+    let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
+        .await
+        .unwrap();
+    let mut sequence = 0_u64;
+    let mut cursor = None::<Vec<u8>>;
+    let mut output = Vec::new();
+    for _ in 0..16 {
+        let before = pic.cycle_balance(canister).await;
+        let step = call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                &selection, &handle, sequence, 17_u32, 4096_u32, 11_u32, &cursor,
+            ),
+        )
+        .await
+        .unwrap();
+        sequence = step.0;
+        if step.1 == "Running" {
+            assert!(step.5.1.is_empty());
+            continue;
+        }
+        assert_eq!(step.1, "Complete");
+        assert_eq!(step.2, 80);
+        let charged = before - pic.cycle_balance(canister).await;
+        eprintln!(
+            "retained DISTINCT start={} rows={} charged_cycles={charged}",
+            output.len(),
+            step.5.1.len()
+        );
+        output.extend(
+            step.5
+                .1
+                .into_iter()
+                .map(|row| row[0].parse::<u64>().unwrap()),
+        );
+        cursor = step.5.2;
+        if output.len() == 33 {
+            upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(output, (0..40).collect::<Vec<_>>());
+    assert!(cursor.is_none());
+    owned.drop().await;
+}
+
+#[tokio::test]
 async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();

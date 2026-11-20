@@ -1210,6 +1210,28 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         ))
         .await
     };
+    let residual_distinct = async |cursor| {
+        console((
+            "Entry",
+            cursor,
+            1,
+            Some(40),
+            None,
+            None,
+            vec!["category"],
+            false,
+            1,
+            8,
+            "category",
+            true,
+        ))
+        .await
+        .unwrap()
+    };
+    let skipped = residual_distinct(None).await;
+    assert!(skipped.1.is_empty());
+    assert_eq!(skipped.3, 1);
+    let skipped_cursor = skipped.2.unwrap();
     let collected = complete_distinct(2, 7, 16, false).await.unwrap();
     assert_eq!(collected.1, [vec!["1"], vec!["0"]]);
     assert_eq!((collected.3, collected.4, collected.5), (6, 6, 16));
@@ -1635,6 +1657,9 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
+    let resumed = residual_distinct(Some(skipped_cursor)).await;
+    assert_eq!(resumed.1, [vec!["0"]]);
+    assert_eq!(resumed.3, 1);
     assert_eq!(complete_distinct(2, 7, 16, false).await.unwrap(), collected);
     assert_eq!(
         aggregate("category,count", 1, 7, 16).await.unwrap(),

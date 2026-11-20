@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.24.3] - Unreleased
+
+### Queries
+
+- `start_distinct::<K>()` and `resume_distinct::<K>()` enumerate scattered
+  projection values in canonical key order. One revision-bound job scans the
+  input in chunks and pages the completed keys. It holds up to 255 tuples
+  within the existing 16 KiB frame. Completed pages read directly from the
+  restored keys in canonical order. Try the local fixture with:
+
+```sh
+db aggregate Entry --select distinct:amount --work 2 --page-size 2
+```
+
+- Retained-job retries and completed-page reads skip the checkpoint write when
+  both the saved sequence and the host observation time stay the same.
+
+- Indexed DISTINCT can now page through classes where only some rows match.
+  A page can examine a nonmatch and resume inside the same class.
+
+```sh
+db query Entry --order-by category --min 40 --select category --distinct --work 1
+```
+
+- `first_as::<Summary>()` and `try_one_as::<Summary>()` return an optional
+  projected record. The latter checks for a second match even after `limit(1)`.
+  With DISTINCT in traversal order, these methods can finish as soon as the
+  first value or a second distinct value establishes the answer.
+
+- When an equality fixes a scalar value, the planner can resolve range
+  comparisons on that value before reading rows. A contradictory range visits
+  zero candidates. A covered count can read just the matching index entries.
+
+### Schema lookup
+
+- Named counts in the console and migration target lookups now use binary search
+  over the store’s existing logical-name order.
+
+### Qualification
+
+- Native fixtures enumerate 64 unindexed DISTINCT values using sorted pages
+  over 128 rows and two retained key ranges over 521 rows. They check the
+  returned values and the cost in examined candidates.
+
+- The mixed-lifecycle fixture now type-checks its Canic database endpoints on
+  native builds and checks pre-decode inspection authorization on PocketIC.
+
 ## [0.24.2] - 2026-11-20
 
 ### Store routing

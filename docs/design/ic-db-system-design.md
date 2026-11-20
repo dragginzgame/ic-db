@@ -1819,6 +1819,10 @@ zero begins advancement; an older sequence reads the current saved state and a
 future sequence refuses. Mutation of cursor and accumulator is one record write
 inside the enclosing message's rollback boundary. Decode/validate result output
 before persisting completion. Arithmetic/output refusal preserves the checkpoint.
+On the current job-store format, a successful retry or completed-page read at
+the saved observation time skips the record write when the sequence also stays
+the same. A later observation is persisted even for completed jobs to enforce
+clock monotonicity. Legacy headers retain their first-successful-save promotion.
 
 Average reuses the retained exact total and present count; divide and round once
 at completion to the result record's declared Decimal scale, nearest with ties
@@ -2299,7 +2303,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, DISTINCT beyond the retained frame or in resumable first-occurrence order, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
@@ -2817,6 +2821,7 @@ The same proof applies when a mandatory equality disagrees with an explicitly
 fixed index component. Pages finish without a continuation and counts return
 zero with no candidate visits. Unvisited owners receive no integrity check.
 A fixed value can also disprove an equality or inequality inside an OR clause.
+Fixed scalar operands decide ordered comparisons using the row filter’s key order.
 For Text and Blob, fixed operands also decide prefix, suffix and substring
 predicates using their original bytes. Frozen IcyDB `6d421e3` separates strict
 and case-folded text comparisons in `db/predicate/semantics/mod.rs`; IC DB
@@ -2920,6 +2925,13 @@ query. Like Toko's terminal, it probes for two even after `limit(1)`; IC DB
 reports `MultipleMatches` on a second row and `Limit` when a partial page
 cannot establish cardinality. A continuation refuses. Use `first()` when
 the caller wants the first match in order. Schema uniqueness controls writes.
+For a record projection, `first_as::<R>()` and `try_one_as::<R>()` apply the
+same cardinality rules to the output of `fetch_as::<R>()`. Byte limits apply
+to the projected records.
+For DISTINCT in first-occurrence order, the first observed class establishes
+the first result and a second class disproves uniqueness. Returning a sole class
+still requires exhaustion. Selecting the first result through a complete sort
+also requires exhaustion.
 
 For application listings use fluent predicates, typed projections, directed
 ordering and live cursors. Grouped counts for a bounded key set compose
@@ -3073,8 +3085,7 @@ An equality alternative inside an OR cannot supply that guarantee. For sparse un
 membership admission. This works even when the requested order traverses another
 index or primary storage. These projections use the ordinary scanner and its live
 page limits. Other live projections must form the
-leading tuple of a selected index after fixed prefix components. Predicates may
-read only projected fields or fields fixed by that actual selected prefix.
+leading tuple of a selected index after fixed prefix components. Residual predicates may vary inside that tuple.
 Ordering supplies the admitted prefix count for both automatic and explicit paths;
 DISTINCT does not independently infer it from equality terms. All operands and
 residual predicates remain validated, including contradictions.
@@ -3082,15 +3093,12 @@ Projection field order need not match index order; equality
 covers the complete selected tuple.
 The existing key codec supplies equality, including optional absence. One bounded
 previous-key buffer suppresses adjacent duplicates; examined duplicates still
-undergo whole-row/index validation and consume work. An exclusive cursor's last
-processed physical key supplies the previous equivalence class even if its row
-has been deleted. An inclusive byte-retry cursor starts at an unreturned class.
-Every duplicate class is either wholly rejected or emitted before continuation
-advances through it. Thus a cursor inside a rejected class cannot hide a later
-match in that same class. Filters varying within a class use complete collection
-instead of a live cursor: an early nonmatch cannot hide a later matching duplicate.
-Cursor binding includes DISTINCT but
-its frame, stored schema and durable state do not change. Live updates retain
+undergo whole-row/index validation and consume work. An exclusive cursor carries the last processed physical key and distinguishes
+a class already emitted from one still awaiting its first match. Resuming
+after a nonmatch can therefore emit a later match in the same class. Inclusive
+byte retries revisit an unreturned value. The new exclusive flag uses the
+existing frame size; readers predating the flag refuse that cursor.
+Live updates retain
 live-enumeration limitations, never an exact aggregate input guarantee.
 
 This retains IcyDB's ordered-adjacent proof and cross-page equality invariants
@@ -3122,7 +3130,36 @@ budget refusal invariants from `db/executor/projection/materialize/distinct`
 and its tests at the same frozen revision. It does not copy global replay/window
 pagination, canonical universal values or hashing machinery. Existing comparison
 keys suffice for the admitted type surface; direct adjacent execution still needs
-no set. Larger paginated/resumable DISTINCT remains product work. Native witnesses
+no set. For scattered duplicates across more than one call, applications needing
+exact values in canonical key order can already use `start_group_count::<K>`,
+resume with `group_page`, and map completed rows to their keys. This path admits
+at most 32 keys within the retained frame and uses revision invalidation.
+Two bounded compositions cover some larger results. When a full scan fits one
+call, a single projected field can be enumerated in ascending value order by
+repeating a sorted DISTINCT query with a strict lower bound on the last
+returned value. A short page establishes exhaustion; an exact multiple needs
+one final empty query. After an absent value, use `filter_present`. Without an index,
+every page scans the source again; each call reads live data. When a scan needs
+several calls and the value domain has known disjoint ranges, a retained group
+job per range can enumerate the keys. Each range must fit the 32-key/frame
+bounds, including all matches, and the ranges must cover the domain (handle
+absence separately). To claim one exact result, accept only completed partitions
+from the same source revision of the same database incarnation; discard a mixed
+run. Each unindexed partition scans the source once. Frozen IcyDB’s projection
+facade at `6d421e3` replayed input and skipped emitted outputs for global DISTINCT.
+These explicit queries expose their scan costs and use existing predicates and jobs.
+For an unknown domain, `start_distinct::<K>` and `resume_distinct::<K>`
+scan scattered input once using the retained-job revision, sequence and expiry
+contract. The grouping table retains one projected record per canonical key.
+Its dedicated versioned job binding selects a checkpoint containing the one-byte
+tuple count and the record bytes for each tuple in key order. The one-byte
+tuple count permits up to 255 keys; key, memory and 16 KiB whole-frame limits can
+refuse sooner. The scanner saves no per-key aggregate or frequency.
+After completion, `limit` selects up to 32 keys per page. Only projected record
+bytes count toward the output budget. Cursor positions above 32 use transport
+version 2; existing group cursor bytes retain version 1. A changed source
+invalidates an unfinished run. Completed pages keep their captured revision.
+Larger retained sets and resumable first-occurrence order remain product work. Native witnesses
 cover result/work/byte/cardinality/state/key bounds, optional text, Decimal equality,
 varying predicates and corruption in a later duplicate; Wasm/CLI witnesses cover
 complete results and refusals across upgrade. Durable state and existing adjacent
@@ -5083,13 +5120,10 @@ Any proposed capability cut needs a concrete reason, not lack of application use
 At adoption, assess measured benefit after consumer changes, missing capabilities
 and supplier responsibilities are included.
 
-The next M4 slice has two concrete decisions before implementation, rather than
-another engine-wide redesign:
-
-| Decision | Owner and completion condition |
-| --- | --- |
-| Shared inspection contract | Canic/application and CLI agree the versioned passive types, method identities, supported maintenance/refusal views and measured metadata bounds. No engine transport dependency or duplicate schema authority. |
-| Target and credential selection | CLI selects an existing host/Platform calling boundary with explicit network, canister and identity; test denied/missing credentials and target mismatch without fallback. Do not introduce another credential store. |
+Canic owns remote inspection, target selection and credentials through
+`canic db inspect`. IC DB qualifies its database behavior behind the mounted
+application handlers. The [mixed-history fixture](../../qualification/README.md#mixed-history-qualification-019)
+exercises authorization, queries, writes and upgrade recovery on PocketIC.
 
 The accepted broad query/type scope remains intact. Nested references/indexes,
 composite primary keys, larger DISTINCT/sorting and broader maintenance envelopes

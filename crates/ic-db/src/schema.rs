@@ -567,9 +567,9 @@ impl Schema {
 
     pub(crate) fn entity_by_name(&self, name: &str) -> Option<&'static EntitySchema> {
         self.entities
-            .iter()
-            .copied()
-            .find(|entity| entity.name == name)
+            .binary_search_by_key(&name, |entity| entity.name)
+            .ok()
+            .map(|position| self.entities[position])
     }
 
     /// Reachable named definitions in logical-name order, without expanding cycles.

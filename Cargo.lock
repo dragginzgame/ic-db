@@ -159,9 +159,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform"
-version = "0.34.18"
+version = "0.34.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b59c6bf641d9d87b4c7cac1012398998b1f4a6217b81bd580b3c84d421b43a2d"
+checksum = "6372d2e30ba4e84ff47824dd1a4542e88215a18890afd9804fed99525bc35962"
 dependencies = [
  "ic-stable-structures",
 ]
@@ -213,9 +213,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.7"
+version = "0.78.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfd78eb2becf9ae4a0a7d46ca4c742d0041eb19b364c50384e4cbc4e5aafdb11"
+checksum = "f1dc2f3cf6f4d861a7584c5e856e50251c1cc081df43123817b0704793905574"
 dependencies = [
  "ic-platform",
  "ic-platform-runtime",

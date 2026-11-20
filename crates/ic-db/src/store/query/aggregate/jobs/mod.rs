@@ -98,6 +98,7 @@ impl Record {
         &self,
         jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
+        changed: bool,
         limit: usize,
         finish: impl FnOnce() -> Result<(T, usize), Error>,
     ) -> Result<JobStep<T>, Error> {
@@ -114,7 +115,7 @@ impl Record {
                 (JobOutcome::Complete(value), bytes)
             }
         };
-        jobs.save(handle, self)?;
+        jobs.save_if_changed(handle, self, changed)?;
 
         Ok(JobStep {
             sequence: self.sequence,
@@ -236,7 +237,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut reducer = self.count_reducer(field)?;
         let expected = field_binding(binding(&plan, &reducer)?, field);
         let bytes = self.request.bytes;
-        prepare(
+        let changed = prepare(
             &*self.db.read()?,
             E::SCHEMA,
             self.request,
@@ -248,7 +249,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             now,
         )?;
 
-        record.finish_and_save(jobs, handle, bytes, || {
+        record.finish_and_save(jobs, handle, changed, bytes, || {
             Ok((reducer.finish()?.into_count()?, 8))
         })
     }
@@ -366,7 +367,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let mut record = jobs.load(handle)?;
         let expected = binding(&plan, &reducer)?;
         let limit = self.request.bytes;
-        prepare(
+        let changed = prepare(
             &*self.db.read()?,
             E::SCHEMA,
             self.request,
@@ -378,7 +379,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
             now,
         )?;
 
-        record.finish_and_save(jobs, handle, limit, || {
+        record.finish_and_save(jobs, handle, changed, limit, || {
             let bytes = reducer.finish()?.into_value()?;
             let size = bytes.as_ref().map_or(0, Vec::len);
             let value = bytes.as_deref().map(decode_record).transpose()?;
@@ -475,13 +476,14 @@ fn prepare<M: Memory>(
     expected: [u8; 32],
     sequence: u64,
     now: Timestamp,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     if record.binding != expected || sequence > record.sequence {
         return Err(Error::InvalidJob);
     }
     if now < record.observed {
         return Err(Error::TimestampRegression);
     }
+    let saved_sequence = record.sequence;
     accumulator.restore(entity, record)?;
     if now >= record.expires && !matches!(record.phase, JobOutcome::Expired) {
         record.phase = JobOutcome::Expired;
@@ -498,7 +500,7 @@ fn prepare<M: Memory>(
                 if cursor.binding != plan.binding {
                     return Err(Error::Corrupt);
                 }
-                plan.validate_position(entity, &cursor.position)?;
+                plan.validate_position(entity, &cursor)?;
 
                 Some(cursor)
             };
@@ -533,7 +535,10 @@ fn prepare<M: Memory>(
             (record.count, record.state) = accumulator.checkpoint()?;
         }
     }
+    // Every advance or phase transition increments the sequence. A later
+    // observation also needs persistence to enforce monotonic time on retries.
+    let changed = record.sequence != saved_sequence || record.observed != now;
     record.observed = now;
 
-    Ok(())
+    Ok(changed)
 }
