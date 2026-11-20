@@ -394,9 +394,9 @@ return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes pe
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
 are not aggregate compositions. Retained grouped operations and completed-output
-pagination use the separate job contract below. Float32 sums and float averages remain open.
+pagination use the separate job contract below.
 
-Count, numeric sums, and integer/Decimal averages also have retained variants. The host creates or
+Count, numeric sums, and integer, Decimal and finite float averages also have retained variants. The host creates or
 opens an `AggregateJobs` store in a separate governed allocation. For example,
 given that store and host-captured timestamps:
 
@@ -410,7 +410,7 @@ let step = db.query::<Entry>().work_limit(64)
 `start_sum::<Record>`/`resume_sum::<Record>` and
 `start_avg::<Record>`/`resume_avg::<Record>` use the same result shapes as their
 synchronous counterparts. Average retains the exact total and present count,
-then divides and rounds once at completion to the declared Decimal scale with
+then divides and rounds once at completion to the input float width or the declared Decimal scale with
 ties to even. Both operation and result scale are bound to the job; a sum cannot
 resume as an average. `JobOutcome` is `Running`, `Complete(value)`, `Invalidated` or `Expired`;
 partial totals are never results. Older sequence numbers return saved progress
@@ -639,10 +639,13 @@ normalizing trailing zeros could fit a different representation. Rescaling and
 integer/Decimal conversion refuse; there is no rounding. Group filters accept
 Decimal operands under the same declared-scale rules as ordinary comparisons.
 
-Float64 sums use a Float64 result field with matching optionality. The reducer
+Float32 and Float64 sums use a result field of the same width and optionality. The reducer
 accumulates exactly and rounds once to nearest with ties to even, including
 after resumption. A final result outside the finite range after rounding returns
 `ArithmeticOverflow`. For example, summing `[1e16, 1.0, -1e16]` returns `1.0`.
+For either float width, `.avg()` and `.group_avg()` divide the exact total by the present count
+before rounding. Averaging two maximum finite values returns that maximum,
+even though their sum exceeds the finite range.
 
 `.group_sum::<KeyRecord, ResultRecord>()` uses the same numeric rules and returns
 `Aggregate<Vec<GroupValue<KeyRecord, ResultRecord>>>`. It retains absent keys

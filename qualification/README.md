@@ -4969,7 +4969,19 @@ negative maximum values. Scalar and grouped jobs save progress before
 cancellation; a stopped canister upgrade reopens the actual database and job
 store. All 32 grouped results preserve their distinct subnormal, and scalar
 sum returns 528 units of the smallest subnormal. Resuming a scalar handle as
-a grouped query refuses.
+a grouped query refuses. The same two-byte-key fixture resumes Float64 averages
+after upgrade. The scalar mean rounds 528 / 160 to three subnormal units,
+and each group rounds its own total divided by five. The fixture also checks
+the same sums and averages in Float32 subnormal units across upgrade.
+
+The write-contention case starts a Float32 scalar average and then a grouped
+average. Each scans 16 candidates and replays its checkpoint before the next
+32-row insert commits. Each then reports invalidation on both resume and retry.
+A previously completed average over the first 32 rows still returns the maximum
+finite Float32 after all writes and an upgrade. A fresh scalar job on the final
+160 rows scans five 32-candidate steps, observes exhaustion on the sixth call,
+and returns three subnormal units. This is a deterministic interleaving test;
+completion rates under sustained application traffic remain unmeasured.
 
 At two-byte group keys all groups fit. At 256-byte keys the attempt to grow a
 16-group checkpoint past the 16 KiB frame limit returns `Limit`; the test

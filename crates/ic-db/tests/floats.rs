@@ -444,12 +444,16 @@ struct MaybeReading {}
 #[record(fields(field(name = "value", value(item(prim = "Float64")))))]
 struct Reading {}
 
+/// Binary32 aggregate over the stored small reading.
+#[record(fields(field(name = "small", value(item(prim = "Float32")))))]
+struct SmallReading {}
+
 /// Group key shared by the synchronous sum checks.
 #[record(fields(field(name = "zone", value(item(prim = "Bool")))))]
 struct Zone {}
 
 #[test]
-fn fluent_float64_sums_round_only_after_all_present_inputs() {
+fn fluent_float_aggregates_round_only_after_all_present_inputs() {
     let runtime = host(VectorMemory::default());
     let mut db = Database::create(
         runtime
@@ -476,7 +480,7 @@ fn fluent_float64_sums_round_only_after_all_present_inputs() {
                 id: id as u64,
                 maybe: value.map(f64v),
                 value: f64v(if value.is_some() { f64::MAX } else { -0.0 }),
-                small: f32v(0.0),
+                small: f32v([0.0, 1.0, 2_f32.powi(-24), f32::from_bits(1)][id]),
                 zone: value.is_some(),
             })
             .unwrap();
@@ -502,6 +506,43 @@ fn fluent_float64_sums_round_only_after_all_present_inputs() {
         db.query::<FloatRow>().limit(1).group_sum::<Zone, Reading>(),
         Err(Error::ArithmeticOverflow)
     ));
+    assert_eq!(
+        db.query::<FloatRow>()
+            .sum::<SmallReading>()
+            .unwrap()
+            .value
+            .unwrap()
+            .small
+            .get()
+            .to_bits(),
+        1_f32.to_bits() + 1
+    );
+    let small_means = db
+        .query::<FloatRow>()
+        .group_avg::<Zone, SmallReading>()
+        .unwrap();
+    assert_eq!(
+        small_means.value[1]
+            .value
+            .as_ref()
+            .unwrap()
+            .small
+            .get()
+            .to_bits(),
+        (1_f32 / 3.0).to_bits()
+    );
+    let mean = db.query::<FloatRow>().avg::<MaybeReading>().unwrap();
+    assert_eq!(mean.value.unwrap().maybe, Some(f64v(1.0 / 3.0)));
+    let means = db.query::<FloatRow>().group_avg::<Zone, Reading>().unwrap();
+    assert_eq!(means.value[1].value.as_ref().unwrap().value, f64v(f64::MAX));
+    assert!(
+        db.query::<FloatRow>()
+            .eq(FloatRow::ZONE, false)
+            .avg::<MaybeReading>()
+            .unwrap()
+            .value
+            .is_none()
+    );
     let scalar = db.query::<FloatRow>().sum::<MaybeReading>().unwrap();
     assert_eq!(scalar.value.unwrap().maybe, Some(f64v(1.0)));
     let groups = db

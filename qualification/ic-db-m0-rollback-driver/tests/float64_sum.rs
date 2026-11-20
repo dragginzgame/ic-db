@@ -1,4 +1,4 @@
-//! Exact Float64 sums using the product scanner, retained job codec and stable store.
+//! Exact finite float aggregates using the product scanner, retained job codec and stable store.
 mod wire_call;
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 type Reply = Result<(u64, u64, Option<Vec<(String, u64)>>), String>;
@@ -9,7 +9,13 @@ async fn product_float_sums_resume_and_refuse_intact() {
             .unwrap();
     let owned = instance().await.unwrap();
     let pic = &owned;
-    for width in [2_u16, 256] {
+    for (width, average, small) in [
+        (2_u16, false, false),
+        (256, false, false),
+        (2, true, false),
+        (2, false, true),
+        (2, true, true),
+    ] {
         let canister = pic.create_canister().await;
         pic.add_cycles(canister, 2_000_000_000_000).await;
         pic.install_canister(canister, wasm.clone(), vec![], None)
@@ -18,10 +24,17 @@ async fn product_float_sums_resume_and_refuse_intact() {
             wire_call::call::<()>(pic, canister, "seed", 1, &(width, round)).await;
         }
         let start = async |grouped| -> Vec<u8> {
-            wire_call::call(pic, canister, "start", 2, &grouped).await
+            wire_call::call(pic, canister, "start", 2, &(grouped, average, small)).await
         };
         let advance = async |grouped: bool, handle: &Vec<u8>, seq: u64, work: u16| -> Reply {
-            wire_call::call(pic, canister, "advance", 3, &(grouped, handle, seq, work)).await
+            wire_call::call(
+                pic,
+                canister,
+                "advance",
+                3,
+                &(grouped, average, small, handle, seq, work),
+            )
+            .await
         };
         let scalar = start(false).await;
         let grouped = start(true).await;
@@ -40,7 +53,12 @@ async fn product_float_sums_resume_and_refuse_intact() {
             "InvalidJob"
         );
         if width == 2 {
-            let expected = (0..32).map(|i| (format!("{i:02}"), i + 1)).collect();
+            let expected = (0..32)
+                .map(|i| {
+                    let units = if average { (i + 3) / 5 } else { i + 1 };
+                    (format!("{i:02}"), units)
+                })
+                .collect();
             assert_eq!(
                 advance(true, &grouped, 1, 256).await.unwrap(),
                 (2, 160, Some(expected))
@@ -52,8 +70,94 @@ async fn product_float_sums_resume_and_refuse_intact() {
         }
         assert_eq!(
             advance(false, &scalar, 1, 256).await.unwrap(),
-            (2, 160, Some(vec![(String::new(), 528)]))
+            (
+                2,
+                160,
+                Some(vec![(String::new(), if average { 3 } else { 528 })])
+            )
         );
     }
+    owned.drop().await;
+}
+
+#[tokio::test]
+async fn committed_writes_invalidate_running_averages_and_preserve_completed_results() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_FLOAT64_SUM_WASM").expect("run make m2-float64-sum"))
+            .unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 2_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let seed = async |round: u8| {
+        wire_call::call::<()>(pic, canister, "seed", 1, &(2_u16, round)).await;
+    };
+    let start = async |grouped: bool| -> Vec<u8> {
+        wire_call::call(pic, canister, "start", 2, &(grouped, true, true)).await
+    };
+    let advance = async |grouped: bool, handle: &[u8], sequence: u64, work: u16| -> Reply {
+        wire_call::call(
+            pic,
+            canister,
+            "advance",
+            3,
+            &(grouped, true, true, handle, sequence, work),
+        )
+        .await
+    };
+
+    seed(0).await;
+    let completed = start(false).await;
+    let original = advance(false, &completed, 0, 64).await.unwrap();
+    assert_eq!(
+        original,
+        (
+            1,
+            32,
+            Some(vec![(String::new(), u64::from(f32::MAX.to_bits()))])
+        )
+    );
+
+    for (grouped, round) in [(false, 1), (true, 2)] {
+        let running = start(grouped).await;
+        assert_eq!(
+            advance(grouped, &running, 0, 16).await.unwrap(),
+            (1, 16, None)
+        );
+        // A retry before the write returns the checkpoint without scanning again.
+        assert_eq!(
+            advance(grouped, &running, 0, 16).await.unwrap(),
+            (1, 16, None)
+        );
+        seed(round).await;
+        assert_eq!(
+            advance(grouped, &running, 1, 16).await.unwrap_err(),
+            "Invalidated"
+        );
+        assert_eq!(
+            advance(grouped, &running, 1, 16).await.unwrap_err(),
+            "Invalidated"
+        );
+    }
+    seed(3).await;
+    seed(4).await;
+    upgrade_stopped(pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(advance(false, &completed, 0, 32).await.unwrap(), original);
+
+    let fresh = start(false).await;
+    for sequence in 0..5 {
+        assert_eq!(
+            advance(false, &fresh, sequence, 32).await.unwrap(),
+            (sequence + 1, (sequence + 1) * 32, None)
+        );
+    }
+    assert_eq!(
+        advance(false, &fresh, 5, 32).await.unwrap(),
+        (6, 160, Some(vec![(String::new(), 3)]))
+    );
     owned.drop().await;
 }

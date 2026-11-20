@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.26.1] - Unreleased
+
+### Queries
+
+- Float32 fields support scalar and grouped `sum` and `avg`, including retained
+  jobs. Results round directly to Float32. Each exact total uses 40 bytes.
+- Float64 fields support scalar and grouped `avg`, including retained jobs.
+  The engine divides the exact total by the number of present values and
+  rounds once to Float64, nearest with ties to even.
+
+### Qualification
+
+- Verified that committed writes invalidate unfinished Float32 scalar and grouped
+  averages, that retries preserve this outcome, and that a completed result
+  remains readable after later writes and a canister upgrade.
+
 ## [0.26.0] - 2026-11-20
 
 ### Schema

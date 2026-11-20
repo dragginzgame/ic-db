@@ -1013,8 +1013,7 @@ flag and the equivalent explicit declarations preserves schema identity.
 Defaults and managed timestamps are authoring/write behavior. The implemented
 copy path preserves managed roles and values; changing them is unsupported.
 Defaults do not run during copying. Exact comparator identities, supported numeric
-results and null/empty outcomes are specified below. Float32 sums, float averages and the
-conditional cells still need operation-specific contracts and witnesses.
+results and null/empty outcomes are specified below. The conditional cells still need operation-specific contracts and witnesses.
 Removing SQL must not silently remove finite floats,
 dates/durations, field-to-field comparison or supported text/collection predicates.
 
@@ -2306,7 +2305,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, Float32 sums, float averages, richer operation combinations and representative contention/query-growth costs |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
@@ -3463,20 +3462,22 @@ width, widening beyond u64/u128, cancellation at both i128 bounds, U256 overflow
 absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
 backing during queries. Retained scalar/grouped sums reuse this arithmetic under
-the job contract above. Float32 accumulation and float averages remain open.
+the job contract above.
 
-**Float64 sum.** For finite binary64 inputs, sum the exact stored
-values and round once to binary64, nearest with ties to even. Ignore absent
+**Finite float aggregates.** For Float32 and Float64 inputs, sum the exact stored
+values and round once to the input width, nearest with ties to even. Ignore absent
 values, return absence when no value was present, and canonicalize an exact zero
 to positive zero. Report `ArithmeticOverflow` if the rounded result would be
 infinite. A large intermediate total can still cancel to a finite result.
 Traversal direction and checkpoint boundaries must preserve result bits.
 
-The [Float64 accumulator](../../crates/ic-db/src/store/query/aggregate/float_sum.rs) uses
+The [float accumulator](../../crates/ic-db/src/store/query/aggregate/float_sum.rs) uses
 an integer in units of the smallest subnormal (2⁻¹⁰⁷⁴). One finite operand uses at
 most 2,098 magnitude bits. The retained job limit of one million candidates
 adds at most 20 bits; 34 signed 64-bit words cover that range (272 bytes for the
-total, plus presence). This applies the exact fixed-point sum and final-rounding
+total, plus presence). Binary32 uses units of 2⁻¹⁴⁹ and needs at most 277
+magnitude bits per operand. Five signed 64-bit words cover a million operands
+(40 bytes). Rounding directly to binary32 avoids rounding twice near a midpoint. This applies the exact fixed-point sum and final-rounding
 principle described by [Radford Neal](https://arxiv.org/abs/1505.05571).
 Frozen IcyDB `6d421e3` separates integer SUM and decimal AVG in
 `db/executor/aggregate/contracts/state/grouped/mod.rs`. IC DB already shares
@@ -3484,14 +3485,17 @@ its numeric reducer across traversal paths. Keep that ownership when adding
 the binary64 arithmetic.
 
 The same numeric reducer serves synchronous and retained sums, scalar and
-grouped. Only Float64 sums allocate the 272-byte total. The Float64 algorithm
+grouped. Float64 sums and averages allocate the 272-byte total. The Float64 algorithm
 has its own job binding and stores 34 little-endian words with the existing
 presence count. Restore checks the exact payload length and bounds its magnitude
 by the number of present inputs times the maximum finite operand.
 The [installed product witness](../../qualification/README.md#float64-sums-across-upgrade)
 covers a real cursor, refusal with preserved backing, a smaller retry and
-reopen after upgrade. Float averages require rounding the exact quotient and
-remain a separate admission decision.
+reopen after upgrade. Both widths reuse the exact total and present count for averages.
+Finalization divides the magnitude by the present count in subnormal units.
+The remainder participates in nearest-even rounding, including when the result
+rounds to canonical zero. Each operation has its own job binding. A mean of
+finite operands always fits Float64, even when the total alone would overflow.
 
 Decimal sums now use the same accumulator at the field's declared scale (0–28).
 The result record must preserve scale and optionality. Each borrowed value supplies
@@ -3567,8 +3571,8 @@ Native witnesses cover every integer width, signed ties, repeating fractions at
 28 places, absence, rounded group comparisons and final overflow. Wasm checks
 rounding, upgrade/reopen, an overflowing sum with a fitting average and unchanged
 stable bytes. The CLI's average selectors choose scale 2. Scalar and grouped
-average jobs reuse this arithmetic and are described above. Floating arithmetic
-remains subsequent work.
+average jobs reuse this Decimal arithmetic. Float64 averages use the binary64
+contract above.
 
 The existing row inspector optionally records at most 16 validated byte ranges,
 including optional presence tags. Filtering/index integrity still use borrowed
@@ -3995,8 +3999,7 @@ floats keep their identities. This adds two small scalar types and extends share
 codec/key traversal, with no new dependency, durable metadata or numeric engine.
 Native/Wasm witnesses cover independently framed schema/row bytes, extreme and
 subnormal ordering, malformed payloads, zero no-ops/unique refusals, final-state
-swaps, complete-message rollback and unchanged upgrade/reopen. Float32 sums and float averages
-remain M2 work; ordered grouping/DISTINCT use the shared component semantics.
+swaps, complete-message rollback and unchanged upgrade/reopen. Ordered grouping/DISTINCT use the shared component semantics.
 
 U256 fields use `value(item(prim="U256"))`, optionally with `opt`; the public
 Rust type is `ic_db::U256`, re-exported from feature-free ethnum 1.5.3. The owned

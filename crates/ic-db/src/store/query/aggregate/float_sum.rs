@@ -1,30 +1,52 @@
-//! Exact signed sums in units of the smallest binary64 subnormal.
+//! Exact signed sums in units of the smallest subnormal of the input format.
 
-use crate::{Error, Float64};
+use crate::{Error, Float32, Float64};
 
-const WORDS: usize = 34;
-const FRACTION: u64 = (1 << 52) - 1;
+// Capacity includes up to one million finite inputs and a sign bit.
+pub(super) type Binary32Sum = FloatSum<5, 23, 8>;
+pub(super) type Binary64Sum = FloatSum<34, 52, 11>;
 
 #[derive(Clone)]
-pub(super) struct FloatSum {
+pub(super) struct FloatSum<const WORDS: usize, const FRAC: usize, const EXP: usize> {
     // Little-endian two's complement, in units of the smallest subnormal.
-    // At most one million finite operands require 2118 magnitude bits.
     total: [u64; WORDS],
 }
 
-impl Default for FloatSum {
+impl<const WORDS: usize, const FRAC: usize, const EXP: usize> Default
+    for FloatSum<WORDS, FRAC, EXP>
+{
     fn default() -> Self {
         Self { total: [0; WORDS] }
     }
 }
 
-impl FloatSum {
+impl Binary32Sum {
+    pub(super) fn add(&mut self, value: Float32) {
+        self.add_bits(u64::from(value.get().to_bits()));
+    }
+
+    pub(super) fn finish(&self, divisor: u64) -> Result<Float32, Error> {
+        Float32::from_canonical_bits(self.rounded_bits(divisor)? as u32).ok_or(Error::Corrupt)
+    }
+}
+
+impl Binary64Sum {
+    pub(super) fn add(&mut self, value: Float64) {
+        self.add_bits(value.get().to_bits());
+    }
+
+    pub(super) fn finish(&self, divisor: u64) -> Result<Float64, Error> {
+        Float64::from_canonical_bits(self.rounded_bits(divisor)?).ok_or(Error::Corrupt)
+    }
+}
+
+impl<const WORDS: usize, const FRAC: usize, const EXP: usize> FloatSum<WORDS, FRAC, EXP> {
+    const EXP_MASK: u64 = (1 << EXP) - 1;
     pub(super) const BYTES: usize = WORDS * 8;
 
-    pub(super) fn add(&mut self, value: Float64) {
-        let bits = value.get().to_bits();
-        let exponent = ((bits >> 52) & 0x7ff) as usize;
-        let mantissa = (bits & FRACTION) | (u64::from(exponent != 0) << 52);
+    fn add_bits(&mut self, bits: u64) {
+        let exponent = ((bits >> FRAC) & Self::EXP_MASK) as usize;
+        let mantissa = (bits & ((1 << FRAC) - 1)) | (u64::from(exponent != 0) << FRAC);
         let shift = exponent.saturating_sub(1);
         let offset = shift % 64;
         let low = mantissa << offset;
@@ -41,7 +63,7 @@ impl FloatSum {
                 _ if !carry => break,
                 _ => 0,
             };
-            (*word, carry) = if bits >> 63 == 0 {
+            (*word, carry) = if bits >> (FRAC + EXP) == 0 {
                 word.carrying_add(term, carry)
             } else {
                 word.borrowing_sub(term, carry)
@@ -54,17 +76,24 @@ impl FloatSum {
     }
 
     pub(super) fn restore(&mut self, present: u64, bytes: &[u8]) -> Result<(), Error> {
-        let encoded: &[u8; Self::BYTES] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-        for (word, encoded) in self.total.iter_mut().zip(encoded.as_chunks::<8>().0) {
+        if bytes.len() != Self::BYTES {
+            return Err(Error::Corrupt);
+        }
+        for (word, encoded) in self.total.iter_mut().zip(bytes.as_chunks::<8>().0) {
             *word = u64::from_le_bytes(*encoded);
         }
-        // Every term is at most (2^53 - 1) << 2045 subnormal units.
-        let maximum = u128::from(present) * u128::from((1_u64 << 53) - 1);
+        // Maximum finite significand times the count, shifted into subnormal units.
+        let maximum = u128::from(present) * u128::from((1_u64 << (FRAC + 1)) - 1);
+        let shift = Self::EXP_MASK as usize - 2;
+        let offset = shift % 64;
         let mut bound = [0; WORDS];
-        bound[31] = (maximum << 61) as u64;
-        bound[32] = (maximum >> 3) as u64;
-        bound[33] = (maximum >> 67) as u64;
-        if self.magnitude().1.iter().rev().gt(bound.iter().rev()) {
+        let mut high = maximum >> (64 - offset);
+        bound[shift / 64] = (maximum << offset) as u64;
+        for word in &mut bound[shift / 64 + 1..] {
+            *word = high as u64;
+            high >>= 64;
+        }
+        if high == 0 && self.magnitude().1.iter().rev().gt(bound.iter().rev()) {
             return Err(Error::Corrupt);
         }
         Ok(())
@@ -82,38 +111,54 @@ impl FloatSum {
         (negative, words)
     }
 
-    pub(super) fn finish(&self) -> Result<Float64, Error> {
-        let (negative, words) = self.magnitude();
-        let Some(top) = words.iter().rposition(|&w| w != 0) else {
-            return Ok(Float64::default());
-        };
-        let highest = top * 64 + 63 - words[top].leading_zeros() as usize;
-        if highest > 2097 {
+    fn rounded_bits(&self, divisor: u64) -> Result<u64, Error> {
+        let (negative, mut words) = self.magnitude();
+        let divisor = u128::from(divisor);
+        let mut remainder = 0;
+        if divisor != 1 {
+            // Long division in subnormal units. Keep the fractional unit for the
+            // final rounding decision, including underflow and near-midpoints.
+            for word in words.iter_mut().rev() {
+                let dividend = (remainder << 64) | u128::from(*word);
+                *word = (dividend / divisor) as u64;
+                remainder = dividend % divisor;
+            }
+        }
+        let highest = words
+            .iter()
+            .rposition(|&w| w != 0)
+            .map_or(0, |top| top * 64 + 63 - words[top].leading_zeros() as usize);
+        if highest > Self::EXP_MASK as usize - 2 + FRAC {
             return Err(Error::ArithmeticOverflow);
         }
-        let shift = highest.saturating_sub(52);
+        let shift = highest.saturating_sub(FRAC);
         let index = shift / 64;
         let offset = shift % 64;
         let mut leading = words[index] >> offset;
         if offset != 0 {
             leading |= words[index + 1] << (64 - offset);
         }
-        if shift != 0 {
+        if shift == 0 {
+            if 2 * remainder > divisor || (2 * remainder == divisor && leading & 1 != 0) {
+                leading += 1;
+            }
+        } else {
             let guard = (shift - 1) % 64;
             let guard_word = (shift - 1) / 64;
             let half = 1_u64 << guard;
-            let sticky =
-                words[guard_word] & (half - 1) != 0 || words[..guard_word].iter().any(|&v| v != 0);
+            let sticky = remainder != 0
+                || words[guard_word] & (half - 1) != 0
+                || words[..guard_word].iter().any(|&v| v != 0);
             if words[guard_word] & half != 0 && (sticky || leading & 1 != 0) {
                 leading += 1;
             }
         }
         // The implicit leading bit supplies the low exponent unit for normal results.
-        let magnitude = ((shift as u64) << 52) + leading;
-        if magnitude >= f64::INFINITY.to_bits() {
+        let magnitude = ((shift as u64) << FRAC) + leading;
+        if magnitude >= (Self::EXP_MASK << FRAC) {
             return Err(Error::ArithmeticOverflow);
         }
-        Float64::from_canonical_bits(magnitude | (u64::from(negative) << 63)).ok_or(Error::Corrupt)
+        Ok(magnitude | (u64::from(negative && magnitude != 0) << (FRAC + EXP)))
     }
 }
 
@@ -121,13 +166,13 @@ impl FloatSum {
 fn check(inputs: &[Option<f64>], expected: Result<Option<u64>, ()>) {
     for reverse in [false, true] {
         for split in 0..=inputs.len() {
-            let mut sum = FloatSum::default();
+            let mut sum = Binary64Sum::default();
             let mut present = 0;
             for i in 0..=inputs.len() {
                 if i == split {
                     // Simulate restoring numeric state through little-endian bytes.
                     let saved = sum.checkpoint();
-                    sum = FloatSum::default();
+                    sum = Binary64Sum::default();
                     sum.restore(present, saved.as_flattened()).unwrap();
                 }
                 if i < inputs.len()
@@ -138,7 +183,7 @@ fn check(inputs: &[Option<f64>], expected: Result<Option<u64>, ()>) {
                 }
             }
             let result = sum
-                .finish()
+                .finish(1)
                 .map(|x| (present != 0).then(|| x.get().to_bits()))
                 .map_err(|_| ());
             assert_eq!(result, expected);
@@ -178,21 +223,21 @@ fn verify_float_sum() {
     check(&[Some(max), Some(tiny)], Ok(Some(max.to_bits())));
     check(&[Some(max), Some(2_f64.powi(970))], Err(()));
     check(&[Some(-max), Some(-max)], Err(()));
-    let mut sum = FloatSum::default();
+    let mut sum = Binary64Sum::default();
     for _ in 0..500_000 {
         sum.add(Float64::try_new(max).unwrap());
     }
     for _ in 0..500_000 {
         sum.add(Float64::try_new(-max).unwrap());
     }
-    assert_eq!(sum.finish().unwrap(), Float64::default());
+    assert_eq!(sum.finish(1).unwrap(), Float64::default());
 }
 
 #[test]
 fn checkpoint_refuses_an_impossible_sum_for_its_count() {
-    let mut sum = FloatSum::default();
+    let mut sum = Binary64Sum::default();
     for value in [f64::MAX, -f64::MAX] {
-        let mut source = FloatSum::default();
+        let mut source = Binary64Sum::default();
         source.add(Float64::try_new(value).unwrap());
         source.add(Float64::try_new(value).unwrap());
         let saved = source.checkpoint();
@@ -205,6 +250,66 @@ fn checkpoint_refuses_an_impossible_sum_for_its_count() {
             Err(Error::Corrupt)
         ));
         sum.restore(2, saved.as_flattened()).unwrap();
-        assert!(matches!(sum.finish(), Err(Error::ArithmeticOverflow)));
+        assert!(matches!(sum.finish(1), Err(Error::ArithmeticOverflow)));
     }
+}
+
+#[test]
+fn averages_round_the_exact_quotient_once() {
+    let tiny = f64::from_bits(1);
+    let next = f64::from_bits(1.0_f64.to_bits() + 1);
+    for (inputs, expected) in [
+        (vec![f64::MAX, f64::MAX], f64::MAX),
+        (vec![-tiny, 0.0], 0.0),
+        (vec![tiny, tiny, 0.0], tiny),
+        (vec![tiny, 2.0 * tiny], 2.0 * tiny),
+        (vec![1.0, next], 1.0),
+        // One fractional subnormal unit in the quotient breaks a normal midpoint tie.
+        (vec![2.0, next * 2.0, tiny, 0.0], next),
+    ] {
+        let mut total = Binary64Sum::default();
+        for value in &inputs {
+            total.add(Float64::try_new(*value).unwrap());
+        }
+        assert_eq!(
+            total.finish(inputs.len() as u64).unwrap().get().to_bits(),
+            expected.to_bits()
+        );
+    }
+}
+
+#[test]
+fn binary32_uses_its_own_units_and_rounds_directly() {
+    let next = f32::from_bits(1_f32.to_bits() + 1);
+    let tiny = f32::from_bits(1);
+    for (values, divisor, expected) in [
+        (vec![1.0, 2_f32.powi(-24), tiny], 1, next),
+        (vec![2.0, 2.0 * next, tiny, 0.0], 4, next),
+        (vec![f32::MAX, tiny, -f32::MAX], 1, tiny),
+        (vec![f32::MAX, f32::MAX], 2, f32::MAX),
+        (vec![-tiny, 0.0], 2, 0.0),
+    ] {
+        let mut sum = Binary32Sum::default();
+        for value in &values {
+            sum.add(Float32::try_new(*value).unwrap());
+        }
+        let saved = sum.checkpoint();
+        let mut restored = Binary32Sum::default();
+        restored
+            .restore(values.len() as u64, saved.as_flattened())
+            .unwrap();
+        assert_eq!(
+            restored.finish(divisor).unwrap().get().to_bits(),
+            expected.to_bits()
+        );
+    }
+    let mut sum = Binary32Sum::default();
+    for _ in 0..2 {
+        sum.add(Float32::try_new(f32::MAX).unwrap());
+    }
+    assert!(matches!(sum.finish(1), Err(Error::ArithmeticOverflow)));
+    assert!(matches!(
+        Binary32Sum::default().restore(1, sum.checkpoint().as_flattened()),
+        Err(Error::Corrupt)
+    ));
 }

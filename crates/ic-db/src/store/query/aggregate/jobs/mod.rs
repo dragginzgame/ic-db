@@ -254,7 +254,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    /// Retain an integer, Decimal or Float64 sum job with synchronous sum's exact result shape.
+    /// Retain an integer, Decimal or finite float sum job with synchronous sum's exact result shape.
     /// Same expiry, capacity and query-binding contract as [`Self::start_count`].
     /// # Errors
     /// Refuses unsupported sum shapes, query admission, expiry or occupied capacity.
@@ -287,8 +287,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Sum)
     }
 
-    /// Retain an exact integer/Decimal average. R declares one Decimal field
-    /// with the source name and optionality, and its desired result scale (0–28).
+    /// Retain an exact finite float or integer/Decimal average. R declares a matching float or a Decimal field
+    /// with the source name and optionality. Decimal results declare scale 0–28.
     /// Shares count/sum's expiry, capacity and revision contract. Average versus
     /// sum and the result scale are bound to the job; they cannot change on resume.
     /// # Errors
@@ -306,7 +306,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     /// Advance average under count's bounded work/retry/invalidation contract.
     /// Retain the exact total and present count across steps; divide and round once
-    /// at completion to the declared Decimal scale, nearest with ties to even.
+    /// at completion to the input float width or the declared Decimal scale, nearest with ties to even.
     /// Empty/all-absent input completes as None. Never average rounded page means.
     /// # Errors
     /// Count's refusals plus arithmetic overflow or completed-result byte limits.
@@ -411,11 +411,15 @@ fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
         Reducer::Numeric(state) => {
             hash.update([state.operation as u8, state.position as u8]);
             let output = state.output();
-            if matches!(
-                crate::key::operand_type(output.value),
-                crate::FieldType::Float64
-            ) {
-                hash.update(b"binary64-exact-sum:v1\0");
+            match (crate::key::operand_type(output.value), state.operation) {
+                (crate::FieldType::Float32, _) => hash.update(b"binary32-exact:v1\0"),
+                (crate::FieldType::Float64, Operation::Sum) => {
+                    hash.update(b"binary64-exact-sum:v1\0")
+                }
+                (crate::FieldType::Float64, Operation::Average) => {
+                    hash.update(b"binary64-exact-average:v1\0")
+                }
+                _ => {}
             }
             let mut bytes = Vec::new();
             crate::schema::encode_type(&mut bytes, output.value, output.optional, false)?;

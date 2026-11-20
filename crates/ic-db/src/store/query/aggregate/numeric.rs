@@ -1,6 +1,6 @@
-//! Exact integer, decimal and Float64 totals, with rounding at completion.
+//! Exact integer, decimal and finite float totals, with rounding at completion.
 
-use super::float_sum::FloatSum;
+use super::float_sum::{Binary32Sum, Binary64Sum};
 use super::{super::Plan, Aggregate, Completed, GroupValue, Query, Reducer};
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
@@ -10,13 +10,13 @@ use ethnum::I256;
 use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
-    /// Sum one integer, Decimal or Float64 field into a single-field result record with the same field
+    /// Sum one integer, Decimal or finite float field into a single-field result record with the same field
     /// name and optionality. Scalar newtype inputs use their declared primitive.
     /// The result may preserve the exact input newtype. A primitive integer result may widen within
     /// the same signed/unsigned family. Unsigned results may widen to U256.
     /// Decimal results preserve the source's declared scale; coefficients accumulate
     /// exactly in I256 and must fit i128 at completion. No rescaling or rounding.
-    /// Float64 sums finite values exactly, rounding once to nearest with ties to even.
+    /// Float32 and Float64 sum finite values exactly, rounding once to nearest with ties to even.
     /// Empty/all-absent input returns `None`; present zero returns a record.
     /// Signed accumulation uses I256, so cancelling prefixes do not cause narrow
     /// overflow. Unsigned accumulation uses checked U256. The final total must fit
@@ -34,7 +34,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.scalar_value(&plan, reducer)
     }
 
-    /// Sum one integer, Decimal or Float64 operand per exact grouping record, retaining absent keys
+    /// Sum one integer, Decimal or finite float operand per exact grouping record, retaining absent keys
     /// and all-absent groups. R selects the same explicit result widening as sum.
     /// Group predicates use R's result type; e.g. Nat128 totals require u128 operands.
     /// Complete every group before filtering, ordering and output limits.
@@ -51,14 +51,13 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.group_values(&plan, reducer)
     }
 
-    /// Average an integer or Decimal field (including a scalar newtype) into a single-field Decimal record.
-    /// Preserve the field name and optionality. A primitive Decimal selects scale 0–28;
-    /// a Decimal newtype result preserves the exact input newtype and its scale.
-    /// Ignore absent operands, returning `None` for empty/all-absent input.
-    /// Divide the exact total by the present count once, rounding to nearest with
-    /// ties to even at the result scale. No floating-point conversion or scale fallback.
+    /// Average present values into a single-field record with matching name and optionality.
+    /// Float inputs preserve their width. Integer and Decimal inputs produce Decimal at the
+    /// declared result scale (0–28). A named result preserves the source newtype.
+    /// Divide the exact total by the present count and round once, nearest with
+    /// ties to even. Empty and all-absent inputs return `None`.
     /// # Errors
-    /// Refuses nonnumeric inputs, non-Decimal results, changed optionality, cursors,
+    /// Refuses unsupported input/result pairs, changed optionality, cursors,
     /// DISTINCT, input ordering and group modifiers. Work exhaustion returns `Limit`;
     /// an unrepresentable rounded coefficient returns `ArithmeticOverflow`.
     /// Output-byte bounds match [`Self::sum`]. No partial average is returned.
@@ -70,9 +69,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.scalar_value(&plan, reducer)
     }
 
-    /// Average per group using [`Self::avg`]'s Decimal scale and rounding contract.
+    /// Average per group using [`Self::avg`]'s result type and rounding contract.
     /// Finalize all groups before filtering, ordering and output limits; these
-    /// operations compare the rounded Decimal results. Retain all-absent groups.
+    /// operations compare the rounded results. Retain all-absent groups.
     /// # Errors
     /// Scalar average admission/range errors and grouped work/state/output bounds
     /// apply. Overflow in an excluded group still refuses the whole query.
@@ -117,7 +116,8 @@ pub(in crate::store::query) struct NumericAggregate {
 }
 #[derive(Clone)]
 enum Total {
-    Float(Box<FloatSum>),
+    Float32(Box<Binary32Sum>),
+    Float64(Box<Binary64Sum>),
     Signed(I256),
     Unsigned(U256),
 }
@@ -158,9 +158,8 @@ impl NumericAggregate {
             _ => 0,
         };
         let total = match (operation, input, result_type) {
-            (Operation::Sum, FieldType::Float64, FieldType::Float64) => {
-                Total::Float(Box::default())
-            }
+            (_, FieldType::Float32, FieldType::Float32) => Total::Float32(Box::default()),
+            (_, FieldType::Float64, FieldType::Float64) => Total::Float64(Box::default()),
             (
                 Operation::Sum,
                 FieldType::Decimal { scale: from },
@@ -203,7 +202,13 @@ impl NumericAggregate {
             return Ok(());
         }
         match &mut self.total {
-            Total::Float(total) => {
+            Total::Float32(total) => {
+                let IndexValue::Float32(value) = value else {
+                    return Err(Error::Corrupt);
+                };
+                total.add(value);
+            }
+            Total::Float64(total) => {
                 let IndexValue::Float64(value) = value else {
                     return Err(Error::Corrupt);
                 };
@@ -251,7 +256,8 @@ impl NumericAggregate {
         match &self.total {
             Total::Signed(n) => write(self.count, &n.to_be_bytes()),
             Total::Unsigned(n) => write(self.count, &n.to_be_bytes()),
-            Total::Float(sum) => write(self.count, sum.checkpoint().as_flattened()),
+            Total::Float32(sum) => write(self.count, sum.checkpoint().as_flattened()),
+            Total::Float64(sum) => write(self.count, sum.checkpoint().as_flattened()),
         }
     }
 
@@ -263,17 +269,18 @@ impl NumericAggregate {
             Total::Unsigned(n) => {
                 *n = U256::from_be_bytes(bytes.try_into().map_err(|_| Error::Corrupt)?)
             }
-            Total::Float(sum) => sum.restore(count, bytes)?,
+            Total::Float32(sum) => sum.restore(count, bytes)?,
+            Total::Float64(sum) => sum.restore(count, bytes)?,
         }
         self.count = count;
         Ok(())
     }
 
     pub(super) fn total_bytes(&self) -> usize {
-        if matches!(self.total, Total::Float(_)) {
-            FloatSum::BYTES
-        } else {
-            32
+        match self.total {
+            Total::Float32(_) => Binary32Sum::BYTES,
+            Total::Float64(_) => Binary64Sum::BYTES,
+            Total::Signed(_) | Total::Unsigned(_) => 32,
         }
     }
 
@@ -295,12 +302,9 @@ impl NumericAggregate {
             return Ok(Completed::Value(None));
         }
         let result_type = crate::key::operand_type(self.output.value);
-        if matches!(self.operation, Operation::Average) {
-            let FieldType::Decimal { scale } = result_type else {
-                return Err(Error::Corrupt);
-            };
+        if let (Operation::Average, FieldType::Decimal { scale }) = (self.operation, result_type) {
             let numerator = match self.total {
-                Total::Float(_) => return Err(Error::Corrupt),
+                Total::Float32(_) | Total::Float64(_) => return Err(Error::Corrupt),
                 Total::Signed(n) => n,
                 // A nonnegative integer total this large cannot produce a Decimal
                 // coefficient fitting i128 even after division by the retained
@@ -328,9 +332,18 @@ impl NumericAggregate {
                 IndexValue::$variant(value).append_component(self.output.optional, &mut key);
             }};
         }
+        let divisor = match self.operation {
+            Operation::Sum => 1,
+            Operation::Average => self.count,
+        };
         match (self.total, result_type) {
-            (Total::Float(sum), FieldType::Float64) => {
-                let value = sum.finish()?;
+            (Total::Float32(sum), FieldType::Float32) => {
+                let value = sum.finish(divisor)?;
+                output.float32(value)?;
+                IndexValue::Float32(value).append_component(self.output.optional, &mut key);
+            }
+            (Total::Float64(sum), FieldType::Float64) => {
+                let value = sum.finish(divisor)?;
                 output.float64(value)?;
                 IndexValue::Float64(value).append_component(self.output.optional, &mut key);
             }

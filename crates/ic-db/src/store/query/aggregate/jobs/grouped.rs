@@ -121,7 +121,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 
-    /// Retain grouped integer, Decimal or Float64 sums with `group_sum`'s exact result types.
+    /// Retain grouped integer, Decimal or finite float sums with `group_sum`'s exact result types.
     /// Uses grouped counts' 32-group/16 KiB frame, revision and expiry bounds.
     /// Key/result types, operation and completed-group selection bind the job.
     /// # Errors
@@ -156,7 +156,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     }
 
     /// Retain grouped averages, saving exact totals and each group's present count.
-    /// Round once at completion to R's Decimal scale, nearest with ties to even.
+    /// Round once at completion to the input float width or R's Decimal scale, nearest with ties to even.
     /// Bounds and query binding match `start_group_sum`; no precision fallback.
     /// # Errors
     /// Refuses invalid average shapes, expiry or exhausted job capacity.

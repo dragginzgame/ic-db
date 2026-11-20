@@ -1,4 +1,4 @@
-//! Installed product sums over 32 text groups with canceling Float64 inputs.
+//! Installed product sums over 32 text groups with canceling Float32 and Float64 inputs.
 #![deny(unsafe_code)]
 
 use ic_db::design::prelude::*;
@@ -17,6 +17,7 @@ struct Rows {}
 
 #[entity(store = Rows, pk(field = "id"), fields(
     field(name = "id", value(item(prim = "Nat64"))),
+    field(name = "small", value(item(prim = "Float32"))),
     field(name = "label", value(item(prim = "Text", max_bytes = 256))),
     field(name = "value", value(item(prim = "Float64")))
 ))]
@@ -27,6 +28,9 @@ struct Label {}
 
 #[record(fields(field(name = "value", value(item(prim = "Float64")))))]
 struct Reading {}
+
+#[record(fields(field(name = "small", value(item(prim = "Float32")))))]
+struct SmallReading {}
 
 const ROWS: &str = "probe.rows.v1";
 const JOBS: &str = "probe.jobs.v1";
@@ -88,10 +92,16 @@ fn seed((width, round): (u16, u8)) {
             2 => f64::from_bits(group + 1),
             _ => -f64::MAX,
         };
+        let small = match round {
+            0 | 1 => f32::MAX,
+            2 => f32::from_bits(group as u32 + 1),
+            _ => -f32::MAX,
+        };
         batch
             .insert(&Sample {
                 id: u64::from(round) * 32 + group,
                 label: format!("{group:0width$}", width = usize::from(width)),
+                small: Float32::try_new(small).unwrap(),
                 value: Float64::try_new(value).unwrap(),
             })
             .unwrap();
@@ -102,15 +112,24 @@ fn seed((width, round): (u16, u8)) {
 #[ic_platform_runtime::update(runtime = ic_platform_runtime, name = "start",
     guard = crate::transport::admit::<2>, decode = crate::transport::decode::<_, 2>,
     encode = crate::transport::encode::<_, 2>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
-fn start(grouped: bool) -> Vec<u8> {
+fn start((grouped, average, small): (bool, bool, bool)) -> Vec<u8> {
+    if small {
+        start_job::<SmallReading>(grouped, average)
+    } else {
+        start_job::<Reading>(grouped, average)
+    }
+}
+
+fn start_job<R: Value>(grouped: bool, average: bool) -> Vec<u8> {
     let (db, mut jobs) = stores();
     let q = db.query::<Sample>();
     let now = Timestamp::from_millis(0);
     let expires = Timestamp::from_millis(100);
-    if grouped {
-        q.start_group_sum::<Label, Reading>(&mut jobs, now, expires)
-    } else {
-        q.start_sum::<Reading>(&mut jobs, now, expires)
+    match (grouped, average) {
+        (true, true) => q.start_group_avg::<Label, R>(&mut jobs, now, expires),
+        (false, true) => q.start_avg::<R>(&mut jobs, now, expires),
+        (true, false) => q.start_group_sum::<Label, R>(&mut jobs, now, expires),
+        (false, false) => q.start_sum::<R>(&mut jobs, now, expires),
     }
     .unwrap()
     .to_bytes()
@@ -120,15 +139,44 @@ type Reply = (u64, u64, Option<Vec<(String, u64)>>);
 #[ic_platform_runtime::update(runtime = ic_platform_runtime, name = "advance",
     guard = crate::transport::admit::<3>, decode = crate::transport::decode::<_, 3>,
     encode = crate::transport::encode::<_, 3>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
-fn advance((grouped, handle, sequence, work): (bool, Vec<u8>, u64, u16)) -> Result<Reply, String> {
+fn advance(
+    (grouped, average, small, handle, sequence, work): (bool, bool, bool, Vec<u8>, u64, u16),
+) -> Result<Reply, String> {
+    if small {
+        advance_job(
+            grouped,
+            average,
+            &handle,
+            sequence,
+            work,
+            |r: SmallReading| u64::from(r.small.get().to_bits()),
+        )
+    } else {
+        advance_job(grouped, average, &handle, sequence, work, |r: Reading| {
+            r.value.get().to_bits()
+        })
+    }
+}
+
+fn advance_job<R: Value>(
+    grouped: bool,
+    average: bool,
+    handle: &[u8],
+    sequence: u64,
+    work: u16,
+    bits: impl Fn(R) -> u64,
+) -> Result<Reply, String> {
     let (db, mut jobs) = stores();
     let q = db.query::<Sample>().limit(32).work_limit(usize::from(work));
-    let handle = JobHandle::from_bytes(&handle).unwrap();
+    let handle = JobHandle::from_bytes(handle).unwrap();
     let now = Timestamp::from_millis(1);
     let step = if grouped {
-        let s = q
-            .resume_group_sum::<Label, Reading>(&mut jobs, &handle, sequence, now)
-            .map_err(|e| format!("{e:?}"))?;
+        let s = if average {
+            q.resume_group_avg::<Label, R>(&mut jobs, &handle, sequence, now)
+        } else {
+            q.resume_group_sum::<Label, R>(&mut jobs, &handle, sequence, now)
+        }
+        .map_err(|e| format!("{e:?}"))?;
         (
             s.sequence,
             s.examined,
@@ -137,25 +185,28 @@ fn advance((grouped, handle, sequence, work): (bool, Vec<u8>, u64, u16)) -> Resu
                 JobOutcome::Complete(page) => Some(
                     page.rows
                         .into_iter()
-                        .map(|r| (r.key.label, r.value.unwrap().value.get().to_bits()))
+                        .map(|r| (r.key.label, bits(r.value.unwrap())))
                         .collect(),
                 ),
-                _ => panic!("unexpected phase"),
+                JobOutcome::Invalidated => return Err("Invalidated".into()),
+                JobOutcome::Expired => return Err("Expired".into()),
             },
         )
     } else {
-        let s = q
-            .resume_sum::<Reading>(&mut jobs, &handle, sequence, now)
-            .map_err(|e| format!("{e:?}"))?;
+        let s = if average {
+            q.resume_avg::<R>(&mut jobs, &handle, sequence, now)
+        } else {
+            q.resume_sum::<R>(&mut jobs, &handle, sequence, now)
+        }
+        .map_err(|e| format!("{e:?}"))?;
         (
             s.sequence,
             s.examined,
             match s.outcome {
                 JobOutcome::Running => None,
-                JobOutcome::Complete(value) => {
-                    Some(vec![(String::new(), value.unwrap().value.get().to_bits())])
-                }
-                _ => panic!("unexpected phase"),
+                JobOutcome::Complete(value) => Some(vec![(String::new(), bits(value.unwrap()))]),
+                JobOutcome::Invalidated => return Err("Invalidated".into()),
+                JobOutcome::Expired => return Err("Expired".into()),
             },
         )
     };
