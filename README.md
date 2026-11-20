@@ -394,9 +394,9 @@ return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes pe
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
 are not aggregate compositions. Retained grouped operations and completed-output
-pagination use the separate job contract below. Float arithmetic remains work.
+pagination use the separate job contract below. Float32 sums and float averages remain open.
 
-Count and integer/Decimal sum and average also have retained variants. The host creates or
+Count, numeric sums, and integer/Decimal averages also have retained variants. The host creates or
 opens an `AggregateJobs` store in a separate governed allocation. For example,
 given that store and host-captured timestamps:
 
@@ -639,7 +639,12 @@ normalizing trailing zeros could fit a different representation. Rescaling and
 integer/Decimal conversion refuse; there is no rounding. Group filters accept
 Decimal operands under the same declared-scale rules as ordinary comparisons.
 
-`.group_sum::<KeyRecord, ResultRecord>()` uses the same integer/Decimal rules and returns
+Float64 sums use a Float64 result field with matching optionality. The reducer
+accumulates exactly and rounds once to nearest with ties to even, including
+after resumption. A final result outside the finite range after rounding returns
+`ArithmeticOverflow`. For example, summing `[1e16, 1.0, -1e16]` returns `1.0`.
+
+`.group_sum::<KeyRecord, ResultRecord>()` uses the same numeric rules and returns
 `Aggregate<Vec<GroupValue<KeyRecord, ResultRecord>>>`. It retains absent keys
 and all-absent groups. Group predicates must use the declared result type, so a
 Nat128 total requires a `u128` operand:
@@ -816,7 +821,10 @@ changes the schema contract; it does not silently backfill stored rows. Inspect
 `DefaultRow` with `db schema`. Nested-record and primary-key defaults are not yet
 supported; no existing authoring attributes were removed.
 
-For database-managed time, declare nonoptional Timestamp fields with
+Add the bare `timestamps` flag inside `#[entity(...)]` to declare both
+`created_at` and `updated_at` as managed `Timestamp` fields. Both count toward
+the 16-field limit and can be indexed explicitly. For a single role, a custom
+field name or a timestamp newtype, declare nonoptional fields with
 `managed = "created_at"` or `managed = "updated_at"`. Each role may appear once,
 independently of the other. Begin writes with `Batch::at(operation_timestamp)`;
 the host supplies one captured time for the whole batch. The insert builder omits

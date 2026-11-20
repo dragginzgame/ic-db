@@ -10,6 +10,43 @@ fn expand(
 }
 
 #[test]
+fn timestamps_expands_identically_to_the_explicit_managed_pair() {
+    let item = quote!(
+        struct Row {}
+    );
+    let common = quote!(pk(field = "id"), index(field = "updated_at"));
+    let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
+    let shorthand = expand(quote!(#common, timestamps, fields(#id)), item.clone()).unwrap();
+    let explicit = expand(
+        quote!(#common, fields(
+            #id,
+            field(name = "created_at", value(item(prim = "Timestamp")), managed = "created_at"),
+            field(name = "updated_at", value(item(prim = "Timestamp")), managed = "updated_at")
+        )),
+        item.clone(),
+    )
+    .unwrap();
+    assert_eq!(shorthand.to_string(), explicit.to_string());
+
+    for conflict in [
+        quote!(field(name = "updated_at", value(item(prim = "Timestamp")))),
+        quote!(field(
+            name = "born",
+            value(item(prim = "Timestamp")),
+            managed = "created_at"
+        )),
+    ] {
+        assert!(
+            expand(
+                quote!(#common, fields(#id, #conflict), timestamps),
+                item.clone()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn entity_field_constants_reject_ambiguous_spellings() {
     let args = quote!(
         pk(field = "id"),

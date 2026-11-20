@@ -1042,6 +1042,7 @@ dependencies = [
 name = "ic-db-m0-aggregation-canister"
 version = "0.0.0"
 dependencies = [
+ "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.23",
  "ic-storage 0.78.8",

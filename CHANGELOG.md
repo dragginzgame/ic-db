@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.26.0] - Unreleased
+
+### Schema
+
+- Add `timestamps` inside `#[entity(...)]` for the standard managed `created_at`
+  and `updated_at` fields. Switching from the equivalent explicit declarations
+  preserves the schema fingerprint. Inspect managed roles in the local fixture:
+
+```sh
+db schema ManagedRow
+```
+
+### Queries
+
+- Fluent scalar and grouped sums now accept Float64 fields in synchronous and
+  retained queries. They round the exact total once, including across upgrades.
+  Empty or all-absent input returns absence; exact cancellation returns positive
+  zero. Finite-result overflow refuses at completion.
+
 ## [0.25.0] - 2026-11-20
 
 ### Queries

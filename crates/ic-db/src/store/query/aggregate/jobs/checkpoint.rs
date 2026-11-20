@@ -36,15 +36,7 @@ impl Accumulator<'_> {
 
                 reader.finish()
             }
-            Self::Scalar(reducer) => {
-                let total: [u8; 32] = record
-                    .state
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| Error::Corrupt)?;
-
-                reducer.restore_job(record.count, total)
-            }
+            Self::Scalar(reducer) => reducer.restore_job(record.count, &record.state),
         }
     }
 
@@ -62,9 +54,7 @@ impl Accumulator<'_> {
                 (seen.len() as u64, writer.finish())
             }
             Self::Scalar(reducer) => {
-                let (count, total) = reducer.job_state()?;
-
-                (count, total.to_vec())
+                reducer.with_job_state(|count, total| (count, total.to_vec()))?
             }
         })
     }
@@ -106,29 +96,24 @@ impl Reducer {
         Ok(())
     }
 
-    fn job_state(&self) -> Result<(u64, [u8; 32]), Error> {
+    fn with_job_state<T>(&self, write: impl FnOnce(u64, &[u8]) -> T) -> Result<T, Error> {
         match self {
-            Self::Count { total, .. } => Ok((*total, [0; 32])),
-            Self::Numeric(state) => Ok(state.checkpoint()),
+            Self::Count { total, .. } => Ok(write(*total, &[0; 32])),
+            Self::Numeric(state) => Ok(state.with_checkpoint(write)),
             _ => Err(Error::InvalidQuery),
         }
     }
 
-    fn restore_job(&mut self, count: u64, total: [u8; 32]) -> Result<(), Error> {
-        if count == 0 && total != [0; 32] {
+    fn restore_job(&mut self, count: u64, bytes: &[u8]) -> Result<(), Error> {
+        if count == 0 && bytes.iter().any(|&b| b != 0) {
             return Err(Error::Corrupt);
         }
         match self {
-            Self::Count { total: value, .. } => {
-                if total != [0; 32] {
-                    return Err(Error::Corrupt);
-                }
-                *value = count;
-            }
-            Self::Numeric(state) => state.restore(count, total),
+            Self::Count { total, .. } if bytes == [0; 32] => *total = count,
+            Self::Count { .. } => return Err(Error::Corrupt),
+            Self::Numeric(state) => state.restore(count, bytes)?,
             _ => return Err(Error::InvalidQuery),
         }
-
         Ok(())
     }
 }
@@ -161,13 +146,13 @@ impl Groups {
 
                 u64::from(selected.is_some())
             } else {
-                let (present, total) = reducer.job_state()?;
-                writer.nat64(present)?;
-                if matches!(reducer, Reducer::Numeric(_)) {
-                    writer.bytes(&total)?;
-                }
-
-                present
+                reducer.with_job_state(|present, total| {
+                    writer.nat64(present)?;
+                    if matches!(reducer, Reducer::Numeric(_)) {
+                        writer.bytes(total)?;
+                    }
+                    Ok::<_, Error>(present)
+                })??
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
         }
@@ -215,14 +200,14 @@ impl Groups {
                 u64::from(present)
             } else {
                 let present = reader.nat64()?;
-                let total = if matches!(reducer, Reducer::Numeric(_)) {
-                    reader.blob(32)?.try_into().map_err(|_| Error::Corrupt)?
+                let total = if let Reducer::Numeric(state) = &reducer {
+                    reader.blob_ref(state.total_bytes())?
                 } else {
                     if present == 0 && matches!(reducer, Reducer::Count { presence: None, .. }) {
                         return Err(Error::Corrupt);
                     }
 
-                    [0; 32]
+                    &[0; 32]
                 };
                 reducer.restore_job(present, total)?;
 

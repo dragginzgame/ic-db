@@ -27,6 +27,7 @@ help:
 	  'make m0-batch                    Run final-state batch constraint probe' \
 	  'make m0-reads                    Run bounded ordering/page/DISTINCT probe' \
 	  'make m0-aggregation              Run only the resumable grouped-sum probe' \
+	  'make m2-float64-sum              Verify exact Float64 queries and retained jobs' \
 	  'make m0-maintenance              Run interrupted schema-maintenance probe' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
@@ -186,6 +187,14 @@ m0-aggregation:
 	@IC_DB_M0_AGGREGATION_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_aggregation_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/aggregation-build.jsonl)" && \
 	  export IC_DB_M0_AGGREGATION_WASM && \
 	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test aggregation revision_aggregation -- --nocapture
+
+.PHONY: m2-float64-sum
+m2-float64-sum:
+	cargo test --locked -p ic-db --lib float_sum
+	@mkdir -p qualification/target/evidence/m2
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-aggregation-canister --example float64_sum --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/float64-build.jsonl
+	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "float64_sum") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/float64-build.jsonl)" && \
+	  IC_DB_FLOAT64_SUM_WASM="$$artifact" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test float64_sum -- --nocapture
 
 m0-batch: m0-core-artifact
 	IC_DB_M0_WASM="$(CURDIR)/qualification/target/evidence/m0/core.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test batch final_state_batches -- --nocapture

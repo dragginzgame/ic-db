@@ -121,7 +121,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
     }
 
-    /// Retain grouped integer/Decimal sums with `group_sum`'s exact result types.
+    /// Retain grouped integer, Decimal or Float64 sums with `group_sum`'s exact result types.
     /// Uses grouped counts' 32-group/16 KiB frame, revision and expiry bounds.
     /// Key/result types, operation and completed-group selection bind the job.
     /// # Errors

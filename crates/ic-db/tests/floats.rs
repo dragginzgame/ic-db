@@ -435,3 +435,85 @@ fn collection_keys_canonicalize_zero_and_inspection_checks_unindexed_payloads() 
     assert!(matches!(db.commit(b), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+/// Optional Float64 projection for sums over present readings.
+#[record(fields(field(name = "maybe", value(opt, item(prim = "Float64")))))]
+struct MaybeReading {}
+
+/// Required Float64 projection for zero and final overflow checks.
+#[record(fields(field(name = "value", value(item(prim = "Float64")))))]
+struct Reading {}
+
+/// Group key shared by the synchronous sum checks.
+#[record(fields(field(name = "zone", value(item(prim = "Bool")))))]
+struct Zone {}
+
+#[test]
+fn fluent_float64_sums_round_only_after_all_present_inputs() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[FloatRow::SCHEMA]).unwrap(),
+        [7; 16],
+    )
+    .unwrap();
+    assert!(
+        db.query::<FloatRow>()
+            .sum::<MaybeReading>()
+            .unwrap()
+            .value
+            .is_none()
+    );
+    let mut batch = Batch::new();
+    for (id, value) in [None, Some(1e16), Some(1.0), Some(-1e16)]
+        .into_iter()
+        .enumerate()
+    {
+        batch
+            .insert(&FloatRow {
+                id: id as u64,
+                maybe: value.map(f64v),
+                value: f64v(if value.is_some() { f64::MAX } else { -0.0 }),
+                small: f32v(0.0),
+                zone: value.is_some(),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<FloatRow>()
+            .eq(FloatRow::ZONE, false)
+            .sum::<Reading>()
+            .unwrap()
+            .value
+            .unwrap()
+            .value
+            .get()
+            .to_bits(),
+        0
+    );
+    assert!(matches!(
+        db.query::<FloatRow>().sum::<Reading>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    assert!(matches!(
+        db.query::<FloatRow>().limit(1).group_sum::<Zone, Reading>(),
+        Err(Error::ArithmeticOverflow)
+    ));
+    let scalar = db.query::<FloatRow>().sum::<MaybeReading>().unwrap();
+    assert_eq!(scalar.value.unwrap().maybe, Some(f64v(1.0)));
+    let groups = db
+        .query::<FloatRow>()
+        .group_sum::<Zone, MaybeReading>()
+        .unwrap()
+        .value;
+    assert_eq!(
+        groups
+            .into_iter()
+            .map(|row| (row.key.zone, row.value.map(|v| v.maybe.unwrap())))
+            .collect::<Vec<_>>(),
+        [(false, None), (true, Some(f64v(1.0)))]
+    );
+}

@@ -254,7 +254,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    /// Retain an integer/Decimal sum job with synchronous sum's exact result shape.
+    /// Retain an integer, Decimal or Float64 sum job with synchronous sum's exact result shape.
     /// Same expiry, capacity and query-binding contract as [`Self::start_count`].
     /// # Errors
     /// Refuses unsupported sum shapes, query admission, expiry or occupied capacity.
@@ -411,6 +411,12 @@ fn binding(plan: &Plan<'_>, reducer: &Reducer) -> Result<[u8; 32], Error> {
         Reducer::Numeric(state) => {
             hash.update([state.operation as u8, state.position as u8]);
             let output = state.output();
+            if matches!(
+                crate::key::operand_type(output.value),
+                crate::FieldType::Float64
+            ) {
+                hash.update(b"binary64-exact-sum:v1\0");
+            }
             let mut bytes = Vec::new();
             crate::schema::encode_type(&mut bytes, output.value, output.optional, false)?;
             hash.update(bytes);

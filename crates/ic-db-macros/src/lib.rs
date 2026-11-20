@@ -292,12 +292,15 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let mut primary = None;
     let mut store = None;
     let mut authored = None;
+    let mut timestamps = None;
     let mut indexes = Vec::new();
     for meta in metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut logical_name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("store") {
             once(&mut store, owner_path(&meta)?, &meta)?;
+        } else if matches!(&meta, Meta::Path(path) if path.is_ident("timestamps")) {
+            once(&mut timestamps, (), &meta)?;
         } else if meta.path().is_ident("pk") {
             let mut key = None;
             for part in meta_items(&meta)? {
@@ -360,6 +363,17 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let store = store.ok_or_else(|| fail("entity requires store = StoreType"))?;
     let primary = primary.ok_or_else(|| fail("entity requires pk"))?;
     let mut authored = authored.ok_or_else(|| fail("entity requires fields"))?;
+    if timestamps.is_some() {
+        for (name, role) in [
+            ("created_at", field::Management::CreatedAt),
+            ("updated_at", field::Management::UpdatedAt),
+        ] {
+            authored.push(Field {
+                managed: Some(role),
+                ..Field::nested(name, field::Kind::Timestamp, false, None)
+            });
+        }
+    }
     let names: BTreeSet<_> = authored.iter().map(|field| &field.name).collect();
     if names.len() != authored.len()
         || authored.is_empty()

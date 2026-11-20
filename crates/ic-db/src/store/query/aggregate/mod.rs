@@ -1,5 +1,6 @@
 //! Bounded aggregates over the shared scanner and exact reducers, without row history.
 
+mod float_sum;
 pub(super) mod jobs;
 mod numeric;
 

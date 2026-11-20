@@ -4960,6 +4960,27 @@ bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.tom
   --locked -p ic-db-m0-rollback-driver --test write_envelope -- --nocapture
 ```
 
+### Float64 sums across upgrade
+
+Run `make m2-float64-sum` for exact arithmetic and installed fluent jobs. The
+fixture writes 160 records in five batches across 32 text groups. Each group
+receives two maximum finite Float64 values, a distinct subnormal, then two
+negative maximum values. Scalar and grouped jobs save progress before
+cancellation; a stopped canister upgrade reopens the actual database and job
+store. All 32 grouped results preserve their distinct subnormal, and scalar
+sum returns 528 units of the smallest subnormal. Resuming a scalar handle as
+a grouped query refuses.
+
+At two-byte group keys all groups fit. At 256-byte keys the attempt to grow a
+16-group checkpoint past the 16 KiB frame limit returns `Limit`; the test
+compares the complete stable backing before and after. A one-candidate retry
+advances the same job from 16 to 17 examined rows. Resource refusal does not
+promise that all 32 wide groups can eventually fit.
+
+The earlier arithmetic-only installation measured 133,696 and 132,736 IC
+instructions in two 512-addition loops. Those measurements excluded query
+scanning, storage, rounding and job encoding. They are not end-to-end query costs.
+
 ### SQLite reference checks
 
 Run `make m2-sqlite-reference` for native differential checks. The same suite
