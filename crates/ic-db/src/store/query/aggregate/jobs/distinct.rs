@@ -33,7 +33,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// it and the per-call work and byte allowances may change between calls.
     /// # Errors
     /// Refuses incomplete-state cursors, changed queries and exhausted tuple, frame
-    /// or output bounds. A refusal preserves the last successful checkpoint.
+    /// or output bounds. Tuple or frame exhaustion returns `Error::Limit` and preserves
+    /// the last successful checkpoint. Reducing the output page size cannot resolve
+    /// retained-state exhaustion. Cancel the job to release its slot.
     /// # Panics
     /// Supplier mutation failures trap the enclosing message.
     pub fn resume_distinct<K: Value>(

@@ -351,59 +351,6 @@ fn fluent_binary_projection(
     (rows, bytes as u32, counter() - start)
 }
 
-// Both measurements use the same admitted query. Only the optional hint varies.
-// measured_listing
-// Compare bounded listings with and without the explicit index hint.
-// guard  : validates the request frame for method 189.
-// limits : 64 KiB request, 64 KiB reply.
-#[cfg(feature = "query-measurements")]
-#[ic_platform_runtime::update(
-    runtime = ic_platform_runtime,
-    name = "measured_listing",
-    guard = crate::transport::admit::<189>,
-    decode = crate::transport::decode_measured::<_, 189>,
-    encode = crate::transport::encode::<_, 189>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn measured_listing(
-    ((hinted, after, work, bytes), counter): crate::transport::Measured<(
-        bool,
-        Option<Vec<u8>>,
-        u32,
-        u32,
-    )>,
-) -> ListingSample {
-    let start = counter();
-    let host = runtime();
-    let db = open(&host);
-    let cursor = decode_cursor(after.as_deref()).unwrap();
-    let mut q = db
-        .query::<Document>()
-        .eq(Document::ENTRY_ID, 1_u64)
-        .eq(Document::PUBLISHED, true)
-        .order_by(&[Document::SCORE, Document::ID])
-        .descending()
-        .limit(20)
-        .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-    if hinted {
-        q = q.using_index("entry_id,score", &[1_u64.into()]);
-    }
-    if let Some(cursor) = &cursor {
-        q = q.after(cursor);
-    }
-    let page = q.fetch_as::<IdOnly>().unwrap();
-
-    (
-        page.rows.into_iter().map(|r| r.id).collect(),
-        page.next.map(|c| c.to_bytes()),
-        page.examined as u32,
-        page.fetched as u32,
-        counter() - start,
-    )
-}
-
 ///
 /// Summary
 /// Groups `id` and `amount` into one record.
@@ -584,7 +531,7 @@ fn id_page(page: ic_db::QueryPage<IdOnly>) -> IdPage {
     )
 }
 
-fn decode_cursor(bytes: Option<&[u8]>) -> Result<Option<QueryCursor>, ic_db::Error> {
+pub(super) fn decode_cursor(bytes: Option<&[u8]>) -> Result<Option<QueryCursor>, ic_db::Error> {
     bytes.map(QueryCursor::from_bytes).transpose()
 }
 
@@ -595,6 +542,3 @@ fn query_error(error: &ic_db::Error) -> u8 {
         _ => 3,
     }
 }
-
-#[cfg(feature = "query-measurements")]
-type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);

@@ -5999,6 +5999,50 @@ fn distinct_single_result_probes_stop_on_proof() {
         query().work_limit(1).try_one_as::<AmountOnly>(),
         Err(Error::Limit)
     ));
+    // A fixed projection has only one possible class; existence still depends on the row.
+    let payload = [7_u8; 100];
+    let fixed = || {
+        query()
+            .eq(Entry::PAYLOAD, &payload)
+            .gte(Entry::AMOUNT, 20_u64)
+    };
+    assert!(matches!(
+        fixed().work_limit(1).try_one_as::<PayloadOnly>(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        fixed()
+            .work_limit(2)
+            .try_one_as::<PayloadOnly>()
+            .unwrap()
+            .unwrap()
+            .payload,
+        payload
+    );
+    assert!(matches!(
+        fixed()
+            .work_limit(2)
+            .test_output_limit(1)
+            .try_one_as::<PayloadOnly>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(
+        query()
+            .eq(Entry::PAYLOAD, &[0_u8])
+            .try_one_as::<PayloadOnly>()
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        query()
+            .using_index("category", &[1_u8.into()])
+            .work_limit(1)
+            .try_one_as::<CategoryOnly>()
+            .unwrap()
+            .unwrap()
+            .category,
+        1
+    );
     // Every row has the same payload. A second row need not mean a second result.
     assert!(matches!(
         query().work_limit(2).try_one_as::<PayloadOnly>(),
@@ -6125,11 +6169,62 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
 }
 
 #[test]
-fn adjacent_distinct_resumes_before_and_after_the_first_matching_owner() {
+fn primary_scan_pages_a_literal_fixed_distinct_projection() {
     let runtime = host(VectorMemory::default());
     let mut db = create(&runtime, 1);
-    // Each class has four owners; only the two middle owners match.
-    for category in 0_u8..40 {
+    let mut batch = Batch::new();
+    for id in [3, 6] {
+        let mut entry = row(id);
+        entry.payload = vec![42];
+        batch.replace(&entry).unwrap();
+    }
+    db.commit(batch).unwrap();
+
+    // Payload is unindexed. Duplicate matches are separated by nonmatching owners.
+    for needle in [42_u8, 99] {
+        for reverse in [false, true] {
+            let mut after = None;
+            let mut results = Vec::new();
+            let mut examined = 0;
+            let operand = [needle];
+            for _ in 0..=8 {
+                let mut query = db
+                    .query::<Entry>()
+                    .eq(Entry::PAYLOAD, &operand)
+                    .distinct()
+                    .work_limit(1);
+                if reverse {
+                    query = query.descending();
+                }
+                if let Some(cursor) = &after {
+                    query = query.after(cursor);
+                }
+                let page = query.fetch_as::<PayloadOnly>().unwrap();
+                assert!(page.examined <= 1);
+                examined += page.examined;
+                results.extend(page.rows.into_iter().map(|row| row.payload));
+                after = page
+                    .next
+                    .map(|cursor| QueryCursor::from_bytes(&cursor.to_bytes()).unwrap());
+                if after.is_none() {
+                    break;
+                }
+            }
+            assert!(after.is_none());
+            assert_eq!(examined, 8);
+            let expected = if needle == 42 { vec![vec![42]] } else { vec![] };
+            assert_eq!(results, expected);
+        }
+    }
+}
+
+#[test]
+fn adjacent_distinct_pages_a_tuple_with_a_fixed_non_index_field() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    // All 256 classes must stream even though a retained DISTINCT job holds at most 255.
+    // Of the four added owners in each class, only the middle two match.
+    for category in 0..=u8::MAX {
         let mut batch = Batch::new();
         for ordinal in 0..4_u64 {
             let id = 9 + u64::from(category) * 4 + ordinal;
@@ -6152,24 +6247,114 @@ fn adjacent_distinct_resumes_before_and_after_the_first_matching_owner() {
                 .eq(Entry::AMOUNT, 1_u64)
                 .work_limit(1);
             if reverse {
-                query = query.descending();
+                query = query.descending().using_index("category", &[]);
             }
             if let Some(after) = &cursor {
                 query = query.after(after);
             }
-            let page = query.fetch_as::<CategoryOnly>().unwrap();
+            let page = query.fetch_as::<CategoryAmount>().unwrap();
             examined += page.examined;
-            assert!(examined <= 168);
-            output.extend(page.rows.into_iter().map(|row| row.category));
+            assert!(page.examined <= 1);
+            assert!(page.next.is_none() || page.examined == 1);
+            assert!(examined <= 8 + 4 * 256);
+            output.extend(page.rows.into_iter().map(|row| (row.category, row.amount)));
             let Some(next) = page.next else { break };
             cursor = Some(QueryCursor::from_bytes(&next.to_bytes()).unwrap());
         }
-        let mut expected: Vec<_> = (0..40).collect();
+        let mut expected: Vec<_> = (0..=u8::MAX).map(|category| (category, 1)).collect();
         if reverse {
             expected.reverse();
         }
         assert_eq!(output, expected);
     }
+    // Either amount can match, so a category-only prefix cannot identify the tuple.
+    assert!(matches!(
+        db.query::<Entry>()
+            .using_index("category", &[])
+            .distinct()
+            .filter_in(Entry::AMOUNT, &[0_u64, 1])
+            .work_limit(1)
+            .fetch_as::<CategoryAmount>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
+fn adjacent_distinct_crosses_a_fixed_interior_index_component() {
+    ///
+    /// Listing
+    /// Orders amounts within each category and publication state.
+    ///
+
+    #[entity(
+        store = ic_db::testing::FixtureStore,
+        pk(field = "id"),
+        index(fields = ["category", "published", "amount"]),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "category", value(item(prim = "Nat8"))),
+            field(name = "published", value(item(prim = "Bool"))),
+            field(name = "amount", value(item(prim = "Nat64")))
+        )
+    )]
+    struct Listing {}
+
+    let fixture = ic_db::testing::Fixture::new("test.listings.v1");
+    let mut db = fixture
+        .create(Schema::new(&[Listing::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    for id in 0..16 {
+        batch
+            .insert(&Listing {
+                id,
+                category: (id % 2) as u8,
+                published: id & 2 == 0,
+                // One unpublished-only amount catches an omitted residual check.
+                amount: if id == 2 { 99 } else { (id / 4) % 2 },
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    for reverse in [false, true] {
+        let mut after = None;
+        let mut output = Vec::new();
+        for _ in 0..=16 {
+            let mut query = db
+                .query::<Listing>()
+                .distinct()
+                .eq(Listing::PUBLISHED, true)
+                .order_by(&[Listing::CATEGORY, Listing::AMOUNT])
+                .work_limit(1);
+            if reverse {
+                query = query.descending();
+            }
+            if let Some(cursor) = &after {
+                query = query.after(cursor);
+            }
+            let page = query.fetch_as::<CategoryAmount>().unwrap();
+            output.extend(page.rows.into_iter().map(|row| (row.category, row.amount)));
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(after.is_none());
+        let mut expected = [(0, 0), (0, 1), (1, 0), (1, 1)];
+        if reverse {
+            expected.reverse();
+        }
+        assert_eq!(output, expected);
+    }
+    // Without the equality, the same pair recurs in both publication states.
+    assert!(matches!(
+        db.query::<Listing>()
+            .using_index("category,published,amount", &[])
+            .distinct()
+            .work_limit(1)
+            .fetch_as::<CategoryAmount>(),
+        Err(Error::Limit)
+    ));
 }
 
 #[test]

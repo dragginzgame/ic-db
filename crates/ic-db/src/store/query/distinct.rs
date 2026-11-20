@@ -10,17 +10,10 @@ use std::collections::BTreeSet;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Strategy {
     Identity,
+    FirstMatch,
     Adjacent(usize),
     Complete,
     Sorted { prefix_len: usize },
-}
-
-fn complete(request: &Request<'_>) -> Result<Strategy, Error> {
-    if request.cursor.is_some() {
-        return Err(Error::InvalidQuery);
-    }
-
-    Ok(Strategy::Complete)
 }
 
 pub(super) fn admit(
@@ -45,9 +38,19 @@ pub(super) fn admit(
     for (name, _) in super::order::literal_equalities(request) {
         constants |= 1 << position(name)?;
     }
-    let prefix_fields = index.map_or(&[][..], |selected| &selected.fields[..fixed]);
+    let fields = index.map_or(&[][..], |selected| selected.fields);
+    let (prefix_fields, suffix_fields) = fields.split_at(fixed);
     for name in prefix_fields {
         constants |= 1 << position(name)?;
+    }
+    // On an ordered traversal, one validated match proves the entire projected
+    // result for a fresh single-result probe when no projected field can vary.
+    if request.single_result_probe
+        && request.cursor.is_none()
+        && !sorted
+        && remaining & !constants == 0
+    {
+        return Ok(Strategy::FirstMatch);
     }
     if constants & primary != 0 {
         return Ok(Strategy::Identity);
@@ -93,27 +96,32 @@ pub(super) fn admit(
 
         return Ok(Strategy::Sorted { prefix_len });
     }
-    let Some(index) = index else {
-        return complete(request);
-    };
-    for name in &index.fields[..fixed] {
+    for name in prefix_fields {
         remaining &= !(1 << position(name)?);
     }
-    if remaining == 0 {
-        return Ok(Strategy::Adjacent(fixed));
-    }
-    for (i, name) in index.fields.iter().enumerate().skip(fixed) {
+    let mut components = fixed;
+    for name in suffix_fields {
         let bit = 1 << position(name)?;
-        if remaining & bit == 0 {
-            return complete(request);
+        // Cross a nonprojected constant only to reach a varying projected field.
+        // Keep the physical prefix in the cursor comparison, including that constant.
+        let crosses_constant = constants & bit != 0 && remaining & !constants != 0;
+        if remaining & bit == 0 && !crosses_constant {
+            break;
         }
         remaining &= !bit;
-        if remaining == 0 {
-            return Ok(Strategy::Adjacent(i + 1));
-        }
+        components += 1;
+    }
+    // A mandatory equality fixes its projected value for every matching owner,
+    // even when the selected index ends before that field.
+    if remaining & !constants == 0 {
+        return Ok(Strategy::Adjacent(components));
     }
 
-    complete(request)
+    if request.cursor.is_some() {
+        return Err(Error::InvalidQuery);
+    }
+
+    Ok(Strategy::Complete)
 }
 
 pub(super) fn boundary<'a>(
@@ -125,6 +133,10 @@ pub(super) fn boundary<'a>(
     let Strategy::Adjacent(components) = strategy else {
         return Ok(None);
     };
+    if components == 0 {
+        // All matches share one class, including on a primary scan.
+        return Ok(Some(&[]));
+    }
     let index = index.ok_or(Error::InvalidQuery)?;
     let mut remaining = position
         .get(INDEX_PREFIX_BYTES..)

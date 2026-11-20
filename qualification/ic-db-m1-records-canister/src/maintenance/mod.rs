@@ -2,6 +2,7 @@
 
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
+mod listing;
 
 use crate::{
     Document, Entry, KEY, RecordsStore,

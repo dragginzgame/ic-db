@@ -1,51 +1,16 @@
 //! Cardinality, retained-byte and completed-output boundaries in the real engine.
 
 mod artifact;
+mod wire_call;
 
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
-use serde::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
+use wire_call::call;
 
 type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
 type Page = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
-
-async fn call<T: DeserializeOwned>(
-    pic: &PocketIc,
-    canister: CanisterId,
-    name: &str,
-    method: u64,
-    request: &impl Serialize,
-) -> T {
-    let reply = pic
-        .update_call(
-            canister,
-            canister,
-            name,
-            ic_wire::encode(
-                request,
-                Encoding::Frame {
-                    method,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    ic_wire::decode(
-        &reply,
-        Encoding::Frame {
-            method,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
 
 async fn advance(
     pic: &PocketIc,

@@ -1,5 +1,7 @@
 //! Copy/checkpoint and cancellation must share the real IC rollback boundary.
 
+mod wire_call;
+
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -705,4 +707,104 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         );
     }
     owned.drop().await;
+}
+
+#[tokio::test]
+async fn listing_index_replacement_crosses_installed_upgrades() {
+    exercise_listing_index(false).await;
+}
+
+#[tokio::test]
+async fn cancelled_listing_index_restores_the_source_cursor_after_upgrade() {
+    exercise_listing_index(true).await;
+}
+
+async fn exercise_listing_index(cancel: bool) {
+    let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").unwrap());
+    let wasm = std::fs::read(directory.join("maintenance.wasm")).unwrap();
+    let other = std::fs::read(directory.join("maintenance-v2.wasm")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    type Page = (Vec<u64>, Option<Vec<u8>>);
+    let call = async |operation: u8, cursor: Option<Vec<u8>>| {
+        wire_call::call::<Result<Page, String>>(
+            &pic,
+            canister,
+            "maintenance_listing",
+            191,
+            &(operation, cursor),
+        )
+        .await
+    };
+    let (ids, old) = call(0, None).await.unwrap();
+    assert_eq!(ids, [3, 1]);
+    let old = old.unwrap();
+    let upgrade = async |code: Vec<u8>| {
+        ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, code, vec![], None)
+            .await
+            .unwrap();
+    };
+    if cancel {
+        call(5, None).await.unwrap(); // Interrupt bounded cleanup after one entry.
+        assert_eq!(call(6, Some(old.clone())).await.unwrap_err(), "Maintenance");
+        assert_eq!(call(1, None).await.unwrap_err(), "InvalidTransition");
+    }
+    upgrade(other).await;
+    let frozen = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        call(if cancel { 5 } else { 1 }, None).await.unwrap_err(),
+        "InvalidTransition"
+    );
+    assert_eq!(call(3, None).await.unwrap_err(), "Maintenance");
+    assert_eq!(pic.get_stable_memory(canister).await, frozen);
+    upgrade(wasm.clone()).await;
+    if cancel {
+        let mut restored = false;
+        for _ in 0..32 {
+            call(5, None).await.unwrap();
+            match call(6, Some(old.clone())).await {
+                Err(error) => assert_eq!(error, "Maintenance"),
+                Ok(page) => {
+                    assert_eq!(page, (vec![4], None));
+                    restored = true;
+                    break;
+                }
+            }
+        }
+        assert!(restored);
+        upgrade(wasm).await;
+        let before = pic.get_stable_memory(canister).await;
+        assert_eq!(call(3, None).await.unwrap_err(), "Maintenance");
+        assert_eq!(call(6, Some(old)).await.unwrap(), (vec![4], None));
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        pic.drop().await;
+
+        return;
+    }
+    call(1, None).await.unwrap();
+    let mut published = false;
+    for _ in 0..32 {
+        call(2, None).await.unwrap();
+        match call(3, None).await {
+            Err(error) => assert_eq!(error, "Maintenance"),
+            Ok((ids, _)) => {
+                assert_eq!(ids, [3, 1]);
+                published = true;
+                break;
+            }
+        }
+    }
+    assert!(published);
+    upgrade(wasm).await;
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(call(3, Some(old)).await.unwrap_err(), "InvalidCursor");
+    let (ids, next) = call(3, None).await.unwrap();
+    assert_eq!(ids, [3, 1]);
+    assert_eq!(call(3, Some(next.unwrap())).await.unwrap(), (vec![4], None));
+    assert_eq!(call(4, None).await.unwrap_err(), "ReferenceViolation");
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+    pic.drop().await;
 }

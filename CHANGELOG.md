@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.24.4] - Unreleased
+
+### Queries
+
+- Indexed `distinct()` can page a projection such as `(category, amount)` in
+  category order when `.eq(Entry::AMOUNT, 1_u64)` fixes the amount. Only the
+  varying part of the tuple needs to identify a run of equal index entries.
+  A compound index on `(category, published, amount)` can also page distinct
+  `(category, amount)` pairs when the query fixes `published`.
+- A primary-key scan can page a DISTINCT projection when literal equalities
+  fix every projected field. It emits the tuple once if a matching row exists.
+  On an ordered traversal, `distinct().try_one_as::<R>()` can return on the
+  first validated match when equality fixes the projection.
+
+### Qualification
+
+- Both workspaces now use Toko Tooling 0.45.25. Its new PR baseline rule
+  applies to canisters that ship a supported public Wire API. IC DB's
+  Wire endpoints are private qualification fixtures.
+- The listing benchmark has its own test target and still runs through
+  `make m2-listing-costs`.
+- `make m2-listing-costs` now compares the first 20 IDs from indexed listing
+  and bounded sorting against SQLite, including refusal and cursor behavior
+  with a one-candidate work budget. It also checks how many owner rows the
+  index fetches as the ID cutoff changes. A separate compound-index experiment
+  compares both equality prefixes on the same database and measures the extra
+  index’s single-row write cost and stable-memory allocation. The replacement
+  variant checks restricted deletion and score ordering across publication states.
+  Native checks cover preserved row bytes. A PocketIC upgrade after the first
+  copied document verifies incompatible-version refusal, resumption, cutover
+  and source cursor refusal for the replacement index. Cancelling before cutover
+  restores the original cursor after cleanup, including across upgrades.
+
 ## [0.24.3] - 2026-11-20
 
 ### Queries

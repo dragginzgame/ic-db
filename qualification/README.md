@@ -5173,3 +5173,200 @@ The cursor-suffix check follows frozen IcyDB's ordered-seek regression at
 visibility filter. The measurement Wasm SHA-256 was
 `d12ea9a673031c6e7c4caf62fecc42316a097765479f1dd8e0818bd03ca8ea57`.
 [IcyDB cursor regression](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/tests/cardinality_tiebreak/seek_intersection.rs#L195)
+
+### Filtered top 20 with and without an ordering index
+
+`make m2-listing-costs` also selects published documents for entry 1 with
+`id <= 100`, ordered by score and ID, both descending. Every eligible document
+carries the same score in the indexed `score` and unindexed `previous_score`
+fields. Using two fields keeps the population, executable and projection fixed.
+The second field is optional and present on every eligible row. SQLite supplies
+the expected top 20 independently. The indexed page has a live continuation.
+Complete sorting returns a terminal top 20 after examining the primary range.
+
+| First 20 IDs, work 256, output 160 bytes | Candidates | Owner rows fetched | IC instructions | Repeat in reverse call order |
+| --- | ---: | ---: | ---: | ---: |
+| Compound index | 87 | 87 | 12,320,176 | 12,320,136 |
+| Complete sort | 100 | 100 | 2,197,651 | 2,197,611 |
+
+With work 1, the index returned an empty page with a continuation after its first
+nonmatch. Complete sorting returned `Limit`. Both successful paths matched
+SQLite and all reads preserved stable memory. Counters cover opening the database
+through result construction on a warm PocketIC canister. These measurements
+cover the first 20 IDs only. They do not isolate the cost of owner lookup or
+establish a general planner threshold. Measurement Wasm SHA-256:
+`1ca1c863788a5d5d647056770dd116a2cb54b47fe9bf481ff0eae15473cda882`.
+
+### Owner lookup cost as listing selectivity changes
+
+The same target varies the inclusive ID cutoff while keeping the dataset,
+compound index, order, projection and page budgets fixed. SQLite checks the IDs
+and tie order. “Eligible” counts all matching rows; the first page returns at
+most 20. Each examined index entry fetched one owner row.
+
+| ID cutoff | Eligible | Returned | Candidates / owner fetches | Total IC instructions (millions) | Owner lookup alone (millions, separate probe) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 20 | 6 | 6 | 129 | 17.57 | 12.80 |
+| 60 | 18 | 18 | 129 | 17.60 | 12.80 |
+| 100 | 31 | 20 | 87 | 12.31 | 8.89 |
+| 130 | 40 | 20 | 80 | 11.35 | 8.20 |
+
+A temporary instrumented Wasm timed four regions inside the shared scanner.
+At cutoff 100, traversing the index and reading its owner key took 0.90M
+instructions. Building the row key and fetching its bytes from the stable map
+took 8.89M. Inspecting row fields and checking the primary identity took 0.47M.
+Reconstructing and validating the index entry took 1.46M. The full instrumented
+call cost 12.48M, including all four regions, the counters and the rest of the
+query. The ordinary call cost 12.31M. Across the four instrumented calls,
+owner lookup accounted for 71–72% of measured call instructions.
+
+These are warm reads on this fixture. The sweep changes both matching density
+and where matches occur in traversal order. The two cutoffs that exhaust the
+range isolate the effect of returning different numbers of matches at the
+same fetch count. The instrumented Wasm SHA-256 was
+`0e10391822a1d6b93469efc50dbea8bff97c056303346ec93a41d9cd5a80812c`.
+
+### Matching both equality filters in the listing index
+
+The [compound-index experiment](experiments/listing-compound-index.patch) adds
+`(entry_id, published, score)` to the qualification schema alongside the existing
+`(entry_id, score)` index. Both indexes live in the same PocketIC canister and
+cover the same 130 documents. Fixing entry and publication state leaves score
+and the primary-key suffix in the requested descending order. The ID cutoff
+still applies during traversal.
+
+| ID cutoff | Returned | Owner fetches, old → automatic | Old index, M instructions | Automatic, M instructions |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 6 | 129 → 40 | 19.28 | 6.15 |
+| 60 | 18 | 129 → 40 | 19.42 | 6.18 |
+| 100 | 20 | 87 → 27 | 13.34 | 4.32 |
+| 130 | 20 | 80 → 20 | 12.36 | 3.28 |
+
+Automatic selection matched the explicit three-field hint in examined and
+fetched counts for every cutoff. At cutoff 100, all 59 page pairs across three
+work/output budgets matched SQLite, including ties, empty pages with progress
+and retry at a byte boundary. Reads preserved stable memory. Ordinary owner
+validation ran on each visited row. Bounded sorting cost 2.21M instructions
+for the first 20 at that cutoff and produced a terminal result.
+
+To repeat in a disposable checkout containing this experiment:
+
+```sh
+git apply qualification/experiments/listing-compound-index.patch
+make m2-listing-costs
+git apply -R qualification/experiments/listing-compound-index.patch
+```
+
+### Write and storage cost of the additional listing index
+
+Run `make m2-listing-costs` once with the ordinary schema and once with the
+experiment above. After the listing checks on 130 documents, each run inserts
+document 131, changes its note, score and publication flag in separate calls,
+then deletes it. Each timing starts before database open and ends after commit.
+Replacements include the application read. A subsequent lookup checks the
+stored values or absence outside the timed interval. The driver repeats the
+lifecycle three times, reusing the same key. [Individual instruction counts](measurements/0.24.4-listing-index-writes.csv)
+
+| Single-row operation | Ordinary schema, median M instructions | With additional index, median M instructions | Increase |
+| --- | ---: | ---: | ---: |
+| Insert | 1.404 | 1.991 | 42% |
+| Replace note | 1.400 | 1.679 | 20% |
+| Replace score | 1.680 | 2.375 | 41% |
+| Toggle publication | 1.701 | 2.376 | 40% |
+| Delete | 1.874 | 2.113 | 13% |
+
+The note belongs to no index. Replacement still verifies the old index entries
+during preparation and leaves each unchanged entry in place. The timings include
+all work of the write and can vary with the map layout across rounds.
+
+Both fixtures occupied four 64 KiB stable-memory pages immediately after install.
+The ordinary schema occupied five pages after seeding, and the additional index
+brought the total to six. Each retained its seeded page count after the final
+delete. The added index has 130 non-unique entries. Its encoded key/value payload
+is 42 bytes per document (9 header, 17 field components, 8 owner suffix and
+8 owner value), or 5,460 logical bytes before storage overhead. Physical growth
+reflects page boundaries and the layout of the whole fixture.
+
+Across the two schemas the automatic first page at cutoff 100 saved 7.99M
+instructions (12.31M to 4.32M). The corresponding median score replacement
+cost an additional 0.69M. These are measurements at this population and filter
+distribution. Larger datasets, different write mixes and update batches require
+their own comparison.
+
+### Replacing the listing index
+
+The [replacement experiment](experiments/listing-replace-index.patch) removes
+`(entry_id, score)` and assigns the document reference to
+`(entry_id, published, score)`. Apply it on top of the compound-index patch
+in a disposable checkout and run `make m2-listing-costs`. Other fixture indexes
+stay in place. All three schemas used the same 130 documents and the same
+automatic queries. At ID cutoff 100, both listings request the top 20 by
+descending score and descending ID.
+
+| Listing indexes | Published only, fetches / M instructions | Both states, fetches / M instructions | Both states, next page | Seeded stable pages |
+| --- | ---: | ---: | --- | ---: |
+| Original | 87 / 12.31 | 28 / 4.30 | Live cursor | 5 |
+| Original and wider | 27 / 4.32 | 28 / 4.79 | Live cursor | 6 |
+| Wider only | 27 / 4.26 | 100 / 2.71 | Terminal top 20 | 5 |
+
+With publication fixed, the wider index puts all matching scores in order.
+Across publication states it orders documents by publication first. The
+planner used the bounded sort to produce SQLite's global top 20. With a
+one-candidate work limit this returned `Limit`. With the original index present,
+the next cursor page also matched SQLite. The explicit hint naming the removed
+index returned `InvalidQuery`.
+
+The wider index retains the leading entry ID needed for restricted deletion.
+The replacement schema accepted the setup batch that repointed the last
+dependent and deleted its former parent. Deletion of a parent with surviving
+documents then returned `ReferenceViolation` and preserved stable bytes.
+These checks install fresh schemas; they do not qualify migration of existing
+data or named-index callers outside this workload.
+
+The wider-only schema used the same number of physical pages as the original
+on this dataset. Its median single-row score replacement cost 1.73M instructions
+(original 1.68M, both 2.38M). Toggling publication cost 2.23M (original 1.70M,
+both 2.37M). The [write samples](measurements/0.24.4-listing-index-writes.csv)
+include all three replacement runs.
+
+To reproduce the wider-only case, apply the compound-index patch followed by
+the replacement patch in a disposable checkout, run `make m2-listing-costs`,
+then reverse the patches in the opposite order.
+
+The native schema-copy suite also exercises the same index replacement on a
+populated two-entity fixture. An explicit transition copies the first document,
+reopens the checkpoint, copies the remaining three and then copies their parent.
+Both allocations refuse ordinary access during the interruption. After bounded
+validation and publication, the reopened target contains the same five raw row
+keys and values. A fresh cursor pages the published documents in descending
+score/ID order, including a score tie; the saved source cursor is refused.
+Restricted deletion succeeds only after the batch removes the four dependents.
+
+Run `cargo test --locked -p ic-db --test schema_copy populated_listing_index_replacement`.
+The three-schema cost comparisons above each start from a fresh installation.
+
+The installed maintenance suite also exercises this replacement using the
+eight-field qualification `Document` and its `Entry` parent. After the first
+document is copied, PocketIC installs a Wasm that declares a different
+transition version for the same source and target schemas. Resume refuses
+with `InvalidTransition`, the listing returns `Maintenance`, and the refused
+calls preserve stable memory. Reinstalling the supported Wasm copies exactly
+the three remaining documents and the parent. The client attempts a listing
+after each bounded validation call until publication admits reads.
+
+A further upgrade reopens the published target. Its listing refuses the saved
+source cursor, returns IDs 3 and 1 (tied at score 7), then ID 4. The unpublished
+document at score 99 is excluded. Deleting the referenced parent refuses and
+the reads and refused delete leave stable memory intact. This probe runs in
+`make m3-maintenance` as `listing_index_replacement_crosses_installed_upgrades`.
+
+The companion PocketIC case, `cancelled_listing_index_restores_the_source_cursor_after_upgrade`,
+starts cancellation with one target entry removed per message. At that point the
+source cursor gets `Maintenance` and attempts to resume copying get
+`InvalidTransition`. An executable declaring a different transition version
+also refuses to advance cleanup. After restoring the supported executable, the
+driver attempts the original cursor after each cleanup chunk. Its first successful
+read returns the remaining document, ID 4, and finishes enumeration. A further
+upgrade preserves that result and the discarded target still refuses ordinary
+access. This covers cancellation before publication with the source frozen
+throughout copying and cleanup.

@@ -1618,3 +1618,161 @@ fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
         assert_eq!(*memory.borrow(), before);
     }
 }
+
+// The two declarations differ only in the index named by the reference.
+macro_rules! listing_schema {
+    ($(#[$doc:meta])* $row:ident, $index:tt, [$($field:tt),+]) => {
+        $(#[$doc])*
+        #[entity(
+            store = ic_db::testing::FixtureStore,
+            name = "Document",
+            pk(field = "id"),
+            index(fields = [$($field),+]),
+            fields(
+                field(name = "id", value(item(prim = "Nat64"))),
+                field(name = "entry_id", value(item(prim = "Nat64")), references(entity = "Other", index = $index)),
+                field(name = "published", value(item(prim = "Bool"))),
+                field(name = "score", value(item(prim = "Int64")))
+            )
+        )]
+        struct $row {}
+    };
+}
+
+listing_schema!(
+    ///
+    /// OldDocument
+    /// Orders all documents of one entry by score.
+    ///
+    OldDocument,
+    "entry_id,score",
+    ["entry_id", "score"]
+);
+
+listing_schema!(
+    ///
+    /// NewDocument
+    /// Groups an entry’s documents by publication state before ordering by score.
+    ///
+    NewDocument,
+    "entry_id,published,score",
+    ["entry_id", "published", "score"]
+);
+
+#[test]
+fn populated_listing_index_replacement_resumes_and_preserves_references() {
+    let runtime = host(VectorMemory::default());
+    let source_memory = || runtime.open_memory(&key("copy.source.v1")).unwrap();
+    let target_memory = || runtime.open_memory(&key("copy.target.v1")).unwrap();
+    let source = Schema::new(&[OldDocument::SCHEMA, Other::SCHEMA]).unwrap();
+    let target = Schema::new(&[NewDocument::SCHEMA, Other::SCHEMA]).unwrap();
+    let transition = SchemaTransition::new(&source, &target, "listing-index", 1, &[]).unwrap();
+    let mut db = Database::create(source_memory(), source.clone(), [1; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&Other { id: 1 }).unwrap();
+    for (id, published, score) in [(1, true, 7), (2, false, 99), (3, true, 7), (4, true, -1)] {
+        batch
+            .insert(&OldDocument {
+                id,
+                entry_id: 1,
+                published,
+                score,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let first = db
+        .query::<OldDocument>()
+        .eq(OldDocument::ENTRY_ID, 1_u64)
+        .eq(OldDocument::PUBLISHED, true)
+        .order_by(&[OldDocument::SCORE, OldDocument::ID])
+        .descending()
+        .limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(first.rows[0].id, 3);
+    let old_cursor = first.next.unwrap();
+
+    let mut copy = db
+        .begin_maintenance(&transition)
+        .unwrap()
+        .begin_copy(target_memory(), source.clone(), target.clone(), [2; 16])
+        .unwrap();
+    let transform = |row: OldDocument, _: &[u8]| {
+        Ok(NewDocument {
+            id: row.id,
+            entry_id: row.entry_id,
+            published: row.published,
+            score: row.score,
+        })
+    };
+    assert_eq!(copy.copy_next(1, 4096, transform).unwrap().rows, 1);
+    drop(copy);
+    assert!(matches!(
+        Database::open(source_memory(), source.clone()),
+        Err(Error::Maintenance)
+    ));
+    assert!(matches!(
+        Database::open(target_memory(), target.clone()),
+        Err(Error::Maintenance)
+    ));
+    let mut copy = SchemaCopy::resume(
+        source_memory(),
+        target_memory(),
+        source,
+        target.clone(),
+        &transition,
+    )
+    .unwrap();
+    assert_eq!(copy.copy_next(4, 4096, transform).unwrap().rows, 3);
+    assert!(copy.copy_unchanged::<Other>(2, 4096).unwrap().complete);
+    assert!((0..64).any(|_| copy.validate_next(1).unwrap()));
+    drop(copy.publish().unwrap());
+    let stored_rows = |name| {
+        entries(&runtime, name)
+            .into_iter()
+            .filter(|(key, _)| key[0] == 2)
+            .collect::<Vec<_>>()
+    };
+    let old_rows = stored_rows("copy.source.v1");
+    assert_eq!(old_rows.len(), 5);
+    assert_eq!(stored_rows("copy.target.v1"), old_rows);
+    let mut db = Database::open(target_memory(), target).unwrap();
+    let query = || {
+        db.query::<NewDocument>()
+            .eq(NewDocument::ENTRY_ID, 1_u64)
+            .eq(NewDocument::PUBLISHED, true)
+            .order_by(&[NewDocument::SCORE, NewDocument::ID])
+            .descending()
+            .limit(1)
+    };
+    assert!(matches!(
+        query().after(&old_cursor).fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    let mut after = None;
+    for expected in [3, 1, 4] {
+        let mut q = query();
+        if let Some(cursor) = &after {
+            q = q.after(cursor);
+        }
+        let page = q.fetch().unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].id, expected);
+        after = page.next;
+    }
+    if let Some(cursor) = after {
+        let end = query().after(&cursor).fetch().unwrap();
+        assert!(end.rows.is_empty() && end.next.is_none());
+    }
+    let mut batch = Batch::new();
+    batch.delete::<Other>(1).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    let mut batch = Batch::new();
+    for id in 1..=4 {
+        batch.delete::<NewDocument>(id).unwrap();
+    }
+    batch.delete::<Other>(1).unwrap();
+    db.commit(batch).unwrap();
+    assert!(db.get::<Other>(1).unwrap().is_none());
+}

@@ -950,6 +950,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Return the sole projected result, or `None` on a proven miss.
+    /// With DISTINCT, a literal equality or fixed index prefix covering every
+    /// projected field lets an ordered traversal finish at the first match.
     /// # Errors
     /// Applies the projection checks of [`Self::fetch_as`] and the cardinality checks of [`Self::try_one`].
     pub fn try_one_as<R: Value>(self) -> Result<Option<R>, Error> {
@@ -1760,6 +1762,9 @@ fn execute_inner<M: Memory>(
                 page.rows.push(copy_projection(&bytes, &spans, mask, size));
             } else {
                 page.rows.push(bytes);
+            }
+            if plan.distinct == distinct::Strategy::FirstMatch {
+                return Ok(page);
             }
             if let Some(boundary) = boundary {
                 previous = Some(boundary.to_vec());

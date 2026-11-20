@@ -2303,7 +2303,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, DISTINCT beyond the retained frame or in resumable first-occurrence order, float arithmetic, richer operation combinations and representative contention/query-growth costs |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, resumable first-occurrence DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
@@ -2929,8 +2929,10 @@ For a record projection, `first_as::<R>()` and `try_one_as::<R>()` apply the
 same cardinality rules to the output of `fetch_as::<R>()`. Byte limits apply
 to the projected records.
 For DISTINCT in first-occurrence order, the first observed class establishes
-the first result and a second class disproves uniqueness. Returning a sole class
-still requires exhaustion. Selecting the first result through a complete sort
+the first result and a second class disproves uniqueness. When literal equalities
+or the selected index prefix fix every projected field, the first validated match
+in traversal order also proves uniqueness. With varying fields, returning a sole
+class still requires exhaustion. A miss always requires proof of exhaustion. Selecting the first result through a complete sort
 also requires exhaustion.
 
 For application listings use fluent predicates, typed projections, directed
@@ -3101,6 +3103,20 @@ existing frame size; readers predating the flag refuse that cursor.
 Live updates retain
 live-enumeration limitations, never an exact aggregate input guarantee.
 
+For live indexed DISTINCT, the consumed index prefix can also identify a class
+when every remaining projected field is fixed by a mandatory literal equality.
+For example, with amount fixed, a category index orders distinct
+`(category, amount)` tuples. Owners still pass the residual amount check before
+a class is emitted. A mandatory equality may also fix an unprojected index
+component between projected fields. With `published = true`, the index
+`(category, published, amount)` keeps each matching `(category, amount)`
+pair together. The cursor compares the full physical prefix through amount.
+If publication can vary, the same pair can recur in separate runs.
+When mandatory equalities fix the entire projection, all matching rows belong
+to one class even on a primary-key scan. The existing cursor tracks whether a
+match has been emitted. Nonmatching rows consume work and can yield an empty
+page with a continuation, both before and after the first match.
+
 This retains IcyDB's ordered-adjacent proof and cross-page equality invariants
 from `db/executor/projection/materialize/distinct` and
 `db/executor/pipeline/operators/distinct/tests` at frozen revision
@@ -3159,7 +3175,22 @@ After completion, `limit` selects up to 32 keys per page. Only projected record
 bytes count toward the output budget. Cursor positions above 32 use transport
 version 2; existing group cursor bytes retain version 1. A changed source
 invalidates an unfinished run. Completed pages keep their captured revision.
-Larger retained sets and resumable first-occurrence order remain product work. Native witnesses
+For M2, keep exact scattered DISTINCT within one retained frame. Capacity
+exhaustion returns `Error::Limit` without publishing a partial result or advancing
+the last successful checkpoint. A smaller output page cannot make the retained
+set fit. Callers can cancel the job to release its slot. For a live listing
+where the access path puts equal keys together, adjacent DISTINCT already pages
+without retaining the whole set. Its live cursor has different consistency
+guarantees from a completed revision-bound job.
+
+Revisit larger exact results when a workload needs more retained keys or bytes
+and requires one source revision across pages. Widening the tuple count alone
+would leave the byte limit in place. Spilling keys into another collection
+would require bounded writes and cleanup across cancellation, expiry and upgrade.
+The existing one-frame contract keeps those operations within the job's current
+storage lifecycle. Resumable first-occurrence order remains open separately.
+
+Native witnesses
 cover result/work/byte/cardinality/state/key bounds, optional text, Decimal equality,
 varying predicates and corruption in a later duplicate; Wasm/CLI witnesses cover
 complete results and refusals across upgrade. Durable state and existing adjacent
@@ -5126,7 +5157,7 @@ application handlers. The [mixed-history fixture](../../qualification/README.md#
 exercises authorization, queries, writes and upgrade recovery on PocketIC.
 
 The accepted broad query/type scope remains intact. Nested references/indexes,
-composite primary keys, larger DISTINCT/sorting and broader maintenance envelopes
+composite primary keys, resumable first-occurrence DISTINCT, larger sorting and broader maintenance envelopes
 remain named gaps in section 9, not capability cuts justified by this sequencing.
 Keep the current synchronous write and explicit-maintenance contracts while
 qualifying real application combinations; do not reopen prefix-counter tuning

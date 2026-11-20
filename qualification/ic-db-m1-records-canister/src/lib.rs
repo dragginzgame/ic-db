@@ -27,6 +27,8 @@ mod generation;
 mod handles;
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
+#[cfg(feature = "query-measurements")]
+mod listing_costs;
 #[cfg(feature = "maintenance")]
 mod maintenance;
 mod managed;
