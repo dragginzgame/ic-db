@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.24.2] - Unreleased
+## [0.24.2] - 2026-11-20
 
 ### Store routing
 
