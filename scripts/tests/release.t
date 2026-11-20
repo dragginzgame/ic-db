@@ -6,11 +6,11 @@ use Test::More;
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
 use File::Copy qw(copy);
-use Cwd qw(getcwd);
+use Cwd qw(abs_path getcwd);
 use JSON::PP;
 
 my $root = getcwd();
-my $temp = tempdir(CLEANUP => 1);
+my $temp = abs_path(tempdir(CLEANUP => 1)) or die "resolve fixture directory: $!";
 make_path("$temp/scripts", "$temp/vendor", "$temp/.tools/host/bin");
 system('cp', '-R', "$root/vendor/toko-tooling", "$temp/vendor/") == 0 or die 'copy tooling';
 copy('scripts/release.sh', "$temp/scripts/release.sh") or die $!;
@@ -208,7 +208,7 @@ $ENV{FAIL_GATE} = 'm0-core';
 isnt($status, 0, 'actual runner stops on validation failure') or diag $out;
 ok(!-e $plan, 'failed validation creates no post-validation recovery plan');
 is_deeply([split /\n/, read_file("$temp/target/dispatch")], [@gates[0..8]],
-    'runner preserves fail-fast local gate dispatch');
+    'runner preserves fail-fast local gate dispatch') or diag $out;
 
 write_file("$temp/target/dispatch", '');
 $ENV{FAIL_GATE} = '';
@@ -216,7 +216,7 @@ $ENV{RELEASE_TIMING_ATTEMPT} = 'complete-validation';
 ($status, $out) = run(@runner, 'patch', 'origin', 'main');
 isnt($status, 0, 'metadata refusal stops actual runner');
 is_deeply([split /\n/, read_file("$temp/target/dispatch")], [@gates, 'reached-metadata'],
-    'full retry prepares and validates once before metadata');
+    'full retry prepares and validates once before metadata') or diag $out;
 like(read_file($plan), qr/\nprepare\n\z/, 'metadata failure retains prepare phase');
 my $saved_plan = read_file($plan);
 my $dispatch = read_file("$temp/target/dispatch");
