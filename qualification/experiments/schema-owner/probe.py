@@ -26,6 +26,7 @@ def check_variant(root, args, refusal=None):
 
 
 def prepare(root):
+    shutil.copy(QUAL.parent / "rust-toolchain.toml", root)
     shutil.copy(QUAL.parent / "LICENSE.md", root / "LICENSE.md")
     shutil.copytree(HERE / "producer", root / "producer")
     shutil.copytree(HERE / "consumer", root / "consumer")
