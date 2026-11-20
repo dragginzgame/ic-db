@@ -57,6 +57,7 @@ pub const fn check_schema_member(path: &str, root: &str, members: Option<&str>) 
     }
 }
 
+pub(crate) const MAX_ENTITIES: u8 = 128;
 pub(crate) const MAX_FIELDS: usize = 16;
 
 // FNV-1a is only a compact physical handle, never schema authority. Admission
@@ -360,7 +361,7 @@ impl Schema {
         entities: &[&'static EntitySchema],
         report_reference: impl FnOnce(&str, &FieldSchema, &str, Option<(&str, FieldType)>),
     ) -> Result<Self, Error> {
-        if entities.is_empty() || entities.len() > 32 {
+        if entities.is_empty() || entities.len() > usize::from(MAX_ENTITIES) {
             return Err(Error::InvalidSchema);
         }
         let mut entities = entities.to_vec();

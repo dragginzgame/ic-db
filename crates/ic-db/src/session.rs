@@ -1,6 +1,6 @@
 //! Synchronous access to a database attached by the host.
 
-use crate::{Batch, Database, Entity, Error, IndexValue, Query};
+use crate::{Batch, Database, Entity, Error, IndexValue, InsertInput, Query};
 use std::{
     cell::{Ref, RefCell},
     rc::Rc,
@@ -181,6 +181,18 @@ impl DatabaseSession {
         batch.insert(row)?;
 
         self.commit(batch)
+    }
+
+    /// Insert one generated input, applying its schema defaults. Returns the row
+    /// after commit succeeds. For managed timestamps use [`Batch::at`].
+    /// # Errors
+    /// Propagates input preparation and commit errors.
+    pub fn insert_input<I: InsertInput>(&self, input: I) -> Result<I::Entity, Error> {
+        let mut batch = Batch::new();
+        let row = batch.insert_input(input)?;
+        self.commit(batch)?;
+
+        Ok(row)
     }
 
     /// Replace one existing entity as one batch.

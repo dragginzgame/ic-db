@@ -121,6 +121,18 @@ impl<C: CompiledCanister> CanisterSession<C> {
         self.session::<E::Store>().insert(row)
     }
 
+    /// Insert one generated input in its declared store and return the committed row.
+    /// For managed timestamps use [`Self::batch_at`].
+    /// # Errors
+    /// Propagates [`DatabaseSession::insert_input`] preparation and commit errors.
+    pub fn insert_input<I: InsertInput<Entity: Entity<Store: MountedStore<Canister = C>>>>(
+        &self,
+        input: I,
+    ) -> Result<I::Entity, Error> {
+        self.session::<<I::Entity as Entity>::Store>()
+            .insert_input(input)
+    }
+
     /// Replace one row in its declared store.
     /// # Errors
     /// Propagates batch preparation and commit errors.

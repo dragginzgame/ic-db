@@ -4,6 +4,9 @@
 
 ### Store routing
 
+- Each store now admits up to 128 entity types. Migration checkpoints use the existing
+  one-byte entity position throughout that range.
+
 - `CanisterSession<Hub>` routes fluent queries, key lookups and single-row writes
   to the entity’s declared store. Hosts attach the canister’s compiled roster once.
   Rust rejects entities declared for a different canister. A generic helper can
@@ -13,6 +16,9 @@
   their entity types. Rust rejects a batch that mixes stores. `batch_at(time)`
   supplies one timestamp for managed fields.
 
+- Store and canister sessions accept `db.insert_input(Entity::insert()...)` for
+  a single row with schema defaults. The call returns the row after commit succeeds.
+
 - Store and canister sessions now expose `get_many::<E>(&keys)` for up to
   32 primary keys. Each input position receives its row or `None`.
 
@@ -20,6 +26,9 @@
   indexes can serve it, or which leading field a new index needs.
 
 ### Qualification
+
+- Added `make m1-store-width` to measure creating and reopening a single game
+  store, reading a late entity and enforcing its reference on PocketIC.
 
 - Qualified restricted deletion with a full 32-mutation batch. One surviving child
   refuses the batch intact. After repointing that child, the same delete succeeds

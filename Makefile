@@ -40,6 +40,7 @@ help:
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m4-lifecycle               Check mixed writes, queries, jobs and migration' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
+	  'make m1-store-width            Exercise one store (STORE_WIDTH=32 by default)' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make m2-query-growth            Measure fluent shapes, maps and entity growth' \
 	  'make m2-count-paths            Compare validated, index-entry and maintained prefix counts' \
@@ -148,6 +149,14 @@ m2-count-profile:
 .PHONY: m1-entity-growth
 m1-entity-growth:
 	bash scripts/measure-records.sh growth
+
+STORE_WIDTH ?= 32
+.PHONY: m1-store-width
+m1-store-width:
+	python3 qualification/experiments/schema-owner/probe.py --store-width "$(STORE_WIDTH)"
+	IC_DB_STORE_WIDTH="$(STORE_WIDTH)" IC_DB_SCHEMA_OWNER_ARTIFACTS="$(CURDIR)/qualification/target/schema-owner" \
+	  bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
+	    -p ic-db-m0-rollback-driver --test schema_owner wide_store_on_replica -- --ignored --exact --nocapture
 
 .PHONY: m2-query-growth
 m2-query-growth:

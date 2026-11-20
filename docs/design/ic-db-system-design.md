@@ -910,7 +910,12 @@ Version semantic changes to these policies in the compiled contract.
 The 0.6 typed insert slice implements omission with `Entity::insert()` and
 `Batch::insert_input`, returning the materialized entity before commit. One small
 input per entity contains optional supplied fields; an optional stored field has
-an outer omission marker, so explicit `None` remains distinct. This construction
+an outer omission marker, so explicit `None` remains distinct. Store and canister sessions also accept a single generated input via
+`session.insert_input(Entity::insert()...)`. They return the materialized row
+after the one-row batch commits. Managed time still comes from the host through
+a timed batch. Frozen IcyDB `6d421e3`, `crates/icydb/src/db/session/write/mod.rs`,
+also kept authored input distinct from the returned row. IC DB already has the
+typed row during preparation and can return it directly. This construction
 feeds existing encoding, constraints and commit logic. Fully specified inserts
 and replacements remain available; there is no partial-update builder yet.
 Literal defaults support signed/unsigned 8–128-bit integers, Bool, bounded Text
@@ -1247,9 +1252,8 @@ the existing exact transition/source identity frame, target incarnation and role
 The source role is immutable during copying; the target records copying plus a
 bounded entity position/cursor, copied, validation progress, ready, cancelling or cancelled;
 cutover records the retired source role. These operation records are at
-most 1005 bytes and reuse existing strict identity/cursor codecs. Entity zero keeps
-the original copying tag/layout; later entities use tag 9 plus a bounded ordinal.
-Older readers refuse that tag intact. Resume also checks the ordinal against the
+most 1005 bytes and reuse existing strict identity/cursor codecs. Position zero uses the original copying tag.
+Positions 1–127 use tag 9 and the existing one-byte ordinal. Resume also checks the ordinal against the
 exact compiled schema. Original one-entity checkpoints remain supported. Ordinary open
 validates the envelope and refuses all these roles. Pre-copy `Maintenance::resume`
 cannot reopen them and therefore cannot bypass target cleanup. Resume compares
@@ -1286,7 +1290,7 @@ or stale indexes and conflicting unique ownership. The two passes establish exac
 key coverage; neither source-only nor target-only traversal suffices. Existing
 row/index codecs and ownership checks remain authoritative. Each validated row
 has at most eight index and sixteen reference checks under the admitted schema.
-At each pass's start, all declared revisions (at most 32) are checked, including
+At each pass's start, all declared revisions (at most 128) are checked, including
 those of empty entities. A positive count at revision zero is corrupt even when
 both counts agree. A positive revision with zero rows is valid after deletion.
 No transform is rerun
@@ -4286,7 +4290,11 @@ old keys, temporary copies, values and allocator overhead. It is not a peak-memo
 or instruction measurement. Requalify suppliers without optimizing the product
 around current size classes.
 
-Initial bounds: 32 entities, 16 fields/entity, 64 UTF-8 bytes/name, eight indexes/
+A store admits up to 128 entities. Larger schemas should revisit their store boundaries. The [single-store width measurements](../../qualification/README.md#single-store-width-on-pocketic)
+cover game schemas with many small entities. Creation was the largest measured width cost.
+Each validation pass checks the store's metadata before its first page.
+
+Current bounds: 128 entities/store, 16 fields/entity, 64 UTF-8 bytes/name, eight indexes/
 entity and four components/index; 32 mutations/batch, 128 KiB total encoded new-row
 payload, 4 KiB/row, 512 bytes/complete index key, and 1–32 rows/page. The flat scalar codec checks the input row
 bound and field lengths before allocating owned values; total variable payload

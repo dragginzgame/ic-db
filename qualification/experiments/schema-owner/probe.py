@@ -25,12 +25,16 @@ def check_variant(root, args, refusal=None):
     sys.exit(run.stderr or "expected refusal: " + str(refusal))
 
 
-def prepare(root):
+def prepare(root, width_probe=False):
     shutil.copy(QUAL.parent / "rust-toolchain.toml", root)
     shutil.copy(QUAL.parent / "LICENSE.md", root / "LICENSE.md")
     shutil.copytree(HERE / "producer", root / "producer")
     shutil.copytree(HERE / "consumer", root / "consumer")
     shutil.copytree(HERE / "local", root / "local")
+    if width_probe:
+        consumer = root / "consumer/Cargo.toml"
+        consumer.write_text(consumer.read_text().replace(
+            "[dependencies]", "[dependencies]\nic-storage.workspace = true"))
     manifest = (QUAL / "Cargo.toml").read_text()
     manifest = re.sub(r"members = \[.*?\]", 'members = ["producer", "consumer", "local"]',
                       manifest, count=1, flags=re.S)
@@ -195,14 +199,29 @@ pub struct OtherUser {}
     print(f"Two Wasm artifacts ready for the replica probe in {ARTIFACTS}.")
 
 
+def store_width(root, width):
+    if width not in (32, 33, 72, 128):
+        sys.exit("supported probe widths: 32, 33, 72, 128")
+    templates = HERE / "store-width"
+    model = (templates / "model.rs").read_text()
+    fillers = "".join(f"rule!(Rule{i:03});\n" for i in range(width - 2))
+    (root / "producer/src/model/mod.rs").write_text(model + fillers)
+    shutil.copy(templates / "workload.rs", root / "consumer/src/lib.rs")
+    check_variant(root, ["build", "--release", "--lib", "--target", "wasm32-unknown-unknown"])
+    binary = QUAL / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
+    shutil.copy(binary, ARTIFACTS / f"width-{width}.wasm")
+
+
 with tempfile.TemporaryDirectory(prefix="schema-owner-") as temp:
     root = Path(temp)
-    prepare(root)
+    prepare(root, width_probe=sys.argv[1:2] == ["--store-width"])
     if sys.argv[1:] == ["--admission"]:
         subprocess.run(["cargo", "test", "--locked", "-p", "ic-db-schema-owner-producer",
                         "-p", "ic-db-local-schema-test", "--test", "admission", "--test", "schema_build"],
                        cwd=root, env=dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target")), check=True)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--store-width":
+        store_width(root, int(sys.argv[2]))
     elif not sys.argv[1:]:
         probe(root)
     else:
-        sys.exit("usage: probe.py [--admission]")
+        sys.exit("usage: probe.py [--admission | --store-width N]")

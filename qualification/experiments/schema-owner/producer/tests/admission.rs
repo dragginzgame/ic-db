@@ -99,11 +99,14 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         refused.delete::<Entry>(42).unwrap();
         refused.insert(&User { id: 42 }).unwrap();
         assert!(matches!(refused.commit(), Err(ic_db::Error::Exists)));
-        db.insert(&AuditEvent {
-            id: 42,
-            revision: Revision(9),
-        })
-        .unwrap();
+        let event = db
+            .insert_input(AuditEvent::insert().id(42).revision(Revision(9)))
+            .unwrap();
+        assert_eq!(event.revision, Revision(9));
+        assert!(matches!(
+            db.insert_input(AuditEvent::insert().id(42).revision(Revision(10))),
+            Err(ic_db::Error::Exists)
+        ));
         assert_eq!(events.try_one().unwrap().unwrap().revision, Revision(9));
     }
     let runtime = open_runtime();

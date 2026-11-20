@@ -5,6 +5,7 @@ use crate::{
     Batch, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
     codec::{Decoder, Encoder},
     primary::RowKey,
+    schema::MAX_ENTITIES,
     store::Database,
     store::{
         EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
@@ -88,7 +89,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
                 0
             } else {
                 let entity = reader.nat8()?;
-                if !(1..32).contains(&entity) {
+                if !(1..MAX_ENTITIES).contains(&entity) {
                     return Err(Error::Corrupt);
                 }
 
@@ -473,7 +474,7 @@ impl<M: Memory> SchemaCopy<M> {
     /// Checks complete row framing, exact key coverage in both directions, revision
     /// metadata, expected index membership and every stored index's owner/key.
     /// Each row has at most eight indexes and sixteen references. Each pass first
-    /// checks all declared revisions (at most 32), including empty entities. No writes to
+    /// checks all declared revisions (up to the schema entity limit), including empty entities. No writes to
     /// rows/indexes occur; only successful bounded progress is checkpointed.
     /// Return true only after both passes finish. Copying cannot resume afterward.
     /// # Errors
@@ -634,7 +635,7 @@ fn validate_page<M: Memory>(
     after: Option<&StoreKey>,
     limit: usize,
 ) -> Result<Option<StoreKey>, Error> {
-    // At most 32 entities. Check missing metadata and equal counts for this
+    // Check every declared entity for missing metadata and equal counts for this
     // key-preserving copy; target counts were rebuilt by atomic private inserts.
     // Frozen allocations cannot change mid-pass.
     if after.is_none() {

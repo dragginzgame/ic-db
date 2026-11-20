@@ -162,7 +162,7 @@ durable representation is added. After building the fixture:
 ```sh
 make m2-cli-artifact
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
-bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test records console_counts_
 ```
 
@@ -211,7 +211,7 @@ With those retained local artifacts and the prepared PocketIC server:
 ```sh
 IC_DB_PREVIOUS_PLATFORM_WASM="$PWD/qualification/target/evidence/platform-upgrade/previous.wasm" \
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/platform-upgrade/current.wasm" \
-bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test platform_upgrade
 ```
 
@@ -983,6 +983,52 @@ Artifact SHA-256:
 
 - IC DB: `fb57769bb7a0b813c432989a29cd16873a344850a7a8030ca08781f05544a9b8`.
 - IcyDB: `8addf7680016ce09bb0fc3c0c2667010045a6071b4752aa1937e3f288b2de9c6`.
+
+## Single-store width on PocketIC
+
+`make m1-store-width` builds the temporary game schema with the schema owner's normal
+build script, installs its consumer Wasm, and runs two updates separated by an upgrade
+to the same executable. The first inserts a spell and its referenced ability in one
+batch, dependent first. The second reopens the same allocation, reads the last
+entity, verifies that deleting its referenced ability refuses intact, then deletes
+both together. All intervening entities have just a primary key and no rows.
+
+Measured 2026-11-20 with PocketIC 16.1.0. The 32-entity case used the original
+32-entity admission limit. The same build refused 33 during schema generation with `InvalidSchema`.
+For the other three measurements, a disposable source copy changed only the
+schema admission comparison from `entities.len() > 32` to `entities.len() > 500`.
+The supported cap is now 128. The 500-entity column records the earlier experiment. Exercise a selected width with
+`make m1-store-width STORE_WIDTH=72` (also accepts 32, 33 and 128). This probe is
+independent of the historical entity-growth benchmark.
+
+| IC instructions per operation | 32 | 33 | 72 | 500 |
+|---|---:|---:|---:|---:|
+| Cold compiled schema admission | 254,023 | 264,846 | 539,104 | 3,688,806 |
+| Database creation | 4,854,927 | 4,967,513 | 11,705,426 | 109,347,032 |
+| Two-row insert commit | 1,322,112 | 1,321,215 | 1,476,681 | 1,866,360 |
+| Post-upgrade database open | 158,540 | 158,540 | 178,150 | 195,150 |
+| Late-entity primary lookup | 71,805 | 71,827 | 87,463 | 218,154 |
+| Restricted delete refusal | 306,590 | 306,635 | 368,321 | 551,766 |
+| Two-row delete commit | 1,386,767 | 1,386,879 | 1,588,653 | 2,170,807 |
+
+Whole-update cycles (create and insert / reopen and delete) were
+14,048,058 / 9,676,069 at 32, 14,171,274 / 9,687,093 at 33,
+21,339,080 / 10,299,478 at 72 and 122,520,346 / 14,494,760 at 500.
+Admission was cold on both calls. Creation and open exclude schema admission,
+host bootstrap and lease acquisition. Commit timings exclude caller-side batch
+construction. Each cell is a single measured execution on a sparsely populated
+schema. The lookup includes typed admission and storage access. An unchanged-code
+upgrade exercises reopen. The experimental 500-entity build reproduced the recorded
+instruction and cycle counts. A separate native copy migrated 499 entities to
+a 500-entity target, reopening persisted progress at positions 31, 32, 255,
+256 and 498 before validating and publishing. A producer declaring 501 distinct
+entities refused during schema generation in that experiment.
+
+At the supported 128-entity cap, `make m1-store-width STORE_WIDTH=128` passed
+on PocketIC. The create-and-insert update used 33,894,476 cycles and the
+post-upgrade update used 11,165,683 cycles. A separate native migration with
+128 source and target entities resumed at positions 31, 32, 126 and 127, then
+validated and published. A producer with 129 distinct entities failed schema admission.
 
 ## Controlled entity growth
 
@@ -3694,7 +3740,7 @@ Run just this witness with the prepared PocketIC server:
 ```sh
 make m2-jobs-artifact
 IC_DB_M2_JOBS_WASM="$PWD/qualification/target/evidence/m2/jobs.wasm" \
-bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test jobs_contention shared_jobs_ -- --nocapture
 ```
 
@@ -3705,7 +3751,7 @@ Run only the variable-sized value witness after preparing PocketIC:
 ```sh
 make m2-jobs-artifact
 IC_DB_M2_JOBS_WASM="$PWD/qualification/target/evidence/m2/jobs.wasm" \
-bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test jobs_envelope retained_text_winners -- --nocapture
 ```
 
@@ -3752,7 +3798,7 @@ their in-memory reducer implementation is not copied.
 ```sh
 make m2-cli-artifact
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
-bash scripts/with-pocketic.sh cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test console_aggregates -- --nocapture
 ```
 
@@ -4345,7 +4391,7 @@ waits 90 seconds without server requests, then exercises queries and normal quit
 
 ```sh
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
-  cargo test --offline --locked --manifest-path qualification/Cargo.toml \
+  cargo test --locked --manifest-path qualification/Cargo.toml \
     -p ic-db-m0-rollback-driver --test console_terminal \
     terminal_survives_pocketic_default_idle_timeout -- --ignored --exact
 ```
@@ -4483,8 +4529,8 @@ dynamic-query API; there is no remote connection or durable CLI session.
 Focused native checks:
 
 ```sh
-cargo test --offline --locked -p ic-db --test queries --test key_bounds
-cargo test --offline --locked -p ic-db-macros --lib
+cargo test --locked -p ic-db --test queries --test key_bounds
+cargo test --locked -p ic-db-macros --lib
 ```
 
 The Blob cases in `crates/ic-db/tests/queries/blobs.rs` compare scans, indexed
@@ -4575,7 +4621,7 @@ allowance refuses intact and the same continuation then succeeds. This is
 native persistence evidence, not a new IC instruction or Wasm-upgrade claim.
 
 ```sh
-cargo test --offline --locked -p ic-db --test jobs retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages
+cargo test --locked -p ic-db --test jobs retained_blob_groups_and_distinct_merge_across_sparse_reopens_and_pages
 ```
 
 A second native retained check mixes 24 optional Blob rows, including repeated
@@ -4586,7 +4632,7 @@ eight, and four each for zero-byte and non-UTF-8 keys. No aggregate result is
 returned until completion. This adds no engine or durable-format change.
 
 ```sh
-cargo test --offline --locked -p ic-db --test jobs retained_optional_blob_groups_preserve_absence_across_chunks
+cargo test --locked -p ic-db --test jobs retained_optional_blob_groups_preserve_absence_across_chunks
 ```
 
 Pending fluent Blob prefix qualification compares `StartsWith` with Rust slice
@@ -4600,8 +4646,8 @@ original input. These native checks establish engine behavior independently of
 the console transport and do not establish Wasm performance.
 
 ```sh
-cargo test --offline --locked -p ic-db --test queries blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages
-cargo test --offline --locked -p ic-db --test jobs retained_blob_prefix_binding_survives_reopen
+cargo test --locked -p ic-db --test queries blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages
+cargo test --locked -p ic-db --test jobs retained_blob_prefix_binding_survives_reopen
 ```
 
 The console exposes `--payload-prefix HEX` for `query BinaryObject` and
@@ -4636,8 +4682,8 @@ path examines nine, including the residual nonmatch. Empty values, non-UTF-8 byt
 and equal-winner key ordering are included.
 
 ```sh
-cargo test --offline --locked -p ic-db --test queries blob_prefixes_match_raw_bytes
-cargo test --offline --locked -p ic-db --test jobs retained_blob_group_prefix_selection
+cargo test --locked -p ic-db --test queries blob_prefixes_match_raw_bytes
+cargo test --locked -p ic-db --test jobs retained_blob_group_prefix_selection
 ```
 
 This checks the existing shared executor and finalization contract; no product
@@ -4657,8 +4703,8 @@ an incomplete chunk, refuse a changed suffix without changing backing, then
 finish with the exact count and cancel normally.
 
 ```sh
-cargo test --offline --locked -p ic-db --test queries blob_suffixes
-cargo test --offline --locked -p ic-db --test jobs retained_blob_suffix
+cargo test --locked -p ic-db --test queries blob_suffixes
+cargo test --locked -p ic-db --test jobs retained_blob_suffix
 ```
 
 No durable/schema change or additional execution path is introduced. These are
@@ -4702,7 +4748,7 @@ or the database codec. Adding/changing an authored default still changes its
 schema identity. Macro/library and affected native/Wasm caller Clippy pass.
 
 ```sh
-cargo test --offline --locked -p ic-db --test defaults
+cargo test --locked -p ic-db --test defaults
 make db
 db schema DefaultRow
 ```

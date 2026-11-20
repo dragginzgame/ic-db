@@ -784,6 +784,39 @@ fn malformed_and_future_copy_checkpoints_refuse_intact() {
     }
 }
 
+// Exercise the envelope decoder independently of the writer. Resume separately
+// checks that the decoded position exists in the specific frozen source.
+#[test]
+fn copy_position_frames_accept_only_the_canonical_encoding() {
+    let runtime = host(VectorMemory::default());
+    drop(begin(&runtime));
+    let lease = || runtime.open_memory(&key("copy.target.v1")).unwrap();
+    let manifest = vec![0];
+    let mut header = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(lease())
+        .get(&manifest)
+        .unwrap();
+    assert!(header.ends_with(&[1, 0, 0, 0, 0])); // first entity, empty cursor
+    header.truncate(header.len() - 5);
+    for (position, valid) in [
+        (0, false),
+        (31, true),
+        (32, true),
+        (127, true),
+        (128, false),
+    ] {
+        let frame = [header.as_slice(), &[9, position], &[0; 4]].concat();
+        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(lease()).insert(manifest.clone(), frame);
+        let outcome = Database::open(lease(), target());
+        assert!(
+            matches!(
+                (valid, outcome),
+                (true, Err(Error::Maintenance)) | (false, Err(Error::Corrupt))
+            ),
+            "checkpoint position {position}"
+        );
+    }
+}
+
 fn finish_copy(copy: &mut SchemaCopy) {
     for _ in 0..8 {
         if copy
