@@ -62,6 +62,19 @@ pub trait UniqueKey {
     fn components(&self) -> impl AsRef<[IndexValue<'_>]>;
 }
 
+/// A session that can start a fluent query for `E`. Generic read helpers can
+/// accept either a store session or the session for the entity's canister.
+pub trait QuerySession<E: Entity> {
+    /// Build a live query. The builder owns the selected store handle.
+    fn entity_query<'a>(&self) -> Query<'a, E>;
+}
+
+impl<E: Entity> QuerySession<E> for DatabaseSession {
+    fn entity_query<'a>(&self) -> Query<'a, E> {
+        self.query()
+    }
+}
+
 /// A cloneable handle to one attached database and its existing storage lease.
 /// The host attaches once using [`Self::new`] and hands each caller a clone.
 /// Cloning takes no database borrow and performs no storage access.
@@ -130,6 +143,13 @@ impl DatabaseSession {
     /// Returns a borrow conflict or the original [`Database::get`] error.
     pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
         self.read()?.get::<E>(key)
+    }
+
+    /// Read up to 32 primary keys in input order, preserving duplicates and missing slots.
+    /// # Errors
+    /// Returns a borrow conflict or the original [`Database::get_many`] error.
+    pub fn get_many<E: Entity>(&self, keys: &[E::Key]) -> Result<Vec<Option<E>>, Error> {
+        self.read()?.get_many::<E>(keys)
     }
 
     /// Look up an owned row using a generated unique key, such as

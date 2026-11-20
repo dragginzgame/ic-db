@@ -11,7 +11,7 @@ IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable co
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.25.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.27.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 frozen IcyDB comparison retains its separate transitive Wire 0.22.4 selection;
 there is no cross-version Wire type exchange or product Wire dependency.
@@ -29,7 +29,7 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | The pinned Canic mount and Platform's canister identity read require Wasm. Only the mount and its caller check are conditional. The native fixture test still compiles the inspection, query and mutation handlers. |
+| Mixed-lifecycle endpoints | The released Canic mount and Platform's canister identity read require Wasm. Only the mount and its caller check are conditional. The native fixture test still compiles the inspection, query and mutation handlers. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -99,14 +99,7 @@ export. Its only selected dependency is PocketIC 16.1.0; managed-server, CLI and
 held-reply features remain disabled. Existing endpoint admission, deadlines,
 caller-owned runtime and explicit deletion remain unchanged. This changes the
 dependency owner, not the simulator implementation or its transitive dependencies.
-The pending remote CLI still directly selects Agent 0.49.3. Platform 0.34.13's
-`signed_query` accepts only `Ed25519Identity`; its secp256k1 feature admits prepared
-updates, not the CLI's secp256k1 PEM queries. This remaining migration obligation
-belongs to [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4).
-Do not describe the remote CLI boundary as migrated or release-qualified. No
-legacy Platform facade, local signing implementation or authentication downgrade
-is introduced. The HTTP fixture uses a literal public synthetic PEM instead of
-a direct `ic-ed25519` dependency.
+The historical 0.22.1 client used Agent 0.49.3 for signed inspection. Canic now owns the client and uses Platform for signed queries.
 Focused requalification passes all 11 native CLI tests, missing/malformed endpoint
 refusal, explicit instance release, the nine Wasm rollback modes and the real
 Canic HTTP inspection/listing journey across upgrade and closed admission. All
@@ -351,7 +344,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | Schema authoring | Attributes, shared model, host-side schema/actor generation | Attributes and two-stage path resolution retained; no author-supplied numeric field IDs; generated host registration stays out of Wasm |
 | Ordinary writes | Journaled writes with follow-up work in the measured host | Synchronous bounded final-state batches, preparation before mutation, IC message rollback; no ordinary-write WAL |
 | Durable schema authority | Accepted schema snapshots and runtime binding/admission | Compiled contract admitted against a minimal manifest; explicit versioned maintenance, no runtime DDL or online activation |
-| Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. CLI inspection targets Canic applications; one explicit witness listing uses its application protocol; general query demos remain local |
+| Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. Canic owns remote inspection and application listing endpoints; IC DB CLI query demos run locally |
 | Codec boundary | Owned codec/runtime plus a product `ic-wire` dependency | Database-owned durable codec; no product Wire dependency. Qualification transport may use Wire |
 
 Structural findings are from the frozen
@@ -940,7 +933,7 @@ shape ceased to be part of the supported key contract.
 
 ## Matched high-fan-out writes
 
-The optional `make m1-envelope-comparison` selects the baseline's `envelope`
+The retired `make m1-envelope-comparison` selected the baseline's `envelope`
 fixture feature. Ordinary scalar builds do not include that schema or its controls.
 It runs 32-row inserts and replacements with the same eight four-field indexes
 on both engines, using four 48-byte zero-filled Text values and empty unindexed
@@ -958,11 +951,7 @@ frozen IcyDB caps the **whole index key at 512 bytes** (individual components at
 487). The earlier IC DB stress fixture created 8169-byte keys. IC DB now adopts
 the same complete-key cap. The comparison verifies IcyDB's refusal with unchanged
 stable bytes before running the smaller
-common workload. It does not relax either engine's limits. Reproduce with:
-
-```sh
-make m1-envelope-comparison
-```
+common workload. The comparison remains historical evidence. Use `make m1-write-envelope` for current IC DB write qualification.
 
 Source/lock hashes, compiler, features, Wasm artifacts and raw measurements are
 recorded under `target/evidence/envelope-comparison/`. The initial oversized-key
@@ -1728,7 +1717,7 @@ cover selected rich-key correctness/refusals; they are not IC performance proof.
 ```sh
 cargo fetch --manifest-path qualification/Cargo.toml --locked
 make m0-setup
-make m0-icydb-baseline
+make m2-query-matrix
 ```
 
 Fetching requires read access to the private `dragginzgame/icydb-legacy` repository.
@@ -1785,11 +1774,7 @@ This focused target is not implicitly run by scaffold CI or release qualificatio
 
 ## Matched scalar records
 
-With the server already prepared, run:
-
-```sh
-make m1-records-comparison
-```
+The scalar write comparison was retired. The measurements below describe the historical workload.
 
 This adds one private qualification host, not a product crate. Both hosts expose
 the same five query/update controls and use one three-Nat64 entity with a
@@ -1830,7 +1815,7 @@ IcyDB comparison ceilings. This does not measure principal-heavy query workloads
 
 ### Scalar comparison refresh (0.18)
 
-On 2026-11-16, rerun `make m1-records-comparison` against current IC DB and frozen
+On 2026-11-16, the then-current `make m1-records-comparison` was rerun against current IC DB and frozen
 IcyDB `6d421e3`, preserving the previous complete evidence directory as
 `target/evidence/records-comparison-before-018-refresh/`. The shared workload,
 schemas, host sources and independent tuple oracle are unchanged: 32 inserts,
@@ -2507,8 +2492,7 @@ IcyDB's frozen `guards/mod.rs` supplies the retained authorization-before-reques
 lesson, not copied SQL or session machinery. The witness's owner record is
 application state, not a new database representation. Canic is now the sole
 source/test owner. The application-specific request types do not establish a
-generic remote CLI contract; common inspection and explicit application-query
-selection must be settled before connecting `db` to deployed databases.
+generic remote CLI contract. Canic handles remote inspection.
 
 ### Maintained prefix-count candidate (0.19)
 
@@ -2937,10 +2921,9 @@ schedule, and does not establish the minimum cost for a different schedule.
 
 ### Opening costs through the Canic mount (0.23.7)
 
-Run `make m4-lifecycle` to reproduce these observations. The fixture uses
+The historical run used
 Canic 0.223.1 at `bbc13c36afc88f8dcd09072c1cbfd4478943fffd` and workspace
-IC DB. The separate `make m4-inspection` builds the signed-HTTP producer from
-that Canic revision with its own locked dependencies. Both paths use Wire 0.25.0.
+IC DB. The signed-HTTP producer used its own locked dependencies. Both paths then used Wire 0.25.0. Current runs select the released Canic dependency in the qualification manifest.
 
 The database contains four parents, twelve items and twelve links. The indexed
 query returns the same item and cursor after examining one candidate. The batch
@@ -4659,89 +4642,9 @@ make db
 db schema DefaultRow
 ```
 
-### Native Canic inspection client (0.22.1)
+### Remote inspection ownership
 
-`db inspect` consumes Canic 0.219.0, revision
-`3d2ef2719450e57484638b4f1db6cb6bcc41d64c`, with IC Agent 0.49.3.
-The `db` feature exposes passive definitions to the native client without the
-Canic runtime or IC DB engine. Product dependency graphs and durable formats do
-not change. `scripts/build-canic-inspection.sh` locates that selected committed
-source, verifies its revision/clean tracked files and builds its existing normal,
-fault and incompatible witnesses with artifacts under this workspace's target.
-It does not modify the frozen IcyDB baseline or a sibling Canic checkout.
-
-```sh
-make m0-setup
-make m4-inspection
-```
-
-The actual CLI calls PocketIC's HTTP gateway with query signature verification
-enabled. A public synthetic Ed25519 identity proves caller selection. Catalogue,
-selected fields/indexes and permitted cardinality render in tables/JSON; each
-query reports elapsed time and unavailable remote cycles. Denied callers, missing
-entities and a disconnected provider refuse without fixture fallback. Unchanged
-schema upgrade, maintenance and incompatible storage preserve backing through
-inspection. Native checks additionally refuse wrong method/direction, malformed/
-oversized frames, wrong selection/schema and counts without readable admission.
-Named definitions stay finite; bounds and references have separate table columns.
-The source receipt, Wasm hashes/build records and HTTP run log live under
-`target/evidence/canic-inspection/`. This qualifies simulated-network inspection,
-not live deployment, remote arbitrary queries or update recovery. The explicit application listing is qualified below as the final client slice of
-[IC DB #4](https://github.com/dragginzgame/ic-db/issues/4).
-
-Frozen IcyDB `6d421e3`, `crates/icydb-cli/src/icp/call/mod.rs`, distinguishes
-query failures from updates with unknown outcomes. The client retains that
-call-lane distinction by admitting only inspection queries here; it copies no
-subprocess transport, SQL surface, retries or update reconciliation machinery.
-
-The pending 0.22.2 client applies one Tokio deadline to a complete verified query,
-including node-key reads, and a separate deadline to an explicit local root fetch.
-`--timeout-secs` accepts 1–300 seconds (default 30). Agent's direct upstream HTTP
-service omits its implicit 429/503 retry wrapper; Reqwest and TCP retries are also
-disabled. No local transport implementation, retry state or engine state is added.
-The independent HTTP peer in `tests/remote.rs` checks immediate busy-provider
-refusal and stalled-call termination for both inspection and witness listing,
-with statistics and no partial JSON/fixture fallback. Distinct verification
-requests are counted separately from retries. Four HTTP checks additionally cover
-stalled/busy local-root setup without database dispatch, redirect refusal and
-2 MiB HTTP response enforcement before protocol decoding. The peer captures
-bounded request lines across TCP fragments and has an independent child watchdog.
-The earlier 11 native CLI checks and first two HTTP checks passed with the
-independently changed Testkit 0.108.1 lock selection;
-the released 0.22.1 source retains its qualified 0.108.0 graph.
-The signed Canic HTTP journey also passes with the changed transport, preserving
-authorization, upgrade/maintenance refusals and unchanged backing. Both commands
-reject the actual witness's certificate under default mainnet trust, then succeed
-with explicit local-root admission; selecting a local URL alone grants no trust.
-The extended checks use the existing producer Wasm and native qualification lock;
-concurrent Runtime/macros lock updates are preserved, not requalified as Wasm changes
-by this client-only run. Focused Clippy,
-formatting and documentation checks pass; this is not a second release.
-
-### Native typed witness listing (0.22.1)
-
-The same pinned Canic witness now serves `db witness-list` over verified HTTP.
-Setup inserts six literal rows through the application's bounded write endpoint;
-CLI operations remain read-only. Minimum score 30 with one-candidate work starts
-with an empty page and a cursor at ID 10. The 0.23.6 driver then inserts
-matching IDs 5 and 15 in a single application batch. A fresh listing sees ID 5.
-After upgrade the CLI resumes the original cursor and returns exactly IDs
-15, 30, 40 and 60. Inspection reports all eight rows. Changed minimum, corrupt cursor and
-an unauthorized caller refuse; closed/incompatible storage refuses ordinary
-listing. Both inspection and listing leave backing unchanged. Each listing
-command reports one query call; JSON uses hex continuation and separate statistics.
-Native cases refuse page/candidate excess, oversized cursors, malformed frames
-and wrong method IDs without exposing partial results.
-
-The native client has an explicit binding to `canic-db-witness.query.v1`, not a
-general query protocol. Shared connection code owns target/identity admission,
-signature verification and timing; the application owns query semantics. Its
-whole witness crate currently enables `db-schema` on native builds, so importing
-it merely for DTOs would introduce an unused engine. The isolated binding is
-checked against the actual committed producer rather than copying its executor.
-Producer revision/artifact hashes remain those in `target/evidence/canic-inspection/`;
-`http-client-listing.log` records the extended run. No engine, format or performance
-claim changes, and no write-capable client or automatic retry is introduced.
+Canic owns the `canic db inspect` command and its signed HTTP and installed-canister tests. The application-specific `db witness-list` client was retired. The local console and the mixed lifecycle workload continue to exercise IC DB query semantics.
 
 ### Ordered Document prefix listing (0.23.4 worktree)
 

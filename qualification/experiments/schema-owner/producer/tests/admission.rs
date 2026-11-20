@@ -32,8 +32,10 @@ fn existing_rows_reopen_under_the_producer_export() {
 
 #[test]
 fn host_reopens_only_the_selected_canisters_allocations() {
-    use ic_db::{CompiledCanister, Database};
-    use ic_db_schema_owner_producer::model::{AuditEvent, Hub, Revision, Shard};
+    use ic_db::{CanisterSession, CompiledCanister, Database, DatabaseSession};
+    use ic_db_schema_owner_producer::model::{
+        AuditEvent, AuditEventByRevision, Hub, Revision, Shard,
+    };
     use ic_storage::{
         AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
         SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -75,29 +77,26 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         assert!(
             Database::open(runtime.open_memory(&audit_key).unwrap(), (audit.schema)()).is_err()
         );
-        let mut users = Database::create(
-            runtime.open_memory(&accounts_key).unwrap(),
-            (accounts.schema)(),
-            [1; 16],
-        )
+        let db = CanisterSession::<Hub>::try_attach(|store| {
+            let memory = runtime
+                .open_memory(&StableKey::parse(store.key).unwrap())
+                .unwrap();
+            let incarnation = if store.key == accounts.key {
+                [1; 16]
+            } else {
+                [2; 16]
+            };
+            Database::create(memory, (store.schema)(), incarnation).map(DatabaseSession::new)
+        })
         .unwrap();
-        let mut events = Database::create(
-            runtime.open_memory(&audit_key).unwrap(),
-            (audit.schema)(),
-            [2; 16],
-        )
+        let events = db.query::<AuditEvent>();
+        db.insert(&User { id: 42 }).unwrap();
+        db.insert(&AuditEvent {
+            id: 42,
+            revision: Revision(9),
+        })
         .unwrap();
-        let mut batch = Batch::new();
-        batch.insert(&User { id: 42 }).unwrap();
-        users.commit(batch).unwrap();
-        let mut batch = Batch::new();
-        batch
-            .insert(&AuditEvent {
-                id: 42,
-                revision: Revision(9),
-            })
-            .unwrap();
-        events.commit(batch).unwrap();
+        assert_eq!(events.try_one().unwrap().unwrap().revision, Revision(9));
     }
     let runtime = open_runtime();
     assert!(matches!(
@@ -107,17 +106,56 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         ),
         Err(ic_db::Error::IncompatibleSchema)
     ));
-    let users = Database::open(
-        runtime.open_memory(&accounts_key).unwrap(),
-        (accounts.schema)(),
-    )
-    .unwrap();
-    let events =
-        Database::open(runtime.open_memory(&audit_key).unwrap(), (audit.schema)()).unwrap();
-    assert_eq!(users.get::<User>(42).unwrap().unwrap().id, 42);
+    let reopen = |store: &ic_db::CompiledStore| {
+        let memory = runtime
+            .open_memory(&StableKey::parse(store.key).unwrap())
+            .unwrap();
+        Database::open(memory, (store.schema)()).map(DatabaseSession::new)
+    };
+    let failed = CanisterSession::<Hub>::try_attach(|store| {
+        if store.key == audit.key {
+            return Err(ic_db::Error::Maintenance);
+        }
+        reopen(store)
+    });
+    assert!(matches!(failed, Err(ic_db::Error::Maintenance)));
+    let db = CanisterSession::<Hub>::try_attach(reopen).unwrap();
+    assert_eq!(db.query::<User>().try_one().unwrap().unwrap().id, 42);
     assert_eq!(
-        events.get::<AuditEvent>(42).unwrap().unwrap().revision,
+        db.get::<AuditEvent>(42).unwrap().unwrap().revision,
         Revision(9)
     );
-    assert!(events.get::<User>(42).is_err());
+    db.replace(&AuditEvent {
+        id: 42,
+        revision: Revision(10),
+    })
+    .unwrap();
+    let key = AuditEventByRevision {
+        revision: Revision(10),
+    };
+    assert_eq!(db.get_unique(&key).unwrap().unwrap().id, 42);
+    db.clone().delete::<User>(42).unwrap();
+    assert!(db.get::<User>(42).unwrap().is_none());
+    let keys = [42, 1, 42];
+    assert!(
+        db.get_many::<User>(&keys)
+            .unwrap()
+            .iter()
+            .all(Option::is_none)
+    );
+    let revisions: Vec<_> = db
+        .get_many::<AuditEvent>(&keys)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.map(|event| event.revision))
+        .collect();
+    assert_eq!(revisions, [Some(Revision(10)), None, Some(Revision(10))]);
+    assert!(matches!(
+        db.get_many::<AuditEvent>(&[42; 33]),
+        Err(ic_db::Error::Limit)
+    ));
+    assert_eq!(
+        db.get::<AuditEvent>(42).unwrap().unwrap().revision,
+        Revision(10)
+    );
 }

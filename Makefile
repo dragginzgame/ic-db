@@ -13,7 +13,7 @@ publish-check: override CARGO_PUBLISH_VERIFY_TARGETS := check
 include vendor/toko-tooling/make/consumer.mk
 include vendor/toko-tooling/make/cargo-dependencies.mk
 
-.PHONY: help check test clippy doc docs-check ci db m0-setup m0-contracts m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance m0-maintenance-artifacts m0-icydb-baseline
+.PHONY: help check test clippy doc docs-check ci db m0-setup m0-contracts m0-rollback m0-batch m0-reads m0-aggregation m0-maintenance m0-maintenance-artifacts
 DB_INSTALL_PREFIX ?= $(HOME)/.local
 help:
 	@printf '%s\n' \
@@ -28,7 +28,6 @@ help:
 	  'make m0-reads                    Run bounded ordering/page/DISTINCT probe' \
 	  'make m0-aggregation              Run only the resumable grouped-sum probe' \
 	  'make m0-maintenance              Run interrupted schema-maintenance probe' \
-	  'make m0-icydb-baseline           Measure the frozen SQL-disabled engine' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
 	  'make m2-sqlite-reference        Check native fluent results against SQLite' \
@@ -41,8 +40,6 @@ help:
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m4-lifecycle               Check mixed writes, queries, jobs and migration' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
-	  'make m1-records-comparison      Measure matched scalar IC DB/IcyDB workloads' \
-	  'make m1-envelope-comparison     Compare high-fan-out IC DB/IcyDB writes' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
 	  'make m2-query-growth            Measure fluent shapes, maps and entity growth' \
 	  'make m2-count-paths            Compare validated, index-entry and maintained prefix counts' \
@@ -115,21 +112,7 @@ m0-contracts:
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-qualification-transport --test schema_serde
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test nested_row_codec --test query_composition -- --nocapture
 
-# A benchmark selection, not part of aggregate scaffold CI or routine release.
-# Cargo owns the immutable Git source; no local sibling paths or edits are used.
-m0-icydb-baseline:
-	@mkdir -p qualification/target/evidence/icydb-baseline
-	rustc -Vv > qualification/target/evidence/icydb-baseline/compiler.txt
-	cargo tree --manifest-path qualification/Cargo.toml --locked -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown -e normal,build --format '{p} features=[{f}]' > qualification/target/evidence/icydb-baseline/features.txt
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-icydb-baseline-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/icydb-baseline/build.jsonl
-	@IC_DB_ICYDB_BASELINE_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_icydb_baseline_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/icydb-baseline/build.jsonl)" && \
-	  export IC_DB_ICYDB_BASELINE_WASM && \
-	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test icydb_baseline -- --nocapture
-
-.PHONY: m1-records-comparison m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
-m1-records-comparison:
-	bash scripts/measure-records.sh
-
+.PHONY: m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
 m2-fluent-comparison:
 	bash scripts/measure-records.sh fluent
 
@@ -161,10 +144,6 @@ m2-count-comparison:
 
 m2-count-profile:
 	bash scripts/measure-records.sh count-profile
-
-.PHONY: m1-envelope-comparison
-m1-envelope-comparison:
-	bash scripts/measure-records.sh envelope
 
 .PHONY: m1-entity-growth
 m1-entity-growth:
@@ -390,10 +369,3 @@ release-lint:
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features retained-console --target wasm32-unknown-unknown -- -D warnings
-
-.PHONY: m4-inspection-artifact m4-inspection
-m4-inspection-artifact:
-	bash scripts/build-canic-inspection.sh
-
-m4-inspection: m4-inspection-artifact
-	IC_DB_CANIC_WASM_DIR="$(CURDIR)/qualification/target/evidence/canic-inspection" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test inspection -- --nocapture

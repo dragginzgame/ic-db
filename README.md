@@ -10,17 +10,8 @@ application-defined schemas and broad capabilities drive its design. The private
 Toko GitHub repository is a secondary compatibility target, not the architectural
 guide. Recorded consumer queries can inform compatibility checks.
 It does not replace IcyDB yet.
-`db inspect --provider URL --canister PRINCIPAL --identity KEY.pem` reads an
-application's Canic inspection v1 catalogue. Add `--entity NAME --count` for its
-schema and permitted maintained count, or `--json` for structured output.
-Use `--anonymous` instead of a PEM only when intentionally selecting that caller.
-`--timeout-secs` bounds each complete query, including verification reads (default
-30, range 1–300). Busy providers refuse without automatic retries.
-Loopback development providers need explicit `--local-root-key` trust. Remote
-inspection never falls back to the temporary fixture. `db witness-list` reads one
-bounded page from Canic's specific qualification application; other `query`
-commands still use the local fixture. `make m4-inspection` qualifies the client through an
-installed Canic witness and local HTTP gateway.
+`db entities`, `db schema` and fluent query demonstrations run against the local fixture.
+For an installed application that exposes inspection, use `canic db inspect --help`.
 Ordinary Rust iteration handles result mapping; the Canic adapter owns product
 endpoints. Broad schema types and constrained resumable aggregation are required.
 Shared execution and measured monomorphization growth are explicit design concerns.
@@ -890,10 +881,8 @@ composition natively. It does not qualify product codecs or measure Wasm cost.
 
 The [current delivery status](docs/design/ic-db-system-design.md#9-delivery-and-deletion-gates)
 separates delivered M1–M3 capabilities from remaining qualification and integration
-work. `make m0-icydb-baseline` provides the first
-SQL-disabled comparison workload: persistent writes, indexed reads and unchanged
-upgrade/reopen. It measures the frozen engine only; the separate
-`make m1-records-comparison` provides the matched scalar results.
+work. The frozen IcyDB baseline is used only for query comparisons.
+Run `make m2-query-matrix` for matched query results and instruction costs.
 `make m2-aggregate-comparison` compares fluent category counts, sums and extrema;
 the [receipt](qualification/README.md#matched-grouped-aggregates-019) records its
 32-row scope and result-type differences. `make m2-count-comparison` compares
@@ -1000,8 +989,26 @@ The compiler resolves both links through ordinary Rust paths. The host imports
 schema can use `Accounts::compiled()`. Each store validates references and
 computes its own fingerprint. The generic bound
 `E: Entity<Store: Store<Canister = C>>` restricts a host API to entities of
-canister `C`. The database still takes one allocation lease per handle.
- When moving declarations into a shared
+canister `C`. The host can mount the roster once with `CanisterSession::<Hub>::try_attach`.
+Its callback receives each declared store and returns the corresponding admitted
+`DatabaseSession`. Propagate attachment failure as a lifecycle trap during installation.
+
+Application operations then take one canister session:
+
+```rust
+use directory::model::{Hub, User};
+use ic_db::{CanisterSession, Error};
+
+fn user(db: &CanisterSession<Hub>, id: u64) -> Result<Option<User>, Error> {
+    db.get::<User>(id)
+}
+```
+
+`db.query::<User>()` and `db.insert(&user)` select the same store. A query for
+another canister’s entity fails to compile. Explicit batches still commit through
+one store’s `DatabaseSession`.
+
+When moving declarations into a shared
 library, remove the former consumer-side generation and its build dependencies.
 
 The [schema build script](qualification/ic-db-m1-records-schema/build.rs),

@@ -105,11 +105,10 @@ jobs:
         id: compiler
         timeout-minutes: 3
         shell: bash
-        run: |
-          perl scripts/ci-setup.pl compiler bash -euo pipefail -c '
-            version="$(bash vendor/toko-tooling/scripts/ci/read-cargo-workspace-rust-version.sh Cargo.toml)"
-            rustup toolchain install "$version" --profile minimal --component rustfmt --component clippy
-          '
+        run: >-
+          perl scripts/ci-setup.pl compiler
+          bash vendor/toko-tooling/scripts/dev/prepare-rust-toolchain.sh
+          --workspace-manifest Cargo.toml --component rustfmt --component clippy
       - name: Prepare and admit tools
         id: tools
         timeout-minutes: ${{ matrix.tools_minutes }}

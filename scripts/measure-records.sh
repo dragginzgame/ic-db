@@ -2,14 +2,9 @@
 # Explicit record comparisons or entity growth; no implicit release/CI selection.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-workload="${1:-scalar}"
+workload="${1:-query-matrix}"
 unset IC_DB_KEYSET_COMPARISON IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
 case "$workload" in
-    scalar)
-        evidence="$PWD/qualification/target/evidence/records-comparison"
-        engines=(records-benchmark icydb-baseline)
-        test_name=records_comparison
-        ;;
     fluent)
         evidence="$PWD/qualification/target/evidence/fluent-comparison"
         engines=(records-benchmark icydb-baseline)
@@ -64,11 +59,6 @@ case "$workload" in
         test_name=records_comparison
         export IC_DB_COUNT_COMPARISON=1 IC_DB_COUNT_PROFILE=1
         ;;
-    envelope)
-        evidence="$PWD/qualification/target/evidence/envelope-comparison"
-        engines=(m1-records icydb-baseline)
-        test_name=envelope_comparison
-        ;;
     growth)
         evidence="$PWD/qualification/target/evidence/entity-growth"
         engines=(entities-1 entities-8 entities-32 retained-1 retained-8 retained-32)
@@ -79,7 +69,7 @@ case "$workload" in
         engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
-    *) printf 'Expected scalar, fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, envelope, growth or queries workload\n' >&2; exit 2 ;;
+    *) printf 'Expected fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
 if [[ "$test_name" == query_matrix ]]; then
@@ -140,9 +130,6 @@ for engine in "${engines[@]}"; do
             build_features="${build_features:+$build_features,}retained-host"
         fi
     fi
-    if [[ "$workload" == envelope && "$engine" == icydb-baseline ]]; then
-        build_features=envelope
-    fi
     if [[ "$workload" == queries ]]; then
         package=ic-db-entity-growth-canister
         build_features=retained-host
@@ -173,8 +160,6 @@ done
 
 export IC_DB_RECORDS_BENCHMARK_WASM="$evidence/records-benchmark.wasm"
 export IC_DB_ICYDB_BASELINE_WASM="$evidence/icydb-baseline.wasm"
-export IC_DB_M1_RECORDS_WASM="$evidence/m1-records.wasm"
-export IC_DB_ICYDB_ENVELOPE_WASM="$evidence/icydb-baseline.wasm"
 export IC_DB_ENTITY_GROWTH_DIR="$evidence"
 export IC_DB_QUERY_GROWTH_DIR="$evidence"
 bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver \

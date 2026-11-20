@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.24.2] - Unreleased
+
+### Store routing
+
+- `CanisterSession<Hub>` routes fluent queries, key lookups and single-row writes
+  to the entity’s declared store. Hosts attach the canister’s compiled roster once.
+  Rust rejects entities declared for a different canister. A generic helper can
+  accept `&impl QuerySession<E>` to read through either kind of session.
+
+- Store and canister sessions now expose `get_many::<E>(&keys)` for up to
+  32 primary keys. Each input position receives its row or `None`.
+
+### Qualification
+
+- Remote inspection moves to `canic db inspect`. The fixture-specific `db witness-list`
+  command is retired. Inspect the local database with these commands.
+
+  ```sh
+  db entities
+  db schema
+  ```
+
+- The remaining Wire 0.22 dependency belongs to the
+  frozen IcyDB query comparison. Standalone legacy startup and write benchmarks
+  are retired. Use `make m2-query-matrix` for query comparisons and
+  `make m1-write-envelope` for IC DB write qualification.
+
+### 🧪 Testing
+
+- CI prepares the workspace compiler, rustfmt and Clippy with Toko Tooling’s shared installer. [#14 — Use the shared Rust toolchain installer in CI](https://github.com/dragginzgame/ic-db/issues/14)
+
 ## [0.24.1] - 2026-11-19
 
 - Fixed rust-analyzer marking active entity, store and canister declarations

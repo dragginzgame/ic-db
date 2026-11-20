@@ -73,6 +73,7 @@ pub struct Revision {}
 #[entity(
     store = AuditStore,
     pk(field = "id"),
+    index(field = "revision", unique),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "revision", value(item(is = "Revision")))

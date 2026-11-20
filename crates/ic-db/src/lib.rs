@@ -38,6 +38,7 @@
 //! struct States {}
 //! ```
 
+mod canister_session;
 #[doc(hidden)]
 mod codec;
 mod date;
@@ -61,6 +62,7 @@ mod build;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 pub mod testing;
 
+pub use canister_session::{CanisterSession, MountedStore};
 pub use date::Date;
 pub use decimal::{Decimal, ParseDecimalError};
 pub use defaults::{InsertInput, LiteralDefault};
@@ -73,7 +75,7 @@ pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
 pub use primary::PrimaryKey;
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
-pub use session::{DatabaseSession, UniqueKey};
+pub use session::{DatabaseSession, QuerySession, UniqueKey};
 pub use store::{
     Aggregate, Batch, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor, GroupOrder,
     GroupPage, GroupValue, JobHandle, JobOutcome, JobStep, Page, QueryCursor, QueryOperand,

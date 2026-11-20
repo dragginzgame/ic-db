@@ -13,10 +13,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
-canic.workspace = true
-canic-wire.workspace = true
 clap.workspace = true
-ic-agent.workspace = true
 ic-db-qualification-transport.workspace = true
 ic-host-text.workspace = true
 ic-testkit.workspace = true
@@ -28,6 +25,7 @@ shlex.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
+canic.workspace = true
 ic-host-artifacts.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true

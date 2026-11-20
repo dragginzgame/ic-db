@@ -84,7 +84,7 @@ impl Registry {
             include(canister.strip_prefix(&subtree).unwrap());
             let mut entries = String::new();
             let canister_path = qualified(canister);
-            for &(store, _, key) in stores.iter().filter(|s| s.1 == canister) {
+            for (slot, &(store, _, key)) in stores.iter().filter(|s| s.1 == canister).enumerate() {
                 include(store.strip_prefix(&subtree).unwrap());
                 let store_path = qualified(store);
                 let code = self
@@ -103,6 +103,11 @@ impl Registry {
                      let _ = owner::<{store_path}>;
                      assert!(matches!(<{store_path} as ::ic_db::Store>::KEY.as_bytes(), {:?}),
                          \"store key differs from host\"); }};", key.as_bytes()
+                )
+                .unwrap();
+                writeln!(
+                    assembly,
+                    "impl ::ic_db::MountedStore for {store_path} {{ const SLOT: usize = {slot}; }}"
                 )
                 .unwrap();
                 writeln!(entries,

@@ -5,17 +5,12 @@ use ic_wire::{Direction, Encoding};
 
 type Row = (u64, u64, u64);
 
-pub async fn run(
-    label: &str,
-    wasm_path: &std::ffi::OsStr,
-    needs_settling: bool,
-    compare_reads: bool,
-) {
-    let fluent = compare_reads && std::env::var_os("IC_DB_FLUENT_COMPARISON").is_some();
-    let keyset = compare_reads && std::env::var_os("IC_DB_KEYSET_COMPARISON").is_some();
-    let aggregate = compare_reads && std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
-    let profile = compare_reads && std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
-    let counts = compare_reads && std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
+pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool) {
+    let fluent = std::env::var_os("IC_DB_FLUENT_COMPARISON").is_some();
+    let keyset = std::env::var_os("IC_DB_KEYSET_COMPARISON").is_some();
+    let aggregate = std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
+    let profile = std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
+    let counts = std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
     let prefix_candidate = label == "ic-db" && std::env::var_os("IC_DB_PREFIX_CANDIDATE").is_some();
     assert!(!prefix_candidate || (counts && !profile));
     assert!(
@@ -23,7 +18,7 @@ pub async fn run(
             .into_iter()
             .filter(|selected| *selected)
             .count()
-            <= 1,
+            == 1,
         "select one comparison workload"
     );
     let (wasm, facts) = crate::artifact::read(std::fs::File::open(wasm_path).unwrap()).unwrap();
@@ -146,7 +141,6 @@ pub async fn run(
         }
     };
     let insert = async |value: Row| {
-        let before = pic.cycle_balance(canister).await;
         let reply = pic
             .update_call(
                 canister,
@@ -164,10 +158,7 @@ pub async fn run(
             )
             .await
             .unwrap();
-        let cycles = before
-            .checked_sub(pic.cycle_balance(canister).await)
-            .unwrap();
-        let (accepted, instructions): (bool, u64) = ic_wire::decode(
+        let (accepted, _): (bool, u64) = ic_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 2,
@@ -177,7 +168,7 @@ pub async fn run(
         )
         .unwrap();
 
-        (accepted, instructions, cycles)
+        accepted
     };
     let replace = async |replacement: Row| {
         let before = pic.cycle_balance(canister).await;
@@ -285,7 +276,7 @@ pub async fn run(
             let category = if id % 8 == 0 && id != 128 { 2 } else { 1 };
             let amount = if id == 128 { 10 } else { id % 11 };
             let value = (id, category, amount);
-            assert!(insert(value).await.0);
+            assert!(insert(value).await);
             settle().await;
 
             if category == 1 && amount >= 10 {
@@ -377,13 +368,10 @@ pub async fn run(
         assert_eq!(first, expected[..2]);
         let boundary = first.last().unwrap().0;
         assert_eq!(boundary, 21);
-        let mut write_cost = 0;
-        let mut settle_cost = 0;
         for change in [(8, 1, 10), (32, 1, 10), (43, 2, 10)] {
-            let (actual, instructions, _) = replace(change).await;
+            let (actual, _, _) = replace(change).await;
             assert_eq!(actual, Some(change));
-            write_cost += instructions;
-            settle_cost += settle().await.1;
+            settle().await;
             expected.retain(|row| row.0 != change.0);
             if change.1 == 1 && change.2 >= 10 {
                 expected.push(change);
@@ -398,28 +386,19 @@ pub async fn run(
         let resumed = traverse(Some(boundary), suffix, 1, false).await;
         let fresh = traverse(None, &expected, 1, false).await;
         eprintln!(
-            "{label} keyset edited first={first_cost} writes={write_cost} settling={settle_cost} readiness={reopen_cost} resumed={resumed:?} fresh={fresh:?}"
+            "{label} keyset edited first={first_cost} readiness={reopen_cost} resumed={resumed:?} fresh={fresh:?}"
         );
         owned.drop().await;
 
         return;
     }
     let mut source = Vec::new();
-    let mut insert_instructions = Vec::new();
-    let mut insert_cycles = Vec::new();
-    let mut settling = Vec::new();
     for id in 1..=32 {
         let value = (id, id % 4, id * 10);
-        let (accepted, instructions, cycles) = insert(value).await;
-        assert!(accepted);
+        assert!(insert(value).await);
+        settle().await;
         source.push(value);
-        insert_instructions.push(instructions);
-        insert_cycles.push(cycles);
-        settling.push(settle().await);
     }
-    eprintln!("{label} insert_instructions={insert_instructions:?}");
-    eprintln!("{label} insert_cycles={insert_cycles:?}");
-    eprintln!("{label} insert_settling_steps_instructions_cycles={settling:?}");
 
     let (found, instructions) = lookup(7).await;
     assert_eq!(found, Some((7, 3, 70)));
@@ -427,12 +406,6 @@ pub async fn run(
     let (found, instructions) = lookup(99).await;
     assert_eq!(found, None);
     eprintln!("{label} lookup_miss_instructions={instructions}");
-
-    let (accepted, instructions, cycles) = insert((7, 0, 999)).await;
-    assert!(!accepted);
-    eprintln!("{label} rejected_insert_settling={:?}", settle().await);
-    assert_eq!(lookup(7).await.0, Some((7, 3, 70)));
-    eprintln!("{label} rejected_insert_instructions={instructions} cycles={cycles}");
 
     let (rows, instructions) = listing(3).await;
     assert_eq!(
@@ -446,9 +419,9 @@ pub async fn run(
     eprintln!("{label} indexed_listing_instructions={instructions}");
 
     let replacement: Row = (7, 0, 707);
-    let (value, instructions, cycles) = replace(replacement).await;
+    let (value, _, _) = replace(replacement).await;
     assert_eq!(value, Some(replacement));
-    eprintln!("{label} replacement_settling={:?}", settle().await);
+    settle().await;
     *source.iter_mut().find(|row| row.0 == 7).unwrap() = replacement;
     assert_eq!(lookup(7).await.0, Some(replacement));
     for category in [0, 3] {
@@ -461,8 +434,7 @@ pub async fn run(
                 .collect::<Vec<_>>()
         );
     }
-    eprintln!("{label} read_modify_replace_instructions={instructions} cycles={cycles}");
-    if std::env::var_os("IC_DB_PREFIX_WRITE_PROFILE").is_some() {
+    if label == "ic-db" && std::env::var_os("IC_DB_PREFIX_WRITE_PROFILE").is_some() {
         assert!(counts && !profile);
         for (name, value) in [
             ("same_prefix", (7_u64, 0_u64, 708_u64)),
@@ -813,7 +785,7 @@ pub async fn run(
         for population in [128, 256, 512] {
             for id in source.len() as u64 + 1..=population {
                 let value = (id, id % 4, id * 10);
-                assert!(insert(value).await.0);
+                assert!(insert(value).await);
                 settle().await;
                 source.push(value);
             }

@@ -15,7 +15,6 @@ category = "tests"
 [features]
 unique-lookup = []
 build = ["icydb/build"]
-envelope = []
 
 [dependencies]
 icydb.workspace = true

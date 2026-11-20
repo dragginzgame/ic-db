@@ -58,13 +58,8 @@ This overlay owns local authority, product boundaries and qualification choices.
   Canic's adapter owns endpoints, guards and composition; applications own
   authorization. Standalone qualification may use Platform hooks and bounded
   Wire transport outside product crates, never a second executor/endpoint registry.
-- The maintainer authorized 0.22.1 source delivery after the direct Agent finding.
-  This scopes an exception to the external-IC dependency ownership rule to the
-  native inspection/listing client and its qualification. Retain Agent 0.49.3
-  until Platform supplies the supported secp256k1 query path tracked in
-  [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4), then migrate
-  and remove this exception. It grants no advisory exemption, live deployment,
-  product-engine dependency or sibling implementation authority.
+- Canic owns remote application inspection, caller identity, transport and endpoint
+  qualification. IC DB owns the local fixture console and database semantics.
 - The crate declaring a shared schema owns its package-root `build.rs`, the
   `ic-db/build` build dependency and the generated assembly. Use
   `ic_db::build_schema!(model);` to compile the declarations and `ic_db::include_schema!();` at the
@@ -116,7 +111,9 @@ Read the owning design contract before changing its behavior:
   resource checks must prove backing preservation and supported later progress.
 - Use the [qualification guide](qualification/README.md) and owning design slice
   to select focused native/Wasm checks. `make m0-setup` explicitly prepares the
-  simulator; `make m0-contracts` needs no server. The immutable IcyDB baseline is
+  simulator; `make m0-contracts` needs no server. Use current Canic protocol releases for active integration. Only frozen IcyDB
+  query comparisons may depend on a legacy repository. Keep historical receipts.
+  The immutable IcyDB baseline is
   an explicit comparison, never an implicit CI run or mutation of its checkout.
 - Measures are total uncompressed Wasm/code bytes, IC cycles and instructions;
   native time is not IC performance proof. Keep complete, matched write journeys

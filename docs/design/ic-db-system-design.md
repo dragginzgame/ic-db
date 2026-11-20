@@ -6,8 +6,7 @@ Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-
 hard cut and the 0.18 migration, sorting and comparison increments. Version
 0.20 separates 16 KiB job frames from 4 KiB rows and improves console inspection
 and local operation; it does not establish remote application support.
-The 0.22.1 native CLI adds Canic application inspection; section 9 separates
-its checked inspection/listing scope from broader application qualification.
+Canic owns remote application inspection and its endpoint qualification.
 The changelog and Git tags record releases.
 Application helpers can borrow a database directly or independently obtain a
 `DatabaseSession` clone from their host. One attachment owns the storage lease.
@@ -401,7 +400,12 @@ typed store link and each store's typed canister link. This restores the
 ownership invariant from IcyDB `6d421e3` (archived generated entity,
 `docs/design/archive/0.61-entity-macro-cleanup/generated.rs`, lines 826–827).
 A store has one IC Storage stable key and one validated entity schema.
-A canister exports a roster of these keys and schema constructors. Module
+A canister exports a roster of these keys and schema constructors. The host
+attaches a session for each entry. Typed canister queries and single-row writes
+select the session using the entity’s declared store. Legacy IcyDB `6d421e3`
+resolved store paths through `icydb-core/src/db/registry/registry.rs`; the
+compiled roster supplies the position directly here. Positions exist only in the
+running executable. Explicit batches and reference checks belong to one store. Module
 moves and re-exports preserve membership. References stay within their store;
 named value types can be shared. These links add no bytes to the row or schema
 fingerprint. The host owns grants, installation and reopen policy. The producer checks target
@@ -2293,7 +2297,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, larger paginated/resumable DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
-| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter, native v1 inspection and one typed listing through signed HTTP | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
+| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
 
 The [skewed application workload](../../qualification/README.md#skewed-application-workload-02310)
@@ -2307,8 +2311,7 @@ for sparse-page and larger-page comparisons.
 
 The CLI demonstrates product schemas, bounded queries and aggregates against a
 temporary local fixture. Version 0.18 adds `db migration-demo`
-with a real local canister upgrade during copying. The pending native `db inspect` command now consumes committed Canic inspection
-v1; `db witness-list` binds the qualification application's typed listing only.
+with a real local canister upgrade during copying. Canic owns the remote inspection client.
 
 The 0.21 local console includes `BinaryObject` for synchronous queries,
 maintained counts and retained aggregates. `--payload-min`/`--payload-max` accept `0x`-prefixed hex
@@ -2407,90 +2410,9 @@ into IC DB. Mounting follows Canic's existing Blob hooks; application policy
 remains outside both engines. An operation-level authorization grant does not
 replace any tenant/row checks required inside an application's typed handler.
 
-### Application inspection and one typed listing
+### Application inspection
 
-The 0.22.1 `db inspect` command consumes Canic 0.219.0 at committed revision
-`3d2ef2719450e57484638b4f1db6cb6bcc41d64c`. It requires provider, canister and
-an explicit anonymous/PEM identity, uses verified IC Agent query calls and
-Canic's passive bounded v1 contract, and never falls back to fixture operation.
-Only an explicit loopback option fetches a local root key. A selected entity
-binds the catalogue schema and requires unchanged admission/incarnation across
-its two observations. Counts remain application-selected maintained metadata.
-Tables/JSON separate executable identity from readable/closed/unsupported storage;
-remote cycles are reported as unavailable. No engine or stored format changes.
-The pending 0.22.2 client bounds each complete query and its verification reads
-with an explicit 1–300 second deadline (default 30); local root fetching has a
-separate deadline. Busy-provider replies refuse without implicit transport retries.
-Cancellation reports elapsed time without producing partial inspection output.
-Agent remains a direct, pending native dependency: Platform 0.34.13 supplies
-Ed25519 signed queries but not the CLI's secp256k1 PEM query path. The remaining
-boundary migration is recorded in [Platform #4](https://github.com/dragginzgame/ic-platform/issues/4);
-functional HTTP qualification does not establish dependency-boundary completion.
-The installed HTTP witness qualifies signed caller selection, denial, schema/count
-rendering, unchanged-schema upgrade, maintenance and incompatibility without
-backing changes. This is local simulated-network evidence, not a live deployment.
-The 0.22.1 `db witness-list` command binds the same committed application's
-`canic-db-witness.query.v1`: minimum score, ID order, limit 1–3 and work 1–4.
-One command returns one page, including an empty page with continuation. The
-cursor remains opaque; the application reauthorizes every call and the engine
-refuses changed filter/cursor identity. There is no client filtering, accumulation,
-automatic pagination or update method. Target/identity/verified HTTP and statistics
-have one shared native owner with inspection.
-The isolated client DTO binding follows the application's committed protocol;
-importing its whole witness package would enable `db-schema` and an unnecessary
-native engine dependency. Actual producer calls qualify the binding. No protocol
-registry, source extraction or new package is introduced. The fixed witness
-command is not a general remote fluent frontend; other applications retain their
-own request shapes and exposure policy.
-This witness command is a temporary demonstration surface. Retain the application
-and regression coverage, but retire or move the special command when real
-application integration replaces it; the shared target/identity/inspection client
-remains useful independently.
-Frozen IcyDB `6d421e3`'s
-`db/cursor/tests/mod.rs::prepare_grouped_cursor_rejects_signature_mismatch`
-supplies the changed-query refusal invariant. This client forwards the existing
-IC DB cursor; it does not copy IcyDB's token parser or cursor framework.
-
-| Contract | Preferred initial rule |
-| --- | --- |
-| Target | Select the network/provider, canister and caller identity explicitly. Show the resolved target; a failed connection never falls back to the fixture or another identity. Fixture operation remains clearly identified. |
-| Inspection authority | Canic checks the actual caller before decoding. Applications choose which schema/status facts may be exposed; knowing an entity name grants no read or write permission. |
-| Version and identity | Admit an explicit inspection-protocol version independently of the database format. Return the executable schema identity, readable database incarnation and supported stored admission/maintenance state; never describe compiled declarations as proof that stored data matches. |
-| Schema detail | Begin with a bounded entity catalogue and a selected entity's named fields, types, indexes and reference target/index pairs. Bound reachable named-type metadata and bytes. Refuse an oversized reply explicitly; never truncate a schema and call it complete. |
-| Closed or unsupported database | Report a supported maintenance/refusal state without reopening ordinary access or creating missing storage. Unsupported formats remain intact; do not decode unknown layouts merely to improve diagnostics. |
-| Counts | A selected entity's maintained cardinality may be exposed when ordinary admission and application policy permit it. Label it as metadata; inspection must not silently scan every row or validate all indexes. |
-| Queries | The application owns passive request/reply types and constructs a bounded fluent query. Start with one explicitly compiled witness client. Schema inspection does not grant arbitrary field queries, writes, migration or runtime DDL. The current fixture tuple protocol is not promoted to a public API. |
-| Continuation | Forward the application's bounded cursor unchanged and preserve empty-page continuation. Each request is authorized again. Inspection across several calls is not a snapshot; changed schema/database identity invalidates the client's accumulated description. |
-| Call evidence | Report the actual query/update lane and measured client elapsed time. Show cycles only when their source and scope are known; unavailable remote charges are not zero and concurrent balance changes are not an exact per-call meter. |
-
-The client imports passive inspection definitions from the Canic adapter. Wire stays outside the engine and durable codec. Do not
-add a crate, generated endpoint registry, protocol-negotiation framework or
-general dynamic executor merely to expose these few facts. The current JSON
-display strings are not a substitute for a versioned typed reply. Canic owns `db_inspect`, `canic.db.inspect.v1` and the metadata/frame bounds.
-The adapter contract and its focused installed qualification are tracked in
-[Canic #18](https://github.com/dragginzgame/canic/issues/18). CLI target selection,
-presentation and client integration are tracked separately in
-[IC DB #4](https://github.com/dragginzgame/ic-db/issues/4). Each owner qualifies
-and closes its own implementation; Canic completion does not wait for DB adoption.
-
-Retain IcyDB's conservative call-failure distinction, inspected at frozen
-`6d421e3`, `crates/icydb-cli/src/icp/call/mod.rs`: an update whose reply is lost
-may have committed. Report an unknown outcome rather than retrying automatically
-or claiming rollback. An observed application refusal, pre-dispatch failure and
-unknown update outcome remain distinguishable. No ordinary-write WAL or client
-retry journal follows from this requirement. Inspection alone does not reconcile
-an unknown write; the application must provide an appropriate state/idempotency
-check before a write-capable client is admitted.
-
-Qualification is one small end-to-end application witness, not a second engine:
-authorized schema/status, denied caller before malformed decoding, wrong protocol
-version, unsupported/maintenance state without backing changes, selected-entity
-bounds, and unchanged-schema upgrade. Its real filtered/ordered listing now preserves
-sparse pages and altered-cursor refusal across an unchanged-schema upgrade. A later write-capable client must also
-prove lost-reply handling. Keep network-call latency separate from Wasm bytes,
-instructions and cycles; the frozen IcyDB comparison matrix remains authoritative
-only for its matched workloads. The client supports inspection plus the explicitly named witness listing; generic
-remote queries and writes are not exposed.
+Canic owns the inspection protocol, verified client and installed endpoint tests. Applications decide which callers can inspect a catalogue, selected schema and maintained count. IC DB supplies the schema and admission facts and qualifies bounded fluent listing semantics. The local `db` console operates on the fixture.
 
 ### Current engine delivery and qualification
 
@@ -2511,6 +2433,8 @@ policy. As in frozen IcyDB's `DataStore::exact_entity_count` (`6d421e3`,
 metadata. IcyDB's journal-overlay deltas and planner-selected prefix-count paths
 are not copied; the CLI does not imply row/index integrity validation or remote
 application support. The existing prefix-count experiment stays parked.
+
+Only query comparisons run the frozen IcyDB engine. Their writes seed data or change indexed membership for read checks. Earlier standalone startup and write measurements are historical receipts. Canic inspection uses its released protocol.
 
 The next qualification emphasis is realistic combinations and operational bounds:
 larger/reference-heavy datasets, aggregate contention, entity/query/endpoint
@@ -2966,7 +2890,9 @@ predicate as `filter(field, comparison, value)`. Both forms share cursor identit
 refusal when traversal stops before either outcome.
 
 Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys)`
-for a page of related keys. The batch admits the entity once, reads up to 32
+for a page of related keys. Database, store session and canister session share
+this read path. The canister session selects the declared store once, and the
+store session holds one read borrow for the batch. The batch admits the entity once, reads up to 32
 positions and preserves input order, duplicates and missing slots. This carries
 the positional contract of frozen IcyDB `6d421e3`,
 `db/session/query/exact_key/mod.rs`, into the existing typed read path. The
@@ -4573,7 +4499,7 @@ product graph with a minimal host; Canic composition remains separate qualificat
 These are dependency-admission findings, not compiled Wasm, instruction/cycle
 measurements or a reason to lower the comparison's behavioral requirements.
 
-The subsequent `make m0-icydb-baseline` probe builds that immutable Git revision
+The retired `make m0-icydb-baseline` probe built that immutable Git revision
 through the qualification workspace, independently of local IcyDB files. It uses
 the then-reviewed supplier selection (Storage 0.74.0, Runtime 0.22.2,
 Types 0.20.2 and Wire 0.22.1), not the original IcyDB lockfile. Target facade
@@ -4625,7 +4551,7 @@ not measure broader schema, entity/query growth, aggregate or host workloads.
 
 ### First matched scalar comparison
 
-`make m1-records-comparison` now runs that same workload against a one-entity
+The retired `make m1-records-comparison` ran that same workload against a one-entity
 qualification host using the actual IC DB product and a freshly rebuilt frozen
 IcyDB host. Both use Storage 0.74.1, Runtime 0.22.3, Types 0.20.3, Wire 0.22.1,
 Testkit 0.104.0/PocketIC 16.1.0, Rust 1.100.0/LLVM 23.1.5 and the same release

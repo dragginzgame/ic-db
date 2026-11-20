@@ -74,12 +74,13 @@ def probe(root):
     example = root / "consumer/examples/membership.rs"
     consumer = example.read_text()
     owner_check = """
-fn accepts<C: ic_db::Canister, E: ic_db::Entity<Store: ic_db::Store<Canister = C>>>() {}
-const _: fn() = accepts::<directory::model::Hub, directory::model::hub::User>;
+const _: fn(&ic_db::CanisterSession<directory::model::Hub>) = |db| {
+    let _ = db.query::<directory::model::hub::User>();
+};
 """
     example.write_text(consumer + owner_check)
     assert check_variant(root, native) == baseline
-    example.write_text(consumer + owner_check.replace("model::Hub,", "model::Shard,"))
+    example.write_text(consumer + owner_check.replace("model::Hub>", "model::Shard>"))
     check_variant(root, native, "type mismatch")
     example.write_text(consumer)
 

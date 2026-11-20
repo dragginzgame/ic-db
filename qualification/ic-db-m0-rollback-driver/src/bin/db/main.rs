@@ -1,12 +1,9 @@
 #![forbid(unsafe_code)]
-//! Local product-record console and native client for Canic application inspection.
+//! Local product-record console.
 
-mod inspect;
-mod remote;
 mod terminal;
 #[cfg(test)]
 mod tests;
-mod witness_listing;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_m0_rollback_driver::{LIMITS, instance};
@@ -81,7 +78,7 @@ async fn measured_call(
 #[derive(Parser)]
 #[command(
     name = "db",
-    about = "Inspect a Canic application or query a local IC DB fixture (no SQL)",
+    about = "Inspect schemas and query a local IC DB fixture",
     styles = help_styles(),
     color = help_color(),
     disable_help_subcommand = true
@@ -128,10 +125,6 @@ fn parse_console_line(line: &str) -> Result<Cli, clap::Error> {
 #[derive(Subcommand)]
 #[command(mut_subcommands = |command| command.display_order(0))]
 enum Command {
-    /// Inspect an explicitly selected application through Canic inspection v1.
-    Inspect(inspect::Options),
-    /// Read one page from the Canic qualification application's fixed Item listing.
-    WitnessList(witness_listing::Options),
     /// List entity names and column counts in the current local database.
     Entities {
         /// Emit a JSON array with name and columns for each entity.
@@ -613,16 +606,6 @@ fn print_status((schema, incarnation, revision, pages): Status) {
 
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
-    if let Some(Command::WitnessList(options)) = &cli.command {
-        return tokio::runtime::Runtime::new()
-            .map_err(|e| e.to_string())?
-            .block_on(witness_listing::run(options));
-    }
-    if let Some(Command::Inspect(options)) = &cli.command {
-        return tokio::runtime::Runtime::new()
-            .map_err(|e| e.to_string())?
-            .block_on(inspect::run(options));
-    }
     if matches!(cli.command, Some(Command::Help)) {
         help();
 
@@ -762,8 +745,6 @@ async fn session(
         };
         let outcome = async {
         match command {
-            Command::Inspect(options) => inspect::run(&options).await?,
-            Command::WitnessList(options) => witness_listing::run(&options).await?,
             Command::Help => help(),
             Command::Quit => {}
             Command::MigrationDemo => {
