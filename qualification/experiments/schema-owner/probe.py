@@ -36,7 +36,7 @@ def prepare(root):
                       manifest, count=1, flags=re.S)
     manifest = re.sub(r'path = "([^"]+)"', lambda m: f'path = "{(QUAL / m[1]).resolve()}"',
                       manifest)
-    manifest = manifest.replace(str(HERE / "producer"), str(root / "producer"))
+    manifest = manifest.replace(str(HERE / "producer"), "producer")
     manifest = manifest.replace('license-file = "../LICENSE.md"', 'license-file = "LICENSE.md"')
     deps, rest = manifest.split("[workspace.dependencies]\n")
     entries, lints = rest.split("[workspace.lints.cargo]")
