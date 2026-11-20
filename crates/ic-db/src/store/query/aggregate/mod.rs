@@ -13,7 +13,7 @@ use crate::{
     codec::Decoder, key,
 };
 use ic_storage::Memory;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 const MAX_GROUPS: usize = 32;
 
@@ -29,6 +29,8 @@ pub enum GroupOrder {
     AggregateDescending,
     /// Descending group-key tuple, in canonical field-name order; absence sorts last.
     KeyDescending,
+    /// Retained DISTINCT keys in first matching input order.
+    FirstOccurrence,
 }
 
 #[derive(Default)]
@@ -51,14 +53,20 @@ impl GroupRequest<'_> {
             return Err(Error::Limit);
         }
         let field = match reducer {
-            Reducer::Keys => {
-                if !self.predicates.is_empty() || self.order.is_some() {
+            Reducer::Keys(_) => {
+                let order = self.order.unwrap_or_default();
+                if !self.predicates.is_empty()
+                    || !matches!(
+                        order,
+                        GroupOrder::Key | GroupOrder::KeyDescending | GroupOrder::FirstOccurrence
+                    )
+                {
                     return Err(Error::InvalidQuery);
                 }
 
                 return Ok(Selection {
                     predicates: Vec::new(),
-                    order: GroupOrder::Key,
+                    order,
                     optional: false,
                 });
             }
@@ -76,6 +84,9 @@ impl GroupRequest<'_> {
             }
             Reducer::Numeric(state) => state.output(),
         };
+        if self.order == Some(GroupOrder::FirstOccurrence) {
+            return Err(Error::InvalidQuery);
+        }
         // Extrema/numeric results may be absent even with required input fields.
         let absent_result = !matches!(reducer, Reducer::Count { .. } | Reducer::Distinct { .. });
         let predicates = self
@@ -211,8 +222,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Order completed groups before applying output limits. Only grouped
-    /// terminals accept this modifier. The last call selects the order.
+    /// Order completed groups before applying output limits. Retained DISTINCT
+    /// also accepts key order and first-occurrence order. The last call selects the order.
     #[must_use]
     pub fn order_groups(mut self, order: GroupOrder) -> Self {
         self.request.groups.order = Some(order);
@@ -737,8 +748,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<Plan<'static>, Error> {
         if self.request.cursor.is_some()
             || self.request.distinct
-            || self.request.order.is_some()
-            || self.request.descending
+            || ((self.request.order.is_some() || self.request.descending)
+                && self.request.groups.order != Some(GroupOrder::FirstOccurrence))
         {
             return Err(Error::InvalidQuery);
         }
@@ -852,11 +863,12 @@ impl Accumulator<'_> {
 
 #[derive(Clone)]
 pub(super) enum Reducer {
-    Keys,
+    Keys(u8),
     Numeric(numeric::NumericAggregate),
     Distinct {
         mask: u16,
         seen: BTreeSet<Vec<u8>>,
+        key_bytes: usize,
     },
     Count {
         presence: Option<usize>,
@@ -873,6 +885,7 @@ impl Reducer {
         Self::Distinct {
             mask,
             seen: BTreeSet::new(),
+            key_bytes: 0,
         }
     }
 
@@ -894,10 +907,10 @@ impl Reducer {
 
     fn retained_bytes(&self) -> usize {
         match self {
-            Self::Keys => 0,
+            Self::Keys(_) => 0,
             Self::Numeric(state) => state.retained_bytes(),
             Self::Count { .. } => 8,
-            Self::Distinct { seen, .. } => 8 + seen.iter().map(Vec::capacity).sum::<usize>(),
+            Self::Distinct { key_bytes, .. } => 8 + key_bytes,
             Self::Extremum { selected, .. } => selected
                 .as_ref()
                 .map_or(0, |(key, bytes)| key.capacity() + bytes.capacity()),
@@ -906,7 +919,7 @@ impl Reducer {
 
     fn finish(self) -> Result<Completed, Error> {
         match self {
-            Self::Keys => Ok(Completed::Key),
+            Self::Keys(_) => Ok(Completed::Key),
             Self::Count { total, .. } => Ok(Completed::Count(total)),
             Self::Distinct { seen, .. } => Ok(Completed::Count(seen.len() as u64)),
             Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
@@ -923,18 +936,22 @@ impl Reducer {
         allowance: usize,
     ) -> Result<(), Error> {
         match self {
-            Self::Keys => {}
+            Self::Keys(_) => {}
             Self::Numeric(state) => state.push(values)?,
-            Self::Distinct { mask, seen } => {
+            Self::Distinct {
+                mask,
+                seen,
+                key_bytes,
+            } => {
                 let key = comparison_key(entity, *mask, values)?;
-                if !seen.contains(&key) {
-                    if seen.len() == MAX_DISTINCT_VALUES
-                        || 8 + seen.iter().map(Vec::capacity).sum::<usize>() + key.capacity()
-                            > allowance
-                    {
+                let capacity = key.capacity();
+                if seen.len() == MAX_DISTINCT_VALUES || 8 + *key_bytes + capacity > allowance {
+                    // A full set can still admit a duplicate without allocating a node.
+                    if !seen.contains(&key) {
                         return Err(Error::Limit);
                     }
-                    seen.insert(key);
+                } else if seen.insert(key) {
+                    *key_bytes += capacity;
                 }
             }
             Self::Count { presence, total } => {
@@ -1038,11 +1055,23 @@ pub(super) struct Groups {
 }
 impl Groups {
     fn max_keys(&self) -> usize {
-        if matches!(self.initial, Reducer::Keys) {
+        if matches!(self.initial, Reducer::Keys(_)) {
             usize::from(u8::MAX)
         } else {
             MAX_GROUPS
         }
+    }
+
+    // Ordinals are assigned densely on first insertion or while restoring the checkpoint.
+    fn first_occurrences(&self) -> Result<Vec<&[u8]>, Error> {
+        let mut ordered = vec![&[][..]; self.rows.len()];
+        for (bytes, reducer) in self.rows.values() {
+            let Reducer::Keys(position) = reducer else {
+                return Err(Error::Corrupt);
+            };
+            ordered[usize::from(*position)] = bytes;
+        }
+        Ok(ordered)
     }
 
     fn into_output(self) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
@@ -1104,36 +1133,40 @@ impl Groups {
         spans: &[(u16, u16)],
     ) -> Result<(), Error> {
         let key = comparison_key(entity, self.mask, values)?;
-        let size = projection_size(spans, self.mask);
-        if let Some((_, reducer)) = self.rows.get_mut(&key) {
-            let previous = reducer.retained_bytes();
-            reducer.push(
-                entity,
-                values,
-                bytes,
-                spans,
-                MAX_STATE_BYTES - self.state_bytes + previous,
-            )?;
-            self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
-
-            return Ok(());
-        }
-        let base = key.capacity() + size;
+        let count = self.rows.len();
+        let max_keys = self.max_keys();
         let available = MAX_STATE_BYTES - self.state_bytes;
-        if self.rows.len() == self.max_keys() || base + self.initial.retained_bytes() > available {
+        let entry = match self.rows.entry(key) {
+            Entry::Occupied(mut entry) => {
+                let (_, reducer) = entry.get_mut();
+                let previous = reducer.retained_bytes();
+                reducer.push(entity, values, bytes, spans, available + previous)?;
+                self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
+
+                return Ok(());
+            }
+            Entry::Vacant(entry) => entry,
+        };
+
+        let size = projection_size(spans, self.mask);
+        let base = entry.key().capacity() + size;
+        if count == max_keys || base + self.initial.retained_bytes() > available {
             return Err(Error::Limit);
         }
         let mut reducer = self.initial.clone();
+        if let Reducer::Keys(position) = &mut reducer {
+            *position = count as u8;
+        }
         reducer.push(entity, values, bytes, spans, available - base)?;
         let output = copy_projection(bytes, spans, self.mask, size);
         // Map/set nodes and fixed bookkeeping are independently bounded by the
         // group and per-group distinct cardinality caps.
-        let retained = key.capacity() + output.capacity() + reducer.retained_bytes();
+        let retained = entry.key().capacity() + output.capacity() + reducer.retained_bytes();
         if retained > available {
             return Err(Error::Limit);
         }
         self.state_bytes += retained;
-        self.rows.insert(key, (output, reducer));
+        entry.insert((output, reducer));
 
         Ok(())
     }

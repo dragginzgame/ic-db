@@ -2408,6 +2408,171 @@ fn retained_distinct_scans_once_and_pages_all_keys_after_reopen() {
 }
 
 #[test]
+fn retained_distinct_preserves_first_index_occurrence_and_rejects_duplicate_checkpoint_keys() {
+    use ic_storage::adapter::StableBTreeMap;
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[Some(8), Some(9), None, Some(9)], 0);
+    let query = || {
+        db.query::<Row>()
+            .using_index("flag", &[])
+            .order_groups(GroupOrder::FirstOccurrence)
+    };
+    let handle = query()
+        .start_distinct::<Amount>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query()
+        .work_limit(2)
+        .resume_distinct::<Amount>(&mut jobs, &handle, 0, time(1), None)
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert!(matches!(
+        query()
+            .order_groups(GroupOrder::Key)
+            .resume_distinct::<Amount>(&mut jobs, &handle, first.sequence, time(1), None),
+        Err(Error::InvalidJob)
+    ));
+    let step = query()
+        .resume_distinct::<Amount>(&mut jobs, &handle, first.sequence, time(1), None)
+        .unwrap();
+    let JobOutcome::Complete(page) = step.outcome else {
+        panic!("expected completed DISTINCT keys")
+    };
+    assert_eq!(
+        page.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
+        [Some(8), None, Some(9)]
+    );
+    drop(jobs);
+
+    let key = StableKey::parse("test.jobs.v1").unwrap();
+    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
+        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
+    let mut record = raw.get(&1).unwrap();
+    // The last projected Int128 is present. Turn it into a duplicate of the first.
+    let tail = record.len() - 16;
+    assert_eq!(&record[tail..], &9_i128.to_le_bytes());
+    record[tail..].copy_from_slice(&8_i128.to_le_bytes());
+    raw.insert(1, record);
+    drop(raw);
+    let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        query().resume_distinct::<Amount>(&mut jobs, &handle, step.sequence, time(1), None),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    jobs.cancel(&handle).unwrap();
+}
+
+#[test]
+fn first_occurrence_selects_an_ordered_index_and_binds_its_direction() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[Some(8), Some(9), None, Some(9)], 0);
+    let query = || db.query::<Row>().order_groups(GroupOrder::FirstOccurrence);
+    let before = backing.borrow().clone();
+    // An amount order would require materializing and sorting the input.
+    assert!(matches!(
+        query()
+            .order_by(&[Row::AMOUNT])
+            .start_distinct::<Amount>(&mut jobs, time(0), time(100)),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Row>()
+            .order_by(&[Row::FLAG])
+            .start_distinct::<Amount>(&mut jobs, time(0), time(100)),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(*backing.borrow(), before);
+
+    let by_flag = || query().order_by(&[Row::FLAG]);
+    let handle = by_flag()
+        .descending()
+        .start_distinct::<Amount>(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = by_flag()
+        .descending()
+        .work_limit(1)
+        .resume_distinct::<Amount>(&mut jobs, &handle, 0, time(1), None)
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        by_flag().resume_distinct::<Amount>(&mut jobs, &handle, first.sequence, time(1), None),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), before);
+    let done = by_flag()
+        .descending()
+        .resume_distinct::<Amount>(&mut jobs, &handle, first.sequence, time(1), None)
+        .unwrap();
+    let JobOutcome::Complete(page) = done.outcome else {
+        panic!("expected completed keys")
+    };
+    // Reverse (flag, id) visits IDs 3, 1, 2, 0. IDs 3 and 1 share amount 9.
+    assert_eq!(
+        page.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
+        [Some(9), None, Some(8)]
+    );
+    assert_eq!(done.examined, 4);
+}
+
+#[test]
+fn retained_distinct_pages_descending_keys_with_their_own_byte_sizes() {
+    use ic_db::GroupOrder;
+
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create(&runtime, &[None, Some(9), Some(2), Some(9)], 0);
+    let query = || db.query::<Row>().order_groups(GroupOrder::KeyDescending);
+    let handle = query()
+        .start_distinct::<Amount>(&mut jobs, time(0), time(100))
+        .unwrap();
+    assert!(matches!(
+        db.query::<Row>()
+            .resume_distinct::<Amount>(&mut jobs, &handle, 0, time(1), None),
+        Err(Error::InvalidJob)
+    ));
+    let page = query()
+        .test_output_limit(17)
+        .resume_distinct::<Amount>(&mut jobs, &handle, 0, time(1), None)
+        .unwrap();
+    let JobOutcome::Complete(first) = page.outcome else {
+        panic!("expected completed keys")
+    };
+    assert_eq!(page.output_bytes, 17);
+    assert_eq!(
+        first.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
+        [Some(9)]
+    );
+    let cursor = first.next.unwrap();
+    assert!(matches!(
+        query().test_output_limit(1).resume_distinct::<Amount>(
+            &mut jobs,
+            &handle,
+            page.sequence,
+            time(1),
+            Some(&cursor)
+        ),
+        Err(Error::RowTooLarge)
+    ));
+    let rest = query()
+        .test_output_limit(18)
+        .resume_distinct::<Amount>(&mut jobs, &handle, page.sequence, time(1), Some(&cursor))
+        .unwrap();
+    let JobOutcome::Complete(last) = rest.outcome else {
+        panic!("expected remaining keys")
+    };
+    assert_eq!(
+        last.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
+        [Some(2), None]
+    );
+    assert_eq!(rest.output_bytes, 18);
+    assert!(last.next.is_none());
+}
+
+#[test]
 fn retained_distinct_frame_refusal_preserves_checkpoint_and_cleanup() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -4418,14 +4583,16 @@ fn retained_group_distinct_caps_groups_and_per_group_sets_before_selection() {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
         let (mut db, mut jobs) = create_stores(&runtime, schema());
-        for chunk in (0..33_u64).collect::<Vec<_>>().chunks(32) {
+        for chunk in (0..34_u64).collect::<Vec<_>>().chunks(32) {
             let mut batch = Batch::new();
             for &id in chunk {
+                // After filling the set, repeat its last member before adding a new one.
+                let value = if id < 32 { id } else { id - 1 };
                 batch
                     .insert(&Row {
                         id,
-                        flag: if many_groups { id as u8 } else { 0 },
-                        amount: Some(i128::from(id)),
+                        flag: if many_groups { value as u8 } else { 0 },
+                        amount: Some(i128::from(value)),
                         payload: vec![],
                     })
                     .unwrap();
@@ -4454,6 +4621,18 @@ fn retained_group_distinct_caps_groups_and_per_group_sets_before_selection() {
             .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 0, time(1))
             .unwrap();
         assert_eq!((retry.sequence, retry.examined), (1, 32));
+        let duplicate = query()
+            .work_limit(1)
+            .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 1, time(2))
+            .unwrap();
+        assert!(matches!(duplicate.outcome, JobOutcome::Running));
+        assert_eq!((duplicate.sequence, duplicate.examined), (2, 33));
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            query().resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 2, time(3)),
+            Err(Error::Limit)
+        ));
+        assert_eq!(*backing.borrow(), before);
     }
 }
 

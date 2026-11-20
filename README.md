@@ -431,9 +431,9 @@ and the matching `group_max` start/resume methods retain one optional winner per
 group. All-absent groups remain present with `None`; grouping and operand fields
 may overlap. Finish all input before group filtering, ordering and the total
 limit. These terminals return `GroupPage` and support `group_page` below, within
-the same 32-group and 4096-byte whole-job limits.
+the same 32-group and 16 KiB whole-job limits.
 
-Initial limits are 16 jobs per store, 4096 encoded bytes per job, a one-hour
+The limits are 16 jobs per store, 16 KiB per encoded job, a one-hour
 maximum lifetime and one million examined candidates per job. Each advance uses
 the query's 1–512 candidate limit and at most 64 KiB of source row/key bytes.
 Output bytes bound the completed result. Expired jobs still occupy a slot until
@@ -473,10 +473,25 @@ without accumulating values itself. Each invocation uses the local disposable
 fixture; this command does not connect to a deployed database. See `db aggregate
 --help` for work, response-byte and group-page bounds.
 
+`start_distinct::<Record>` and `resume_distinct::<Record>` enumerate up to 255
+distinct projected tuples within one 16 KiB job frame. To keep the first matching
+value in traversal order, use `order_groups(GroupOrder::FirstOccurrence)`. For
+example, `.order_by(&[Entry::CATEGORY]).descending()` visits categories in
+descending order and breaks ties by descending primary key when the category
+index supplies that order. Repeat the same ordering on resume. A query that
+needs a sort returns `InvalidQuery` before allocating a job.
+
+In the local fixture, this visits category 1 from highest ID to lowest, then
+category 0 in the same direction:
+
+```sh
+db aggregate Entry --select distinct:amount --group-order first --order-by category --desc --work 2 --page-size 2
+```
+
 `start_count_distinct::<Record>`/`resume_count_distinct::<Record>` retain an exact
 count of projected tuples using the same equality as synchronous `count_distinct`.
 Duplicates across steps count once, including an absent tuple; empty input counts
-zero. At most 32 distinct comparison keys fit inside the existing 4096-byte whole
+zero. At most 32 distinct comparison keys fit inside the 16 KiB whole
 job frame. Saved keys are validated on resume. Cardinality/frame/output refusal
 preserves progress; `limit` never truncates input or relaxes the retained-set bounds.
 
@@ -484,7 +499,7 @@ preserves progress; `limit` never truncates input or relaxes the retained-set bo
 `resume_group_count_distinct::<KeyRecord, Record>` retain those sets per group,
 returning `Complete(GroupPage<GroupCount<K>>)`. The projections may overlap, and an
 all-absent tuple contributes one to its group. Admit at most 32 groups and 32 keys
-per group, with all sets and progress fitting the same 4096-byte job frame.
+per group, with all sets and progress fitting the same 16 KiB job frame.
 Group/operand projections and completed-group selection bind the job. Finish
 input before filtering/order/limit; output selection never relaxes state bounds.
 
@@ -526,7 +541,7 @@ leaves the unreturned group for the next page; an oversized first group returns
 result position. Retrying it reads the same position, until expiry/cancellation.
 It is a logical position, not an authorization token or proof of prior enumeration.
 
-Retain at most 32 groups inside the existing 4096-byte **whole job frame**, including
+Retain at most 32 groups inside the 16 KiB **whole job frame**, including
 progress, key-record bytes and reducer state. This is a tighter retained-state envelope than the
 synchronous grouping budget; large keys/groups can therefore refuse with `Limit`.
 Filtering or limiting output cannot relax it. Refused advancement leaves the prior

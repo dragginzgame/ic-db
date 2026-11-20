@@ -3,18 +3,9 @@
 mod wire_call;
 
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
-use ic_db_qualification_transport::RowFilters;
+use ic_db_qualification_transport::{RetainedSelection as Selection, RowFilters};
 use wire_call::call;
 
-type Selection = (
-    String,
-    String,
-    (Option<u64>, Option<u64>, Option<u64>),
-    u32,
-    (Option<String>, Option<String>),
-    Option<String>,
-    RowFilters,
-);
 type Step = (
     u64,
     String,
@@ -45,6 +36,106 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         .await
         .unwrap();
     }
+    for (order, reverse_input) in [
+        (None, false),
+        (Some("key-desc"), false),
+        (Some("first"), false),
+        (Some("first"), true),
+    ] {
+        let selection: Selection = (
+            "Entry".into(),
+            "distinct:amount".into(),
+            (None, None, None),
+            32,
+            (None, None),
+            order.map(str::to_owned),
+            RowFilters::default(),
+            if reverse_input {
+                (vec!["category".into()], true)
+            } else {
+                Default::default()
+            },
+        );
+        let handle =
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
+                .await
+                .unwrap();
+        let mut sequence = 0_u64;
+        let mut cursor = None::<Vec<u8>>;
+        let mut output = Vec::new();
+        for _ in 0..16 {
+            let before = pic.cycle_balance(canister).await;
+            let step = call::<Result<Step, String>>(
+                pic,
+                canister,
+                "aggregate_resume",
+                121,
+                &(
+                    &selection, &handle, sequence, 17_u32, 4096_u32, 11_u32, &cursor,
+                ),
+            )
+            .await
+            .unwrap();
+            sequence = step.0;
+            if step.1 == "Running" {
+                assert!(step.5.1.is_empty());
+                if order == Some("first") && sequence == 1 {
+                    upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+                        .await
+                        .unwrap();
+                }
+                continue;
+            }
+            assert_eq!(step.1, "Complete");
+            assert_eq!(step.2, 80);
+            let charged = before - pic.cycle_balance(canister).await;
+            eprintln!(
+                "retained DISTINCT start={} rows={} charged_cycles={charged}",
+                output.len(),
+                step.5.1.len()
+            );
+            output.extend(
+                step.5
+                    .1
+                    .into_iter()
+                    .map(|row| row[0].parse::<u64>().unwrap()),
+            );
+            cursor = step.5.2;
+            if output.len() == 33 {
+                upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let mut expected = (0..40).collect::<Vec<_>>();
+        if reverse_input {
+            // IDs 80 through 41 encounter amount 0 first, then 39 down to 1.
+            expected[1..].reverse();
+        } else if order == Some("first") {
+            expected.rotate_left(1); // First matched ID is 1; amount 0 first occurs at ID 40.
+        } else if order == Some("key-desc") {
+            expected.reverse();
+        }
+        assert_eq!(output, expected);
+        assert!(cursor.is_none());
+    }
+    owned.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the retained-console Wasm built from the v0.24.4 tag"]
+async fn canonical_distinct_resumes_running_and_completed_v0244_jobs() {
+    let old = std::fs::read(std::env::var_os("IC_DB_V0244_CONSOLE_WASM").unwrap()).unwrap();
+    let new = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, old, vec![], None).await;
+
     let selection: Selection = (
         "Entry".into(),
         "distinct:amount".into(),
@@ -53,57 +144,235 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         (None, None),
         None,
         RowFilters::default(),
+        Default::default(),
     );
-    let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
-        .await
-        .unwrap();
-    let mut sequence = 0_u64;
-    let mut cursor = None::<Vec<u8>>;
-    let mut output = Vec::new();
-    for _ in 0..16 {
-        let before = pic.cycle_balance(canister).await;
+    // The old fixture accepted seven selection fields. The eighth now carries input order.
+    let (entity, select, bounds, limit, filters, order, rows, _) = &selection;
+    let old_selection = (entity, select, bounds, limit, filters, order, rows);
+    let mut saved = Vec::new();
+    for work in [2_u32, 32] {
+        let handle =
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &old_selection)
+                .await
+                .unwrap();
         let step = call::<Result<Step, String>>(
             pic,
             canister,
             "aggregate_resume",
             121,
             &(
-                &selection, &handle, sequence, 17_u32, 4096_u32, 11_u32, &cursor,
+                &old_selection,
+                &handle,
+                0_u64,
+                work,
+                4096_u32,
+                2_u32,
+                None::<Vec<u8>>,
             ),
         )
         .await
         .unwrap();
-        sequence = step.0;
-        if step.1 == "Running" {
-            assert!(step.5.1.is_empty());
-            continue;
+        if work == 2 {
+            assert_eq!((step.1.as_str(), step.2), ("Running", 2));
+            assert!(step.5.1.is_empty() && step.5.2.is_none());
+        } else {
+            assert_eq!((step.1.as_str(), step.2), ("Complete", 6));
+            assert_eq!(step.5.1, [["11"], ["20"]]);
+            assert!(step.5.2.is_some());
         }
-        assert_eq!(step.1, "Complete");
-        assert_eq!(step.2, 80);
-        let charged = before - pic.cycle_balance(canister).await;
-        eprintln!(
-            "retained DISTINCT start={} rows={} charged_cycles={charged}",
-            output.len(),
-            step.5.1.len()
+        saved.push((handle, step.0, step.5.2));
+    }
+
+    upgrade_stopped(pic, canister, new, vec![], None)
+        .await
+        .unwrap();
+    for (handle, sequence, cursor) in saved {
+        let previously_complete = cursor.is_some();
+        let step = call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                &selection, &handle, sequence, 32_u32, 4096_u32, 32_u32, &cursor,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!((step.1.as_str(), step.2), ("Complete", 6));
+        assert_eq!(step.0, sequence + u64::from(!previously_complete));
+        let expected = [["11"], ["20"], ["31"], ["40"], ["51"], ["60"]];
+        assert_eq!(
+            step.5.1,
+            expected[if previously_complete { 2 } else { 0 }..]
         );
-        output.extend(
-            step.5
-                .1
-                .into_iter()
-                .map(|row| row[0].parse::<u64>().unwrap()),
-        );
-        cursor = step.5.2;
-        if output.len() == 33 {
-            upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
+        assert!(step.5.2.is_none());
+    }
+    owned.drop().await;
+}
+
+// Hold the returned page, cursor position and access path fixed as the checkpoint grows.
+#[tokio::test]
+async fn completed_distinct_single_key_page_cost_by_cardinality() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    let selection: Selection = (
+        "Entry".into(),
+        "distinct:amount".into(),
+        (None, None, None),
+        32,
+        (None, None),
+        Some("first".into()),
+        RowFilters::default(),
+        Default::default(),
+    );
+    let mut populated = 0;
+    for keys in [8_u64, 32, 128, 255] {
+        for id in populated + 1..=keys {
+            call::<Result<(), u8>>(
+                pic,
+                canister,
+                "write",
+                4,
+                &(id, 0_u64, id, u8::from(id > 6)),
+            )
+            .await
+            .unwrap();
+        }
+        populated = keys;
+        let handle =
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
                 .unwrap();
-        }
-        if cursor.is_none() {
-            break;
-        }
+        let before_scan = pic.cycle_balance(canister).await;
+        let first = call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                &selection,
+                &handle,
+                0_u64,
+                512_u32,
+                4096_u32,
+                1_u32,
+                None::<Vec<u8>>,
+            ),
+        )
+        .await
+        .unwrap();
+        let scan_cycles = before_scan - pic.cycle_balance(canister).await;
+        assert_eq!(first.1, "Complete");
+        assert_eq!(first.2, keys);
+        assert_eq!(first.5.1, [["1"]]);
+        assert!(first.5.2.is_some());
+        let before = pic.cycle_balance(canister).await;
+        let second = call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                &selection, &handle, first.0, 1_u32, 4096_u32, 1_u32, first.5.2,
+            ),
+        )
+        .await
+        .unwrap();
+        let charged = before - pic.cycle_balance(canister).await;
+        assert_eq!(second.1, "Complete");
+        assert_eq!((second.0, second.2), (first.0, keys));
+        assert_eq!(second.5.1, [["2"]]);
+        assert!(second.5.2.is_some());
+        println!("distinct-scan-and-first-page,keys={keys},charged_cycles={scan_cycles}");
+        println!("completed-distinct,keys={keys},page_size=1,offset=1,charged_cycles={charged}");
+        call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
+            .await
+            .unwrap();
     }
-    assert_eq!(output, (0..40).collect::<Vec<_>>());
-    assert!(cursor.is_none());
+    owned.drop().await;
+}
+
+#[tokio::test]
+async fn repeated_group_keys_preserve_counts_across_checkpoints() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    for id in 1_u64..=256 {
+        let n = id - 1;
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "write",
+            4,
+            &(id, n % 2, (n / 2) % 32, u8::from(id > 6)),
+        )
+        .await
+        .unwrap();
+    }
+    for (select, expected) in [
+        ("category,count", "128"),
+        ("category,distinct-count:amount", "32"),
+    ] {
+        let selection: Selection = (
+            "Entry".into(),
+            select.into(),
+            (None, None, None),
+            32,
+            (None, None),
+            None,
+            RowFilters::default(),
+            Default::default(),
+        );
+        let handle =
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
+                .await
+                .unwrap();
+        let mut sequence = 0;
+        for (index, work) in [128_u32, 256].into_iter().enumerate() {
+            let before = pic.cycle_balance(canister).await;
+            let step = call::<Result<Step, String>>(
+                pic,
+                canister,
+                "aggregate_resume",
+                121,
+                &(
+                    &selection,
+                    &handle,
+                    sequence,
+                    work,
+                    4096_u32,
+                    2_u32,
+                    None::<Vec<u8>>,
+                ),
+            )
+            .await
+            .unwrap();
+            let charged = before - pic.cycle_balance(canister).await;
+            println!("repeated-keys,select={select},step={index},charged_cycles={charged}");
+            sequence = step.0;
+            if index == 0 {
+                assert_eq!((step.1.as_str(), step.2), ("Running", 128));
+                assert!(step.5.1.is_empty());
+            } else {
+                assert_eq!((step.1.as_str(), step.2), ("Complete", 256));
+                assert_eq!(step.5.1, [["0", expected], ["1", expected]]);
+                assert!(step.5.2.is_none());
+            }
+        }
+        call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
+            .await
+            .unwrap();
+    }
     owned.drop().await;
 }
 
@@ -165,6 +434,7 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
                 compare: Some(["title".into(), "contains".into(), right.into()]),
                 ..Default::default()
             },
+            Default::default(),
         )
     };
     let original = selection("note");
@@ -333,6 +603,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 (None, None),
                 None,
                 RowFilters::default(),
+                Default::default(),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -567,6 +838,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 (None, None),
                 None,
                 RowFilters::default(),
+                Default::default(),
             );
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -680,6 +952,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 payload: [lower, upper, prefix, suffix, None],
                 ..Default::default()
             },
+            Default::default(),
         );
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -737,6 +1010,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         (None, None),
         None,
         RowFilters::default(),
+        Default::default(),
     );
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await

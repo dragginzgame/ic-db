@@ -11,11 +11,15 @@ use ic_storage::Memory;
 use sha2::{Digest, Sha256};
 
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
-    /// Start exact enumeration of distinct projected records in ascending canonical key order.
+    /// Start exact enumeration of distinct projected records.
+    /// Defaults to ascending. Use `order_groups` for descending keys or first occurrence
+    /// in input traversal order. First occurrence defaults to ascending primary key.
+    /// Use `order_by` for an order supplied by primary or index traversal and
+    /// `descending` to reverse the traversal, including its primary-key tie-breaker.
     /// The job retains up to 255 tuples in its 16 KiB frame and invalidates on a source
     /// change before completion. Absent tuple components participate in equality.
     /// # Errors
-    /// Refuses incompatible projections, group modifiers, input ordering, expiry or capacity.
+    /// Refuses incompatible projections, group modifiers, unsupported input orders, expiry or capacity.
     /// # Panics
     /// Supplier mutation failures trap the enclosing message.
     pub fn start_distinct<K: Value>(
@@ -25,7 +29,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        self.start_group_value(jobs, now, expires, (plan, Reducer::Keys))
+        self.start_group_value(jobs, now, expires, (plan, Reducer::Keys(0)))
     }
 
     /// Advance a DISTINCT job or page its completed result. Pass `None` until a
@@ -52,7 +56,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let page_size = self.request.rows;
         let query = self.group_page(page_size, after);
         let plan = query.aggregate_plan(Some(K::definition()), true)?;
-        let job = query.retained_groups(plan, Reducer::Keys, None)?;
+        let job = query.retained_groups(plan, Reducer::Keys(0), None)?;
         query.resume_groups(jobs, handle, sequence, now, job, |bytes, result| {
             if !matches!(result, Completed::Key) {
                 return Err(Error::Corrupt);

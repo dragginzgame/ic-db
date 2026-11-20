@@ -83,3 +83,15 @@ pub struct RowFilters {
     /// Field, lower field and upper field for the strict outside-range comparison.
     pub not_between_fields: Option<[String; 3]>,
 }
+
+/// Selection shared by the private retained fixture when starting and resuming a job.
+pub type RetainedSelection = (
+    String,
+    String,
+    (Option<u64>, Option<u64>, Option<u64>),
+    u32,
+    (Option<String>, Option<String>),
+    Option<String>,
+    RowFilters,
+    (Vec<String>, bool),
+);

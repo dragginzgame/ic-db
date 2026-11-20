@@ -12,6 +12,7 @@ fn retained_count_expires_at_its_deadline() {
         (None, None),
         None,
         super::RowFilters::default(),
+        Default::default(),
     );
     let handle = start_at(&selection, Timestamp::from_millis(1_000)).unwrap();
     let request = |sequence| {

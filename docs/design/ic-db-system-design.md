@@ -2303,7 +2303,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, resumable first-occurrence DISTINCT, float arithmetic, richer operation combinations and representative contention/query-growth costs |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, float arithmetic, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
@@ -2998,7 +2998,8 @@ entity and projected output share this concrete collector, without generic
 execution specialization. After complete sorting, apply `limit` and then output
 byte admission; discarded rows do not consume response bytes. Any refusal drops
 the whole result. Return `next: None`; no cursor or explicit-index
-fallback is admitted. Aggregate input ordering still refuses. Indexed live pages
+fallback is admitted. Retained first-occurrence DISTINCT requires a physical
+input order and cannot use this sort. Indexed live pages
 and their bindings are unchanged. The existing work cap admits at most 511
 candidates plus observation of exhaustion; larger or resumable sorting remains work.
 
@@ -3167,14 +3168,33 @@ These explicit queries expose their scan costs and use existing predicates and j
 For an unknown domain, `start_distinct::<K>` and `resume_distinct::<K>`
 scan scattered input once using the retained-job revision, sequence and expiry
 contract. The grouping table retains one projected record per canonical key.
-Its dedicated versioned job binding selects a checkpoint containing the one-byte
-tuple count and the record bytes for each tuple in key order. The one-byte
+Its versioned job binding selects a checkpoint containing the one-byte
+tuple count and the record bytes for each tuple. The one-byte
 tuple count permits up to 255 keys; key, memory and 16 KiB whole-frame limits can
 refuse sooner. The scanner saves no per-key aggregate or frequency.
-After completion, `limit` selects up to 32 keys per page. Only projected record
-bytes count toward the output budget. Cursor positions above 32 use transport
+After completion, `limit` selects up to 32 keys per page. Retained DISTINCT
+supports canonical ordering via `order_groups(Key)` (the default) or `order_groups(KeyDescending)`.
+Direction binds the job and determines the byte charge order for each page.
+Both directions read the same canonical checkpoint; the default keeps its
+original binding. `GroupOrder::FirstOccurrence` binds a separate DISTINCT job.
+It keeps the first matching representative in input traversal order (ascending
+primary key by default, or the specified index order). For first-occurrence jobs,
+fluent input ordering uses the row planner to select a matching primary or index
+traversal. Reversing the traversal also reverses its primary-key tie-breaker.
+An order requiring a sort refuses before allocation. Input order and direction
+bind the job on every resume. Checkpoints encode the
+same count and projected records in encounter order. Restore rebuilds the
+membership map, rejects duplicate keys, and recovers positions from that
+sequence. Group checkpoint restore feeds each projected field directly from the
+row decoder to the same tuple-key builder used during accumulation. The 255-key and 16 KiB bounds also apply here. As in frozen IcyDB
+`6d421e3`'s projection materializer, later equal keys preserve the first
+representative. The retained checkpoint avoids replaying input for each page.
+Only projected record bytes count toward the output budget. Cursor positions above 32 use transport
 version 2; existing group cursor bytes retain version 1. A changed source
 invalidates an unfinished run. Completed pages keep their captured revision.
+The [release-boundary probe](../../qualification/README.md#ordered-distinct-release-compatibility)
+verified that the 0.25.0 candidate resumes both an unfinished canonical DISTINCT
+job and a completed page cursor from 0.24.4.
 For M2, keep exact scattered DISTINCT within one retained frame. Capacity
 exhaustion returns `Error::Limit` without publishing a partial result or advancing
 the last successful checkpoint. A smaller output page cannot make the retained
@@ -3188,7 +3208,7 @@ and requires one source revision across pages. Widening the tuple count alone
 would leave the byte limit in place. Spilling keys into another collection
 would require bounded writes and cleanup across cancellation, expiry and upgrade.
 The existing one-frame contract keeps those operations within the job's current
-storage lifecycle. Resumable first-occurrence order remains open separately.
+storage lifecycle.
 
 Native witnesses
 cover result/work/byte/cardinality/state/key bounds, optional text, Decimal equality,
@@ -5157,7 +5177,7 @@ application handlers. The [mixed-history fixture](../../qualification/README.md#
 exercises authorization, queries, writes and upgrade recovery on PocketIC.
 
 The accepted broad query/type scope remains intact. Nested references/indexes,
-composite primary keys, resumable first-occurrence DISTINCT, larger sorting and broader maintenance envelopes
+composite primary keys, larger sorting and broader maintenance envelopes
 remain named gaps in section 9, not capability cuts justified by this sequencing.
 Keep the current synchronous write and explicit-maintenance contracts while
 qualifying real application combinations; do not reopen prefix-counter tuning

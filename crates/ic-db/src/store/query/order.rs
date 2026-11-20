@@ -138,9 +138,9 @@ pub(super) fn select<'a>(
         return Ok(Path::Primary);
     }
 
-    // Complete sorting never accepts a live cursor. DISTINCT separately
-    // proves projected equivalence after this access path is admitted.
-    if request.cursor.is_some() {
+    // A live cursor or a retained input scan must advance along one physical order.
+    // Only a fresh row query can fall back to a complete sort.
+    if request.cursor.is_some() || !matches!(output, super::PlanOutput::Rows) {
         return Err(Error::InvalidQuery);
     }
     let mut positions =

@@ -165,7 +165,7 @@ enum Command {
     Aggregate {
         #[arg(value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
-        /// Entry: distinct:amount pages distinct values with --page-size;
+        /// Entry: distinct:amount pages distinct values with --page-size; --group-order first accepts --order-by and --desc;
         /// count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
         /// prefix with category, for groups. Document: count/count:note/count:priority,
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
@@ -202,8 +202,10 @@ enum Command {
         #[arg(long, allow_hyphen_values = true)]
         group_max: Option<String>,
         /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
-        #[arg(long, value_parser=["key", "key-desc", "asc", "desc"])]
+        #[arg(long, value_parser=["key", "key-desc", "first", "asc", "desc"])]
         group_order: Option<String>,
+        #[command(flatten)]
+        order: OrderArgs,
         #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=512))]
         work: u32,
         #[arg(long, default_value_t=2, value_parser=clap::value_parser!(u32).range(1..=32))]
@@ -232,12 +234,8 @@ enum Command {
         /// Document.entry_id == VALUE.
         #[arg(long)]
         entry_id: Option<u64>,
-        /// Comma-separated fields with optional :asc or :desc; primary key breaks ties.
-        /// Unspecified directions and the implicit primary key ascend; --desc reverses all.
-        #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
-        order_by: Vec<String>,
-        #[arg(long)]
-        desc: bool,
+        #[command(flatten)]
+        order: OrderArgs,
         #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
         work: u32,
         /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
@@ -287,6 +285,16 @@ enum Command {
 }
 #[derive(Clone, Debug)]
 struct CursorArg(Vec<u8>);
+#[derive(clap::Args, Debug)]
+struct OrderArgs {
+    /// Comma-separated fields with optional :asc or :desc; primary key breaks ties.
+    /// Unspecified directions and the implicit primary key ascend; --desc reverses all.
+    #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
+    order_by: Vec<String>,
+    #[arg(long)]
+    desc: bool,
+}
+
 #[derive(clap::Args, Debug)]
 struct FilterArgs {
     /// Match rows with a value in this optional field, including an empty value.
@@ -836,17 +844,19 @@ async fn session(
                 group_min,
                 group_max,
                 group_order,
+                order,
                 work,
                 page_size,
             } => {
-                let selection = (
-                    entity.as_str(),
-                    select.as_str(),
+                let selection: ic_db_qualification_transport::RetainedSelection = (
+                    entity,
+                    select,
                     (minimum, category, entry_id),
                     limit,
-                    (group_min.as_deref(), group_max.as_deref()),
-                    group_order.as_deref(),
+                    (group_min, group_max),
+                    group_order,
                     filters.into_filters()?,
+                    (order.order_by, order.desc),
                 );
                 let reply = invoke(
                     CallKind::Update,
@@ -873,7 +883,7 @@ async fn session(
                 )
                 .map_err(|e| e.to_string())?;
                 let handle = handle?;
-                println!("\n{entity} — {select}");
+                println!("\n{} — {}", selection.0, selection.1);
                 let run = async {
                     let mut sequence = 0;
                     let mut after: Option<Vec<u8>> = None;
@@ -1066,8 +1076,7 @@ async fn session(
                 minimum,
                 category,
                 entry_id,
-                order_by,
-                desc,
+                order: OrderArgs { order_by, desc },
                 work,
                 select,
                 distinct,

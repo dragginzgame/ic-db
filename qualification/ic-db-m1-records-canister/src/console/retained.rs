@@ -16,6 +16,7 @@ use ic_db::{
     Entity, Error, GroupCount, GroupCursor, GroupPage, GroupValue, JobHandle, JobOutcome, JobStep,
     Timestamp,
 };
+use ic_db_qualification_transport::RetainedSelection as Selection;
 
 // aggregate_start
 // Start a retained console aggregate and return its handle.
@@ -76,24 +77,17 @@ fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
 }
 
 // Reconstructed on every call; product admission binds these semantics to the job.
-type Selection = (
-    String,
-    String,
-    (Option<u64>, Option<u64>, Option<u64>),
-    u32,
-    (Option<String>, Option<String>),
-    Option<String>,
-    super::RowFilters,
-);
 fn configured<'a, E: Entity>(
     query: Query<'a, E>,
     selection: &'a Selection,
 ) -> Result<Query<'a, E>, String> {
-    let (_, select, _, limit, (group_min, group_max), group_order, filters) = selection;
+    let (_, select, _, limit, (group_min, group_max), group_order, filters, (order, descending)) =
+        selection;
     if select == "distinct:amount" && *limit != 32 {
         return Err("use --page-size for retained DISTINCT".into());
     }
     let query = super::filter_rows(query, filters)?;
+    let query = super::apply_order(query, &super::parse_order(order)?, *descending);
 
     select_groups(
         query.limit(*limit as usize),

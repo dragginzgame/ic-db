@@ -318,9 +318,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 32], Error> {
     let mut hash = Sha256::new();
     match &groups.initial {
-        Reducer::Keys => {
+        Reducer::Keys(_) => {
             hash.update(b"ic-db:distinct-keys-job:v1\0");
             hash.update(plan.binding);
+            if groups.selection.order == GroupOrder::KeyDescending {
+                hash.update(b"key-descending\0");
+            } else if groups.selection.order == GroupOrder::FirstOccurrence {
+                hash.update(b"first-occurrence:v1\0");
+            }
 
             return Ok(hash.finalize().into());
         }
@@ -346,6 +351,7 @@ fn group_binding(plan: &Plan<'_>, groups: &Groups, rows: usize) -> Result<[u8; 3
             GroupOrder::AggregateAscending => 1,
             GroupOrder::AggregateDescending => 2,
             GroupOrder::KeyDescending => 3,
+            GroupOrder::FirstOccurrence => return Err(Error::InvalidQuery),
         },
     ]);
     hash.update([groups.selection.predicates.len() as u8]);

@@ -1,7 +1,7 @@
 //! Bounded pages over immutable completed groups; no additional durable state.
 
 use super::{
-    super::{Completed, Groups, MAX_GROUPS, Reducer, admit_output},
+    super::{Completed, GroupOrder, Groups, MAX_GROUPS, Reducer, admit_output},
     JobHandle, JobOutcome,
     storage::Record,
 };
@@ -90,6 +90,15 @@ pub(super) fn group_page<T>(
     handle: &JobHandle,
     decode: fn(&[u8], Completed) -> Result<T, Error>,
 ) -> Result<(GroupPage<T>, usize), Error> {
+    if groups.selection.order == GroupOrder::FirstOccurrence {
+        let keys = groups.first_occurrences()?;
+        let (range, next, used) = select(keys.iter().map(|key| key.len()), bytes, page, handle)?;
+        let rows = keys[range]
+            .iter()
+            .map(|key| decode(key, Completed::Key))
+            .collect::<Result<_, _>>()?;
+        return Ok((GroupPage { rows, next }, used));
+    }
     let (page, used) = select_rows(groups, limit, bytes, page, handle)?;
     let rows = page
         .rows
@@ -117,13 +126,22 @@ fn select_rows(
     page: Option<PageRequest<'_>>,
     handle: &JobHandle,
 ) -> Result<(EncodedPage, usize), Error> {
-    if matches!(groups.initial, Reducer::Keys) {
-        // Restored keys are already validated, unique and in their final order.
+    if matches!(groups.initial, Reducer::Keys(_)) {
+        // Charge in output order, then move just the selected records out of the map.
         let sizes = groups.rows.values().map(|(key, _)| key.len());
-        let (range, next, used) = select(sizes, bytes, page, handle)?;
-        let rows = groups
-            .rows
-            .into_values()
+        let descending = groups.selection.order == GroupOrder::KeyDescending;
+        let (range, next, used) = if descending {
+            select(sizes.rev(), bytes, page, handle)?
+        } else {
+            select(sizes, bytes, page, handle)?
+        };
+        let mut keys = groups.rows.into_values();
+        let rows: &mut dyn Iterator<Item = _> = if descending {
+            &mut keys.by_ref().rev()
+        } else {
+            &mut keys
+        };
+        let rows = rows
             .skip(range.start)
             .take(range.len())
             .map(|(key, _)| (key, Completed::Key))

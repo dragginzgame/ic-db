@@ -1,7 +1,7 @@
 //! Differential checks against SQLite for shared query semantics.
 
 use ic_db::design::prelude::*;
-use ic_db::{AggregateJobs, Batch, Comparison, Database, JobOutcome, QueryCursor};
+use ic_db::{AggregateJobs, Batch, Comparison, Database, GroupOrder, JobOutcome, QueryCursor};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -203,6 +203,82 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
                 assert_eq!(suffix, expected[offset..]);
             }
         }
+    }
+}
+
+#[test]
+fn ordered_distinct_matches_first_qualifying_occurrences_in_sqlite() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let mut jobs = AggregateJobs::open(
+        host.open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let now = Timestamp::from_millis(0);
+    for descending in [false, true] {
+        let direction = if descending { "DESC" } else { "ASC" };
+        // Rank only qualifying rows, then select the earliest rank for each price,
+        // including NULL. This is independent of both DB traversal and key encoding.
+        let statement = format!(
+            "WITH matches AS (
+                SELECT cents, ROW_NUMBER() OVER (ORDER BY rank {direction}, id {direction}) AS pos
+                FROM items WHERE lane = 0 AND visible = 1
+             ) SELECT cents FROM matches GROUP BY cents ORDER BY MIN(pos)"
+        );
+        let expected = sql
+            .prepare(&statement)
+            .unwrap()
+            .query_map([], |row| Ok(row.get::<_, Option<i64>>(0)?.map(i128::from)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let query = || {
+            let q = db
+                .query::<Item>()
+                .eq(Item::LANE, 0_u8)
+                .eq(Item::VISIBLE, true)
+                .order_by(&[Item::RANK, Item::ID]);
+            if descending { q.descending() } else { q }
+        };
+        let cents = |row: Price| row.price.map(|p| p.coefficient_at_scale(2).unwrap());
+        let page = query().distinct().fetch_as::<Price>().unwrap();
+        assert!(page.next.is_none());
+        assert_eq!(
+            page.rows.into_iter().map(cents).collect::<Vec<_>>(),
+            expected
+        );
+
+        let retained = || query().order_groups(GroupOrder::FirstOccurrence);
+        let handle = retained()
+            .start_distinct::<Price>(&mut jobs, now, Timestamp::from_millis(100))
+            .unwrap();
+        let mut cursor = None;
+        let mut sequence = 0;
+        let mut actual = Vec::new();
+        for _ in 0..32 {
+            let step = retained()
+                .work_limit(1)
+                .limit(1)
+                .resume_distinct::<Price>(&mut jobs, &handle, sequence, now, cursor.as_ref())
+                .unwrap();
+            sequence = step.sequence;
+            match step.outcome {
+                JobOutcome::Running => assert_eq!(step.output_bytes, 0),
+                JobOutcome::Complete(page) => {
+                    assert_eq!(page.rows.len(), 1);
+                    actual.extend(page.rows.into_iter().map(cents));
+                    cursor = page.next;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                other => panic!("unexpected DISTINCT outcome: {other:?}"),
+            }
+        }
+        assert!(cursor.is_none());
+        assert_eq!(actual, expected);
+        jobs.cancel(&handle).unwrap();
     }
 }
 

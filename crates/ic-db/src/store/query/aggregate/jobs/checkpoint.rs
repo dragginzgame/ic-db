@@ -2,11 +2,12 @@
 
 use super::{
     super::{
-        Accumulator, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Reducer,
-        comparison_key,
+        Accumulator, GroupOrder, Groups, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES,
+        Reducer,
     },
     storage::{MAX_JOB_BYTES, Record},
 };
+use crate::store::query::build_comparison_key;
 use crate::{
     EntitySchema, Error, IndexValue,
     codec::{Decoder, Encoder, MAX_ROW_BYTES},
@@ -22,9 +23,13 @@ impl Accumulator<'_> {
             Self::Scalar(reducer @ Reducer::Extremum { .. }) => {
                 reducer.restore_extremum(entity, record.count, &record.state)
             }
-            Self::Scalar(Reducer::Distinct { mask, seen }) => {
+            Self::Scalar(Reducer::Distinct {
+                mask,
+                seen,
+                key_bytes,
+            }) => {
                 let mut reader = Decoder::with_byte_limit(&record.state, MAX_JOB_BYTES)?;
-                *seen = read_distinct(&mut reader, entity, *mask)?;
+                (*seen, *key_bytes) = read_distinct(&mut reader, entity, *mask)?;
                 if seen.len() as u64 != record.count {
                     return Err(Error::Corrupt);
                 }
@@ -131,12 +136,18 @@ impl Groups {
     fn checkpoint(&self) -> Result<(u64, Vec<u8>), Error> {
         let mut writer = Encoder::with_byte_limit(MAX_JOB_BYTES);
         writer.nat8(self.rows.len() as u8)?;
+        if self.selection.order == GroupOrder::FirstOccurrence {
+            for bytes in self.first_occurrences()? {
+                writer.bytes(bytes)?;
+            }
+            return Ok((self.rows.len() as u64, writer.finish()));
+        }
         let mut count = 0_u64;
         // Store only original key-record bytes; reconstruct comparison keys through
         // the existing codec on resume, rather than persisting two key representations.
         for (bytes, reducer) in self.rows.values() {
             writer.bytes(bytes)?;
-            let present = if matches!(reducer, Reducer::Keys) {
+            let present = if matches!(reducer, Reducer::Keys(_)) {
                 1
             } else if let Reducer::Distinct { seen, .. } = reducer {
                 write_distinct(&mut writer, seen)?;
@@ -171,13 +182,19 @@ impl Groups {
             return Err(Error::Corrupt);
         }
         let mut count = 0_u64;
-        for _ in 0..length {
+        for position in 0..length {
             let bytes = reader.blob(MAX_ROW_BYTES)?;
             let mut reducer = self.initial.clone();
-            let present = if matches!(reducer, Reducer::Keys) {
+            let present = if let Reducer::Keys(ordinal) = &mut reducer {
+                *ordinal = position as u8;
                 1
-            } else if let Reducer::Distinct { mask, seen } = &mut reducer {
-                *seen = read_distinct(&mut reader, entity, *mask)?;
+            } else if let Reducer::Distinct {
+                mask,
+                seen,
+                key_bytes,
+            } = &mut reducer
+            {
+                (*seen, *key_bytes) = read_distinct(&mut reader, entity, *mask)?;
                 if seen.is_empty() {
                     return Err(Error::Corrupt);
                 }
@@ -213,18 +230,19 @@ impl Groups {
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
             let mut fields = Decoder::new(&bytes)?;
-            let mut values = [IndexValue::Absent; crate::schema::MAX_FIELDS];
-            for (i, field) in entity.fields.iter().enumerate() {
-                if self.mask & (1 << i) != 0 && (!field.optional || fields.boolean()?) {
-                    values[i] = IndexValue::read(&mut fields, field.value)?;
+            let key = build_comparison_key(entity, self.mask, |_, field| {
+                if field.optional && !fields.boolean()? {
+                    Ok(IndexValue::Absent)
+                } else {
+                    IndexValue::read(&mut fields, field.value)
                 }
-            }
+            })?;
             fields.finish()?;
-            let key = comparison_key(entity, self.mask, &values)?;
-            if self
-                .rows
-                .last_key_value()
-                .is_some_and(|(previous, _)| *previous >= key)
+            if self.selection.order != GroupOrder::FirstOccurrence
+                && self
+                    .rows
+                    .last_key_value()
+                    .is_some_and(|(previous, _)| *previous >= key)
             {
                 return Err(Error::Corrupt);
             }
@@ -232,7 +250,9 @@ impl Groups {
             if self.state_bytes > MAX_STATE_BYTES {
                 return Err(Error::Corrupt);
             }
-            self.rows.insert(key, (bytes, reducer));
+            if self.rows.insert(key, (bytes, reducer)).is_some() {
+                return Err(Error::Corrupt);
+            }
         }
         reader.finish()?;
         if count != record.count {
@@ -256,12 +276,13 @@ fn read_distinct(
     reader: &mut Decoder<'_>,
     entity: &EntitySchema,
     mask: u16,
-) -> Result<BTreeSet<Vec<u8>>, Error> {
+) -> Result<(BTreeSet<Vec<u8>>, usize), Error> {
     let count = usize::from(reader.nat8()?);
     if count > MAX_DISTINCT_VALUES {
         return Err(Error::Corrupt);
     }
     let mut seen = BTreeSet::new();
+    let mut key_bytes = 0;
     for _ in 0..count {
         let bytes = reader.blob(MAX_COMPARISON_KEY)?;
         let mut remaining = bytes.as_slice();
@@ -284,8 +305,9 @@ fn read_distinct(
         if !remaining.is_empty() || seen.last().is_some_and(|previous| previous >= &bytes) {
             return Err(Error::Corrupt);
         }
+        key_bytes += bytes.capacity();
         seen.insert(bytes);
     }
 
-    Ok(seen)
+    Ok((seen, key_bytes))
 }

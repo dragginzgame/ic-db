@@ -851,7 +851,19 @@ fn console_inspects_and_queries() {
             })
             .collect::<String>();
         commands.push_str("aggregate Entry\naggregate Entry\naggregate Entry\n");
-        let controls: [ConsoleCase<'_>; 15] = [
+        let controls: [ConsoleCase<'_>; 18] = [
+            (
+                "distinct:amount --group-order key-desc",
+                &[&["60"], &["51"], &["40"], &["31"], &["20"], &["11"]],
+            ),
+            (
+                "distinct:amount --group-order first",
+                &[&["11"], &["20"], &["31"], &["40"], &["51"], &["60"]],
+            ),
+            (
+                "distinct:amount --group-order first --order-by category --desc",
+                &[&["51"], &["31"], &["11"], &["60"], &["40"], &["20"]],
+            ),
             ("count --between-fields category id amount", &[&["1"]]),
             ("count --not-between-fields category id amount", &[&["5"]]),
             ("count --compare id gt category", &[&["5"]]),
@@ -925,6 +937,11 @@ fn console_inspects_and_queries() {
             "aggregate Entry --limit 33",
             "aggregate Entry --select count --group-min 1",
             "aggregate Entry --select count --group-order key",
+            "aggregate Entry --select distinct:amount --group-order desc",
+            "aggregate Entry --select category,count --group-order first",
+            "aggregate Entry --select distinct:amount --group-order first --order-by amount",
+            "aggregate Entry --select distinct:amount --group-order first --order-by category:unknown",
+            "aggregate Entry --select distinct:amount --group-order key --desc",
             "aggregate Entry --group-order unsupported",
             "aggregate Entry --entry-id 1",
             "aggregate Entry --select count:note",

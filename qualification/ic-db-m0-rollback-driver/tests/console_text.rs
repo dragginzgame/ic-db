@@ -143,6 +143,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 (lower, upper),
                 Some("key"),
                 RowFilters::default(),
+                (Vec::<String>::new(), false),
             );
             let reply = pic
                 .update_call(
@@ -397,6 +398,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         (None::<String>, None::<String>),
         Some("key-desc"),
         RowFilters::default(),
+        (Vec::<String>::new(), false),
     );
     let reply = pic
         .update_call(

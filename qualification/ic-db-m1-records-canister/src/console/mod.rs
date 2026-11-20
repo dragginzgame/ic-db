@@ -112,19 +112,7 @@ fn query(
         .map(QueryCursor::from_bytes)
         .transpose()
         .map_err(message)?;
-    let order: Vec<_> = order
-        .iter()
-        .map(|field| {
-            let (name, direction) = field.split_once(':').unwrap_or((field, "asc"));
-            let direction = match direction {
-                "asc" => SortDirection::Ascending,
-                "desc" => SortDirection::Descending,
-                _ => return Err("order direction must be asc or desc".to_owned()),
-            };
-
-            Ok((name, direction))
-        })
-        .collect::<Result<_, String>>()?;
+    let order = parse_order(&order)?;
     let host = runtime();
     let db = open(&host);
 
@@ -464,6 +452,22 @@ type Page = (
     u32,
 );
 
+fn parse_order(order: &[String]) -> Result<Vec<(&str, SortDirection)>, String> {
+    order
+        .iter()
+        .map(|field| {
+            let (name, direction) = field.split_once(':').unwrap_or((field, "asc"));
+            let direction = match direction {
+                "asc" => SortDirection::Ascending,
+                "desc" => SortDirection::Descending,
+                _ => return Err("order direction must be asc or desc".to_owned()),
+            };
+
+            Ok((name, direction))
+        })
+        .collect()
+}
+
 fn configure<'a, E: Entity>(
     mut query: Query<'a, E>,
     cursor: Option<&'a QueryCursor>,
@@ -477,14 +481,24 @@ fn configure<'a, E: Entity>(
         .limit(limit as usize)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
+    query = apply_order(query, order, descending);
+    if let Some(cursor) = cursor {
+        query = query.after(cursor);
+    }
+
+    query
+}
+
+fn apply_order<'a, E: Entity>(
+    mut query: Query<'a, E>,
+    order: &[(&'a str, SortDirection)],
+    descending: bool,
+) -> Query<'a, E> {
     if !order.is_empty() {
         query = query.order_by_each(order);
     }
     if descending {
         query = query.descending();
-    }
-    if let Some(cursor) = cursor {
-        query = query.after(cursor);
     }
 
     query
@@ -494,6 +508,7 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
     match order {
         None => Ok(None),
         Some("key") => Ok(Some(GroupOrder::Key)),
+        Some("first") => Ok(Some(GroupOrder::FirstOccurrence)),
         Some("key-desc") => Ok(Some(GroupOrder::KeyDescending)),
         Some("asc") => Ok(Some(GroupOrder::AggregateAscending)),
         Some("desc") => Ok(Some(GroupOrder::AggregateDescending)),

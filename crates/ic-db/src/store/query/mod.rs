@@ -1121,10 +1121,18 @@ fn comparison_key(
     mask: u16,
     values: &[IndexValue<'_>],
 ) -> Result<Vec<u8>, Error> {
+    build_comparison_key(entity, mask, |i, _| Ok(values[i]))
+}
+
+fn build_comparison_key<'a>(
+    entity: &EntitySchema,
+    mask: u16,
+    mut value: impl FnMut(usize, &crate::FieldSchema) -> Result<IndexValue<'a>, Error>,
+) -> Result<Vec<u8>, Error> {
     let mut key = Vec::new();
     for (i, field) in entity.fields.iter().enumerate() {
         if mask & (1 << i) != 0 {
-            values[i].append_component(field.optional, &mut key);
+            value(i, field)?.append_component(field.optional, &mut key);
             if key.len() > MAX_COMPARISON_KEY {
                 return Err(Error::Limit);
             }

@@ -478,6 +478,77 @@ after returning the first 33. Its next cursor resumes the same completed job.
 Run `make m2-cli` for the installed path or try
 `db aggregate Entry --select distinct:amount --work 2 --page-size 2` locally.
 
+#### Ordered DISTINCT release compatibility
+
+The release-boundary probe installs a retained-console Wasm built from tag
+`v0.24.4`, starts two default-order DISTINCT jobs, and upgrades the same
+canister to the 0.25.0 candidate. One job has scanned two of six rows. The
+other has returned two keys and issued a page cursor. After upgrade the first
+returns all six canonical keys and the saved cursor returns the final four.
+Each call uses its fixture version's Wire request shape.
+
+To repeat the probe, set `IC_DB_V0244_CONSOLE_WASM` to the retained-console Wasm
+built from that tag and run:
+
+```sh
+make m2-cli-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
+  bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test console_aggregates \
+  canonical_distinct_resumes_running_and_completed_v0244_jobs -- --ignored --exact
+```
+
+#### Retained DISTINCT cycle measurements
+
+The 0.25.0 fixture measures the second single-key page of a completed
+first-occurrence job. Each input row has a distinct Nat64 amount equal to its
+ID. Every measured update resumes at offset one, returns amount 2 and leaves
+the job sequence and examined-row count unchanged. Two fresh PocketIC runs
+of `make m2-cli`'s `completed_distinct_single_key_page_cost_by_cardinality`
+case gave the same baseline balance deltas. The second column of measurements
+uses single-pass comparison-key decoding during checkpoint restore.
+
+| Saved keys | Baseline update cycles | Single-pass update cycles |
+| ---: | ---: | ---: |
+| 8 | 7,915,497 | 7,910,381 |
+| 32 | 8,090,254 | 8,069,754 |
+| 128 | 8,952,064 | 8,870,028 |
+| 255 | 10,427,427 | 10,263,984 |
+
+These totals include endpoint and storage work. Each call validates the whole
+saved checkpoint and reconstructs encounter order; the balance delta does
+not isolate the cost of either operation. Wider projections can reach the
+16 KiB frame bound sooner.
+
+The same fixture also measures the preceding update, which scans all rows,
+saves the completed checkpoint and returns the first key. Each row introduces
+a new group. With a single tree lookup for group insertion, the matched
+PocketIC updates cost:
+
+| New keys | Before (cycles) | Single lookup (cycles) |
+| ---: | ---: | ---: |
+| 8 | 8,218,258 | 8,210,097 |
+| 32 | 8,778,108 | 8,704,299 |
+| 128 | 11,278,371 | 10,785,732 |
+| 255 | 15,066,771 | 13,923,490 |
+
+Job creation and fixture population occur before both measurements.
+The repeated-key fixture alternates two categories across 256 rows. Each category
+contains 32 distinct Nat64 amounts repeated four times. Both queries examine 128
+rows per step. The second step restores the checkpoint, sees only previously
+seen amounts and returns both groups. Each group has 128 rows and 32 distinct
+amounts. The measured updates include transport and checkpoint work.
+
+| Reducer | Step | Recount key bytes (cycles) | Track key bytes on insertion (cycles) | Single set lookup (cycles) |
+| --- | --- | ---: | ---: | ---: |
+| Group count (control) | First | 10,023,258 | 10,019,418 | 10,019,418 |
+| Group count (control) | Second | 10,025,218 | 10,021,318 | 10,021,318 |
+| Group distinct count | First | 11,397,453 | 10,693,989 | 10,550,243 |
+| Group distinct count | Second | 11,553,263 | 10,758,751 | 10,759,775 |
+
+Run `make m2-cli` to reproduce the installed fixture. The byte total uses the
+allocated capacities of the live keys and is recomputed when restoring them.
+
 The local 0.24.3 retained-console builds before and after direct DISTINCT
 page selection used the same 80-row fixture, 17-candidate steps and 11-row
 pages. PocketIC balance deltas measure the complete update, including transport
@@ -4902,6 +4973,9 @@ crate and introduces no product or CLI dependency.
 - Compare both directions of a compound-index listing against SQLite's ordered
   IDs. Replay every observed cursor against the expected suffix, including ties,
   sparse empty pages and a matching row deferred by the output-byte limit.
+- Compare synchronous and retained first-occurrence DISTINCT with the first qualifying
+  position for each price in SQLite. Exercise forward and reverse compound-index
+  traversal, tied ranks, absent prices and one-candidate steps with single-key pages.
 - Compare grouped sums and non-null counts with SQLite using exact integer
   cents. Hand-calculated IC DB averages at scale two are 1.24, 1.26 and absent.
   Check synchronous results and reopen both stores between retained steps with

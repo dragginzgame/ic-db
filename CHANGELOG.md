@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.25.0] - Unreleased
+
+### Queries
+
+- Retained DISTINCT can page its completed keys in descending order with
+  `order_groups(GroupOrder::KeyDescending)` or preserve first occurrence with
+  `order_groups(GroupOrder::FirstOccurrence)`. Both use the existing 255-key
+  and 16 KiB limits. Code exhaustively matching `GroupOrder` needs the new arm.
+  In Rust, combine first occurrence with `order_by` and `descending` to visit
+  rows in a supported index order. The planner selects the index automatically.
+  Try either output order on the local fixture:
+
+```sh
+db aggregate Entry --select distinct:amount --group-order key-desc --work 2 --page-size 2
+db aggregate Entry --select distinct:amount --group-order first --order-by category --desc --work 2 --page-size 2
+```
+
+- Resuming a grouped or DISTINCT job decodes each saved projected field directly
+  into its comparison key. At 255 Nat64 keys the measured single-key page update
+  fell from 10.43M to 10.26M cycles.
+- Group accumulation now finds or inserts each key with one tree lookup. Scanning
+  255 distinct Nat64 keys and returning the first result cost 13.92M cycles
+  in the fixture, down from 15.07M.
+- DISTINCT counts track the memory used by retained keys as each new value
+  arrives. Across two groups with repeated amounts, both scan steps together
+  fell from 22.95M to 21.31M cycles. Insertion uses one set lookup. At capacity,
+  duplicates still count toward scan progress and a new key refuses the step.
+
+### Qualification
+
+- Confirmed on PocketIC that the 0.25.0 candidate resumes a running default-order
+  DISTINCT job and a completed page cursor created by the released 0.24.4 engine.
+
+- The SQLite comparison now checks that synchronous and resumable DISTINCT return
+  the same first qualifying prices in both directions of a compound index.
+- PocketIC now measures one completed DISTINCT page at 8, 32, 128 and 255
+  retained keys. The fixture checks that paging leaves input progress unchanged.
+
 ## [0.24.4] - 2026-11-20
 
 ### Queries
