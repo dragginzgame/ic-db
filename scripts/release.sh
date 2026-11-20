@@ -16,10 +16,10 @@ metadata_check() {
 
 verified_source() {
     local receipt
-    [[ "${RELEASE_SOURCE:-}" =~ ^[0-9a-f]{40}$ ]]
+    [[ "${RELEASE_SOURCE:-}" =~ ^[0-9a-f]{40}$ ]] || return 1
     receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"
-    [[ -f "$receipt" && ! -L "$receipt" ]]
-    [[ "$(cat "$receipt")" == "$RELEASE_SOURCE" ]]
+    [[ -f "$receipt" && ! -L "$receipt" ]] || return 1
+    [[ "$(cat "$receipt")" == "$RELEASE_SOURCE" ]] || return 1
 }
 
 case "${1:-}" in
@@ -31,17 +31,17 @@ case "${1:-}" in
         ;;
     release-preflight)
         bash "$shared/check-release-source.sh"
-        [[ "${RELEASE_REMOTE:?}" == origin && "${RELEASE_BRANCH:?}" == main ]]
-        [[ "$(git remote get-url --push origin)" == https://github.com/dragginzgame/ic-db.git ]]
-        [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]]
+        [[ "${RELEASE_REMOTE:?}" == origin && "${RELEASE_BRANCH:?}" == main ]] || exit 1
+        [[ "$(git remote get-url --push origin)" == https://github.com/dragginzgame/ic-db.git ]] || exit 1
+        [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]] || exit 1
         bash "$shared/check-release-changelog.sh" "$RELEASE_VERSION" "$RELEASE_PREVIOUS" "$RELEASE_DATE" CHANGELOG.md
         ;;
     release-verify)
-        [[ "${RELEASE_SOURCE:?}" =~ ^[0-9a-f]{40}$ ]]
+        [[ "${RELEASE_SOURCE:?}" =~ ^[0-9a-f]{40}$ ]] || exit 1
         receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"
         # A failed recheck must not leave an earlier whole-gate pass admissible.
         rm -f -- "$receipt"
-        [[ "$(git rev-parse HEAD)" == "${RELEASE_SOURCE:?}" ]]
+        [[ "$(git rev-parse HEAD)" == "${RELEASE_SOURCE:?}" ]] || exit 1
         bash "$shared/check-release-source.sh"
         printf '%s\n' 'Running the complete IC DB gate; partial prior passes are diagnostics, not reusable proof.'
         printf '%s\n' 'Validation failure reruns this gate; saved post-validation attempts resume their recorded phase.'
@@ -58,7 +58,7 @@ case "${1:-}" in
           m0-core m0-aggregation m0-maintenance \
           m1-records-wasm m1-commit-failures m3-maintenance-wasm m3-cli
         bash "$shared/check-release-source.sh"
-        [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]]
+        [[ "$(git rev-parse HEAD)" == "$RELEASE_SOURCE" ]] || exit 1
         receipt="$(git rev-parse --git-path "release-state/ic-db/$RELEASE_SOURCE.verified")"
         mkdir -p "$(dirname "$receipt")"
         printf '%s\n' "$RELEASE_SOURCE" > "$receipt"
@@ -83,11 +83,11 @@ case "${1:-}" in
         ;;
     release-committed-check|release-tagged-check|release-push-check)
         verified_source
-        [[ "$(git rev-parse "${RELEASE_COMMIT:?}^")" == "$RELEASE_SOURCE" ]]
+        [[ "$(git rev-parse "${RELEASE_COMMIT:?}^")" == "$RELEASE_SOURCE" ]] || exit 1
         git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
         metadata_check
         if [[ "$1" == release-push-check ]]; then
-            [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]]
+            [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]] || exit 1
         fi
         ;;
     *) echo 'unknown release hook' >&2; exit 2 ;;
