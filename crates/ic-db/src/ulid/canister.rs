@@ -3,7 +3,6 @@
 use super::UlidEntropyError;
 use crate::Principal;
 use ic_platform_runtime::{raw_rand, system};
-pub(super) use system::time;
 
 pub(super) async fn fresh_suffix() -> Result<[u8; 10], UlidEntropyError> {
     let bytes = raw_rand::request(10).await.map_err(|error| match error {

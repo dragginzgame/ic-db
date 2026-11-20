@@ -331,7 +331,7 @@ contribute; this is not evidence of blanket feature parity or SQL-removal saving
 | DISTINCT with a fixed compound unique-key component | IC DB pages projected subjects in subject or ID order with one candidate per call | Legacy typed route reads agree in subject order and refuse ID order on this fixture | Result and admission comparison. [Route comparison](#compound-equality-lookup-02312) |
 | Complete sorting at 511 rows | Mixed-order limit 32: 13.86M instructions; two-value DISTINCT: 5.77M | Legacy public typed sort refuses materialization in the 32-row comparison; no matched successful 511-row run | Refusal is not a speed comparison. Rich-key/payload costs and a suitable legacy execution lane remain open. [Receipt](#bounded-sorting-execution-envelope-018) |
 | Exact entity/prefix counts | Automatic whole-entity metadata, covered equality-prefix key scans, or row execution. Explicit owner validation remains available. | IC DB metadata count uses 59.3% fewer instructions at 512 rows; legacy remains cheaper for populated prefix counts | [Automatic count measurements](#automatic-prefix-counts-0235) cover the default fluent call. [Prefix comparison](#prefix-count-paths-0234), [adoption](#maintained-count-adoption-019), [scan profile](#count-cost-decomposition-019) |
-| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | Four-group queries use 74.0–76.0% fewer instructions | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
+| Grouping, sums/averages/extrema and retained aggregation | 32 count/sum/min/max cases over 32 rows; IC DB-only 32-group finalization, text winners, retained Decimal rounding, checkpoint-byte probes and cleanup of 16 near-limit jobs | 0.26.1 four-group count uses 11.6% fewer instructions than legacy. Sum, minimum and maximum use 72.7–74.5% fewer. | Rich types, averages, retained jobs, state ceilings and contention costs remain unmatched. [Comparison](#matched-grouped-aggregates-019), [jobs](#product-retained-aggregates), [shared capacity](#shared-retained-job-capacity-019), [envelope](#retained-aggregate-envelope-020), [text](#retained-variable-sized-values-0210), [Decimal](#retained-decimal-averages-0210) |
 | Schema migration and recovery | Copy, validation, cancellation, publication and cleanup witnesses | No matched migration-cost comparison | Existing entities and keys must survive; added entities start empty. Broader envelopes and allocation lifetime remain open. [Receipt](#identified-maintenance-and-the-local-console) |
 | Mixed write/query histories | Storage 0.78.0 rerun checks 153 attempted batches, sparse listing, jobs, six upgrades and interrupted maintenance on the same records. [Receipt](#application-workload-and-wasm-growth-on-storage-078) | Retains legacy count and final-batch uniqueness invariants; no matched mixed-history run | Small scalar/reference fixture, not production contention or all type combinations. [Receipt](#mixed-history-qualification-019) |
 | Canic endpoints and full applications | Canic-owned typed adapter: caller/frame refusal, sparse pages, upgrades, maintenance and reply rollback | No matched integration benchmark | Canic 0.220.0 witness has a separate [endpoint size comparison](#application-workload-and-wasm-growth-on-storage-078). Native inspection checked through HTTP on the committed inspection contract. The fixed application listing also preserves sparse pages and cursor refusal after upgrade; broader application support is not claimed. [Receipt](#canic-typed-application-integration-019) |
@@ -2103,6 +2103,50 @@ oracle before and after upgrade, and every query preserves the raw stable backin
 There are no null operands in this fixture. Empty input yields no groups. The
 normal scalar host's export set stays unchanged; the shared driver's scalar and
 fluent regressions also pass using preserved artifacts.
+
+On release `v0.26.1` (`d9ab915`), all 32 cases again matched the oracle
+before and after upgrade. Settled instruction counts for all 32 rows across
+four groups were:
+
+| Terminal | IC DB 0.26.1 | Frozen IcyDB |
+| --- | ---: | ---: |
+| Count | 3,238,991 | 3,663,117 |
+| Sum | 999,823 | 3,915,746 |
+| Minimum | 1,020,127 | 3,785,659 |
+| Maximum | 1,035,990 | 3,790,824 |
+
+Grouped count also used 3,238,992 instructions after upgrade. The benchmark's
+all-category filter is `category >= 0` on a required Nat64. The 0.26.1
+count planner selected the category index and visited every owner. The local
+planner change keeps a primary scan for this full-domain comparison. The same
+settled grouped count takes 989,156 instructions (69.5% fewer than 0.26.1).
+With residual amount thresholds of 700 and 999, it takes 918,186 and 911,365.
+All five category-equality cases remain within 0.3% of their 0.26.1 costs.
+The aggregate benchmark Wasm grew by 120 raw bytes (104 code-section bytes).
+These measurements use the same 32-row population and do not establish a
+selectivity threshold for larger datasets.
+
+Selecting a complete unique key for synchronous sums and extrema adds 370
+bytes to the same benchmark Wasm relative to the full-domain fix. None of its
+24 sum/min/max selections supplies a complete unique key. Settled instructions
+rose by less than 0.07% across those controls. A separate native query witness
+uses a present-only unique index and a one-candidate budget. A hit fetches one
+owner, a miss fetches none, and a residual mismatch discards the fetched row.
+
+On the same 32-row fixture, reusing the scanner's comparison buffer and
+overwriting equal-sized winners reduced four-group minimum from 1,020,382 to
+1,010,995 instructions and maximum from 1,036,245 to 1,017,278. Single-match
+extrema cost about 0.02% more. The benchmark Wasm grew by 159 raw bytes
+(115 code-section bytes) relative to the unique-lookup build above. All 32
+comparison cases passed before and after upgrade.
+
+Releasing comparison keys at finalization and using a stable sort for aggregate
+order reduced the four-group count/sum/min/max queries by 522–734 instructions
+relative to the extrema-buffer build. The aggregate benchmark Wasm shrank by
+25 raw bytes (23 code-section bytes). In the separate installed job envelope,
+32 groups with tied counts produced 25 qualifying groups. Its first successful
+three-row page took 1,281,492 instructions versus 1,313,935, and replay after
+upgrade preserved the same page. The measured calls include job handling.
 
 Measured 2026-11-16. Query instruction intervals include open/session creation,
 admission, execution and output mapping, excluding transport encode/decode.

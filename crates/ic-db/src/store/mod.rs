@@ -567,6 +567,10 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier failures after the first mutation trap; never catch and continue an IC commit.
     pub fn commit(&mut self, batch: Batch) -> Result<(), Error> {
+        observe!(commit, { self.commit_batch(batch) })
+    }
+
+    fn commit_batch(&mut self, batch: Batch) -> Result<(), Error> {
         let mut targets = BTreeSet::new();
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();

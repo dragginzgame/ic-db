@@ -28,8 +28,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        self.start_group_value(jobs, now, expires, (plan, Reducer::Keys(0)))
+        observe!(start, {
+            let plan = self.aggregate_plan(Some(K::definition()), true)?;
+            self.start_group_value(jobs, now, expires, (plan, Reducer::Keys(0)))
+        })
     }
 
     /// Advance a DISTINCT job or page its completed result. Pass `None` until a
@@ -50,18 +52,20 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
         after: Option<&'a GroupCursor>,
     ) -> Result<JobStep<GroupPage<K>>, Error> {
-        if self.request.groups.page.is_some() {
-            return Err(Error::InvalidQuery);
-        }
-        let page_size = self.request.rows;
-        let query = self.group_page(page_size, after);
-        let plan = query.aggregate_plan(Some(K::definition()), true)?;
-        let job = query.retained_groups(plan, Reducer::Keys(0), None)?;
-        query.resume_groups(jobs, handle, sequence, now, job, |bytes, result| {
-            if !matches!(result, Completed::Key) {
-                return Err(Error::Corrupt);
+        observe!(resume, {
+            if self.request.groups.page.is_some() {
+                return Err(Error::InvalidQuery);
             }
-            decode_record(bytes)
+            let page_size = self.request.rows;
+            let query = self.group_page(page_size, after);
+            let plan = query.aggregate_plan(Some(K::definition()), true)?;
+            let job = query.retained_groups(plan, Reducer::Keys(0), None)?;
+            query.resume_groups(jobs, handle, sequence, now, job, |bytes, result| {
+                if !matches!(result, Completed::Key) {
+                    return Err(Error::Corrupt);
+                }
+                decode_record(bytes)
+            })
         })
     }
 
@@ -79,19 +83,21 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        let (plan, mut reducer) = self.distinct_plan::<K>()?;
-        if self.request.bytes < 8 {
-            return Err(Error::RowTooLarge);
-        }
+        observe!(start, {
+            let (plan, mut reducer) = self.distinct_plan::<K>()?;
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
 
-        start(
-            jobs,
-            binding(plan.binding),
-            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
-            now,
-            expires,
-            &Accumulator::Scalar(&mut reducer),
-        )
+            start(
+                jobs,
+                binding(plan.binding),
+                self.db.read()?.revision_by_id(E::SCHEMA.id)?,
+                now,
+                expires,
+                &Accumulator::Scalar(&mut reducer),
+            )
+        })
     }
 
     /// Advance DISTINCT count under scalar jobs' work/retry/revision/expiry rules.
@@ -110,23 +116,25 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
-        let (plan, mut reducer) = self.distinct_plan::<K>()?;
-        let mut record = jobs.load(handle)?;
-        let bytes = self.request.bytes;
-        let changed = prepare(
-            &*self.db.read()?,
-            E::SCHEMA,
-            self.request,
-            &plan,
-            Accumulator::Scalar(&mut reducer),
-            &mut record,
-            binding(plan.binding),
-            sequence,
-            now,
-        )?;
+        observe!(resume, {
+            let (plan, mut reducer) = self.distinct_plan::<K>()?;
+            let mut record = jobs.load(handle)?;
+            let bytes = self.request.bytes;
+            let changed = prepare(
+                &*self.db.read()?,
+                E::SCHEMA,
+                self.request,
+                &plan,
+                Accumulator::Scalar(&mut reducer),
+                &mut record,
+                binding(plan.binding),
+                sequence,
+                now,
+            )?;
 
-        record.finish_and_save(jobs, handle, changed, bytes, || {
-            Ok((reducer.finish()?.into_count()?, 8))
+            record.finish_and_save(jobs, handle, changed, bytes, || {
+                Ok((reducer.finish()?.into_count()?, 8))
+            })
         })
     }
 
@@ -145,12 +153,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        if self.request.groups.page.is_some() {
-            return Err(Error::InvalidQuery);
-        }
-        let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+        observe!(start, {
+            if self.request.groups.page.is_some() {
+                return Err(Error::InvalidQuery);
+            }
+            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
 
-        self.start_groups(jobs, now, expires, plan, reducer, None)
+            self.start_groups(jobs, now, expires, plan, reducer, None)
+        })
     }
 
     /// Advance grouped DISTINCT counts with grouped jobs' revision/retry/expiry rules.
@@ -170,10 +180,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
-        let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-        let job = self.retained_groups(plan, reducer, None)?;
+        observe!(resume, {
+            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+            let job = self.retained_groups(plan, reducer, None)?;
 
-        self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
+            self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
+        })
     }
 }
 

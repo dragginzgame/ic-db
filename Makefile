@@ -69,6 +69,8 @@ check:
 
 test:
 	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build,ic-db/test-support
+	cargo test --locked -p ic-db --features metrics --test queries --test jobs metrics_
+	cargo test --locked -p ic-db --features logging --test queries logging_
 
 clippy:
 	cargo clippy --locked -p ic-db -p ic-db-macros --features ic-db/build,ic-db/test-support --all-targets -- -D warnings

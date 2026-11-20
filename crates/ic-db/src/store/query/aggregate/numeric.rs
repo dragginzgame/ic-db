@@ -29,9 +29,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn sum<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Sum)?;
+        observe!(query, {
+            let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Sum)?;
 
-        self.scalar_value(&plan, reducer)
+            self.scalar_value(plan, reducer)
+        })
     }
 
     /// Sum one integer, Decimal or finite float operand per exact grouping record, retaining absent keys
@@ -46,9 +48,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_sum<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
+        observe!(query, {
+            let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
 
-        self.group_values(&plan, reducer)
+            self.group_values(plan, reducer)
+        })
     }
 
     /// Average present values into a single-field record with matching name and optionality.
@@ -64,9 +68,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn avg<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Average)?;
+        observe!(query, {
+            let (plan, reducer) = self.numeric_plan::<R>(None, Operation::Average)?;
 
-        self.scalar_value(&plan, reducer)
+            self.scalar_value(plan, reducer)
+        })
     }
 
     /// Average per group using [`Self::avg`]'s result type and rounding contract.
@@ -78,9 +84,12 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_avg<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
+        observe!(query, {
+            let (plan, reducer) =
+                self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
 
-        self.group_values(&plan, reducer)
+            self.group_values(plan, reducer)
+        })
     }
 
     // One admission path for synchronous, grouped and retained numeric terminals.

@@ -38,7 +38,45 @@
 //! struct States {}
 //! ```
 
+#[cfg(feature = "logging")]
+pub mod logging;
+#[cfg(feature = "metrics")]
+pub mod metrics;
+
+// Wrap complete operation results, including early admission refusals. With
+// metrics disabled the original body executes directly.
+#[cfg(feature = "metrics")]
+macro_rules! observe_metrics {
+    ($kind:ident, $body:block) => {
+        crate::metrics::$kind(|| $body)
+    };
+}
+#[cfg(not(feature = "metrics"))]
+macro_rules! observe_metrics {
+    ($kind:ident, $body:block) => {
+        $body
+    };
+}
+
+// Both observers share the public terminal boundary. Early returns and `?`
+// inside the operation must reach enabled observers exactly once.
+macro_rules! observe {
+    ($kind:ident, $body:block) => {{
+        #[cfg(feature = "logging")]
+        {
+            crate::logging::observe(concat!("ic-db.", stringify!($kind)), || {
+                observe_metrics!($kind, $body)
+            })
+        }
+        #[cfg(not(feature = "logging"))]
+        {
+            observe_metrics!($kind, $body)
+        }
+    }};
+}
+
 mod canister_session;
+mod clock;
 #[doc(hidden)]
 mod codec;
 mod date;

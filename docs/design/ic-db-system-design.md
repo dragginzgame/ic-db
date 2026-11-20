@@ -2227,7 +2227,7 @@ not automatic inclusion or removal. Nothing here authorizes changes to IcyDB.
 | Endpoints, guards and lifecycle composition | Canic adapter owned | Direct library use and separately composed Canic endpoints |
 | Wasm build and PocketIC infrastructure | Build mechanics, upstream client and prepared external launcher | No duplicate provisioning/cache/server manager |
 | CLI/schema inspection and queries | `make db` installs; `db` runs | Thin no-SQL client, shared fluent semantics, bounded output, Canic-owned remote integration |
-| Integrity/error/metrics reporting | Initial bounded essentials | Corruption and incomplete operation produce useful diagnostics |
+| Integrity/error/metrics reporting | Optional standalone or host-owned heap counters for synchronous fluent queries, commits and retained job calls | Successful synchronous results report work and encoded bytes. Query-message observations expire at message end. See [recorder scope](../../README.md#observe-database-operations). Optional [failure logs](../../README.md#read-operational-logs) use the same operation boundaries and one bounded standalone or host-owned destination. |
 | Old formats, cancelled plans and compatibility aliases | Historical research only | Unsupported bytes rejected intact; no legacy read path |
 | Historical implementation-shape tests | Do not port mechanically | Retain requirements and independent semantic oracles |
 
@@ -3233,7 +3233,7 @@ inspect later rows after a match. The result occupies one logical byte. Output
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
 every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
+prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
 residual predicates in `db/query/plan/planner/index_select/mod.rs`. An existence check on an index hit
 fetches and validates its owner. An empty prefix range returns false
@@ -3339,8 +3339,10 @@ Counts and extrema share aggregate admission and the existing scanner through
 a closed internal accumulator choice. Extrema retain one ordered component key
 (at most 4096 logical bytes) and one encoded projected value (bounded by the
 4096-byte source row), with temporary candidate encoding bounded by that same
-row contract. This is not a physical peak-memory measurement. Only winning
-values are copied and only the completed result is decoded at the typed boundary.
+row contract. This is not a physical peak-memory measurement. Each present operand uses the scanner's temporary component buffer for comparison.
+Only winners are copied. Equal-sized replacements overwrite the retained key and
+value in place. Other replacements charge their own buffers against the group
+allowance. Only the completed result is decoded at the typed boundary.
 The output byte allowance applies after complete scanning, so a large provisional
 winner cannot reject a smaller final result. `None` has zero payload bytes;
 transport option framing is outside this metric. Work exhaustion refuses even
@@ -3399,7 +3401,11 @@ keys; absent extrema sort first ascending, last descending. The last order call
 wins. Input work and retained group/state caps still apply to groups later excluded;
 only selected output records consume output bytes. Synchronous terminals add no
 cursor or implicit retry; retained jobs keep their completed-output pagination.
-At most 32 groups reach finalization, allowing one bounded in-memory sort.
+At most 32 aggregate groups reach finalization. The grouping map yields records
+in canonical key order, so finalization can release each encoded comparison key.
+Filtering keeps that order. A stable sort by completed value preserves it for
+ties in either aggregate direction. Every group still finalizes and passes its
+state check before filtering or applying the output limit.
 Admitted predicate keys are separately bounded to eight keys of at most 4096
 logical bytes; source literals also retain the row-byte bound before encoding.
 
@@ -3463,6 +3469,12 @@ absent/zero results, source corruption and admission/work/output refusal. Wasm
 checks sums across upgrade and an exact widened total beyond u64, with unchanged
 backing during queries. Retained scalar/grouped sums reuse this arithmetic under
 the job contract above.
+
+Synchronous scalar and grouped sums, averages and extrema reuse the row
+planner's unique lookup when mandatory equalities fix an entire unique key.
+At most one owner can contribute. Residual predicates and row validation still
+run on a hit. Explicit access selection and primary-key equality keep priority.
+Retained jobs use their existing traversal so saved cursors remain resumable.
 
 **Finite float aggregates.** For Float32 and Float64 inputs, sum the exact stored
 values and round once to the input width, nearest with ties to even. Ignore absent

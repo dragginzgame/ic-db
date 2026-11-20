@@ -143,7 +143,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_count_job(jobs, now, expires, None)
+        observe!(start, { self.start_count_job(jobs, now, expires, None) })
     }
 
     /// Retain the count of present values in a named top-level field, of any stored
@@ -160,7 +160,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_count_job(jobs, now, expires, Some(field))
+        observe!(start, {
+            self.start_count_job(jobs, now, expires, Some(field))
+        })
     }
 
     fn start_count_job(
@@ -204,7 +206,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
-        self.resume_count_job(jobs, handle, sequence, now, None)
+        observe!(resume, {
+            self.resume_count_job(jobs, handle, sequence, now, None)
+        })
     }
 
     /// Advance the present-field count with `resume_count`'s bounds, revision,
@@ -221,7 +225,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
-        self.resume_count_job(jobs, handle, sequence, now, Some(field))
+        observe!(resume, {
+            self.resume_count_job(jobs, handle, sequence, now, Some(field))
+        })
     }
 
     fn resume_count_job(
@@ -266,7 +272,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_numeric::<R>(jobs, now, expires, Operation::Sum)
+        observe!(start, {
+            self.start_numeric::<R>(jobs, now, expires, Operation::Sum)
+        })
     }
 
     /// Advance exact sum under count's work/retry/invalidation contract. Check the
@@ -284,7 +292,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
-        self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Sum)
+        observe!(resume, {
+            self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Sum)
+        })
     }
 
     /// Retain an exact finite float or integer/Decimal average. R declares a matching float or a Decimal field
@@ -301,7 +311,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_numeric::<R>(jobs, now, expires, Operation::Average)
+        observe!(start, {
+            self.start_numeric::<R>(jobs, now, expires, Operation::Average)
+        })
     }
 
     /// Advance average under count's bounded work/retry/invalidation contract.
@@ -320,7 +332,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
-        self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Average)
+        observe!(resume, {
+            self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Average)
+        })
     }
 
     fn start_numeric<R: Value>(

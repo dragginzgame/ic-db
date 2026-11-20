@@ -17,6 +17,8 @@ ctor = { version = "1.0.14", default-features = false, features = ["std"] }
 ethnum = { version = "1.5.3", default-features = false, features = ["serde"] }
 getrandom = "0.4.3"
 ic-db-macros = { version = "=0.26.1", path = "crates/ic-db-macros" }
+ic-logging = { version = "0.25.19", default-features = false }
+ic-metrics = { version = "0.30.20", default-features = false }
 ic-platform-runtime = { version = "0.23.22", default-features = false }
 ic-platform-types = { version = "0.21.4", default-features = false }
 ic-storage = "0.78.7"

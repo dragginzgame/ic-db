@@ -1,6 +1,10 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
 
 mod blobs;
+#[cfg(feature = "logging")]
+mod logging;
+#[cfg(feature = "metrics")]
+mod metrics;
 mod sorting;
 
 use ic_db::design::prelude::*;
@@ -6440,6 +6444,87 @@ fn exact_counts_and_groups_complete_before_output_limits() {
     );
     assert_eq!(groups.value.iter().map(|g| g.count).sum::<u64>(), 8);
     assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn value_aggregates_seek_one_unique_owner_and_check_residuals() {
+    #[record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 0)))))]
+    struct AverageAmount {}
+
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 21);
+    let query = |key: u64| db.query::<Entry>().eq(Entry::MAYBE, key).work_limit(1);
+    let sum = query(8).sum::<AmountOnly>().unwrap();
+    assert_eq!(
+        (sum.examined, sum.fetched, sum.value.unwrap().amount),
+        (1, 1, 80)
+    );
+    let groups = query(8).group_min::<CategoryOnly, AmountOnly>().unwrap();
+    assert_eq!(
+        (groups.examined, groups.fetched, groups.value.len()),
+        (1, 1, 1)
+    );
+    assert_eq!(groups.value[0].value.as_ref().unwrap().amount, 80);
+    let avg = query(8).avg::<AverageAmount>().unwrap();
+    assert_eq!(
+        (
+            avg.examined,
+            avg.fetched,
+            avg.value.unwrap().amount.to_string()
+        ),
+        (1, 1, "80".into())
+    );
+    let broad = db
+        .query::<Entry>()
+        .filter(Entry::CATEGORY, C::Ge, 0_u8)
+        .sum::<AmountOnly>()
+        .unwrap();
+    assert_eq!(
+        (broad.examined, broad.fetched, broad.value.unwrap().amount),
+        (8, 8, 360)
+    );
+    let miss = query(99).max::<AmountOnly>().unwrap();
+    assert_eq!((miss.examined, miss.fetched, miss.value), (0, 0, None));
+    let filtered = query(8)
+        .eq(Entry::CATEGORY, 1_u8)
+        .sum::<AmountOnly>()
+        .unwrap();
+    assert_eq!(
+        (filtered.examined, filtered.fetched, filtered.value),
+        (1, 1, None)
+    );
+    // Both absent rows lie outside the present-only unique index.
+    let absent = db
+        .query::<Entry>()
+        .filter_absent(Entry::MAYBE)
+        .sum::<AmountOnly>()
+        .unwrap();
+    assert_eq!(absent.value.unwrap().amount, 90);
+}
+
+#[test]
+fn grouped_count_prefers_a_restricting_range_over_a_full_domain_bound() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 21);
+    for (comparison, endpoint) in [(C::Ge, u8::MIN), (C::Le, u8::MAX)] {
+        let query = || {
+            db.query::<Entry>()
+                .filter(Entry::CATEGORY, comparison, endpoint)
+        };
+        let groups = query()
+            .filter(Entry::AMOUNT, C::Ge, 80_u64)
+            .work_limit(2)
+            .group_count::<CategoryOnly>()
+            .unwrap();
+        assert_eq!((groups.examined, groups.fetched), (1, 1));
+        assert_eq!(groups.value.len(), 1);
+        assert_eq!(
+            (groups.value[0].key.category, groups.value[0].count),
+            (0, 1)
+        );
+        let count = query().count().unwrap();
+        assert_eq!((count.value, count.fetched), (8, 0));
+    }
 }
 
 #[test]

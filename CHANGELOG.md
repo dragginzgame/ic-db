@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.26.2] - Unreleased
+
+### Logging
+
+- The optional `logging` feature records bounded, payload-free failure diagnostics.
+  Standalone callers can page through local entries. A Canic adapter can route
+  them directly to its existing operator log.
+
+### Metrics
+
+- The optional `metrics` feature records fluent query work, result rows and
+  bytes, commits, retained aggregate calls and returned failures. Standalone
+  callers can read a heap snapshot, and Canic adapters can attach shared storage.
+
+### Queries
+
+- Completed groups release their encoded comparison keys during finalization.
+  Ordering by aggregate value preserves ascending group-key order for ties,
+  including across retained result pages.
+- Scalar and grouped minima and maxima reuse comparison storage during each
+  scan. Equal-sized winners reuse the retained key and value buffers, including
+  during a retained job step.
+- Synchronous scalar and grouped sums, averages, minima and maxima now seek a
+  complete unique key supplied by equality filters. A hit needs one owner read,
+  and a missing key needs none. Other filters still apply to the owner.
+- Grouped counts can stay on the primary scan when a secondary-index bound
+  spans the entire fixed-width field, such as `category >= 0` for a Nat64.
+  A selective range on another index can still narrow the scan. Scalar counts
+  retain their key-only path when index keys prove every filter.
+
 ## [0.26.1] - 2026-11-20
 
 ### Queries

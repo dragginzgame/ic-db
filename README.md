@@ -945,6 +945,75 @@ and then call `outer.commit(batch)?`. If you bind a read guard to a variable,
 drop it before committing. Keep handles within one synchronous execution and
 reacquire from the host after an `await`. [Native fixture example](crates/ic-db/tests/sessions.rs)
 
+## Observe database operations
+
+Enable the `metrics` feature on `ic-db`. Standalone programs can read
+`ic_db::metrics::snapshot()` directly. All database handles in the canister
+share the recorder. Each field is an IC Metrics measurement counter with a
+saturating `.total()` and a `.total_overflowed()` flag.
+
+A Canic adapter can attach its own recorder
+during initialization, before the first database operation:
+
+```rust
+use canic::metrics::store;
+use ic_db::metrics::{self, MetricsStorage, StorageConflict};
+
+struct DatabaseSource;
+impl store::Source for DatabaseSource {
+    type Storage = MetricsStorage;
+}
+
+fn initialize() -> Result<(), StorageConflict> {
+    metrics::initialize_with_metrics(store::open::<DatabaseSource>())
+}
+```
+
+The adapter can read `store::get::<DatabaseSource>()` and report its
+`.snapshot()`. Reattaching the same recorder preserves its counters. A second
+recorder is refused once recording begins.
+
+- Synchronous fluent terminals count calls and returned errors. Successful
+  terminals contribute candidates examined, rows fetched, results returned
+  and encoded result bytes. A scalar count returns one value, even when it
+  counts thousands of rows. Direct key lookups and maintenance are outside
+  these totals.
+- Commits count batch submissions and returned failures. Retained aggregate
+  starts and resumes have their own call and failure counters. Their cumulative
+  progress is available on the job itself.
+- Counters live in heap memory. On the IC, observations inside a query call
+  are visible during that execution and discarded afterward. A trapped update
+  rolls back its counters. Upgrades start a fresh recorder. Use host or replica
+  telemetry for query traffic across messages. Encoded result bytes measure
+  DB output size; stable allocation and live entity cardinality have their
+  own storage measurements.
+
+### Read operational logs
+
+Enable the independent `ic-db/logging` feature for bounded failure diagnostics.
+A standalone database records returned fluent query, commit and retained-job
+start/resume errors. Use `ic_db::logging::page(None)` for the newest eight
+entries and pass `next_before` to read older entries. The recorder retains up
+to 128 entries within an 8 KiB text budget. Entries contain only the timestamp,
+severity, operation source and a fixed error description. Successful operations
+are counted by the separate metrics feature.
+
+A Canic adapter with `canic/logging` enabled can forward the same events to
+its own operator log. During install and after upgrade, initialize the host
+logger and select it once, before the first DB failure:
+
+```rust
+fn initialize_logging() -> Result<(), ic_db::logging::AlreadyInitialized> {
+    canic::logging::initialize();
+    ic_db::logging::initialize_with_logger(canic::logging::record)
+}
+```
+
+Read forwarded entries through the host. Both destinations use incarnation-local
+heap memory. A failure returned during an update can leave a diagnostic when the
+message commits. A query message discards its entries on return, and a trap
+rolls back entries produced in that execution.
+
 ## Test an application database on the host
 
 Enable the `test-support` feature on the application’s `ic-db` dev-dependency.

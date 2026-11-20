@@ -14,6 +14,8 @@ ignored = ["toko-tooling"]
 [features]
 build = ["dep:ctor"]
 test-support = []
+logging = ["dep:ic-logging"]
+metrics = ["dep:ic-metrics"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 ctor = { workspace = true, optional = true }
@@ -25,6 +27,8 @@ ic-platform-runtime = { workspace = true, features = ["raw-rand"] }
 [dependencies]
 ethnum.workspace = true
 ic-db-macros.workspace = true
+ic-logging = { workspace = true, optional = true }
+ic-metrics = { workspace = true, optional = true }
 ic-platform-types.workspace = true
 ic-storage.workspace = true
 memchr.workspace = true

@@ -176,6 +176,23 @@ fn unique_lookup<'a>(
     Ok(None)
 }
 
+// Synchronous value aggregates may seek one proven owner without relying on
+// selectivity estimates. Retained jobs keep the traversal bound to their cursor.
+pub(super) fn select_unique_aggregate_path<'a>(
+    entity: &'a EntitySchema,
+    request: &Request<'_>,
+    plan: &mut super::Plan<'a>,
+) -> Result<(), Error> {
+    if plan.index.is_none()
+        && !request.predicates.is_empty()
+        && equality(request, entity.primary_key).is_none()
+        && let Some(path) = unique_lookup(entity, request)?
+    {
+        plan.use_index(entity, path);
+    }
+    Ok(())
+}
+
 // Only supplied prefix components have a fixed value.
 fn prefix_value<'a>(
     fields: &[&str],
@@ -188,11 +205,13 @@ fn prefix_value<'a>(
         .find_map(|(name, value)| (*name == field).then_some(*value))
 }
 
-/// Select the aggregate input path and report whether its keys prove every predicate.
+/// Select the aggregate input path. Predicate coverage saves owner reads only
+/// when the terminal can consume keys alone.
 pub(super) fn select_aggregate_path<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
+    keys_suffice: bool,
 ) -> Result<bool, Error> {
     if let Some((_, values)) = &request.index {
         return Ok(plan.index.is_some_and(|index| {
@@ -227,14 +246,15 @@ pub(super) fn select_aggregate_path<'a>(
         let Some(path) = automatic_prefix(entity, index, &values)? else {
             continue;
         };
-        let covered = covers_keys(
-            entity,
-            request,
-            plan,
-            Some(index),
-            &values,
-            path.prefix.len(),
-        );
+        let covered = keys_suffice
+            && covers_keys(
+                entity,
+                request,
+                plan,
+                Some(index),
+                &values,
+                path.prefix.len(),
+            );
         let single_owner = index.is_unique_lookup(path.fixed);
         // The exact key proves exhaustion in one visit. If it also covers
         // every predicate, no other candidate can improve the work bound.

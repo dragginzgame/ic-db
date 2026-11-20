@@ -129,8 +129,27 @@ pub(super) fn has_secondary_bound(
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
 ) -> bool {
-    plan.clauses()
-        .any(|clause| bounds_index_clause(entity, path, clause))
+    plan.clauses().any(|clause| {
+        if let [term] = clause
+            && let TermOperand::Literal { bytes, .. } = &term.operand
+        {
+            let field = &entity.fields[term.position];
+            // The lowest/highest possible fixed-width key excludes no candidates
+            // at an inclusive bound. An optional field has a separate absence tag.
+            if !field.optional
+                && crate::key::fixed_width(crate::key::operand_type(field.value))
+                    == Some(bytes.len())
+                && match term.comparison {
+                    Comparison::Ge => bytes.iter().all(|&b| b == 0),
+                    Comparison::Le => bytes.iter().all(|&b| b == u8::MAX),
+                    _ => false,
+                }
+            {
+                return false;
+            }
+        }
+        bounds_index_clause(entity, path, clause)
+    })
 }
 
 // A disjunction of literal equalities on one key component fits one inclusive scan between

@@ -6245,3 +6245,27 @@ fn numeric_results_preserve_exact_units_across_job_steps() {
         .unwrap();
     assert!(matches!(last.outcome, JobOutcome::Complete(Some(value)) if value.price == price(124)));
 }
+
+#[cfg(feature = "metrics")]
+#[test]
+fn metrics_job_calls_keep_lifecycle_separate_from_synchronous_queries() {
+    let runtime = host(VectorMemory::default());
+    let (db, mut jobs) = create_stores(&runtime, schema());
+    let handle = db
+        .query::<Row>()
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    db.query::<Row>()
+        .resume_count(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(
+        db.query::<Row>()
+            .resume_count(&mut jobs, &handle, 99, time(2))
+            .is_err()
+    );
+    let totals = ic_db::metrics::snapshot();
+    assert_eq!(totals.job_starts.total(), 1);
+    assert_eq!(totals.job_resumes.total(), 2);
+    assert_eq!(totals.job_failures.total(), 1);
+    assert_eq!(totals.queries.total(), 0);
+}

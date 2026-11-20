@@ -137,6 +137,8 @@ dependencies = [
  "getrandom",
  "ic-db",
  "ic-db-macros",
+ "ic-logging",
+ "ic-metrics",
  "ic-platform-runtime",
  "ic-platform-types",
  "ic-storage",
@@ -156,6 +158,18 @@ dependencies = [
  "syn",
  "toko-tooling",
 ]
+
+[[package]]
+name = "ic-logging"
+version = "0.25.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c00d1b09ef3d794150b9b14053666d3963a7d6cfacc82e2bd6ef46e9af4e1da"
+
+[[package]]
+name = "ic-metrics"
+version = "0.30.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b81df66fe4067fdc703b2a70ba076f8cb2c560a2f5e6333200048c1dcda3a0ad"
 
 [[package]]
 name = "ic-platform"

@@ -1,15 +1,6 @@
-//! Native clock and entropy for ULID issuance outside an IC execution.
+//! Native entropy for ULID issuance outside an IC execution.
 
 use super::UlidEntropyError;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-pub(super) fn time() -> u64 {
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
-}
 
 pub(super) fn identity() -> ([u8; 32], u64) {
     thread_local! {

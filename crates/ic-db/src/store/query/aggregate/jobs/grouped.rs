@@ -34,7 +34,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_group_count_job::<K>(jobs, now, expires, None)
+        observe!(start, {
+            self.start_group_count_job::<K>(jobs, now, expires, None)
+        })
     }
 
     /// Retain present-field counts per exact key record. Any top-level stored field
@@ -51,7 +53,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_group_count_job::<K>(jobs, now, expires, Some(field))
+        observe!(start, {
+            self.start_group_count_job::<K>(jobs, now, expires, Some(field))
+        })
     }
 
     fn start_group_count_job<K: Value>(
@@ -86,7 +90,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
-        self.resume_group_count_job::<K>(jobs, handle, sequence, now, None)
+        observe!(resume, {
+            self.resume_group_count_job::<K>(jobs, handle, sequence, now, None)
+        })
     }
 
     /// Advance grouped present-field counts with `resume_group_count`'s lifecycle.
@@ -104,7 +110,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
-        self.resume_group_count_job::<K>(jobs, handle, sequence, now, Some(field))
+        observe!(resume, {
+            self.resume_group_count_job::<K>(jobs, handle, sequence, now, Some(field))
+        })
     }
 
     fn resume_group_count_job<K: Value>(
@@ -134,7 +142,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Sum)
+        observe!(start, {
+            self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Sum)
+        })
     }
 
     /// Advance grouped sums; all-absent groups have `None`, present zero is a value.
@@ -152,7 +162,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
-        self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Sum)
+        observe!(resume, {
+            self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Sum)
+        })
     }
 
     /// Retain grouped averages, saving exact totals and each group's present count.
@@ -168,7 +180,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Average)
+        observe!(start, {
+            self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Average)
+        })
     }
 
     /// Advance grouped averages with `resume_group_sum`'s complete-input contract.
@@ -185,7 +199,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
-        self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Average)
+        observe!(resume, {
+            self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Average)
+        })
     }
 
     fn start_group_numeric<K: Value, R: Value>(

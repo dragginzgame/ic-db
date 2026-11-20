@@ -245,7 +245,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn min<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        self.extremum(false)
+        observe!(query, { self.extremum(false) })
     }
 
     /// Maximum present value, with the same types, bounds and empty-input behavior
@@ -255,13 +255,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn max<R: Value>(self) -> Result<Aggregate<Option<R>>, Error> {
-        self.extremum(true)
+        observe!(query, { self.extremum(true) })
     }
 
     fn extremum<R: Value>(self, maximum: bool) -> Result<Aggregate<Option<R>>, Error> {
         let (plan, reducer) = self.extremum_plan::<R>(maximum)?;
 
-        self.scalar_value(&plan, reducer)
+        self.scalar_value(plan, reducer)
     }
 
     fn extremum_plan<R: Value>(&self, maximum: bool) -> Result<(Plan<'a>, Reducer), Error> {
@@ -277,14 +277,15 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn scalar_value<R: Value>(
         self,
-        plan: &Plan<'_>,
+        mut plan: Plan<'_>,
         mut reducer: Reducer,
     ) -> Result<Aggregate<Option<R>>, Error> {
+        super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
         let page = execute(
             &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
-            plan,
+            &plan,
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
         let mut output_bytes = 0;
@@ -323,7 +324,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_min<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        self.group_extrema(false)
+        observe!(query, { self.group_extrema(false) })
     }
 
     /// Maximum present operand per group, with the contract of [`Self::group_min`].
@@ -332,7 +333,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn group_max<K: Value, R: Value>(self) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        self.group_extrema(true)
+        observe!(query, { self.group_extrema(true) })
     }
 
     fn group_extrema<K: Value, R: Value>(
@@ -341,7 +342,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         let (plan, initial) = self.group_extremum_plan::<K, R>(maximum)?;
 
-        self.group_values(&plan, initial)
+        self.group_values(plan, initial)
     }
 
     fn group_extremum_plan<K: Value, R: Value>(
@@ -358,10 +359,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn group_values<K: Value, R: Value>(
         self,
-        plan: &Plan<'_>,
+        mut plan: Plan<'_>,
         initial: Reducer,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
-        let (groups, page) = self.grouped(plan, initial)?;
+        super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
+        let (groups, page) = self.grouped(&plan, initial)?;
         let (value, output_bytes) = group_output(
             groups,
             self.request.rows,
@@ -390,22 +392,24 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
-        let mut plan = self.aggregate_plan(None, false)?;
-        self.select_aggregate_row_path(&mut plan)?;
-        let mut found = false;
-        let page = execute(
-            &self.db.read()?.map,
-            E::SCHEMA,
-            &self.request,
-            &plan,
-            Some(Accumulator::Exists(&mut found)),
-        )?;
+        observe!(query, {
+            let mut plan = self.aggregate_plan(None, false)?;
+            self.select_aggregate_row_path(&mut plan)?;
+            let mut found = false;
+            let page = execute(
+                &self.db.read()?.map,
+                E::SCHEMA,
+                &self.request,
+                &plan,
+                Some(Accumulator::Exists(&mut found)),
+            )?;
 
-        Ok(Aggregate {
-            value: found,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes: 1,
+            Ok(Aggregate {
+                value: found,
+                examined: page.examined,
+                fetched: page.fetched,
+                output_bytes: 1,
+            })
         })
     }
 
@@ -426,34 +430,36 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn count(self) -> Result<Aggregate<u64>, Error> {
-        if self.request.bytes < 8 {
-            return Err(Error::RowTooLarge);
-        }
-        let mut plan = self.aggregate_plan(None, false)?;
-        if self.request.predicates.is_empty() && self.request.index.is_none() {
-            return Ok(Aggregate {
-                value: self.db.read()?.cardinality::<E>()?,
-                examined: 0,
-                fetched: 0,
-                output_bytes: 8,
-            });
-        }
-        if plan.index.is_none()
-            && let Some(count) = self.count_members(&plan)?
-        {
-            return Ok(count);
-        }
-        if super::order::select_aggregate_path(E::SCHEMA, &self.request, &mut plan)? {
-            return self.count_keys(&plan);
-        }
-        if plan.index.is_some()
-            && let Some(count) = self.count_members(&plan)?
-        {
-            return Ok(count);
-        }
-        let reducer = self.count_reducer(None)?;
+        observe!(query, {
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
+            let mut plan = self.aggregate_plan(None, false)?;
+            if self.request.predicates.is_empty() && self.request.index.is_none() {
+                return Ok(Aggregate {
+                    value: self.db.read()?.cardinality::<E>()?,
+                    examined: 0,
+                    fetched: 0,
+                    output_bytes: 8,
+                });
+            }
+            if plan.index.is_none()
+                && let Some(count) = self.count_members(&plan)?
+            {
+                return Ok(count);
+            }
+            if super::order::select_aggregate_path(E::SCHEMA, &self.request, &mut plan, true)? {
+                return self.count_keys(&plan);
+            }
+            if plan.index.is_some()
+                && let Some(count) = self.count_members(&plan)?
+            {
+                return Ok(count);
+            }
+            let reducer = self.count_reducer(None)?;
 
-        self.scalar_count_value(&plan, reducer)
+            self.scalar_count_value(&plan, reducer)
+        })
     }
 
     /// Count by validating each visited row, including its selected index entry.
@@ -461,7 +467,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and resource errors as [`Self::count`], and
     /// reports corruption encountered during traversal.
     pub fn count_validated(self) -> Result<Aggregate<u64>, Error> {
-        self.scalar_count(None)
+        observe!(query, { self.scalar_count(None) })
     }
 
     /// Count physical entries in the range selected by `using_index` and its
@@ -476,15 +482,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Malformed supplier storage can trap during traversal.
     pub fn count_index_entries(self) -> Result<Aggregate<u64>, Error> {
-        if self.request.index.is_none() || !self.request.predicates.is_empty() {
-            return Err(Error::InvalidQuery);
-        }
-        if self.request.bytes < 8 {
-            return Err(Error::RowTooLarge);
-        }
-        let plan = self.aggregate_plan(None, false)?;
+        observe!(query, {
+            if self.request.index.is_none() || !self.request.predicates.is_empty() {
+                return Err(Error::InvalidQuery);
+            }
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
+            let plan = self.aggregate_plan(None, false)?;
 
-        self.count_keys(&plan)
+            self.count_keys(&plan)
+        })
     }
 
     fn count_members(&self, plan: &Plan<'_>) -> Result<Option<Aggregate<u64>>, Error> {
@@ -538,7 +546,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn count_field(self, field: &str) -> Result<Aggregate<u64>, Error> {
-        self.scalar_count(Some(field))
+        observe!(query, { self.scalar_count(Some(field)) })
     }
 
     /// Count distinct projected tuples, including absent values. An indexed filter can narrow the input.
@@ -550,13 +558,15 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn count_distinct<K: Value>(self) -> Result<Aggregate<u64>, Error> {
-        if self.request.bytes < 8 {
-            return Err(Error::RowTooLarge);
-        }
-        let (mut plan, reducer) = self.distinct_plan::<K>()?;
-        self.select_aggregate_row_path(&mut plan)?;
+        observe!(query, {
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
+            let (mut plan, reducer) = self.distinct_plan::<K>()?;
+            self.select_aggregate_row_path(&mut plan)?;
 
-        self.scalar_count_value(&plan, reducer)
+            self.scalar_count_value(&plan, reducer)
+        })
     }
 
     fn distinct_plan<K: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
@@ -568,7 +578,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
         if plan.index.is_none() {
-            super::order::select_aggregate_path(E::SCHEMA, &self.request, plan)?;
+            super::order::select_aggregate_path(E::SCHEMA, &self.request, plan, false)?;
         }
 
         Ok(())
@@ -623,7 +633,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn group_count<K: Value>(self) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        self.group_counts(None)
+        observe!(query, { self.group_counts(None) })
     }
 
     /// Count present operand values within each projected group. Groups whose
@@ -638,7 +648,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
         field: &str,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        self.group_counts(Some(field))
+        observe!(query, { self.group_counts(Some(field)) })
     }
 
     /// Count distinct projected `R` tuples within each projected `K` group.
@@ -656,9 +666,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn group_count_distinct<K: Value, R: Value>(
         self,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
+        observe!(query, {
+            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
 
-        self.group_count_values(plan, reducer)
+            self.group_count_values(plan, reducer)
+        })
     }
 
     fn group_distinct_plan<K: Value, R: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
@@ -849,6 +861,7 @@ impl Accumulator<'_> {
         values: &[IndexValue<'_>],
         bytes: &[u8],
         spans: &[(u16, u16)],
+        scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
         match self {
             Self::Exists(found) => {
@@ -856,8 +869,10 @@ impl Accumulator<'_> {
 
                 Ok(())
             }
-            Self::Scalar(state) => state.push(entity, values, bytes, spans, MAX_STATE_BYTES),
-            Self::Groups(state) => state.push(entity, values, bytes, spans),
+            Self::Scalar(state) => {
+                state.push(entity, values, bytes, spans, scratch, MAX_STATE_BYTES)
+            }
+            Self::Groups(state) => state.push(entity, values, bytes, spans, scratch),
         }
     }
 }
@@ -934,6 +949,7 @@ impl Reducer {
         values: &[IndexValue<'_>],
         bytes: &[u8],
         spans: &[(u16, u16)],
+        scratch: &mut Vec<u8>,
         allowance: usize,
     ) -> Result<(), Error> {
         match self {
@@ -967,21 +983,35 @@ impl Reducer {
                 if value == IndexValue::Absent {
                     return Ok(());
                 }
-                let mut key = Vec::new();
-                value.append_component(entity.fields[*position].optional, &mut key);
-                if key.len() > MAX_COMPARISON_KEY {
+                scratch.clear();
+                value.append_component(entity.fields[*position].optional, scratch);
+                if scratch.len() > MAX_COMPARISON_KEY {
                     return Err(Error::Limit);
                 }
-                if selected
-                    .as_ref()
-                    .is_none_or(|(old, _)| if *maximum { key > *old } else { key < *old })
-                {
+                if selected.as_ref().is_none_or(|(old, _)| {
+                    if *maximum {
+                        scratch.as_slice() > old.as_slice()
+                    } else {
+                        scratch.as_slice() < old.as_slice()
+                    }
+                }) {
                     let (start, end) = spans[*position];
-                    if key.capacity() + usize::from(end - start) > allowance {
+                    let output = &bytes[usize::from(start)..usize::from(end)];
+                    if let Some((old_key, old_output)) = selected
+                        && old_key.len() == scratch.len()
+                        && old_output.len() == output.len()
+                    {
+                        // Equal-sized replacement uses the already charged buffers.
+                        old_key.copy_from_slice(scratch);
+                        old_output.copy_from_slice(output);
+                        return Ok(());
+                    }
+                    if scratch.len() + output.len() > allowance {
                         return Err(Error::Limit);
                     }
                     // Copy only a winner, after admitting its replacement charge.
-                    let output = bytes[usize::from(start)..usize::from(end)].to_vec();
+                    let key = scratch.as_slice().to_vec();
+                    let output = output.to_vec();
                     if key.capacity() + output.capacity() > allowance {
                         return Err(Error::Limit);
                     }
@@ -1080,8 +1110,8 @@ impl Groups {
         let mut state_bytes = self.state_bytes;
         let mut rows = self
             .rows
-            .into_iter()
-            .map(|(key, (record, reducer))| {
+            .into_values()
+            .map(|(record, reducer)| {
                 let previous = reducer.retained_bytes();
                 let result = reducer.finish()?;
                 state_bytes = state_bytes - previous + result.retained_bytes();
@@ -1089,10 +1119,10 @@ impl Groups {
                     return Err(Error::Limit);
                 }
 
-                Ok((key, (record, result)))
+                Ok((record, result))
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        rows.retain(|(_, (_, result))| {
+        rows.retain(|(_, result)| {
             let mut scratch = [0; 8];
             let actual = result.result_key(&mut scratch);
 
@@ -1110,20 +1140,19 @@ impl Groups {
             // filtered rows before any output limit or page is selected.
             rows.reverse();
         } else if self.selection.order != GroupOrder::Key {
-            rows.sort_unstable_by(|(ka, (_, a)), (kb, (_, b))| {
+            // Stable sorting preserves the map's ascending key order on equal results.
+            rows.sort_by(|(_, a), (_, b)| {
                 let (mut sa, mut sb) = ([0; 8], [0; 8]);
                 let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
-                let order = if self.selection.order == GroupOrder::AggregateDescending {
+                if self.selection.order == GroupOrder::AggregateDescending {
                     order.reverse()
                 } else {
                     order
-                };
-
-                order.then_with(|| ka.cmp(kb))
+                }
             });
         }
 
-        Ok(rows.into_iter().map(|(_, row)| row).collect())
+        Ok(rows)
     }
 
     fn push(
@@ -1132,6 +1161,7 @@ impl Groups {
         values: &[IndexValue<'_>],
         bytes: &[u8],
         spans: &[(u16, u16)],
+        scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
         let key = comparison_key(entity, self.mask, values)?;
         let count = self.rows.len();
@@ -1141,7 +1171,7 @@ impl Groups {
             Entry::Occupied(mut entry) => {
                 let (_, reducer) = entry.get_mut();
                 let previous = reducer.retained_bytes();
-                reducer.push(entity, values, bytes, spans, available + previous)?;
+                reducer.push(entity, values, bytes, spans, scratch, available + previous)?;
                 self.state_bytes = self.state_bytes - previous + reducer.retained_bytes();
 
                 return Ok(());
@@ -1158,7 +1188,7 @@ impl Groups {
         if let Reducer::Keys(position) = &mut reducer {
             *position = count as u8;
         }
-        reducer.push(entity, values, bytes, spans, available - base)?;
+        reducer.push(entity, values, bytes, spans, scratch, available - base)?;
         let output = copy_projection(bytes, spans, self.mask, size);
         // Map/set nodes and fixed bookkeeping are independently bounded by the
         // group and per-group distinct cardinality caps.

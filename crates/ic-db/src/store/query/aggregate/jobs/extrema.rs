@@ -20,9 +20,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        let admitted = self.group_extremum_plan::<K, R>(false)?;
+        observe!(start, {
+            let admitted = self.group_extremum_plan::<K, R>(false)?;
 
-        self.start_group_value(jobs, now, expires, admitted)
+            self.start_group_value(jobs, now, expires, admitted)
+        })
     }
 
     /// Retain maxima per exact key record with `start_group_min`'s bounds.
@@ -37,9 +39,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        let admitted = self.group_extremum_plan::<K, R>(true)?;
+        observe!(start, {
+            let admitted = self.group_extremum_plan::<K, R>(true)?;
 
-        self.start_group_value(jobs, now, expires, admitted)
+            self.start_group_value(jobs, now, expires, admitted)
+        })
     }
 
     /// Advance grouped minima with the retained revision, retry and expiry contract.
@@ -59,9 +63,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
-        let admitted = self.group_extremum_plan::<K, R>(false)?;
+        observe!(resume, {
+            let admitted = self.group_extremum_plan::<K, R>(false)?;
 
-        self.resume_group_value(jobs, handle, sequence, now, admitted)
+            self.resume_group_value(jobs, handle, sequence, now, admitted)
+        })
     }
 
     /// Advance grouped maxima with `resume_group_min`'s exactness and bounds.
@@ -77,9 +83,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
-        let admitted = self.group_extremum_plan::<K, R>(true)?;
+        observe!(resume, {
+            let admitted = self.group_extremum_plan::<K, R>(true)?;
 
-        self.resume_group_value(jobs, handle, sequence, now, admitted)
+            self.resume_group_value(jobs, handle, sequence, now, admitted)
+        })
     }
 
     /// Retain a minimum over one exact single-field result record, without scanning.
@@ -96,7 +104,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_extremum::<R>(jobs, now, expires, false)
+        observe!(start, {
+            self.start_extremum::<R>(jobs, now, expires, false)
+        })
     }
 
     /// Retain a maximum with `start_min`'s types and bounds. Minimum and maximum
@@ -111,7 +121,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        self.start_extremum::<R>(jobs, now, expires, true)
+        observe!(start, {
+            self.start_extremum::<R>(jobs, now, expires, true)
+        })
     }
 
     /// Advance a retained minimum with `resume_count`'s bounded work, retry,
@@ -132,9 +144,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
-        let (plan, reducer) = self.extremum_plan::<R>(false)?;
+        observe!(resume, {
+            let (plan, reducer) = self.extremum_plan::<R>(false)?;
 
-        self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+            self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+        })
     }
 
     /// Advance a retained maximum with `resume_min`'s exactness and bounds.
@@ -149,9 +163,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         sequence: u64,
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
-        let (plan, reducer) = self.extremum_plan::<R>(true)?;
+        observe!(resume, {
+            let (plan, reducer) = self.extremum_plan::<R>(true)?;
 
-        self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+            self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+        })
     }
 
     fn start_extremum<R: Value>(

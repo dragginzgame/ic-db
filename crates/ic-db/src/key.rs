@@ -431,7 +431,7 @@ impl From<Account> for IndexValue<'_> {
 }
 
 // Schema admission and byte framing share the fixed-width contract here.
-fn fixed_width(field: FieldType) -> Option<usize> {
+pub(crate) fn fixed_width(field: FieldType) -> Option<usize> {
     match field {
         FieldType::Named(link) if unit_enum_len((link.definition)()).is_some() => Some(1),
         FieldType::Nat8 | FieldType::Int8 | FieldType::Bool => Some(1),

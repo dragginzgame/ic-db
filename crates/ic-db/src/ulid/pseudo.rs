@@ -47,7 +47,7 @@ impl SeededUlidGenerator {
     /// # Panics
     /// Traps on exhaustion after at least 2^79 same-millisecond increments.
     pub fn next_id(&mut self) -> Ulid {
-        self.at(platform::time())
+        self.at(crate::clock::time_ns())
     }
 }
 
@@ -97,7 +97,7 @@ impl Ulid {
     /// Panics on suffix exhaustion or if the native OS cannot seed the thread.
     #[must_use]
     pub fn generate_prand() -> Self {
-        generate(platform::time(), platform::identity)
+        generate(crate::clock::time_ns(), platform::identity)
     }
 
     /// Start an owned generator with fresh entropy from the IC or native OS. Later issuance is synchronous.

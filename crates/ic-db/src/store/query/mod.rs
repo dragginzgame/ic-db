@@ -908,6 +908,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch(self) -> Result<QueryPage<E>, Error> {
+        observe!(query, { self.entity_page() })
+    }
+
+    fn entity_page(self) -> Result<QueryPage<E>, Error> {
         fetch_rows(&*self.db.read()?, E::SCHEMA, self.request, None)?.decode_entities()
     }
 
@@ -917,26 +921,28 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and storage errors as `fetch`. Returns `Limit`
     /// if the work budget ends before a match or exhaustion is established.
     pub fn first(self) -> Result<Option<E>, Error> {
-        self.first_with(Self::fetch)
+        self.first_with(Self::entity_page)
     }
 
     /// Return the first projected record in query order.
     /// # Errors
     /// Applies the projection checks of [`Self::fetch_as`] and the work bound of [`Self::first`].
     pub fn first_as<R: Value>(self) -> Result<Option<R>, Error> {
-        self.first_with(Self::fetch_as::<R>)
+        self.first_with(Self::projected_page::<R>)
     }
 
     fn first_with<R>(
         self,
         fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
     ) -> Result<Option<R>, Error> {
-        let mut page = fetch(self.probe_matches(1)?)?;
-
-        match page.rows.pop() {
-            None if page.next.is_some() => Err(Error::Limit),
-            result => Ok(result),
-        }
+        observe!(query, {
+            let page = fetch(self.probe_matches(1)?)?;
+            if page.rows.is_empty() && page.next.is_some() {
+                return Err(Error::Limit);
+            }
+            Ok(page)
+        })
+        .map(|mut page| page.rows.pop())
     }
 
     /// Return the only match, or `None` when the query is exhausted without one.
@@ -946,7 +952,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns `MultipleMatches` on a second match and `Limit` if the page is
     /// incomplete before cardinality is known. Ordinary fetch errors apply.
     pub fn try_one(self) -> Result<Option<E>, Error> {
-        self.try_one_with(Self::fetch)
+        self.try_one_with(Self::entity_page)
     }
 
     /// Return the sole projected result, or `None` on a proven miss.
@@ -955,25 +961,28 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Errors
     /// Applies the projection checks of [`Self::fetch_as`] and the cardinality checks of [`Self::try_one`].
     pub fn try_one_as<R: Value>(self) -> Result<Option<R>, Error> {
-        self.try_one_with(Self::fetch_as::<R>)
+        self.try_one_with(Self::projected_page::<R>)
     }
 
     fn try_one_with<R>(
         self,
         fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
     ) -> Result<Option<R>, Error> {
-        if self.request.cursor.is_some() {
-            return Err(Error::InvalidQuery);
-        }
-        let mut page = fetch(self.probe_matches(2)?)?;
-        if page.rows.len() == 2 {
-            return Err(Error::MultipleMatches);
-        }
-        if page.next.is_some() {
-            return Err(Error::Limit);
-        }
+        observe!(query, {
+            if self.request.cursor.is_some() {
+                return Err(Error::InvalidQuery);
+            }
+            let page = fetch(self.probe_matches(2)?)?;
+            if page.rows.len() == 2 {
+                return Err(Error::MultipleMatches);
+            }
+            if page.next.is_some() {
+                return Err(Error::Limit);
+            }
 
-        Ok(page.rows.pop())
+            Ok(page)
+        })
+        .map(|mut page| page.rows.pop())
     }
 
     fn probe_matches(mut self, rows: usize) -> Result<Self, Error> {
@@ -996,6 +1005,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for direct record reads.
     pub fn fetch_as<R: Value>(self) -> Result<QueryPage<R>, Error> {
+        observe!(query, { self.projected_page() })
+    }
+
+    fn projected_page<R: Value>(self) -> Result<QueryPage<R>, Error> {
         let raw = fetch_rows(
             &*self.db.read()?,
             E::SCHEMA,
@@ -1739,7 +1752,7 @@ fn execute_inner<M: Memory>(
         let boundary = distinct::boundary(entity, plan.index, plan.distinct, stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {
-            accumulator.push(entity, &values, &bytes, &spans)?;
+            accumulator.push(entity, &values, &bytes, &spans, &mut component)?;
             if matches!(accumulator, aggregate::Accumulator::Exists(_)) {
                 // One validated match proves existence, even at the work boundary.
                 return Ok(page);
