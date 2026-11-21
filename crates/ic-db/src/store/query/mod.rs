@@ -405,7 +405,10 @@ impl Predicate<'_> {
                 QueryOperand::Field(right),
             ) => right == self.field,
             (
-                Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains,
+                Comparison::Ge
+                | Comparison::StartsWith
+                | Comparison::EndsWith
+                | Comparison::Contains,
                 QueryOperand::Literal(needle),
             ) => {
                 // An empty Text/Blob collection member still requires a matching element.
@@ -426,6 +429,12 @@ impl Predicate<'_> {
     }
 
     fn constant_comparison(&self, entity: &EntitySchema) -> Option<bool> {
+        // Empty is the least present Text or Blob. Absence also fails ordering.
+        if let (Comparison::Lt, QueryOperand::Literal(value)) = (self.comparison, self.operand)
+            && scalar_bytes(value).is_some_and(<[u8]>::is_empty)
+        {
+            return Some(false);
+        }
         if matches!(self.operand, QueryOperand::Length(_)) {
             let result = self.present_length_result(entity)?;
             return (result == self.comparison.accepts_absent(false)
@@ -1613,7 +1622,7 @@ impl<'a> Plan<'a> {
             order::Path::Primary => {}
             order::Path::Index(path) => plan.use_index(entity, path),
             order::Path::Sort(fields) => {
-                order::select_filtered_path(entity, request, &mut plan, false)?;
+                order::select_filtered_path(entity, request, &mut plan, None)?;
                 for field in &fields {
                     if field.member.is_some() {
                         plan.span_fields |= 1 << field.position;

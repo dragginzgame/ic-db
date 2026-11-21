@@ -1517,91 +1517,28 @@ fn foreign_database_and_job_store_cannot_resume_a_handle() {
 }
 
 #[test]
-fn legacy_job_frames_reopen_without_writes_and_promote_only_on_successful_save() {
+fn previous_job_header_is_refused_without_touching_existing_jobs() {
     use ic_storage::adapter::StableBTreeMap;
-    for action in 0..5 {
-        let backing = VectorMemory::default();
-        let runtime = host(backing.clone());
-        let (db, mut jobs) = create(&runtime, &[Some(1); 4], 0);
-        let handle = db
-            .query::<Row>()
-            .start_count(&mut jobs, time(0), time(100))
-            .unwrap();
-        db.query::<Row>()
-            .work_limit(2)
-            .resume_count(&mut jobs, &handle, 0, time(1))
-            .unwrap();
-        drop(jobs);
-        let key = StableKey::parse("test.jobs.v1").unwrap();
-        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        // V1's header and record layout are unchanged except for the admitted
-        // envelope marker. Build the predecessor header independently of its writer.
-        let mut header = b"ICDBAJ01".to_vec();
-        header.extend(3_u32.to_le_bytes());
-        header.extend([2_u8; 16]);
-        header.extend(1_u64.to_le_bytes());
-        assert!(raw.get(&1).unwrap().len() <= 4096);
-        raw.insert(0, header.clone());
-        drop(raw);
-        let before = backing.borrow().clone();
-        let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
-        assert_eq!(*backing.borrow(), before, "reopen must be read-only");
-        assert!(matches!(
-            db.query::<Row>()
-                .resume_count(&mut jobs, &handle, 99, time(1)),
-            Err(Error::InvalidJob)
-        ));
-        assert_eq!(
-            *backing.borrow(),
-            before,
-            "refusal must not promote the header"
-        );
-        match action {
-            0 => {
-                let result = db
-                    .query::<Row>()
-                    .resume_count(&mut jobs, &handle, 1, time(2))
-                    .unwrap();
-                assert!(matches!(result.outcome, JobOutcome::Complete(4)));
-            }
-            1 => {
-                db.query::<Row>()
-                    .start_count(&mut jobs, time(1), time(100))
-                    .unwrap();
-            }
-            2 => jobs.cancel(&handle).unwrap(),
-            3 => assert_eq!(jobs.cleanup_expired(time(100), 1).unwrap(), 1),
-            4 => {
-                let retry = db
-                    .query::<Row>()
-                    .resume_count(&mut jobs, &handle, 0, time(1))
-                    .unwrap();
-                assert_eq!(retry.sequence, 1);
-                assert!(matches!(retry.outcome, JobOutcome::Running));
-            }
-            _ => unreachable!(),
-        }
-        drop(jobs);
-        let raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        if matches!(action, 0 | 1 | 4) {
-            header[..8].copy_from_slice(b"ICDBAJ02");
-        }
-        if action == 1 {
-            header[28..36].copy_from_slice(&2_u64.to_le_bytes());
-        }
-        assert_eq!(raw.get(&0).unwrap(), header);
-        drop(raw);
-        if action < 2 {
-            let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
-            let step = db
-                .query::<Row>()
-                .resume_count(&mut jobs, &handle, 1, time(2))
-                .unwrap();
-            assert!(matches!(step.outcome, JobOutcome::Complete(4)));
-        }
-    }
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[Some(1); 4], 0);
+    db.query::<Row>()
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    drop(jobs);
+    let key = StableKey::parse("test.jobs.v1").unwrap();
+    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
+        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
+    let mut header = raw.get(&0).unwrap();
+    header[..8].copy_from_slice(b"ICDBAJ01");
+    raw.insert(0, header);
+    drop(raw);
+    let before = backing.borrow().clone();
+    assert!(matches!(
+        AggregateJobs::open(runtime.open_memory(&key).unwrap()),
+        Err(Error::InvalidJob)
+    ));
+    assert_eq!(*backing.borrow(), before);
 }
 
 #[test]

@@ -119,22 +119,12 @@ async fn check_job_binding_across_upgrade(operation: u8, changed: u8, expected: 
 async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
-    // Optional recorded predecessor qualifies old scalar checkpoints against this
-    // executable. Without it, the same test proves same-code reopening.
-    let initial = std::env::var_os("IC_DB_M2_SCALAR_JOBS_WASM")
-        .map(|path| std::fs::read(path).unwrap())
-        .unwrap_or_else(|| wasm.clone());
-    let grouped_predecessor = std::env::var_os("IC_DB_M2_GROUP_COUNT_JOBS_WASM")
-        .map(|path| std::fs::read(path).unwrap())
-        .unwrap_or_else(|| wasm.clone());
-    let distinct_predecessor = std::env::var_os("IC_DB_M2_DISTINCT_JOBS_WASM")
-        .map(|path| std::fs::read(path).unwrap())
-        .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
-    pic.install_canister(canister, initial, vec![], None).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
     let start = async |operation: u8, fault: u64| {
         pic.update_call(
             canister,
@@ -292,9 +282,6 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert!(control(5, &vec![], 0, 0).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
 
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, grouped_predecessor, vec![], None)
-        .await
-        .unwrap();
     let grouped = handle(start(3, 0).await.unwrap());
     let first_grouped = decode(advance(&grouped, 3, 0, 1, 0, false).await.unwrap());
     assert_eq!(
@@ -311,9 +298,6 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(&grouped, 3, 1, 2, 0, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, distinct_predecessor, vec![], None)
-        .await
-        .unwrap();
     let grouped_sum = handle(start(4, 0).await.unwrap());
     let grouped_average = handle(start(5, 0).await.unwrap());
     let distinct = handle(start(8, 0).await.unwrap());
@@ -329,36 +313,15 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
-    // With a recorded v1 predecessor this is the first save that promotes the
-    // store to v2. A backing failure or enclosing trap restores header AND job.
     let before = pic.get_stable_memory(canister).await;
     assert!(advance(&sum, 1, 1, 2, 1, false).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(advance(&sum, 1, 1, 2, 0, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    // A successful old-sequence replay preserves progress while admitting v2.
+    // Replaying the prior sequence must not write a checkpoint.
     let replay = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap());
     assert_eq!((replay.0, replay.2, replay.4), (1, 2, 0));
-    if let Some(path) = std::env::var_os("IC_DB_M2_V1_JOBS_WASM") {
-        let before = pic.get_stable_memory(canister).await;
-        ic_db_m0_rollback_driver::upgrade_stopped(
-            pic,
-            canister,
-            std::fs::read(path).unwrap(),
-            vec![],
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(
-            start(0, 0).await.is_err(),
-            "v1 executable must refuse the v2 store"
-        );
-        assert_eq!(pic.get_stable_memory(canister).await, before);
-        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
-            .await
-            .unwrap();
-    }
+    assert_eq!(pic.get_stable_memory(canister).await, before);
     let group_distinct = handle(start(9, 0).await.unwrap());
     let first = decode(advance(&group_distinct, 9, 0, 1, 0, false).await.unwrap());
     assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
@@ -498,14 +461,12 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
 async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
-    let initial = std::env::var_os("IC_DB_M2_FIELD_COUNT_JOBS_WASM")
-        .map(|path| std::fs::read(path).unwrap())
-        .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
-    pic.install_canister(canister, initial, vec![], None).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
     let advance =
         async |handle: &Vec<u8>, operation: u8, sequence: u64, fault: u64, trap_after: bool| {
             pic.update_call(
@@ -594,14 +555,11 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
     type PageResponse = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-jobs")).unwrap();
-    let predecessor = std::env::var_os("IC_DB_M2_GROUP_PAGES_PREDECESSOR_WASM")
-        .map(|path| std::fs::read(path).unwrap())
-        .unwrap_or_else(|| wasm.clone());
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
-    pic.install_canister(canister, predecessor, vec![], None)
+    pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
     let start = async || {
         let response = pic
@@ -710,7 +668,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let fresh = decode(page(&pending, 0, None, 1, 0, false).await.unwrap());
     assert_eq!((fresh.1, fresh.2), (1, vec![(0, 3)]));
-    // A job completed by the predecessor can be paged without rewriting its format.
+    // A job completed before upgrade can be paged without rewriting its format.
     let first = decode(page(&handle, old.0, None, 2, 0, false).await.unwrap());
     assert_eq!(
         (first.0, first.1, first.2, first.4),

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.26.9] - Unreleased
+
+### Breaking storage change
+
+- Aggregate jobs accept only the `ICDBAJ02` job allocation. Opening an
+  `ICDBAJ01` allocation returns `InvalidJob` and preserves its contents.
+  A host that needs old results must retrieve them under its old executable.
+  To start fresh, use a new job allocation and incarnation.
+
+### 🔍 Queries
+
+- For Text and Blob, an empty `StartsWith` or an inclusive lower bound of
+  empty matches every present value. Aggregate planning can use a narrower
+  index on another field. A strict upper bound of empty examines zero rows.
+  An inclusive upper bound of empty fixes the field to the present empty value.
+- When a membership list spans a field’s full encoded range, aggregate planning
+  can choose a narrower index on another field. Membership still filters each
+  candidate, including values between the listed endpoints. Row-scanning
+  operations such as `count_field()` use this rule on unique indexes too.
+- A membership filter containing only copies of one value can fix a compound
+  index component. For example, `tenant IN [1, 1]` and `code = 20` can seek
+  the unique booking directly.
+- `filter_in(...).count()` can count from a unique compound index when the
+  requested values cover a complete range on its leading fixed-width field.
+  Each matching entry counts, including entries that share that leading value.
+- Two required literal prefixes or two required literal suffixes on the same
+  Text or Blob field can rule out a query before it reads any rows. For
+  example, a currency cannot end in both `SD` and `UR`.
+
 ## [0.26.8] - 2026-11-21
 
 ### Schema inspection

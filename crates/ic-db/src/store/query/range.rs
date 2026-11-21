@@ -140,10 +140,10 @@ pub(super) fn key_range_proves_clause(
             if low == high {
                 return true;
             }
-            // A nonunique index can have many owners per component. A complete run
-            // of fixed-width values proves membership for every one of those entries.
+            // Trailing components do not affect membership in this interval.
+            // Keep complete unique keys on the bounded point-probe path.
             secondary
-                && index.is_some_and(|i| !i.unique)
+                && !index.is_some_and(|i| i.is_unique_lookup(fixed + 1))
                 && low.len() == high.len()
                 && entity
                     .index_field(name)
@@ -201,30 +201,40 @@ pub(super) fn has_secondary_bound(
     entity: &EntitySchema,
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
+    can_probe: bool,
 ) -> bool {
+    let Some((name, secondary)) = next_field(entity, Some(path.index), path.fixed) else {
+        return false;
+    };
+    let extreme = |key: &[u8], byte| {
+        entity.index_field(name).is_some_and(|field| {
+            !field.optional
+                && crate::key::fixed_width(crate::key::operand_type(field.value)) == Some(key.len())
+                && key.iter().all(|&b| b == byte)
+        })
+    };
     plan.clauses().any(|clause| {
-        if let [term] = clause
-            && let Some((bytes, _)) = literal(term)
-        {
-            let field = match &term.operand {
-                TermOperand::Nested { member, .. } => member.field(),
-                _ => &entity.fields[term.position],
-            };
-            // The lowest/highest possible fixed-width key excludes no candidates
-            // at an inclusive bound. An optional field has a separate absence tag.
-            if !field.optional
-                && crate::key::fixed_width(crate::key::operand_type(field.value))
-                    == Some(bytes.len())
-                && match term.comparison {
-                    Comparison::Ge => bytes.iter().all(|&b| b == 0),
-                    Comparison::Le => bytes.iter().all(|&b| b == u8::MAX),
-                    _ => false,
-                }
+        if let [term] = clause {
+            if !matches_field(entity, term, name)
+                || (term.tests_presence && entity.field_is_required(name))
             {
                 return false;
             }
+            return bound_operand(entity, term, secondary, path.prefix.len())
+                .ok()
+                .flatten()
+                .is_some_and(|(comparison, key)| match comparison {
+                    Comparison::Ge => !extreme(key, 0),
+                    Comparison::Le => !extreme(key, u8::MAX),
+                    _ => true,
+                });
         }
-        bounds_index_clause(entity, path, clause)
+        membership_interval(entity, name, clause, path.prefix.len()).is_some_and(|(low, high)| {
+            // Complete keys can use point probes. A component with trailing keys
+            // must scan every value between the two endpoints.
+            (can_probe && (!secondary || path.index.is_unique_lookup(path.fixed + 1)))
+                || !(extreme(low, 0) && extreme(high, u8::MAX))
+        })
     })
 }
 

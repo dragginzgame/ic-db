@@ -88,6 +88,7 @@ This overlay owns local authority, product boundaries and qualification choices.
   source/target identity, closed ordinary access during maintenance, rollback,
   supported cancellation, validated publication and retired-source custody.
   Do not add an inferred DDL planner, ordinary-write WAL or reset/reuse authority.
+- Before 1.0, hard-cut superseded formats. Reject unsupported headers intact at open. Keep historical readers and automatic format promotion out of ordinary operations.
 - Exact aggregates use per-entity revision invalidation and bounded retained
   jobs; continuous-write completion is not promised. Expiry/incompatible upgrades
   must retain supported cleanup. Capacity exhaustion refuses without automatic spill.

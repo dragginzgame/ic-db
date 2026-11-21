@@ -259,7 +259,7 @@ pub struct GroupValue<K, R> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum MemberProbe {
+pub(super) enum MemberProbe {
     CountKeys,
     CountWithRows,
     CountValidated,
@@ -567,7 +567,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
         observe!(query, {
             let mut plan = self.aggregate_plan(None, false)?;
-            self.select_aggregate_row_path(&mut plan)?;
+            self.select_aggregate_row_path(&mut plan, Some(MemberProbe::Exists))?;
             if let Some(result) = probe_members(
                 &self.db,
                 E::SCHEMA,
@@ -652,7 +652,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             {
                 return Ok(count);
             }
-            if super::order::select_filtered_path(E::SCHEMA, &self.request, &mut plan, true)? {
+            if super::order::select_filtered_path(
+                E::SCHEMA,
+                &self.request,
+                &mut plan,
+                Some(MemberProbe::CountWithRows),
+            )? {
                 return self.count_keys(&plan);
             }
             if let Some(count) = probe_members(
@@ -755,7 +760,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 return Err(Error::RowTooLarge);
             }
             let mut plan = self.aggregate_plan(Some(K::definition()), false)?;
-            self.select_aggregate_row_path(&mut plan)?;
+            self.select_aggregate_row_path(&mut plan, None)?;
             let projected = plan.projection.ok_or(Error::InvalidQuery)?;
             let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);
 
@@ -763,9 +768,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         })
     }
 
-    fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
+    fn select_aggregate_row_path(
+        &self,
+        plan: &mut Plan<'static>,
+        probe: Option<MemberProbe>,
+    ) -> Result<(), Error> {
         if plan.index.is_none() {
-            super::order::select_filtered_path(E::SCHEMA, &self.request, plan, false)?;
+            super::order::select_filtered_path(E::SCHEMA, &self.request, plan, probe)?;
         }
 
         Ok(())
@@ -776,15 +785,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Err(Error::RowTooLarge);
         }
         let mut plan = self.aggregate_plan(None, false)?;
-        self.select_aggregate_row_path(&mut plan)?;
-        if field.is_none()
-            && let Some(count) = probe_members(
-                &self.db,
-                E::SCHEMA,
-                &self.request,
-                &plan,
-                MemberProbe::CountValidated,
-            )?
+        let probe = field.is_none().then_some(MemberProbe::CountValidated);
+        self.select_aggregate_row_path(&mut plan, probe)?;
+        if let Some(probe) = probe
+            && let Some(count) = probe_members(&self.db, E::SCHEMA, &self.request, &plan, probe)?
         {
             return Ok(count);
         }
@@ -896,7 +900,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         mut plan: Plan<'static>,
         mut reducer: Reducer,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        self.select_aggregate_row_path(&mut plan)?;
+        self.select_aggregate_row_path(&mut plan, None)?;
         if let Reducer::Distinct { mask, .. } = &mut reducer {
             let grouped = plan.projection.ok_or(Error::InvalidQuery)?;
             let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);

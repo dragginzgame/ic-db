@@ -236,7 +236,7 @@ pub(super) fn select_filtered_path<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
-    keys_suffice: bool,
+    probe: Option<super::aggregate::MemberProbe>,
 ) -> Result<bool, Error> {
     if let Some((_, values)) = &request.index {
         return Ok(plan.index.is_some_and(|index| {
@@ -271,7 +271,7 @@ pub(super) fn select_filtered_path<'a>(
         let Some(path) = automatic_prefix(entity, index, &values)? else {
             continue;
         };
-        let covered = keys_suffice
+        let covered = probe == Some(super::aggregate::MemberProbe::CountWithRows)
             && covers_keys(
                 entity,
                 request,
@@ -295,7 +295,7 @@ pub(super) fn select_filtered_path<'a>(
             continue;
         }
         let (fixed, width, name) = rank(index, path.fixed);
-        let bounded = super::range::has_secondary_bound(entity, plan, &path);
+        let bounded = super::range::has_secondary_bound(entity, plan, &path, probe.is_some());
         if values.is_empty() && !bounded && !covered {
             continue;
         }
@@ -495,20 +495,26 @@ fn satisfies(
     wanted.eq(supplied)
 }
 
-// Only singleton equality clauses are mandatory. An equality inside an OR
-// must not restrict an index prefix or prove that an ordering field is constant.
+// A disjunction fixes a field only if every alternative asserts the same equality.
 pub(super) fn literal_equalities<'r, 'a>(
     request: &'r Request<'a>,
 ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
+    fn fixed<'a>(p: &Predicate<'a>) -> Option<(&'a str, IndexValue<'a>)> {
+        let QueryOperand::Literal(value) = p.operand else {
+            return None;
+        };
+        // Ordering excludes absence, and empty is the least Text or Blob value.
+        (p.comparison == Comparison::Eq
+            || (p.comparison == Comparison::Le
+                && super::scalar_bytes(value).is_some_and(<[u8]>::is_empty)))
+        .then_some((p.field, value))
+    }
     request.clauses().filter_map(|clause| {
-        if let [predicate] = clause
-            && predicate.comparison == Comparison::Eq
-            && let QueryOperand::Literal(value) = predicate.operand
-        {
-            Some((predicate.field, value))
-        } else {
-            None
-        }
+        let (predicate, rest) = clause.split_first()?;
+        let equality = fixed(predicate)?;
+        rest.iter()
+            .all(|other| fixed(other) == Some(equality))
+            .then_some(equality)
     })
 }
 
@@ -584,20 +590,45 @@ pub(super) fn fixed_prefix_value<'a>(
     }
 }
 
-// Only singleton clauses constrain every match. Each bound below also requires
-// a present value. Ne alone would allow absence and cannot narrow this interval.
-fn length_excluded(
+// Only singleton clauses constrain every match. Required prefixes or suffixes
+// must agree on their shared bytes. Ne alone allows absence and cannot narrow length.
+fn excluded_by_bounds(
     entity: &EntitySchema,
     request: &Request<'_>,
     index: Option<&IndexSchema>,
     predicate: &Predicate<'_>,
 ) -> bool {
-    let QueryOperand::Length(threshold) = predicate.operand else {
-        return false;
-    };
     if request.predicates.len() < 2 {
         return false;
     }
+    if let (op @ (Comparison::StartsWith | Comparison::EndsWith), QueryOperand::Literal(value)) =
+        (predicate.comparison, predicate.operand)
+        && let Some(bytes) = super::scalar_bytes(value)
+    {
+        return request.clauses().any(|clause| {
+            let [other] = clause else { return false };
+            if other.field != predicate.field
+                || other.comparison != op
+                || std::ptr::eq(other, predicate)
+            {
+                return false;
+            }
+            let QueryOperand::Literal(value) = other.operand else {
+                return false;
+            };
+            super::scalar_bytes(value).is_some_and(|other| {
+                let (long, short) = if bytes.len() >= other.len() {
+                    (bytes, other)
+                } else {
+                    (other, bytes)
+                };
+                !op.accepts_bytes(long, short)
+            })
+        });
+    }
+    let QueryOperand::Length(threshold) = predicate.operand else {
+        return false;
+    };
     let Some(field) = entity.index_field(predicate.field) else {
         return false;
     };
@@ -677,7 +708,7 @@ pub(super) fn has_conflicting_predicates(
         return request.clauses().any(|clause| {
             clause.iter().all(|p| {
                 p.constant_comparison(entity) == Some(false)
-                    || length_excluded(entity, request, None, p)
+                    || excluded_by_bounds(entity, request, None, p)
             })
         });
     }
@@ -698,7 +729,7 @@ pub(super) fn has_conflicting_predicates(
     request.clauses().any(|clause| {
         clause.iter().all(|p| {
             fixed_comparison(entity, p, &lookup) == Some(false)
-                || length_excluded(entity, request, index, p)
+                || excluded_by_bounds(entity, request, index, p)
         })
     })
 }

@@ -1459,6 +1459,10 @@ Direct Text and Blob members also support `EndsWith` against literals and fields
 Like the suffix predicate in frozen IcyDB `6d421e3` (`db/predicate/semantics/mod.rs`),
 this compares the end of the value. Normal index order supplies no suffix seek.
 The member suffix predicate reads candidate rows within the existing work budget.
+Two mandatory literal prefixes on the same field must agree over their shared
+leading bytes. Suffixes follow the same rule over their trailing bytes. This
+extends the compatible repeated-prefix case in frozen IcyDB `6d421e3`
+(`db/query/plan/planner/range/tests.rs`) to unindexed scans and suffixes.
 Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
 validated scalar for the bounded complete sorter. A missing parent and missing
 member share one absent sort key. Ordinary direction and primary tie-breaker
@@ -1872,14 +1876,12 @@ One `AggregateJobs` collection uses a
 separate host-governed allocation, leaving the row manifest and codec unchanged.
 Its versioned header admits the owned codec version and owns a fresh incarnation
 and monotonic slot generation.
-Version two (`ICDBAJ02`) admits 16 KiB frames. Version-one stores remain readable
-with their original 4096-byte bound; reopening, refused operations, cancellation
-and expiry cleanup do not promote the header. The first successful insert/save
-atomically promotes it alongside the job write, preserving incarnation, existing
-records and progress. This is a specific compatible envelope expansion, not a
-schema transformation or general format reconciler. Old executables refuse the
-v2 header; downgrade does not reopen it. Row codecs, schema identity and ordinary
-row bounds are unchanged. Internal envelope constructors reuse scalar encoding
+Only the current header (`ICDBAJ02`) and current codec version admit the job
+allocation. An older header returns `InvalidJob` before any write, including
+when the allocation has no remaining jobs. Retained v1 results and handles
+require the old executable. A host moving off v1 must provision a fresh job
+allocation with a fresh incarnation. Row storage is independent.
+Internal envelope constructors reuse scalar encoding
 with a byte budget owned by jobs; public row constructors retain 4 KiB.
 At most 16 slots retain 16 KiB encoded bytes each; expiry is fixed at creation and
 at most one hour after host-captured time. A job admits one million candidates;
@@ -1913,7 +1915,7 @@ before persisting completion. Arithmetic/output refusal preserves the checkpoint
 On the current job-store format, a successful retry or completed-page read at
 the saved observation time skips the record write when the sequence also stays
 the same. A later observation is persisted even for completed jobs to enforce
-clock monotonicity. Legacy headers retain their first-successful-save promotion.
+clock monotonicity.
 
 Average reuses the retained exact total and present count; divide and round once
 at completion to the result record's declared Decimal scale, nearest with ties
@@ -2818,8 +2820,9 @@ deduplication or canonical membership representation. Both fluent methods share
 clause construction; no temporary member collection or new execution path is needed.
 For counts, when both ends of the selected membership interval encode the same
 value, every index entry in the interval proves the clause, including tied
-owners of a record-member value. On a nonunique index with a fixed-width
-component, the same proof holds when the clause includes each encoded value
+owners of a record-member value. On a secondary index with a fixed-width
+component, including a leading component of a unique compound key, the same
+proof holds when the clause includes each encoded value
 from the lowest to the highest. The planner searches the supplied operands for
 each successive encoded key, borrowing their bytes directly. The eight-term
 limit allows at most seven successful steps. A gap retains
@@ -3135,6 +3138,11 @@ another field still requires ordinary planning. Frozen IcyDB `6d421e3` also
 deduplicates membership inputs in `db/query/plan/planner/compare/mod.rs` and
 tests intersection of borrowed keys in `db/query/plan/planner/predicate/child_tests.rs`. IC DB retains all authored terms for admission
 and leaves validated counts on the owner-reading path.
+A membership clause in which every alternative asserts the same typed literal
+equality fixes that field for index selection. Frozen IcyDB collapses singleton
+membership during access planning in `db/query/plan/planner/compare/mod.rs`.
+IC DB compares the bounded alternatives directly and keeps the authored terms
+for query binding.
 A unique index has no owner suffix. Membership on its last unfixed component
 can reuse the point probes when every preceding component is fixed by a mandatory
 equality or by an explicit prefix. Each other clause must be proven by that
@@ -3428,7 +3436,7 @@ inspect later rows after a match. The result occupies one logical byte. Output
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
 every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
+prefix or a mandatory range on the first index field if it preserves the available primary-key bounds. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. The same rule applies when the smallest and largest membership operands span the entire component and trailing keys require an interval scan. For Text and Blob, an empty prefix and an inclusive lower bound of empty both test presence. Neither narrows a required field. A strict upper bound of empty matches no row, including when the field is absent. An inclusive upper bound of empty fixes the field to its present empty value for prefix selection and contradiction checks. Membership on a complete physical key gets a point-probe preference only for terminals that can execute those probes. Field counts, grouping, DISTINCT reductions and bounded sorting rank their actual scan intervals. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
 residual predicates in `db/query/plan/planner/index_select/mod.rs`. An existence check on an index hit
 fetches and validates its owner. An empty prefix range returns false

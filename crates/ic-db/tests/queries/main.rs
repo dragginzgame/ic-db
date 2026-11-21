@@ -503,7 +503,7 @@ fn fixed_non_unique_index_seeks_the_owner_key() {
 fn covered_count_prefers_the_exact_unique_key() {
     ///
     /// CodedRow
-    /// Exercises indexed access by `code` on rows keyed by `id`.
+    /// Exercises competing code and score indexes on rows keyed by `id`.
     ///
 
     #[entity(
@@ -511,9 +511,11 @@ fn covered_count_prefers_the_exact_unique_key() {
         pk(field = "id"),
         index(name = "by_code_and_id", fields = ["code", "id"]),
         index(field = "code", unique),
+        index(field = "score"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
-            field(name = "code", value(item(prim = "Nat64")))
+            field(name = "code", value(item(prim = "Nat64"))),
+            field(name = "score", value(item(prim = "Nat64")))
         )
     )]
     struct CodedRow {}
@@ -523,7 +525,9 @@ fn covered_count_prefers_the_exact_unique_key() {
         .create(Schema::new(&[CodedRow::SCHEMA]).unwrap(), [1; 16])
         .unwrap();
     let mut batch = Batch::new();
-    batch.insert(&CodedRow { id: 1, code: 7 }).unwrap();
+    for (id, code, score) in [(1, 7, 0), (2, 0, 1), (3, u64::MAX, 2)] {
+        batch.insert(&CodedRow { id, code, score }).unwrap();
+    }
     db.commit(batch).unwrap();
 
     // The compound index sorts first by name. Only the unique index proves
@@ -541,6 +545,20 @@ fn covered_count_prefers_the_exact_unique_key() {
             (expected as u64, expected, expected)
         );
     }
+    // Counting a field scans rows; a unique index alone does not enable point probes.
+    let query = || {
+        db.query::<CodedRow>()
+            .filter_in(CodedRow::CODE, &[0_u64, u64::MAX])
+            .gte(CodedRow::SCORE, 2_u64)
+            .work_limit(2)
+    };
+    let count = query().count_field(CodedRow::ID).unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
+    let checked = query().count_validated().unwrap();
+    assert_eq!(
+        (checked.value, checked.examined, checked.fetched),
+        (1, 2, 2)
+    );
 }
 
 #[test]
@@ -2865,6 +2883,40 @@ fn compound_unique_membership_counts_use_the_equality_prefix_selected_by_the_pla
     }
     let across_tenants = codes().count().unwrap();
     assert_eq!(across_tenants.value, 4);
+    let repeated_tenant = || codes().filter_in(Booking::TENANT, &[1_u8, 1]);
+    let repeated = repeated_tenant().work_limit(3).count().unwrap();
+    assert_eq!(
+        (repeated.value, repeated.examined, repeated.fetched),
+        (2, 3, 0)
+    );
+    assert_eq!(
+        repeated_tenant().count_validated().unwrap().value,
+        repeated.value
+    );
+    let booking = db
+        .query::<Booking>()
+        .filter_in(Booking::TENANT, &[1_u8, 1])
+        .eq(Booking::CODE, 20_u64)
+        .work_limit(1)
+        .try_one()
+        .unwrap()
+        .unwrap();
+    assert_eq!(booking.id, 2);
+    // Multiple bookings share each leading tenant on the unique (tenant, code) index.
+    for (members, expected, fetched) in [([2_u8, 1, 2], 5, 0), ([3, 1, 3], 3, 5)] {
+        let tenants = || {
+            db.query::<Booking>()
+                .filter_in(Booking::TENANT, &members)
+                .using_index("tenant,code", &[])
+        };
+        let count = tenants().count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, 5, fetched)
+        );
+        assert_eq!(tenants().count_validated().unwrap().value, expected);
+        assert!(matches!(tenants().work_limit(4).count(), Err(Error::Limit)));
+    }
 }
 
 #[test]
@@ -6697,6 +6749,19 @@ fn value_aggregates_seek_one_unique_owner_and_check_residuals() {
 fn grouped_count_prefers_a_restricting_range_over_a_full_domain_bound() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 21);
+    let groups = db
+        .query::<Entry>()
+        .filter_in(Entry::CATEGORY, &[u8::MAX, u8::MIN, u8::MAX])
+        .gte(Entry::AMOUNT, 70_u64)
+        .work_limit(3)
+        .group_count::<CategoryOnly>()
+        .unwrap();
+    assert_eq!((groups.examined, groups.fetched), (2, 2));
+    assert_eq!(groups.value.len(), 1);
+    assert_eq!(
+        (groups.value[0].key.category, groups.value[0].count),
+        (0, 1)
+    );
     for (comparison, endpoint) in [(C::Ge, u8::MIN), (C::Le, u8::MAX)] {
         let query = || {
             db.query::<Entry>()

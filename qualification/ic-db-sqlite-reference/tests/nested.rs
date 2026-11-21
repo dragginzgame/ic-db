@@ -146,6 +146,41 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
             }
         }
     }
+    for (op, comparison) in [(ic_db::Comparison::Ge, ">="), (ic_db::Comparison::Lt, "<")] {
+        let expected: u32 = sql
+            .query_row(
+                &format!("SELECT count(*) FROM products WHERE currency {comparison} ''"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let count = db
+            .query::<Product>()
+            .filter(CURRENCY, op, "")
+            .count()
+            .unwrap();
+        assert_eq!(count.value, u64::from(expected));
+        if op == ic_db::Comparison::Lt {
+            assert_eq!(count.examined, 0);
+        }
+    }
+    // NULL prices/currencies fail ordering; the one present empty currency matches.
+    for length in [0_u32, 1] {
+        let expected: u32 = sql.query_row(
+            "SELECT count(*) FROM products WHERE currency <= '' AND length(CAST(currency AS BLOB)) = ?1",
+            [length], |r| r.get(0),
+        ).unwrap();
+        let count = db
+            .query::<Product>()
+            .lte(CURRENCY, "")
+            .filter_length(CURRENCY, ic_db::Comparison::Eq, length)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, u64::from(expected));
+        if length == 1 {
+            assert_eq!(count.examined, 0);
+        }
+    }
     // Prefix and suffix operands constrain the UTF-8 byte length of this member.
     for (pattern, sql_match) in [
         (ic_db::Comparison::StartsWith, "instr(currency, ?1) = 1"),
@@ -175,6 +210,59 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
                 .unwrap();
             assert_eq!((impossible.value, impossible.examined), (0, 0));
         }
+    }
+    for (op, condition, short, long, conflict) in [
+        (
+            ic_db::Comparison::StartsWith,
+            "instr(currency, ?1) = 1",
+            "U",
+            "US",
+            "EU",
+        ),
+        (
+            ic_db::Comparison::EndsWith,
+            "substr(currency, -length(?1)) = ?1",
+            "D",
+            "SD",
+            "UR",
+        ),
+    ] {
+        for (a, b, incompatible) in [
+            (short, long, false),
+            (long, short, false),
+            (long, conflict, true),
+        ] {
+            let expected: u64 = sql
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM products WHERE {condition} AND {}",
+                        condition.replace("?1", "?2")
+                    ),
+                    [a, b],
+                    |r| r.get::<_, u32>(0).map(u64::from),
+                )
+                .unwrap();
+            let count = db
+                .query::<Product>()
+                .filter(CURRENCY, op, a)
+                .filter(CURRENCY, op, b)
+                .count()
+                .unwrap();
+            assert_eq!(count.value, expected);
+            if incompatible {
+                assert_eq!(count.examined, 0);
+            }
+        }
+        let alternatives = db
+            .query::<Product>()
+            .filter(CURRENCY, op, short)
+            .filter_any_operands(&[
+                (CURRENCY, op, ic_db::QueryOperand::Literal(conflict.into())),
+                (CURRENCY, op, ic_db::QueryOperand::Literal(long.into())),
+            ])
+            .count()
+            .unwrap();
+        assert_eq!(alternatives.value, 2);
     }
     // A long suffix in one OR alternative imposes no minimum on the other.
     let alternatives = db
@@ -925,6 +1013,29 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             Err(Error::InvalidOperand)
         ));
         let tag = Tag("128".into());
+        for (op, condition) in [
+            (ic_db::Comparison::StartsWith, "instr(payload, x'') = 1"),
+            (ic_db::Comparison::Ge, "payload >= x''"),
+        ] {
+            let expected: u32 = sql
+                .query_row(
+                    &format!("SELECT count(*) FROM observations WHERE {condition} AND score >= ?1"),
+                    [i64::MAX],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let count = db
+                .query::<Observation>()
+                .filter(PAYLOAD, op, b"")
+                .gte(SCORE, i64::MAX)
+                .work_limit(2)
+                .count_validated()
+                .unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (u64::from(expected), 1, 1)
+            );
+        }
         for (comparison, predicate) in [
             (ic_db::Comparison::StartsWith, "instr(payload,header) = 1"),
             (

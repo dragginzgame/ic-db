@@ -9,9 +9,7 @@ use ic_storage::{Memory, RuntimeMemory, adapter::StableBTreeMap};
 
 pub(super) const SLOTS: u8 = 16;
 pub(super) const MAX_JOB_BYTES: usize = 16 * 1024;
-const LEGACY_MAX_JOB_BYTES: usize = 4096;
 const MAGIC: &[u8; 8] = b"ICDBAJ02";
-const LEGACY_MAGIC: &[u8; 8] = b"ICDBAJ01";
 
 /// Durable bounded aggregates in a host-governed allocation.
 /// Holds at most 16 jobs, each at most 16 KiB encoded bytes. Creation requires a
@@ -21,7 +19,6 @@ const LEGACY_MAGIC: &[u8; 8] = b"ICDBAJ01";
 pub struct AggregateJobs<M: Memory> {
     map: StableBTreeMap<u8, Vec<u8>, M>,
     incarnation: [u8; 16],
-    legacy: bool,
 }
 impl<M: Memory> AggregateJobs<M> {
     /// Create in an empty allocation, with a host-supplied fresh incarnation.
@@ -39,16 +36,10 @@ impl<M: Memory> AggregateJobs<M> {
         let mut map = StableBTreeMap::create(memory);
         map.insert(0, header(incarnation, 0));
 
-        Ok(Self {
-            map,
-            incarnation,
-            legacy: false,
-        })
+        Ok(Self { map, incarnation })
     }
 
-    /// Reopen a supported job-store format without modifying it. Version-one
-    /// jobs remain readable; the first successful insert/save atomically admits
-    /// version two and its larger frame bound. Older executables then refuse.
+    /// Reopen the current job-store format without modifying it.
     /// # Errors
     /// Refuses missing/corrupt headers and unsupported formats intact.
     /// # Panics
@@ -59,7 +50,7 @@ impl<M: Memory> AggregateJobs<M> {
         }
         let map: StableBTreeMap<u8, Vec<u8>, M> = StableBTreeMap::load(memory);
         let bytes = map.get(&0).ok_or(Error::Corrupt)?;
-        let (incarnation, _, legacy) = read_header(&bytes)?;
+        let (incarnation, _) = read_header(&bytes)?;
         if map.len() > u64::from(SLOTS) + 1
             || map
                 .range(..)
@@ -69,11 +60,7 @@ impl<M: Memory> AggregateJobs<M> {
             return Err(Error::Corrupt);
         }
 
-        Ok(Self {
-            map,
-            incarnation,
-            legacy,
-        })
+        Ok(Self { map, incarnation })
     }
 
     /// Cancel one job, immediately releasing its logical slot. Repeated/stale
@@ -104,7 +91,7 @@ impl<M: Memory> AggregateJobs<M> {
         let mut expired = Vec::new();
         for slot in 1..=SLOTS {
             if let Some(bytes) = self.map.get(&slot) {
-                let record = self.decode(&bytes)?;
+                let record = Record::decode(&bytes)?;
                 if record.expires <= now && expired.len() < limit {
                     expired.push(slot);
                 }
@@ -121,7 +108,7 @@ impl<M: Memory> AggregateJobs<M> {
         let slot = (1..=SLOTS)
             .find(|slot| !self.map.contains_key(slot))
             .ok_or(Error::JobCapacity)?;
-        let (incarnation, generation, _) = read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
+        let (incarnation, generation) = read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
         if incarnation != self.incarnation {
             return Err(Error::Corrupt);
         }
@@ -131,7 +118,6 @@ impl<M: Memory> AggregateJobs<M> {
         // No recoverable refusal after the first persistent write.
         self.map.insert(0, header(incarnation, generation));
         self.map.insert(slot, bytes);
-        self.legacy = false;
 
         Ok(JobHandle {
             incarnation,
@@ -155,7 +141,7 @@ impl<M: Memory> AggregateJobs<M> {
             return Err(Error::InvalidJob);
         }
         let bytes = self.map.get(&handle.slot).ok_or(Error::InvalidJob)?;
-        let record = self.decode(&bytes)?;
+        let record = Record::decode(&bytes)?;
         if record.generation != handle.generation {
             return Err(Error::InvalidJob);
         }
@@ -169,30 +155,11 @@ impl<M: Memory> AggregateJobs<M> {
         record: &Record,
         changed: bool,
     ) -> Result<(), Error> {
-        if !changed && !self.legacy {
-            return Ok(());
+        if changed {
+            self.map.insert(handle.slot, record.encode()?);
         }
-
-        let bytes = record.encode()?;
-        // Prepare every refusal before publishing the wider bound. Both writes
-        // share the enclosing message's rollback boundary, just like insertion.
-        if self.legacy {
-            let (incarnation, generation, _) =
-                read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
-            self.map.insert(0, header(incarnation, generation));
-        }
-        self.map.insert(handle.slot, bytes);
-        self.legacy = false;
 
         Ok(())
-    }
-
-    fn decode<'a>(&self, bytes: &'a [u8]) -> Result<Record<&'a [u8]>, Error> {
-        if self.legacy && bytes.len() > LEGACY_MAX_JOB_BYTES {
-            return Err(Error::Corrupt);
-        }
-
-        Record::decode(bytes)
     }
 }
 fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
@@ -204,13 +171,11 @@ fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
     bytes
 }
 
-fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64, bool), Error> {
+fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
     if bytes.len() != 36 {
         return Err(Error::Corrupt);
     }
-    if (&bytes[..8] != MAGIC && &bytes[..8] != LEGACY_MAGIC)
-        || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes()
-    {
+    if &bytes[..8] != MAGIC || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes() {
         return Err(Error::InvalidJob);
     }
     let incarnation = bytes[12..28].try_into().map_err(|_| Error::Corrupt)?;
@@ -221,7 +186,6 @@ fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64, bool), Error> {
     Ok((
         incarnation,
         u64::from_le_bytes(bytes[28..].try_into().map_err(|_| Error::Corrupt)?),
-        &bytes[..8] == LEGACY_MAGIC,
     ))
 }
 

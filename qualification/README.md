@@ -4096,20 +4096,16 @@ physical-memory shrink or completion
 under sustained writes. Initial quotas are design bounds, not peak-memory or
 performance claims. The earlier fixed M0 grouped probe remains separate evidence.
 
-The driver can also install a recorded scalar predecessor before upgrading to
-the current artifact, selected explicitly by `IC_DB_M2_SCALAR_JOBS_WASM`. The
-grouping run used the previously verified scalar artifact with SHA-256
-`3602176165900fc7ad6475ad273b7e28f0d29cbcc0888c5a02da7e9ba6b1785c`, retained at
-`qualification/target/evidence/m2/scalar-jobs-before-grouping.wasm`. Its unfinished
-count/sum/average jobs resume under the grouped implementation without migration.
-Without that optional artifact, `make m2-jobs` verifies same-code upgrades. This
-specific compatibility witness does not qualify arbitrary changed-code recovery.
+The current driver uses the same executable across upgrades. The historical
+grouping run used a scalar predecessor with SHA-256
+`3602176165900fc7ad6475ad273b7e28f0d29cbcc0888c5a02da7e9ba6b1785c`,
+retained at `qualification/target/evidence/m2/scalar-jobs-before-grouping.wasm`.
+Its unfinished count/sum/average jobs resumed in that run.
 The numeric grouping run also selected `IC_DB_M2_GROUP_COUNT_JOBS_WASM` for the
 intermediate grouped-count predecessor, SHA-256
 `70998b9a5bcce9abbc60a019ed9853d257e237cb4ef6549f453b2e49f472ebad`, retained at
 `qualification/target/evidence/m2/count-groups-before-numeric.wasm`. Its unfinished
 grouped counts resume under the numeric grouping implementation without migration.
-Omitting either predecessor uses the current executable for that upgrade step.
 
 The 0.11 field-count run selected the pushed 0.10.0 checkpoint artifact for both
 predecessor steps, SHA-256
@@ -4124,7 +4120,7 @@ second test, using the prior verified field-count artifact with SHA-256
 test also checks DISTINCT backing-write/later-application traps, upgrades an
 unfinished set, retries and completes with two categories across six rows.
 Grouped DISTINCT adds both trap probes and same-code upgrade/retry, completing
-two groups with one distinct category each. The grouped run supplies
+two groups with one distinct category each. The grouped run supplied
 `IC_DB_M2_DISTINCT_JOBS_WASM` for the intermediate scalar-DISTINCT predecessor,
 SHA-256 `664aaa344ecb77b2454b72365d23ab82e6c2ec4b70935e671333a2ba9ad58080`, retained at
 `qualification/target/evidence/m2/scalar-distinct-before-grouped.wasm`. Its saved
@@ -4132,11 +4128,10 @@ scalar DISTINCT set resumes under the grouped implementation without migration.
 
 A third Wasm test qualifies completed-group pages, final-progress/first-page and
 later-application rollback, and continuation across source changes and upgrade.
-It also pages a job completed by the prior executable, selected with
+The historical run also paged a job completed by the prior executable, selected with
 `IC_DB_M2_GROUP_PAGES_PREDECESSOR_WASM`: SHA-256
 `3fe0851839f25583ff1ac2277123fd0770f36c53c49f637e4478ff87e8604e6a`, retained at
-`qualification/target/evidence/m2/group-distinct-before-pages.wasm`. Omitting this
-artifact checks same-code upgrades. The API now returns GroupPage rows/continuation;
+`qualification/target/evidence/m2/group-distinct-before-pages.wasm`. The API now returns GroupPage rows/continuation;
 job bytes remain unchanged. The CLI keeps its synchronous `query` terminals and
 adds `aggregate Entry`, `aggregate Document` and `aggregate DecimalRow` to demonstrate retained progress
 and completed pages. `make m2-cli` selects the console feature and tests fourteen
@@ -4422,21 +4417,12 @@ append trailing bytes or corrupt its length: both cancellation and cleanup refus
 without deleting the earlier valid slot. Correctly framed opaque accumulator
 bytes remain cancellable even when the reducer rejects their contents.
 
-Job store v2 (`ICDBAJ02`) preserves the record encoding and admits the wider
-envelope. Native cases construct the v1 header independently and prove read-only
-reopening, refusal preservation, insert/save promotion and cancellation/expiry
-without promotion. Existing Wasm predecessor hooks also ran against the recorded
-4 KiB artifact (SHA-256
-`ee01c24a829691f6fff20e4088613712f701c69cbf473a4743ede6c690d439e8`):
-old scalar/grouped/DISTINCT progress resumes, traps restore the header and job,
-and the old executable refuses a promoted store intact. Reinstalling the new
-executable restores access. No data reset or application schema migration is
-required; after the first successful insert/save, keep a v2-capable executable.
-Without predecessor paths, the normal job test qualifies same-code upgrades.
-`IC_DB_M2_SCALAR_JOBS_WASM`, `IC_DB_M2_GROUP_COUNT_JOBS_WASM` and
-`IC_DB_M2_DISTINCT_JOBS_WASM` select predecessors for those checkpoints;
-`IC_DB_M2_V1_JOBS_WASM` explicitly selects a v1 executable for downgrade refusal.
-All four pointed to the recorded 4 KiB artifact for this run.
+Current native qualification constructs a populated allocation with the previous
+job header and checks that opening it refuses and preserves the full backing.
+Installed qualification exercises checkpoint rollback, replay and reopening
+with the current executable. Historical 0.20 probes used the 4 KiB artifact
+(SHA-256 `ee01c24a829691f6fff20e4088613712f701c69cbf473a4743ede6c690d439e8`)
+to qualify the promotion behavior that 0.26.9 removes.
 
 Measured on 2026-11-16 with the pending 0.20 engine and qualification host,
 Rust 1.100.0, IC Storage 0.74.1, Platform Runtime 0.23.14, qualification
