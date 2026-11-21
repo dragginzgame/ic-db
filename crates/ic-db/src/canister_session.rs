@@ -122,7 +122,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
     }
 
     /// Insert one generated input in its declared store and return the committed row.
-    /// For managed timestamps use [`Self::batch_at`].
+    /// Managed fields receive the current operation time.
     /// # Errors
     /// Propagates [`DatabaseSession::insert_input`] preparation and commit errors.
     pub fn insert_input<I: InsertInput<Entity: Entity<Store: MountedStore<Canister = C>>>>(

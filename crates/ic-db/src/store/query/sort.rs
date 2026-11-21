@@ -15,7 +15,7 @@ pub(super) struct Collection {
 }
 
 struct Row {
-    key: Vec<u8>,
+    key: Box<[u8]>,
     bytes: Vec<u8>,
 }
 
@@ -40,8 +40,9 @@ impl Collection {
         values: &[IndexValue<'_>],
         bytes: &[u8],
         spans: &[(u16, u16)],
+        key: &mut Vec<u8>,
     ) -> Result<(), Error> {
-        let mut key = Vec::new();
+        key.clear();
         let order = plan.sort.as_ref().ok_or(Error::InvalidQuery)?;
         // Trailing fields only order representatives of the same projected
         // value. Its leading components suffice for both ranking and equality.
@@ -52,9 +53,9 @@ impl Collection {
             if let Some(member) = &field.member {
                 let (start, end) = spans[position];
                 let value = member.read(&bytes[usize::from(start)..usize::from(end)], optional)?;
-                value.append_component(optional || member.field().optional, &mut key);
+                value.append_component(optional || member.field().optional, key);
             } else {
-                values[position].append_component(optional, &mut key);
+                values[position].append_component(optional, key);
             }
             if key.len() > MAX_COMPARISON_KEY {
                 return Err(Error::Limit);
@@ -70,71 +71,66 @@ impl Collection {
         // The projected tuple decides the order between distinct results. Once
         // evicted, a tuple ranks below every retained tuple, even if seen again
         // with a different primary tie-breaker.
-        if self.prefix_len.is_some() && self.rows.iter().any(|row| row.key == key) {
-            return Ok(());
-        }
-        if self.rows.len() == self.limit {
-            // At most 32 retained rows: find the worst cached key directly.
-            let (worst, row) = self
-                .rows
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| {
-                    if self.descending {
-                        b.key.cmp(&a.key)
-                    } else {
-                        a.key.cmp(&b.key)
-                    }
-                })
-                .ok_or(Error::InvalidQuery)?;
-            let better = if self.descending {
-                key > row.key
+        let compare = |row: &Row| {
+            if self.descending {
+                key.as_slice().cmp(&row.key)
             } else {
-                key < row.key
-            };
-            if !better {
+                row.key.as_ref().cmp(key.as_slice())
+            }
+        };
+        let candidates = if self.rows.len() == self.limit {
+            let (worst, better) = self.rows.split_last().ok_or(Error::InvalidQuery)?;
+            if !compare(worst).is_gt() {
                 return Ok(());
             }
-            // Release the losing output before copying its replacement. A later
-            // refusal drops the whole collection, never exposing a partial answer.
-            let removed = self.rows.swap_remove(worst);
-            self.state_bytes -= removed.key.capacity() + removed.bytes.capacity();
+            better
+        } else {
+            self.rows.as_slice()
+        };
+        let position = match candidates.binary_search_by(compare) {
+            // Full row keys include the primary tie-breaker. Equal projected
+            // keys in sorted DISTINCT already have a representative.
+            Ok(_) => return Ok(()),
+            Err(position) => position,
+        };
+        if self.rows.len() == self.limit {
+            // Release the worst retained output before charging its replacement.
+            let removed = self.rows.pop().ok_or(Error::InvalidQuery)?;
+            self.state_bytes -= removed.key.len() + removed.bytes.capacity();
             drop(removed);
         }
         let size = plan
             .projection
             .map_or(bytes.len(), |mask| projection_size(spans, mask));
-        if self.state_bytes + key.capacity() + size > MAX_STATE_BYTES {
+        if self.state_bytes + key.len() + size > MAX_STATE_BYTES {
             return Err(Error::Limit);
         }
         let row = plan.projection.map_or_else(
             || bytes.to_vec(),
             |mask| copy_projection(bytes, spans, mask, size),
         );
-        let charge = key.capacity() + row.capacity();
+        let charge = key.len() + row.capacity();
         if self.state_bytes + charge > MAX_STATE_BYTES {
             return Err(Error::Limit);
         }
         self.state_bytes += charge;
-        self.rows.push(Row { key, bytes: row });
+        self.rows.insert(
+            position,
+            Row {
+                key: Box::from(key.as_slice()),
+                bytes: row,
+            },
+        );
 
         Ok(())
     }
 
     // Only called after the scanner observes exhaustion. Retained keys are unique.
-    // Compare admitted bytes without decoding inside the sort.
     pub(super) fn finish(
-        mut self,
+        self,
         byte_limit: usize,
         page: &mut QueryPage<Vec<u8>>,
     ) -> Result<(), Error> {
-        self.rows.sort_unstable_by(|left, right| {
-            if self.descending {
-                right.key.cmp(&left.key)
-            } else {
-                left.key.cmp(&right.key)
-            }
-        });
         for row in self.rows {
             admit_output(row.bytes.len(), byte_limit, &mut page.output_bytes)?;
             page.rows.push(row.bytes);

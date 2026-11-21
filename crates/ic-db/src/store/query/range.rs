@@ -52,9 +52,11 @@ impl Endpoint {
 fn matches_field(entity: &EntitySchema, term: &Term, path: &str) -> bool {
     let parent = entity.fields[term.position].name;
     match &term.operand {
-        TermOperand::Nested { member, .. } => {
-            path.split_once('.') == Some((parent, member.field().name))
-        }
+        TermOperand::Nested { member, .. }
+        | TermOperand::Length {
+            member: Some(member),
+            ..
+        } => path.split_once('.') == Some((parent, member.field().name)),
         _ => path == parent,
     }
 }

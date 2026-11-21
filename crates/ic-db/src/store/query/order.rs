@@ -490,16 +490,6 @@ pub(super) fn literal_equalities<'r, 'a>(
     })
 }
 
-// Operands have already been type-checked. Text and Blob literals carry their
-// original bytes, before the durable key codec escapes embedded zeros.
-fn literal_bytes(value: IndexValue<'_>) -> Option<&[u8]> {
-    match value {
-        IndexValue::Text(text) => Some(text.as_bytes()),
-        IndexValue::Blob(bytes) => Some(bytes),
-        _ => None,
-    }
-}
-
 // The caller supplies either known query values or just the selected key prefix.
 fn fixed_comparison<'a>(
     predicate: &Predicate<'_>,
@@ -511,7 +501,7 @@ fn fixed_comparison<'a>(
             let length = if left == IndexValue::Absent {
                 None
             } else {
-                Some(u32::try_from(literal_bytes(left)?.len()).ok()?)
+                Some(u32::try_from(super::scalar_bytes(left)?.len()).ok()?)
             };
 
             return Some(predicate.comparison.accepts_length(length, threshold));
@@ -530,23 +520,28 @@ fn fixed_comparison<'a>(
             // Text and Blob already have the declared byte order. For every
             // other admitted scalar, compare the same components as a row filter.
             let mut encoded = Vec::new();
-            let (left, right) =
-                if let (Some(l), Some(r)) = (literal_bytes(left), literal_bytes(right)) {
-                    (l, r)
-                } else {
-                    left.append_component(false, &mut encoded);
-                    let split = encoded.len();
-                    right.append_component(false, &mut encoded);
-                    encoded.split_at(split)
-                };
+            let (left, right) = if let (Some(l), Some(r)) =
+                (super::scalar_bytes(left), super::scalar_bytes(right))
+            {
+                (l, r)
+            } else {
+                left.append_component(false, &mut encoded);
+                let split = encoded.len();
+                right.append_component(false, &mut encoded);
+                encoded.split_at(split)
+            };
 
             Some(predicate.comparison.accepts(Some(left), Some(right), false))
         }
-        Comparison::StartsWith => Some(literal_bytes(left)?.starts_with(literal_bytes(right)?)),
-        Comparison::EndsWith => Some(literal_bytes(left)?.ends_with(literal_bytes(right)?)),
-        Comparison::Contains => {
-            Some(memchr::memmem::find(literal_bytes(left)?, literal_bytes(right)?).is_some())
+        Comparison::StartsWith => {
+            Some(super::scalar_bytes(left)?.starts_with(super::scalar_bytes(right)?))
         }
+        Comparison::EndsWith => {
+            Some(super::scalar_bytes(left)?.ends_with(super::scalar_bytes(right)?))
+        }
+        Comparison::Contains => Some(
+            memchr::memmem::find(super::scalar_bytes(left)?, super::scalar_bytes(right)?).is_some(),
+        ),
     }
 }
 

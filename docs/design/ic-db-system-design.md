@@ -953,6 +953,10 @@ update time. The caller reads after commit if it needs the final assigned value.
 Equal timestamps are not an optimistic-concurrency token: distinct changes may
 share an operation time.
 Deletes need no operation time because they assign none.
+For a single managed insert input or replacement, the session captures
+`Timestamp::now()` and supplies it to the existing batch. Mounted canister
+sessions delegate to the owning store session. This follows frozen IcyDB
+`6d421e3`'s session write boundary in `db/session/write/mod.rs`.
 
 This retains IcyDB's frozen-time, no-op and corrupt-order regressions from
 `persisted_row/patch/tests.rs`, including rejection of inverted stored time even
@@ -1433,6 +1437,10 @@ validation from traversal in `db/query/predicate/validate.rs`. The executor read
 the child from the validated parent span using the row codec. Absence at either
 level gives the ordinary absent scalar. Presence filters use that scalar's
 presence directly and skip encoding a comparison key.
+Text and Blob members also accept literal `StartsWith` through the same typed
+comparison and encoded prefix bounds as top-level fields. An empty prefix matches
+every present value, including an empty member. An absent parent or member fails
+the prefix predicate. An indexed member can answer the bounded count from keys.
 Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
 validated scalar for the bounded complete sorter. A missing parent and missing
 member share one absent sort key. Ordinary direction and primary tie-breaker
@@ -2679,7 +2687,10 @@ values and Gt(0) selects present nonempty values. A mandatory literal equality o
 length of a Text or Blob. The planner can reject a contradictory clause before
 traversal and an index covering the other filters can count entries directly.
 The length uses the original value, including UTF-8 and raw zero bytes.
-For residual length filters the u32 count comes from the validated field span.
+For top-level residual length filters the u32 count comes from the validated field span.
+For a direct Text or Blob member of a record, the scanner takes the byte length
+of the borrowed member value. An absent parent and an absent member both match
+only Ne. The continuation binds both the member position and the threshold.
 The threshold is bound to cursor and job identity. `QueryOperand::Length(n)` uses the same term
 inside an OR clause. The local `db query` and `db aggregate` commands pass
 `--length FIELD OP N` to the same builder. Frozen IcyDB `6d421e3` tested Text and list emptiness in
@@ -2698,6 +2709,9 @@ fields in one transient presence mask instead of requesting scalar key slots;
 the existing full-row decoder supplies validated byte spans. Execution reads the
 optional tag and shares comparison absence semantics. It still validates the
 entire present value before filtering, without materializing a generic value tree.
+For top-level scalar presence tests, the executor uses the decoded scalar's
+presence or an already required field span. Neither requires encoding the value
+as a comparison key.
 This retains IcyDB `6d421e3`'s structural null/presence distinction from
 `db/predicate/runtime` and missing-path regression lessons, without its separate
 scalar/value predicate dispatch, nested-path rules or SQL null nodes. Existing
@@ -3080,9 +3094,16 @@ input order and cannot use this sort. Indexed live pages
 and their bindings are unchanged. The existing work cap admits at most 511
 candidates plus observation of exhaustion; larger or resumable sorting remains work.
 
-Bounded selection compares each candidate with the worst retained key and drops
-the loser before copying a replacement output. At most 32 retained keys are
-examined per candidate; no heap index, value cache or generic comparator is added.
+Bounded selection keeps up to 32 retained rows in requested order. Once full,
+the last key supplies the cutoff: only a strictly better candidate needs a
+binary search for its insertion point or an equal DISTINCT key.
+Insertion can move at most 31 retained row handles. The worst row is dropped
+before copying its replacement output, and completed rows are emitted in order.
+The scanner reuses its temporary component buffer for each candidate key.
+Field offsets also use a scan-local buffer. When the plan requires offsets,
+row inspection overwrites every declared field's range, including absent fields,
+before any consumer reads it. Borrowed field values remain local to each row.
+Only a retained row owns a key copy, charged at its exact encoded length.
 All matching candidates still obey the comparison-key bound, even when discarded.
 The retained buffer cap applies throughout selection, so oversized intermediate
 winners may refuse even if later winners would be smaller. Native full-sort

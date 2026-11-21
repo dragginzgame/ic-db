@@ -9,7 +9,10 @@ use rusqlite::Connection;
 /// Stores an optional amount at scale two.
 ///
 
-#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
+#[record(fields(
+    field(name = "amount", value(opt, item(prim = "Decimal", scale = 2))),
+    field(name = "currency", value(opt, item(prim = "Text", max_bytes = 3)))
+))]
 struct Price {}
 
 ///
@@ -30,30 +33,31 @@ struct Product {}
 #[test]
 fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     const AMOUNT: &str = ic_db::field_path!(Product::PRICE, Price::AMOUNT);
+    const CURRENCY: &str = ic_db::field_path!(Product::PRICE, Price::CURRENCY);
     let fixture = Fixture::new("test.products.v1");
     let schema = || Schema::new(&[Product::SCHEMA]).unwrap();
     let mut db = fixture.create(schema(), [1; 16]).unwrap();
     let sql = Connection::open_in_memory().unwrap();
     sql.execute(
-        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER)",
+        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER, currency TEXT)",
         [],
     )
     .unwrap();
     let mut batch = Batch::new();
-    for (id, price) in [
-        None,
-        Some(None),
-        Some(Some(0_i32)),
-        Some(Some(-15)),
-        Some(Some(125)),
-        Some(Some(-15)),
+    for (id, (price, currency)) in [
+        (None, None),
+        (Some(None), None),
+        (Some(Some(0_i32)), Some("")),
+        (Some(Some(-15)), Some("USD")),
+        (Some(Some(125)), Some("EUR")),
+        (Some(Some(-15)), Some("USD")),
     ]
     .into_iter()
     .enumerate()
     {
         sql.execute(
-            "INSERT INTO products VALUES (?1,?2)",
-            (id as u32, price.flatten()),
+            "INSERT INTO products VALUES (?1,?2,?3)",
+            (id as u32, price.flatten(), currency),
         )
         .unwrap();
         batch
@@ -61,6 +65,7 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
                 id: id as u64,
                 price: price.map(|amount| Price {
                     amount: amount.map(|c| Decimal::try_new(i128::from(c), 2).unwrap()),
+                    currency: currency.map(String::from),
                 }),
             })
             .unwrap();
@@ -70,6 +75,26 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     let db = fixture.open(schema()).unwrap();
     let zero = Decimal::try_new(0, 2).unwrap();
     for (query, predicate) in [
+        (
+            db.query::<Product>()
+                .filter_length(CURRENCY, ic_db::Comparison::Eq, 0),
+            "length(CAST(currency AS BLOB)) = 0",
+        ),
+        (
+            db.query::<Product>()
+                .filter_length(CURRENCY, ic_db::Comparison::Ne, 3),
+            "length(CAST(currency AS BLOB)) IS NOT 3",
+        ),
+        (
+            db.query::<Product>()
+                .filter(CURRENCY, ic_db::Comparison::StartsWith, ""),
+            "instr(currency, '') = 1",
+        ),
+        (
+            db.query::<Product>()
+                .filter(CURRENCY, ic_db::Comparison::StartsWith, "US"),
+            "instr(currency, 'US') = 1",
+        ),
         (db.query::<Product>().filter_absent(AMOUNT), "cents IS NULL"),
         (
             db.query::<Product>().filter_present(AMOUNT),
@@ -290,16 +315,36 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
         assert_eq!(ids, expected, "{predicate}");
         assert_eq!(examined, candidates, "{predicate}");
     }
-    // The interval crosses both rows at 256, but neither belongs to the requested set.
-    let sparse = db
-        .query::<Ranked>()
-        .filter_in(SCORE, &[257_u16, 255, 257])
-        .order_desc(SCORE)
-        .order_desc(Ranked::ID)
-        .fetch()
+    // Each row in the SQLite interval corresponds to one candidate-budgeted page.
+    // The two tied scores at 256 produce consecutive empty pages between matches.
+    let expected = sql
+        .prepare("SELECT CASE WHEN score IN (257,255) THEN id END FROM ranked WHERE score BETWEEN 255 AND 257 ORDER BY score DESC, id DESC")
+        .unwrap()
+        .query_map([], |r| r.get::<_, Option<u32>>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(sparse.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [5, 1]);
-    assert_eq!(sparse.examined, 4);
+    assert_eq!(expected, [Some(5), None, None, Some(1)]);
+    let sparse = || {
+        db.query::<Ranked>()
+            .filter_in(SCORE, &[257_u16, 255, 257])
+            .order_desc(SCORE)
+            .order_desc(Ranked::ID)
+            .work_limit(1)
+    };
+    let mut page = sparse().fetch().unwrap();
+    for (position, id) in expected.into_iter().enumerate() {
+        if position > 0 {
+            page = sparse().after(page.next.as_ref().unwrap()).fetch().unwrap();
+        }
+        assert_eq!(page.examined, 1);
+        assert!(page.rows.iter().map(|row| row.id).eq(id.map(u64::from)));
+    }
+    if let Some(after) = page.next {
+        let end = sparse().after(&after).fetch().unwrap();
+        assert_eq!(end.examined, 0);
+        assert!(end.rows.is_empty() && end.next.is_none());
+    }
 
     let count = db
         .query::<Ranked>()
@@ -335,6 +380,73 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
             expected
         );
     }
+}
+
+#[test]
+fn nested_index_cursor_resumes_after_deleted_key_across_reopen() {
+    const SCORE: &str = ic_db::field_path!(Ranked::RATING, Rating::SCORE);
+    let fixture = Fixture::new("test.ranked.live.v1");
+    let schema = || Schema::new(&[Ranked::SCHEMA]).unwrap();
+    let mut db = fixture.create(schema(), [3; 16]).unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute(
+        "CREATE TABLE ranked(id INTEGER PRIMARY KEY, score INTEGER)",
+        [],
+    )
+    .unwrap();
+    let row = |id: u32, score| Ranked {
+        id: u64::from(id),
+        bucket: 0,
+        rating: Rating { score, other: 0 },
+    };
+    let mut batch = Batch::new();
+    for (id, score) in [(1, 10), (2, 20), (3, 20), (4, 30)] {
+        batch.insert(&row(id, score)).unwrap();
+        sql.execute("INSERT INTO ranked VALUES (?1,?2)", (id, score))
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let first = db
+        .query::<Ranked>()
+        .order_asc(SCORE)
+        .limit(2)
+        .fetch()
+        .unwrap();
+    assert_eq!(first.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [1, 2]);
+    let anchor = first.rows.last().unwrap();
+    let cursor = first.next.unwrap();
+
+    // Remove the anchor, move a returned row ahead of it and an unseen row behind it.
+    let mut batch = Batch::new();
+    batch.delete::<Ranked>(2).unwrap();
+    sql.execute("DELETE FROM ranked WHERE id=2", []).unwrap();
+    for (id, score) in [(1, 40), (4, 5)] {
+        batch.replace(&row(id, score)).unwrap();
+        sql.execute("UPDATE ranked SET score=?2 WHERE id=?1", (id, score))
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = fixture.open(schema()).unwrap();
+    let expected = sql
+        .prepare("SELECT id FROM ranked WHERE (score,id) > (?1,?2) ORDER BY score,id")
+        .unwrap()
+        .query_map(
+            (anchor.rating.score, i64::try_from(anchor.id).unwrap()),
+            |r| r.get::<_, u32>(0).map(u64::from),
+        )
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(expected, [3, 1]);
+    let page = db
+        .query::<Ranked>()
+        .order_asc(SCORE)
+        .limit(2)
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
 }
 
 #[newtype(item(prim = "Text", max_bytes = 32))]
@@ -470,6 +582,54 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             Err(Error::InvalidOperand)
         ));
         let tag = Tag("128".into());
+        for (path, column) in [(LABEL, "label"), (PAYLOAD, "payload"), (TAG, "tag")] {
+            let expected = sql.prepare(&format!("SELECT id FROM observations WHERE length(CAST({column} AS BLOB)) >= 2 ORDER BY id"))
+                .unwrap().query_map([], |r| r.get::<_, u32>(0).map(u64::from)).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let query = || {
+                db.query::<Observation>()
+                    .filter_length(path, ic_db::Comparison::Ge, 2)
+            };
+            let page = query().fetch().unwrap();
+            assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
+            assert!(matches!(query().work_limit(1).count(), Err(Error::Limit)));
+        }
+        let length = |path, n| {
+            db.query::<Observation>()
+                .filter_length(path, ic_db::Comparison::Ge, n)
+                .limit(1)
+        };
+        let cursor = length(LABEL, 0).fetch().unwrap().next.unwrap();
+        for changed in [length(LABEL, 1), length(PAYLOAD, 0)] {
+            assert!(matches!(
+                changed.after(&cursor).fetch(),
+                Err(Error::InvalidCursor)
+            ));
+        }
+        assert!(matches!(length(SCORE, 0).fetch(), Err(Error::InvalidQuery)));
+        for (path, operand, column, prefix) in [
+            (LABEL, IndexValue::from("a\0"), "label", &b"a\0"[..]),
+            (LABEL, "é".into(), "label", "é".as_bytes()),
+            (PAYLOAD, (&[0_u8]).into(), "payload", &[0][..]),
+            (PAYLOAD, (&[0xff_u8]).into(), "payload", &[0xff][..]),
+            (PAYLOAD, (&[] as &[u8]).into(), "payload", &[][..]),
+        ] {
+            let expected = sql
+                .prepare(&format!("SELECT id FROM observations WHERE instr(CAST({column} AS BLOB), ?1) = 1 ORDER BY {column}, id"))
+                .unwrap()
+                .query_map([prefix], |r| r.get::<_, u32>(0).map(u64::from))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let query = || {
+                db.query::<Observation>()
+                    .filter(path, ic_db::Comparison::StartsWith, operand)
+            };
+            let page = query().order_asc(path).fetch().unwrap();
+            assert_eq!(page.examined, expected.len());
+            assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
+            let count = query().count().unwrap();
+            assert_eq!((count.value, count.fetched), (expected.len() as u64, 0));
+        }
         for (path, upper, column, sql_value) in [
             (
                 TAG,

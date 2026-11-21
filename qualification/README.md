@@ -1806,6 +1806,30 @@ The original fixture is restored; the only retained product changes in this
 increment are the result-type decoding boundary and duplicate revision-lookup
 removal. No experimental entity-fetch helper or request context remains.
 
+### Ordered buffer for bounded sorting (after 0.26.5)
+
+`make m2-sort-costs` compares the records measurement canister on 0.26.5
+with successive changes to bounded selection. All four builds passed the same results, resource
+refusals and upgrade checks. Selected 511-row query costs in IC instructions:
+
+| Query | 0.26.5 | Ordered buffer | With cutoff | Reused key buffer |
+| --- | ---: | ---: | ---: | ---: |
+| Category ascending, amount descending, limit 32 | 15,579,060 | 9,795,345 | 9,577,935 | 8,937,810 |
+| Same order, limit 1 | 8,452,339 | 8,465,599 | 8,458,208 | 7,869,354 |
+| Descending category DISTINCT, two categories, limit 2 | 7,028,999 | 7,126,034 | 7,045,260 | 6,853,640 |
+| Descending category DISTINCT, high cardinality, limit 32 | 9,202,068 | 7,796,583 | 7,510,851 | 7,332,604 |
+
+Measurement Wasm went from 1,196,392 to 1,191,542 bytes, then to 1,191,637
+with the cutoff and 1,191,459 with key-buffer reuse. Across the 55 measured calls,
+the largest instruction increase from the cutoff build was 0.58% for a post-upgrade
+amount sort with one qualifying row in 511 candidates (6,739,000 to 6,777,771).
+
+Reusing the scanner's field-offset table across candidates took the same top-32
+query from 8,937,810 to 8,778,696 instructions. The filtered sort that examined
+511 rows and returned none went from 6,725,827 to 6,566,713. The largest increase
+across the 55 calls was six instructions on a single-row lookup. Measurement
+Wasm grew by 14 bytes to 1,191,473.
+
 ### Expanded sorting costs and direction admission (0.18)
 
 Re-run the unchanged six-subject `make m2-query-growth` fixture after per-field
@@ -4974,6 +4998,14 @@ endpoints are qualification controls, not a shipped Canic adapter or a new publi
 dynamic-query API; there is no remote connection or durable CLI session.
 
 ### Blob query contract (0.21.0)
+
+A follow-up PocketIC measurement after 0.26.5 used the records measurement
+canister with one `BinaryObject` whose optional Blob held 32 zero bytes.
+Selecting the optional field through `measured_query` took 296,231 instructions
+before the scalar presence change and 291,180 after for `filter_present`
+(one row). The same projection with `filter_absent` took 274,279 and 269,031
+instructions (zero rows). Both calls preserved stable memory. Measurement Wasm
+grew by one byte. These figures cover this one-row fixture.
 
 Focused native checks:
 

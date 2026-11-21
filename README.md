@@ -1147,7 +1147,10 @@ fn register_pair(db: &CanisterSession<Hub>, first: &User, second: &User) -> Resu
 }
 ```
 
-Use `db.batch_at(time)` to supply the operation timestamp for managed fields.
+For one managed row, use `db.insert_input(input)?` or `db.replace(&row)?`.
+The session captures the operation time. A replacement that changes no fields
+preserves the stored update time. Use `db.batch_at(time)` when supplying an
+explicit time or grouping several managed writes under one timestamp.
 Prepared changes become visible together when the store accepts the commit.
 
 When moving declarations into a shared

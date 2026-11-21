@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+### ✨ Writes
+
+- Single-row session `insert_input` and `replace` automatically capture the time
+  for database-managed timestamps. Replacing an unchanged row preserves its update time.
+
+### 🔍 Queries
+
+- `filter_length` accepts a direct Text or Blob member of a record. It counts
+  UTF-8 or raw bytes and keeps absent values distinct from present empty values.
+
+- `filter(path, Comparison::StartsWith, prefix)` now accepts direct Text and Blob
+  members of a record. A matching member index can serve an ordered prefix scan
+  or count matching entries without fetching their owner rows.
+
+- `filter_present` and `filter_absent` on a top-level optional scalar use its
+  validated presence directly, avoiding a comparison-key allocation for present values.
+
+- Query scans decide once whether field offsets are needed and reuse the offset
+  buffer across rows. Each row still passes full codec validation.
+
+- Bounded sorts keep their best rows in order during the scan. Sorted DISTINCT
+  uses the same binary search to recognize an already retained tuple. Once the
+  window fills, a single comparison can discard a candidate at or below the cutoff.
+  Scanned rows reuse the comparison buffer. Only retained keys get an owned copy.
+
+### 🎯 Qualification
+
+- Compare live nested-index pagination with SQLite after deleting the cursor row,
+  moving two rows across its position and reopening the database.
+- Verify that a descending nested-index query resumes through consecutive empty
+  pages when its work budget allows one candidate per call.
+
 ## [0.26.5] - 2026-11-21
 
 ### ✨ Features

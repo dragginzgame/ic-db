@@ -1,6 +1,8 @@
 //! Synchronous access to a database attached by the host.
 
-use crate::{Batch, Database, Entity, Error, IndexValue, InsertInput, Query};
+use crate::{
+    Batch, Database, Entity, EntitySchema, Error, IndexValue, InsertInput, Query, Timestamp,
+};
 use std::{
     cell::{Ref, RefCell},
     rc::Rc,
@@ -101,6 +103,14 @@ impl<E: Entity> QuerySession<E> for DatabaseSession {
 #[derive(Clone)]
 pub struct DatabaseSession(Rc<RefCell<Database>>);
 
+fn single_write_batch(entity: &EntitySchema) -> Batch {
+    if entity.has_managed() {
+        Batch::at(Timestamp::now())
+    } else {
+        Batch::new()
+    }
+}
+
 impl DatabaseSession {
     /// Wrap an already-created or reopened database. Its allocation remains
     /// leased until the last handle is dropped.
@@ -184,22 +194,22 @@ impl DatabaseSession {
     }
 
     /// Insert one generated input, applying its schema defaults. Returns the row
-    /// after commit succeeds. For managed timestamps use [`Batch::at`].
+    /// after commit succeeds. Managed fields receive the current operation time.
     /// # Errors
     /// Propagates input preparation and commit errors.
     pub fn insert_input<I: InsertInput>(&self, input: I) -> Result<I::Entity, Error> {
-        let mut batch = Batch::new();
+        let mut batch = single_write_batch(I::Entity::SCHEMA);
         let row = batch.insert_input(input)?;
         self.commit(batch)?;
 
         Ok(row)
     }
 
-    /// Replace one existing entity as one batch.
+    /// Replace one existing entity. A changed row receives the current managed update time.
     /// # Errors
     /// Propagates batch preparation and commit errors.
     pub fn replace<E: Entity>(&self, row: &E) -> Result<(), Error> {
-        let mut batch = Batch::new();
+        let mut batch = single_write_batch(E::SCHEMA);
         batch.replace(row)?;
 
         self.commit(batch)

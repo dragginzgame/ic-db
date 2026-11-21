@@ -211,6 +211,39 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
 }
 
 #[test]
+fn single_row_session_writes_supply_managed_time_and_preserve_replays() {
+    let host = runtime(VectorMemory::default());
+    let db = Database::create(
+        host.open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Entry::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let db = ic_db::DatabaseSession::new(db);
+    let mut seed = Batch::at(time(100));
+    let mut old = seed.insert_input(Entry::insert().id(1)).unwrap();
+    db.commit(seed).unwrap();
+
+    let before = Timestamp::now();
+    let inserted = db
+        .insert_input(Entry::insert().id(2).body("reserved".into()))
+        .unwrap();
+    assert_eq!(db.get::<Entry>(2).unwrap(), Some(inserted.clone()));
+    assert_eq!(inserted.born.0, inserted.changed.0);
+    assert!((before..=Timestamp::now()).contains(&inserted.born.0));
+
+    db.replace(&old).unwrap();
+    assert_eq!(db.get::<Entry>(1).unwrap(), Some(old.clone()));
+    old.body = "confirmed".into();
+    db.replace(&old).unwrap();
+    let confirmed = db.get::<Entry>(1).unwrap().unwrap();
+    assert_eq!(confirmed.born.0, time(100));
+    assert_eq!(confirmed.body, "confirmed");
+    assert!((before..=Timestamp::now()).contains(&confirmed.changed.0));
+}
+
+#[test]
 fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchanged() {
     let backing = VectorMemory::default();
     let host = runtime(backing.clone());
