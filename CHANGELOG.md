@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.26.8] - Unreleased
+## [0.26.8] - 2026-11-21
 
 ### Schema inspection
 
