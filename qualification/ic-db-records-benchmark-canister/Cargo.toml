@@ -16,6 +16,7 @@ category = "tests"
 crate-type = ["cdylib"]
 
 [features]
+ranked-listing = []
 aggregate-comparison = []
 count-comparison = []
 exists-comparison = []

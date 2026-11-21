@@ -50,6 +50,7 @@ help:
 	  'make m2-aggregate-comparison    Compare grouped IC DB/IcyDB aggregate costs' \
 	  'make m2-fluent-comparison       Compare fluent IC DB/IcyDB listings and sorting' \
 	  'make m2-keyset-comparison       Compare complete two-row listings with frozen IcyDB' \
+	  'make m2-ranked-listing          Check ordered project listings against SQLite' \
 	  'make m2-query-matrix            Compare broad query/selectivity/population matrix' \
 	  'make m2-aggregate-paths         Compare primary and explicit-index aggregates' \
 	  'make m2-prefix-candidate        Measure isolated maintained-prefix experiment' \
@@ -125,6 +126,10 @@ m2-fluent-comparison:
 .PHONY: m2-keyset-comparison
 m2-keyset-comparison:
 	bash scripts/measure-records.sh keyset
+
+.PHONY: m2-ranked-listing
+m2-ranked-listing:
+	bash scripts/measure-records.sh ranked-listing
 
 .PHONY: m2-query-matrix
 m2-query-matrix:

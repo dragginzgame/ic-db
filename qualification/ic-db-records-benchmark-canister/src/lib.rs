@@ -1,9 +1,11 @@
 #![deny(unsafe_code)]
 // Platform narrowly permits the generated IC export attribute; handlers remain safe.
-//! One-entity host matching the frozen IcyDB scalar workload, without fault controls.
+//! Scalar benchmark host. The ranked listing feature adds four layouts for the SQLite comparison.
 
 #[cfg(feature = "count-profile")]
 mod count_profile;
+#[cfg(feature = "ranked-listing")]
+mod ranked_listing;
 
 use ic_db_qualification_transport as transport;
 
@@ -399,7 +401,18 @@ const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
 type Row = (u64, u64, u64);
 
 fn compiled() -> Schema {
-    Schema::new(&[Entry::SCHEMA]).unwrap()
+    Schema::new(&[
+        Entry::SCHEMA,
+        #[cfg(feature = "ranked-listing")]
+        ranked_listing::ByTime::SCHEMA,
+        #[cfg(feature = "ranked-listing")]
+        ranked_listing::ByProject::SCHEMA,
+        #[cfg(feature = "ranked-listing")]
+        ranked_listing::ByPrice::SCHEMA,
+        #[cfg(feature = "ranked-listing")]
+        ranked_listing::ByPriceAndTime::SCHEMA,
+    ])
+    .unwrap()
 }
 
 fn runtime() -> MemoryRuntime<DefaultMemoryImpl> {

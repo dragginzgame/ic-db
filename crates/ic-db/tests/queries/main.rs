@@ -512,8 +512,10 @@ fn covered_count_prefers_the_exact_unique_key() {
         index(name = "by_code_and_id", fields = ["code", "id"]),
         index(field = "code", unique),
         index(field = "score"),
+        index(field = "active"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "active", value(item(prim = "Bool"))),
             field(name = "code", value(item(prim = "Nat64"))),
             field(name = "score", value(item(prim = "Nat64")))
         )
@@ -526,7 +528,14 @@ fn covered_count_prefers_the_exact_unique_key() {
         .unwrap();
     let mut batch = Batch::new();
     for (id, code, score) in [(1, 7, 0), (2, 0, 1), (3, u64::MAX, 2)] {
-        batch.insert(&CodedRow { id, code, score }).unwrap();
+        batch
+            .insert(&CodedRow {
+                id,
+                code,
+                score,
+                active: id != 2,
+            })
+            .unwrap();
     }
     db.commit(batch).unwrap();
 
@@ -559,6 +568,15 @@ fn covered_count_prefers_the_exact_unique_key() {
         (checked.value, checked.examined, checked.fetched),
         (1, 2, 2)
     );
+    // Both activity states cover the entire non-unique index. Only score narrows the scan.
+    let count = db
+        .query::<CodedRow>()
+        .filter_in(CodedRow::ACTIVE, &[true, false])
+        .gte(CodedRow::SCORE, 2_u64)
+        .work_limit(2)
+        .count_field(CodedRow::ID)
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
 }
 
 #[test]
@@ -585,6 +603,96 @@ fn aggregate_unique_lookup_checks_remaining_filters_in_one_visit() {
             (found.value, found.examined, found.fetched),
             (expected, visited, visited)
         );
+    }
+}
+
+#[test]
+fn aggregate_ranks_sparse_presence_below_a_narrow_range() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || db.query::<Entry>();
+    for full_range in [
+        query().gte(Entry::MAYBE, 0_u64),
+        query().lte(Entry::MAYBE, u64::MAX),
+        query().ne(Entry::MAYBE, IndexValue::Absent),
+    ] {
+        let count = full_range
+            .gte(Entry::AMOUNT, 70_u64)
+            .work_limit(3)
+            .count_field(Entry::ID)
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (2, 2, 2));
+    }
+    let members = || query().filter_in(Entry::MAYBE, &[0_u64, u64::MAX]);
+    let scan = members()
+        .gte(Entry::AMOUNT, 70_u64)
+        .work_limit(3)
+        .count_field(Entry::ID)
+        .unwrap();
+    assert_eq!((scan.value, scan.examined, scan.fetched), (0, 2, 2));
+    let probes = members().work_limit(2).count_validated().unwrap();
+    assert_eq!((probes.value, probes.examined, probes.fetched), (0, 2, 0));
+    // Presence alone can still avoid the two rows omitted from the sparse index.
+    let present = query()
+        .ne(Entry::MAYBE, IndexValue::Absent)
+        .work_limit(7)
+        .count_field(Entry::ID)
+        .unwrap();
+    assert_eq!(
+        (present.value, present.examined, present.fetched),
+        (6, 6, 6)
+    );
+}
+
+#[test]
+fn full_primary_range_allows_a_narrow_sparse_scan() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for (op, endpoint) in [(C::Ge, 0_u64), (C::Le, u64::MAX)] {
+        let count = db
+            .query::<Entry>()
+            .filter(Entry::ID, op, endpoint)
+            .gte(Entry::MAYBE, 7_u64)
+            .work_limit(3)
+            .count_field(Entry::ID)
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (2, 2, 2));
+    }
+    // A scan between these ID extrema covers the table. Only ID 7 is listed
+    // among the two rows on the sparse range; ID 8 still fails membership.
+    let ids = [0_u64, 7, u64::MAX];
+    let query = || {
+        db.query::<Entry>()
+            .filter_in(Entry::ID, &ids)
+            .gte(Entry::MAYBE, 7_u64)
+            .work_limit(3)
+    };
+    let scan = query().count_field(Entry::ID).unwrap();
+    assert_eq!((scan.value, scan.examined, scan.fetched), (1, 2, 2));
+    for count in [query().count().unwrap(), query().count_validated().unwrap()] {
+        assert_eq!((count.value, count.examined, count.fetched), (1, 3, 1));
+    }
+    let restricted = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[6_u64, 7])
+        .gte(Entry::MAYBE, 0_u64)
+        .work_limit(3)
+        .count_field(Entry::ID)
+        .unwrap();
+    assert_eq!(
+        (restricted.value, restricted.examined, restricted.fetched),
+        (1, 2, 2)
+    );
+    for query in [
+        db.query::<Entry>().gte(Entry::ID, 8_u64),
+        db.query::<Entry>().eq(Entry::ID, 8_u64),
+    ] {
+        let count = query
+            .gte(Entry::MAYBE, 0_u64)
+            .work_limit(2)
+            .count_field(Entry::ID)
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
     }
 }
 
@@ -6540,7 +6648,7 @@ fn adjacent_distinct_crosses_a_fixed_interior_index_component() {
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
             field(name = "category", value(item(prim = "Nat8"))),
-            field(name = "published", value(item(prim = "Bool"))),
+            field(name = "published", value(opt, item(prim = "Bool"))),
             field(name = "amount", value(item(prim = "Nat64")))
         )
     )]
@@ -6556,42 +6664,87 @@ fn adjacent_distinct_crosses_a_fixed_interior_index_component() {
             .insert(&Listing {
                 id,
                 category: (id % 2) as u8,
-                published: id & 2 == 0,
+                published: (id != 15).then_some(id & 2 == 0),
                 // One unpublished-only amount catches an omitted residual check.
-                amount: if id == 2 { 99 } else { (id / 4) % 2 },
+                amount: match id {
+                    2 => 99,
+                    15 => 100,
+                    _ => (id / 4) % 2,
+                },
             })
             .unwrap();
     }
     db.commit(batch).unwrap();
-    for reverse in [false, true] {
-        let mut after = None;
-        let mut output = Vec::new();
-        for _ in 0..=16 {
-            let mut query = db
-                .query::<Listing>()
-                .distinct()
-                .eq(Listing::PUBLISHED, true)
-                .order_by(&[Listing::CATEGORY, Listing::AMOUNT])
-                .work_limit(1);
+    for (op, operand, published) in [
+        (C::Eq, true, true),
+        (C::Gt, false, true),
+        (C::Ge, true, true),
+        (C::Lt, true, false),
+        (C::Le, false, false),
+    ] {
+        for reverse in [false, true] {
+            let mut after = None;
+            let mut output = Vec::new();
+            for _ in 0..=16 {
+                let mut query = db
+                    .query::<Listing>()
+                    .distinct()
+                    .filter(Listing::PUBLISHED, op, operand)
+                    .order_by(&[Listing::CATEGORY, Listing::AMOUNT])
+                    .work_limit(1);
+                if reverse {
+                    query = query.descending();
+                }
+                if let Some(cursor) = &after {
+                    query = query.after(cursor);
+                }
+                let page = query.fetch_as::<CategoryAmount>().unwrap();
+                output.extend(page.rows.into_iter().map(|row| (row.category, row.amount)));
+                after = page.next;
+                if after.is_none() {
+                    break;
+                }
+            }
+            assert!(after.is_none());
+            let mut expected = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
+            if !published {
+                expected.insert(2, (0, 99));
+            }
             if reverse {
-                query = query.descending();
+                expected.reverse();
             }
-            if let Some(cursor) = &after {
-                query = query.after(cursor);
-            }
-            let page = query.fetch_as::<CategoryAmount>().unwrap();
-            output.extend(page.rows.into_iter().map(|row| (row.category, row.amount)));
-            after = page.next;
-            if after.is_none() {
-                break;
-            }
+            assert_eq!(output, expected);
         }
-        assert!(after.is_none());
-        let mut expected = [(0, 0), (0, 1), (1, 0), (1, 1)];
-        if reverse {
-            expected.reverse();
-        }
-        assert_eq!(output, expected);
+    }
+    for (op, value) in [(C::Lt, false), (C::Gt, true)] {
+        let count = db
+            .query::<Listing>()
+            .filter(Listing::PUBLISHED, op, value)
+            .work_limit(1)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
+    }
+    for (op, value) in [(C::Ge, false), (C::Le, true)] {
+        // The absent publication state in category 1 is outside both ranges.
+        let count = db
+            .query::<Listing>()
+            .eq(Listing::CATEGORY, 1_u8)
+            .filter(Listing::PUBLISHED, op, value)
+            .work_limit(8)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (7, 7, 0));
+    }
+    // Both inequalities include the category's one absent publication state.
+    for (excluded, expected) in [(false, 5), (true, 4)] {
+        let count = db
+            .query::<Listing>()
+            .eq(Listing::CATEGORY, 1_u8)
+            .ne(Listing::PUBLISHED, excluded)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, expected);
     }
     // Without the equality, the same pair recurs in both publication states.
     assert!(matches!(

@@ -391,7 +391,9 @@ impl Predicate<'_> {
     // Each of these predicates matches exactly the rows where the field is present.
     fn tests_presence(&self, entity: &EntitySchema, operand: &TermOperand) -> bool {
         match (self.comparison, self.operand) {
-            (Comparison::Ne, QueryOperand::Literal(IndexValue::Absent)) => true,
+            (Comparison::Ne, QueryOperand::Literal(IndexValue::Absent))
+            | (Comparison::Ge, QueryOperand::Literal(IndexValue::Bool(false)))
+            | (Comparison::Le, QueryOperand::Literal(IndexValue::Bool(true))) => true,
             (_, QueryOperand::Length(_)) => {
                 self.present_length_result(entity) == Some(true)
                     && self.comparison != Comparison::Ne
@@ -429,11 +431,16 @@ impl Predicate<'_> {
     }
 
     fn constant_comparison(&self, entity: &EntitySchema) -> Option<bool> {
-        // Empty is the least present Text or Blob. Absence also fails ordering.
-        if let (Comparison::Lt, QueryOperand::Literal(value)) = (self.comparison, self.operand)
-            && scalar_bytes(value).is_some_and(<[u8]>::is_empty)
-        {
-            return Some(false);
+        if let QueryOperand::Literal(value) = self.operand {
+            // Absence also fails these comparisons at the edges of the present domain.
+            return match (self.comparison, value) {
+                (Comparison::Lt, IndexValue::Bool(false))
+                | (Comparison::Gt, IndexValue::Bool(true)) => Some(false),
+                (Comparison::Lt, _) if scalar_bytes(value).is_some_and(<[u8]>::is_empty) => {
+                    Some(false)
+                }
+                _ => None,
+            };
         }
         if matches!(self.operand, QueryOperand::Length(_)) {
             let result = self.present_length_result(entity)?;

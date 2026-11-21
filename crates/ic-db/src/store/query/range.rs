@@ -206,17 +206,27 @@ pub(super) fn has_secondary_bound(
     let Some((name, secondary)) = next_field(entity, Some(path.index), path.fixed) else {
         return false;
     };
-    let extreme = |key: &[u8], byte| {
-        entity.index_field(name).is_some_and(|field| {
-            !field.optional
-                && crate::key::fixed_width(crate::key::operand_type(field.value)) == Some(key.len())
-                && key.iter().all(|&b| b == byte)
-        })
+    let Some(field) = entity.index_field(name) else {
+        return false;
+    };
+    let includes_absence = field.optional && !path.index.present_only;
+    let extreme = |key: &[u8], upper: bool| {
+        let present = if field.optional {
+            match key {
+                [0] => return !upper,
+                [1, value @ ..] if upper || !includes_absence => value,
+                _ => return false,
+            }
+        } else {
+            key
+        };
+        crate::key::is_fixed_extreme(field.value, present, upper)
     };
     plan.clauses().any(|clause| {
         if let [term] = clause {
             if !matches_field(entity, term, name)
-                || (term.tests_presence && entity.field_is_required(name))
+                || (term.tests_presence
+                    && (entity.field_is_required(name) || path.index.present_only))
             {
                 return false;
             }
@@ -224,8 +234,9 @@ pub(super) fn has_secondary_bound(
                 .ok()
                 .flatten()
                 .is_some_and(|(comparison, key)| match comparison {
-                    Comparison::Ge => !extreme(key, 0),
-                    Comparison::Le => !extreme(key, u8::MAX),
+                    Comparison::Ge => !extreme(key, false),
+                    // Optional upper bounds also exclude absent entries.
+                    Comparison::Le => includes_absence || !extreme(key, true),
                     _ => true,
                 });
         }
@@ -233,7 +244,7 @@ pub(super) fn has_secondary_bound(
             // Complete keys can use point probes. A component with trailing keys
             // must scan every value between the two endpoints.
             (can_probe && (!secondary || path.index.is_unique_lookup(path.fixed + 1)))
-                || !(extreme(low, 0) && extreme(high, u8::MAX))
+                || !(extreme(low, false) && extreme(high, true))
         })
     })
 }
@@ -329,7 +340,7 @@ pub(super) fn point_members<'a>(
                 if name == field {
                     Some(**value)
                 } else {
-                    super::order::fixed_prefix_value(request, plan, name)
+                    super::order::fixed_prefix_value(entity, request, plan, name)
                 }
             };
             let mut needs_row = false;
@@ -370,23 +381,36 @@ pub(super) fn point_members<'a>(
     )
 }
 
-// A secondary candidate must retain every bound the primary scan could seek.
+// A secondary candidate must retain every restriction the primary scan could seek.
 pub(super) fn preserves_primary_bounds(
     entity: &EntitySchema,
     plan: &Plan<'_>,
     path: &super::order::IndexPath<'_>,
+    can_probe: bool,
 ) -> bool {
+    let field = entity.fields[plan.primary].value;
     plan.clauses().all(|clause| {
         let primary_bound = match clause {
             [term] => {
                 term.position == plan.primary
-                    && matches!(
-                        bound_operand(entity, term, false, plan.prefix.len()),
-                        Ok(Some(_))
-                    )
+                    && !term.tests_presence
+                    && bound_operand(entity, term, false, plan.prefix.len())
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(comparison, key)| match comparison {
+                            Comparison::Ge => !crate::key::is_fixed_extreme(field, key, false),
+                            Comparison::Le => !crate::key::is_fixed_extreme(field, key, true),
+                            _ => true,
+                        })
             }
             _ => {
-                membership_interval(entity, entity.primary_key, clause, plan.prefix.len()).is_some()
+                membership_interval(entity, entity.primary_key, clause, plan.prefix.len())
+                    .is_some_and(|(low, high)| {
+                        // Probes can skip unlisted IDs even when the interval spans the table.
+                        can_probe
+                            || !(crate::key::is_fixed_extreme(field, low, false)
+                                && crate::key::is_fixed_extreme(field, high, true))
+                    })
             }
         };
 

@@ -461,6 +461,19 @@ pub(crate) fn fixed_width(field: FieldType) -> Option<usize> {
     }
 }
 
+// Recognize proven extrema of present fixed-width keys when ranking index ranges.
+pub(crate) fn is_fixed_extreme(field: FieldType, bytes: &[u8], upper: bool) -> bool {
+    match operand_type(field) {
+        FieldType::Bool => bytes == [u8::from(upper)],
+        FieldType::Named(link) => unit_enum_len((link.definition)())
+            .is_some_and(|len| bytes == [if upper { (len - 1) as u8 } else { 0 }]),
+        scalar => {
+            fixed_width(scalar) == Some(bytes.len())
+                && bytes.iter().all(|&b| b == if upper { u8::MAX } else { 0 })
+        }
+    }
+}
+
 pub(crate) fn supports(field: FieldType) -> bool {
     let field = operand_type(field);
 

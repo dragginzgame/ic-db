@@ -77,7 +77,7 @@ pub(super) fn select<'a>(
             };
         }
     }
-    let single_row = equality(request, entity.primary_key).is_some();
+    let single_row = equality(entity, request, entity.primary_key).is_some();
     let fits_order = |index, fixed| single_row || satisfies(entity, request, index, fixed);
     if let Some((name, values)) = &request.index {
         let index = entity.index_by_name(name).ok_or(Error::InvalidQuery)?;
@@ -121,14 +121,14 @@ pub(super) fn select<'a>(
             || request
                 .cursor
                 .is_some_and(|c| c.position.first() == Some(&2))
-            || literal_equalities(request).next().is_none());
+            || literal_equalities(entity, request).next().is_none());
     if default_primary {
         return Ok(Path::Primary);
     }
     let primary_fits = fits_order(None, 0);
     let mut best: Option<IndexPath<'_>> = None;
     for index in entity.indexes {
-        let values = leading_equalities(request, index);
+        let values = leading_equalities(entity, request, index);
         if (primary_fits && values.is_empty())
             || !complete_membership(entity, index, index.fields, &values, request)
             || !fits_order(Some(index), values.len())
@@ -162,7 +162,7 @@ pub(super) fn select<'a>(
     let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
     let mut varying = Vec::with_capacity(order.len() + 1);
     for (i, name) in order.iter().enumerate() {
-        if equality(request, name).is_none() {
+        if equality(entity, request, name).is_none() {
             varying.push(positions[i]);
         }
     }
@@ -190,7 +190,7 @@ fn unique_lookup<'a>(
         .iter()
         .filter(|i| i.unique && i.fields.len() <= request.predicates.len())
     {
-        let values = leading_equalities(request, index);
+        let values = leading_equalities(entity, request, index);
         if index.is_unique_lookup(values.len())
             && let Some(path) = automatic_prefix(entity, index, &values)?
         {
@@ -210,7 +210,7 @@ pub(super) fn select_unique_aggregate_path<'a>(
 ) -> Result<(), Error> {
     if plan.index.is_none()
         && !request.predicates.is_empty()
-        && equality(request, entity.primary_key).is_none()
+        && equality(entity, request, entity.primary_key).is_none()
         && let Some(path) = unique_lookup(entity, request)?
     {
         plan.use_index(entity, path);
@@ -250,7 +250,7 @@ pub(super) fn select_filtered_path<'a>(
             )
         }));
     }
-    let primary = equality(request, entity.primary_key);
+    let primary = equality(entity, request, entity.primary_key);
     if covers_keys(
         entity,
         request,
@@ -262,9 +262,10 @@ pub(super) fn select_filtered_path<'a>(
         return Ok(true);
     }
     let exact_id = primary.is_some();
+    let can_probe = probe.is_some();
     let mut best = None;
     for index in entity.indexes {
-        let values = leading_equalities(request, index);
+        let values = leading_equalities(entity, request, index);
         if !complete_membership(entity, index, index.fields, &values, request) {
             continue;
         }
@@ -290,13 +291,15 @@ pub(super) fn select_filtered_path<'a>(
         }
         if !covered
             && (exact_id
-                || (!single_owner && !super::range::preserves_primary_bounds(entity, plan, &path)))
+                || (!single_owner
+                    && !super::range::preserves_primary_bounds(entity, plan, &path, can_probe)))
         {
             continue;
         }
         let (fixed, width, name) = rank(index, path.fixed);
-        let bounded = super::range::has_secondary_bound(entity, plan, &path, probe.is_some());
-        if values.is_empty() && !bounded && !covered {
+        let bounded = super::range::has_secondary_bound(entity, plan, &path, can_probe);
+        // A complete sparse traversal already skips rows with absent components.
+        if values.is_empty() && !bounded && !covered && !index.present_only {
             continue;
         }
         let score = (!single_owner, !covered, fixed, !bounded, width, name);
@@ -350,11 +353,15 @@ fn covers_keys(
         })
 }
 
-fn leading_equalities<'a>(request: &Request<'a>, index: &IndexSchema) -> Vec<IndexValue<'a>> {
+fn leading_equalities<'a>(
+    entity: &EntitySchema,
+    request: &Request<'a>,
+    index: &IndexSchema,
+) -> Vec<IndexValue<'a>> {
     index
         .fields
         .iter()
-        .map_while(|field| equality(request, field))
+        .map_while(|field| equality(entity, request, field))
         .collect()
 }
 
@@ -411,7 +418,7 @@ fn requires_presence(
                     .clauses()
                     .any(|clause| clause.iter().all(|p| directly_requires_presence(p, other)))
         }
-        Comparison::Ne => equality(request, other) == Some(IndexValue::Absent),
+        Comparison::Ne => equality(entity, request, other) == Some(IndexValue::Absent),
         comparison => !comparison.accepts_absent(false) && !comparison.accepts_absent(true),
     }
 }
@@ -459,8 +466,9 @@ fn satisfies(
     // An empty requested field list leaves just the primary-key tie-breaker.
     let order = request.order.as_deref().unwrap_or_default();
     let fields = index.map_or(&[][..], |i| i.fields);
-    let fixed =
-        |name: &&str| fields[..prefix_len].contains(name) || equality(request, name).is_some();
+    let fixed = |name: &&str| {
+        fields[..prefix_len].contains(name) || equality(entity, request, name).is_some()
+    };
     // A fixed primary key admits at most one record, so every admitted order fits.
     if fields[..prefix_len].contains(&entity.primary_key) {
         return true;
@@ -497,23 +505,35 @@ fn satisfies(
 
 // A disjunction fixes a field only if every alternative asserts the same equality.
 pub(super) fn literal_equalities<'r, 'a>(
+    entity: &'r EntitySchema,
     request: &'r Request<'a>,
 ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
-    fn fixed<'a>(p: &Predicate<'a>) -> Option<(&'a str, IndexValue<'a>)> {
+    fn fixed<'a>(entity: &EntitySchema, p: &Predicate<'a>) -> Option<(&'a str, IndexValue<'a>)> {
         let QueryOperand::Literal(value) = p.operand else {
             return None;
         };
-        // Ordering excludes absence, and empty is the least Text or Blob value.
-        (p.comparison == Comparison::Eq
-            || (p.comparison == Comparison::Le
-                && super::scalar_bytes(value).is_some_and(<[u8]>::is_empty)))
-        .then_some((p.field, value))
+        // Ordered comparisons exclude absence, including on optional fields.
+        let fixed = match (p.comparison, value) {
+            (Comparison::Eq, _) => value,
+            (Comparison::Ne, IndexValue::Bool(excluded)) if entity.field_is_required(p.field) => {
+                IndexValue::Bool(!excluded)
+            }
+            (Comparison::Le, _) if super::scalar_bytes(value).is_some_and(<[u8]>::is_empty) => {
+                value
+            }
+            (Comparison::Gt, IndexValue::Bool(false))
+            | (Comparison::Ge, IndexValue::Bool(true)) => IndexValue::Bool(true),
+            (Comparison::Lt, IndexValue::Bool(true))
+            | (Comparison::Le, IndexValue::Bool(false)) => IndexValue::Bool(false),
+            _ => return None,
+        };
+        Some((p.field, fixed))
     }
-    request.clauses().filter_map(|clause| {
+    request.clauses().filter_map(move |clause| {
         let (predicate, rest) = clause.split_first()?;
-        let equality = fixed(predicate)?;
+        let equality = fixed(entity, predicate)?;
         rest.iter()
-            .all(|other| fixed(other) == Some(equality))
+            .all(|other| fixed(entity, other) == Some(equality))
             .then_some(equality)
     })
 }
@@ -565,6 +585,7 @@ pub(super) fn fixed_comparison<'a>(
 
 // An explicit prefix takes precedence over a requested equality on the same field.
 fn constrained_value<'a>(
+    entity: &EntitySchema,
     request: &Request<'a>,
     index: Option<&IndexSchema>,
     field: &str,
@@ -574,17 +595,18 @@ fn constrained_value<'a>(
         .as_ref()
         .zip(index)
         .and_then(|((_, values), index)| prefix_value(index.fields, values, field))
-        .or_else(|| equality(request, field))
+        .or_else(|| equality(entity, request, field))
 }
 
 pub(super) fn fixed_prefix_value<'a>(
+    entity: &EntitySchema,
     request: &Request<'a>,
     plan: &super::Plan<'_>,
     field: &str,
 ) -> Option<IndexValue<'a>> {
     let index = plan.index?;
     if index.fields[..plan.fixed_components].contains(&field) {
-        constrained_value(request, Some(index), field)
+        constrained_value(entity, request, Some(index), field)
     } else {
         None
     }
@@ -650,7 +672,7 @@ fn excluded_by_bounds(
             (Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains, operand) => {
                 let value = match operand {
                     QueryOperand::Literal(value) => Some(value),
-                    QueryOperand::Field(name) => constrained_value(request, index, name),
+                    QueryOperand::Field(name) => constrained_value(entity, request, index, name),
                     QueryOperand::Length(_) => None,
                 };
                 let Some(bytes) = value.and_then(super::scalar_bytes) else {
@@ -703,7 +725,7 @@ pub(super) fn has_conflicting_predicates(
     index: Option<&IndexSchema>,
 ) -> bool {
     if request.index.is_none()
-        && (request.predicates.len() < 2 || literal_equalities(request).next().is_none())
+        && (request.predicates.len() < 2 || literal_equalities(entity, request).next().is_none())
     {
         return request.clauses().any(|clause| {
             clause.iter().all(|p| {
@@ -717,14 +739,14 @@ pub(super) fn has_conflicting_predicates(
         .into_iter()
         .flat_map(|((_, values), index)| index.fields.iter().copied().zip(values.iter().copied()));
     if components
-        .chain(literal_equalities(request))
+        .chain(literal_equalities(entity, request))
         .any(|(field, value)| {
             value == IndexValue::Absent && requires_present_field(entity, request, field)
         })
     {
         return true;
     }
-    let lookup = |field: &str| constrained_value(request, index, field);
+    let lookup = |field: &str| constrained_value(entity, request, index, field);
 
     request.clauses().any(|clause| {
         clause.iter().all(|p| {
@@ -734,8 +756,12 @@ pub(super) fn has_conflicting_predicates(
     })
 }
 
-fn equality<'a>(request: &Request<'a>, field: &str) -> Option<IndexValue<'a>> {
-    literal_equalities(request)
+fn equality<'a>(
+    entity: &EntitySchema,
+    request: &Request<'a>,
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    literal_equalities(entity, request)
         .find(|(name, _)| *name == field)
         .map(|(_, value)| value)
 }

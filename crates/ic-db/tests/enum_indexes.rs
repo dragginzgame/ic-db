@@ -106,6 +106,8 @@ struct States {}
 #[entity(
     store = ic_db::testing::FixtureStore,
     pk(field = "id"),
+    index(field = "unrelated"),
+    index(field = "wanted"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "allowed", value(item(is = "States"))),
@@ -129,13 +131,32 @@ fn enum_membership_checks_schema_identity_before_comparing_ordinals() {
                 id,
                 allowed: States([State::Ready].into()),
                 wanted,
-                unrelated: Other::Ready,
+                unrelated: if id == 1 { Other::Draft } else { Other::Ready },
             })
             .unwrap();
     }
     db.commit(batch).unwrap();
 
     let query = || db.query::<Permissions>();
+    // The first and last ordinals span the unrelated index. Ready narrows wanted to one row.
+    let by_wanted = || {
+        query()
+            .gte(Permissions::WANTED, &State::Ready)
+            .work_limit(2)
+    };
+    for (filtered, expected) in [
+        (by_wanted().lte(Permissions::UNRELATED, &Other::Ready), 1),
+        (
+            by_wanted().filter_in(Permissions::UNRELATED, &[&Other::Archived, &Other::Ready]),
+            0,
+        ),
+    ] {
+        let count = filtered.count_field(Permissions::ID).unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, 1, 1)
+        );
+    }
     let page = query()
         .filter_fields("allowed", Contains, "wanted")
         .fetch()
@@ -283,6 +304,25 @@ fn enum_keys_preserve_identity_order_uniqueness_and_reopen() {
             .unwrap(),
         [rows[0].clone()]
     );
+    // None through Ready spans the whole boxed index. The maybe index visits
+    // just Draft and Ready; only the row with absent boxed state survives.
+    let count = db
+        .query::<Row>()
+        .filter_in(Row::BOXED, &[None, Some(&State::Ready)])
+        .gte(Row::MAYBE, &State::Draft)
+        .work_limit(3)
+        .count_field(Row::ID)
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 2, 2));
+    // Starting at the first present variant skips the absent key.
+    let count = db
+        .query::<Row>()
+        .filter_in(Row::BOXED, &[&State::Archived, &State::Ready])
+        .gte(Row::MAYBE, &State::Archived)
+        .work_limit(3)
+        .count_field(Row::ID)
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (2, 2, 2));
     drop(db);
     let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
     assert_eq!(

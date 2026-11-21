@@ -389,7 +389,7 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | 4,191 raw bytes per added entity from 1 to 8 and 4,496 from 8 to 32 in the 0.26.7 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0267-worktree) |
-| Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
+| Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,676 of 1,908 successful pairs. The median paired ratio was 0.384. | Owner-validated prefix counts reached 31.39× legacy. This workload uses three Nat64 fields. [Planner checkpoint](#planner-checkpoint-after-0269) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sparse ID listing | 128 rows, two categories, default-order IC DB and explicit-index control | Automatic IC DB used 51.7–55.1% fewer handler instructions than legacy after upgrade and readiness | Two-row pages on fixed input with last-ID boundaries. [0.23.13 comparison](#automatic-equality-listings-02313) |
@@ -3202,6 +3202,91 @@ results and source/build receipts. Hosts are 321,866 raw / 296,887 code bytes an
 
 - IC DB: `854dc15dfa3103429449034818d5c912bddc387ec53e27b122c8321b8a10981d`.
 - IcyDB: `5402e8ab13bc2b714a160fd7ae9afaf09ea8fba1c5540c86d29180ca6f8fd295`.
+
+### Ranked project listing
+
+Run `make m2-ranked-listing` after `make m0-setup`. The installed records
+benchmark host stores the same 128 synthetic items in four layouts. All secondary indexes
+start with project and open state. The time and price
+layouts append their respective fields. The equality layout ends at open state.
+A fourth layout declares the price index first and the time index second.
+All four run the same fluent query. SQLite independently filters integer
+cents at the supplied inclusive ceiling and orders by update time and ID descending.
+The following runs use a ceiling of 100.00.
+
+| Query on installed Wasm | Calls | Returned | Examined / fetched | Handler instructions |
+| --- | ---: | ---: | ---: | ---: |
+| Ordered index, 20 results per page | 1 | 17 | 90 / 90 | 12,251,114 |
+| Both indexes, 2 results and 4 candidates per page | 25 | 17 | 90 / 90 | 36,067,431 |
+| Equality index and complete sort, best 2 | 1 | 2 | 90 / 90 | 11,876,367 |
+| Equality index and complete sort, best 32 | 1 | 17 | 90 / 90 | 11,935,027 |
+
+For a first page of two with a 128-candidate budget, each cell below gives
+candidates examined / handler instructions. Each examined candidate required
+one owner fetch. The time index can stop after two qualifying items. The price
+index bounds the candidates by price and sorts the entire matching range.
+The equality index must check the price on every candidate before sorting.
+
+| Price ceiling | Matching items | Time index | Price index | Equality index | Both price and time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 99.99 | 0 | 90 / 12,201,547 | 0 / 954,310 | 90 / 11,836,109 | 90 / 13,390,467 |
+| 100.00 | 17 | 7 / 1,756,312 | 17 / 3,234,734 | 90 / 11,876,367 | 7 / 1,892,565 |
+| 100.01 | 90 | 2 / 1,170,899 | 90 / 12,533,516 | 90 / 11,975,153 | 2 / 1,217,025 |
+
+With both indexes available, automatic selection used the time order at all three
+ceilings. The zero-match case exposes the cost of checking price as a residual
+predicate. At 100.00 the dual-index traversal resumed through all 25 pages.
+
+On 2026-11-21, all returned IDs and their order matched SQLite. Fourteen sparse
+pages returned zero rows with a continuation. Complete sorting refused a work
+budget of 90 and succeeded at 91, where it could observe exhaustion. Handler
+instructions include opening the database on each call and mapping the result
+to IDs. Transport encoding and decoding are outside the counter. The runner
+saves the Wasm, build information and output in `target/evidence/ranked-listing`
+under the qualification workspace.
+
+### Planner checkpoint after 0.26.9
+
+On 2026-11-21 the unreleased planner and tagged IC DB v0.26.9 each ran the
+[broad query matrix](#broad-query-matrix-019) against the same frozen IcyDB
+Wasm. Each run checked all 4,680 outcomes against independent expectations and
+verified stable backing after each read matrix. Of 2,340 paired reads per run,
+432 exercised the documented legacy sort refusal. Across the other 1,908 pairs,
+the worktree used fewer instructions than legacy in 1,676 and more in 232.
+The median paired IC DB / legacy instruction ratio was 0.384.
+
+| Release-profile query host | Uncompressed Wasm bytes | Code section bytes |
+| --- | ---: | ---: |
+| IC DB v0.26.9 | 386,117 | 357,964 |
+| IC DB planner worktree | 387,058 | 358,951 |
+| Frozen IcyDB `6d421e3` | 3,295,334 | 3,183,403 |
+
+Against v0.26.9, the worktree's 2,340 matched IC DB instruction counts ranged
+from 0.306% lower to 0.0412% higher, with a median change of −0.045%.
+All frozen-engine instruction counts repeated exactly. These cases exercise
+existing scalar workloads. The optional, Boolean and enum planner bounds have
+separate focused tests. The reported sizes are for the complete hosts.
+
+The broad matrix uses explicit owner validation for category counts. A separate
+`make m2-count-paths` run checked 108 successful pairs, including the default
+fluent count. After upgrade, the 511-row skewed fixture measured the following
+handler instructions, including database open.
+
+| Category matches | IC DB automatic count | IC DB validated count | Frozen IcyDB maintained count |
+| ---: | ---: | ---: | ---: |
+| 415 | 3,821,466 | 49,035,788 | 1,553,991 |
+| 32 | 1,045,446 | 4,699,385 | 1,561,362 |
+| 0 | 837,258 | 836,118 | 1,559,694 |
+
+IC DB counts the covered index entries. The default cost grows with the number
+of matches. Legacy maintains this prefix count on writes. The separate count
+receipts are in `target/evidence/count-paths-0269-planner`.
+
+The raw CSVs, build outputs and logs are under `target/evidence/` in
+`query-matrix-0269-planner` and `query-matrix-0269-release` in this workspace.
+The control host was built from a Git archive of v0.26.9 with the same locked
+release profile, target and `query-matrix` feature, then installed using the
+same driver. Run `make m2-query-matrix` to repeat the worktree comparison.
 
 ### Broad query matrix (0.19)
 

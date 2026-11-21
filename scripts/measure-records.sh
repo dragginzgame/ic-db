@@ -23,6 +23,11 @@ case "$workload" in
         test_name=records_comparison
         export IC_DB_AGGREGATE_COMPARISON=1
         ;;
+    ranked-listing)
+        evidence="$PWD/qualification/target/evidence/ranked-listing"
+        engines=(records-benchmark)
+        test_name=ranked_listing
+        ;;
     query-matrix)
         evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/query-matrix}"
         engines=(records-benchmark icydb-baseline)
@@ -69,7 +74,7 @@ case "$workload" in
         engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;
-    *) printf 'Expected fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, growth or queries workload\n' >&2; exit 2 ;;
+    *) printf 'Expected ranked-listing, fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, growth or queries workload\n' >&2; exit 2 ;;
 esac
 mkdir -p "$evidence"
 if [[ "$test_name" == query_matrix ]]; then
@@ -101,6 +106,9 @@ for engine in "${engines[@]}"; do
     build_features=""
     if [[ "$workload" == query-matrix || "$workload" == aggregate-paths ]]; then
         build_features=query-matrix
+    fi
+    if [[ "$workload" == ranked-listing ]]; then
+        build_features=ranked-listing
     fi
     if [[ "$workload" == exists ]]; then
         build_features=exists-comparison

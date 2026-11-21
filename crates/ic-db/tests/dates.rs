@@ -221,6 +221,30 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
             .collect::<Vec<_>>()
     };
     assert_eq!(read(&db), vec![1, 2, 3, 4, 5, 6]);
+    for (op, value) in [
+        (ic_db::Comparison::Ge, false),
+        (ic_db::Comparison::Le, true),
+    ] {
+        let count = db
+            .query::<DateRow>()
+            .filter(DateRow::ZONE, op, value)
+            .work_limit(1)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (6, 0, 0));
+    }
+    for (excluded, expected) in [(false, Some(1)), (true, None)] {
+        let page = db
+            .query::<DateRow>()
+            .ne(DateRow::ZONE, excluded)
+            .order_by(&[DateRow::VALUE, DateRow::ID])
+            .limit(1)
+            .work_limit(1)
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.first().map(|row| row.id), expected);
+        assert_eq!(page.examined, usize::from(expected.is_some()));
+    }
     for pair in values().windows(2) {
         assert!(pair[0] < pair[1]);
         let key = |v: Date| ic_db::__private::encode_index(&[(v.into(), false)], false).unwrap();

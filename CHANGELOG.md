@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.26.10] - Unreleased
+
+### Queries
+
+- Boolean ranges that select one present value can use it as a fixed compound
+  index field. For example, `published > false` can page distinct categories
+  and amounts through an index on `(category, published, amount)`.
+  On a required Boolean, `!= false` and `!= true` also fix the index field.
+  On an optional Boolean, either inequality can also match an absent value.
+- Counts for impossible Boolean ranges return zero without examining rows.
+  On a required Boolean, `>= false` and `<= true` can use maintained cardinality.
+  On an optional Boolean, these comparisons count only present values.
+- A membership filter containing both Boolean values covers a required field's
+  entire range. On required unit enums, the planner likewise recognizes the
+  first and last variants in canonical name order as the scan boundaries. A narrower index
+  can serve the aggregate while membership still filters out unlisted variants.
+  On an optional field, membership from absence through the largest present
+  value also spans its ordinary index. On a present-only index, the first and
+  last present values span the index. Aggregate scans can still use that index
+  to skip absent rows when there is no narrower range.
+- An inclusive bound covering the entire primary-key domain, such as
+  `id >= 0` on a `Nat64`, lets aggregate scans use a narrower secondary
+  range. The same applies to membership lists spanning both key extremes when
+  the operation scans rows. Counts that can probe individual IDs retain those
+  probes. Exact IDs and restrictive primary-key ranges keep their existing seeks.
+
+### Qualification
+
+- Repeated the installed-Wasm query matrix against v0.26.9 and frozen IcyDB.
+  The planner changes added 941 bytes to the query host. Across 2,340 IC DB
+  executions, the largest measured instruction increase was 0.0412%.
+  [Results](qualification/README.md#planner-checkpoint-after-0269)
+
+- `make m2-ranked-listing` checks a filtered project listing against SQLite on
+  installed Wasm. It covers automatic index selection, sparse continuation
+  pages, timestamp ties and the work boundary for a globally ordered top two.
+  It also measures how time, price and equality indexes affect first-page work
+  with zero, sparse and dense price matches, including automatic selection when
+  both price and time indexes are declared.
+
 ## [0.26.9] - 2026-11-21
 
 ### Breaking storage change
