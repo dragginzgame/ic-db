@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.26.9] - Unreleased
+## [0.26.9] - 2026-11-21
 
 ### Breaking storage change
 
