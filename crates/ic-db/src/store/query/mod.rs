@@ -75,7 +75,7 @@ pub enum Comparison {
 
 impl Comparison {
     fn supports_record_member(self) -> bool {
-        self.is_relational() || self == Self::StartsWith
+        self.is_relational() || matches!(self, Self::StartsWith | Self::EndsWith)
     }
 
     fn is_relational(self) -> bool {
@@ -273,6 +273,46 @@ impl QueryCursor {
     }
 }
 
+impl serde::Serialize for QueryCursor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_bytes().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for QueryCursor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Frame;
+
+        impl<'de> serde::de::Visitor<'de> for Frame {
+            type Value = QueryCursor;
+
+            fn expecting(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                fmt.write_str("a bounded IC DB query cursor frame")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<QueryCursor, A::Error> {
+                let size = seq.size_hint().unwrap_or(0);
+                if size > QueryCursor::MAX_ENCODED_BYTES {
+                    return Err(serde::de::Error::custom(Error::InvalidCursor));
+                }
+                let mut frame = Vec::with_capacity(size);
+                while let Some(byte) = seq.next_element()? {
+                    if frame.len() == QueryCursor::MAX_ENCODED_BYTES {
+                        return Err(serde::de::Error::custom(Error::InvalidCursor));
+                    }
+                    frame.push(byte);
+                }
+                QueryCursor::from_bytes(&frame).map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_seq(Frame)
+    }
+}
+
 /// A bounded page. Empty rows do not mean completion when `next` is present.
 /// Ordinary queries are live; maintenance source pages read frozen input.
 #[derive(Debug)]
@@ -335,7 +375,7 @@ pub enum QueryOperand<'a> {
     Literal(IndexValue<'a>),
     /// Compare the field's byte length (Text/Blob) or item count (list/set/map).
     Length(u32),
-    /// Compare with another top-level field on the same row.
+    /// Compare with another field or supported direct record member on the same row.
     Field(&'a str),
 }
 
@@ -664,7 +704,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Add an AND term. A top-level list or set supports exact scalar membership with `Contains`.
     /// A direct scalar record member selected by [`crate::field_path!`] accepts
     /// Eq, Ne, Lt, Le, Gt and Ge against a literal. Text and Blob members
-    /// also accept `StartsWith` with a prefix of the same type.
+    /// also accept `StartsWith` and `EndsWith` with an operand of the same type.
     /// Eq/Ne with `IndexValue::Absent` also accept any optional stored field,
     /// including blobs and containers. Empty values are present, not absent.
     /// All operands are admitted before storage reads, including contradictory terms.
@@ -723,7 +763,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Compare fields on the same row. Eq, Ne, Lt, Le, Gt and Ge also accept
-    /// direct scalar record members on either side, as does StartsWith for Text and Blob.
+    /// direct scalar record members on either side, as do StartsWith and EndsWith for Text and Blob.
     /// Top-level lists and sets support Contains
     /// with a present scalar field or direct record member of the element type. Text and Blob also
     /// support StartsWith, EndsWith and Contains with a present right-hand field.

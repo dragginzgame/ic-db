@@ -340,12 +340,13 @@ fn covers_keys(
             });
 
             key_proves_clause
-                || match terms {
-                    [term] => {
-                        super::range::bounds_key_term(entity, index, values.len(), term, prefix_len)
-                    }
-                    _ => false,
-                }
+                || super::range::key_range_proves_clause(
+                    entity,
+                    index,
+                    values.len(),
+                    terms,
+                    prefix_len,
+                )
         })
 }
 
@@ -585,23 +586,53 @@ pub(super) fn fixed_prefix_value<'a>(
 
 // Only singleton clauses constrain every match. Each bound below also requires
 // a present value. Ne alone would allow absence and cannot narrow this interval.
-fn length_excluded(request: &Request<'_>, predicate: &Predicate<'_>) -> bool {
+fn length_excluded(
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    index: Option<&IndexSchema>,
+    predicate: &Predicate<'_>,
+) -> bool {
     let QueryOperand::Length(threshold) = predicate.operand else {
         return false;
     };
     if request.predicates.len() < 2 {
         return false;
     }
-    let (mut min, mut max) = (0, u32::MAX);
+    let Some(field) = entity.index_field(predicate.field) else {
+        return false;
+    };
+    let Some(mut max) = super::length_limit(field.value) else {
+        return false;
+    };
+    let mut min = 0;
     for clause in request.clauses() {
         let [bound] = clause else { continue };
-        let QueryOperand::Length(n) = bound.operand else {
-            continue;
-        };
         if bound.field != predicate.field {
             continue;
         }
-        match bound.comparison {
+        let (comparison, n) = match (bound.comparison, bound.operand) {
+            (comparison, QueryOperand::Length(n)) => (comparison, n),
+            // Collection lengths count elements, even for a Text or Blob needle.
+            (Comparison::Contains, _) if super::member_type(field.value).is_some() => {
+                (Comparison::Ge, 1)
+            }
+            (Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains, operand) => {
+                let value = match operand {
+                    QueryOperand::Literal(value) => Some(value),
+                    QueryOperand::Field(name) => constrained_value(request, index, name),
+                    QueryOperand::Length(_) => None,
+                };
+                let Some(bytes) = value.and_then(super::scalar_bytes) else {
+                    continue;
+                };
+                (
+                    Comparison::Ge,
+                    u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+                )
+            }
+            _ => continue,
+        };
+        match comparison {
             Comparison::Eq => {
                 min = min.max(n);
                 max = max.min(n);
@@ -645,7 +676,8 @@ pub(super) fn has_conflicting_predicates(
     {
         return request.clauses().any(|clause| {
             clause.iter().all(|p| {
-                p.constant_comparison(entity) == Some(false) || length_excluded(request, p)
+                p.constant_comparison(entity) == Some(false)
+                    || length_excluded(entity, request, None, p)
             })
         });
     }
@@ -665,7 +697,8 @@ pub(super) fn has_conflicting_predicates(
 
     request.clauses().any(|clause| {
         clause.iter().all(|p| {
-            fixed_comparison(entity, p, &lookup) == Some(false) || length_excluded(request, p)
+            fixed_comparison(entity, p, &lookup) == Some(false)
+                || length_excluded(entity, request, index, p)
         })
     })
 }

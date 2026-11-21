@@ -1,6 +1,6 @@
 //! Named record boundary; field codecs and type rules stay in `field`.
 
-use super::{declaration, field::Field, meta_items, metas, once, text};
+use super::{declaration, field::Field, meta_items, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -9,7 +9,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let mut name = None;
     let mut fields = None;
-    for meta in metas(args)? {
+    let (wire, options) = crate::declaration_options(args)?;
+    for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("fields") {
@@ -81,7 +82,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let field_constants = super::field_constants(&fields, &item.ident)?;
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs)?;
+    let attrs = crate::schema_attrs(&item.attrs, wire)?;
 
     Ok(quote! {
         #attrs

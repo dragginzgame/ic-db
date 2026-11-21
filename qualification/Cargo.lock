@@ -991,6 +991,7 @@ dependencies = [
  "ic-platform-runtime 0.23.24",
  "ic-platform-types 0.21.4",
  "ic-storage 0.78.8",
+ "ic-wire 0.28.0",
  "memchr",
  "serde",
  "sha2 0.11.1",
@@ -1177,6 +1178,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-db-wire-schema-probe"
+version = "0.0.0"
+dependencies = [
+ "ic-db",
+ "ic-wire 0.28.0",
+ "serde",
+ "serde_json",
+ "toko-tooling",
+]
+
+[[package]]
 name = "ic-entropy"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1237,9 +1249,9 @@ dependencies = [
 
 [[package]]
 name = "ic-platform-protocol"
-version = "0.3.7"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d8b8e67643b3107f060b90f85d7e51ea136d4e498e791e090c4810434bab545"
+checksum = "ac5afafd05512480789ef66466bf5c6e9b63d84e47760bed5fa8ead8c59b7cd3"
 
 [[package]]
 name = "ic-platform-runtime"
@@ -1384,9 +1396,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "024b6e9cdada5e25ac61615bb6c5502549678bff7091af4eff6a9d2e7fddd46b"
 dependencies = [
  "bytemuck",
+ "ic-platform-types 0.21.4",
+ "ic-wire-derive",
  "postcard",
  "serde",
  "serde_bytes",
+ "serde_json",
+]
+
+[[package]]
+name = "ic-wire-derive"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cb8522ad8da5121f02f0624b80bb476c6a571d005b62962271c12febbabf1e5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]

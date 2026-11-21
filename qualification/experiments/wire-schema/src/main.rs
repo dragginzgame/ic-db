@@ -1,0 +1,310 @@
+//! Downstream application payload and host inspection probe.
+#![forbid(unsafe_code)]
+
+use ic_db::design::prelude::*;
+#[cfg(feature = "inspection")]
+use ic_wire::typescript::Wire;
+use ic_wire::{Encoding, Limits};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "inspection", derive(Wire))]
+struct UserAdminRequest {
+    user_id: Ulid,
+    action: Action,
+}
+
+#[enum_(wire, variant(name = "Suspend"), variant(name = "Allow"))]
+struct Action {}
+
+#[newtype(wire, item(prim = "Nat16"))]
+struct Code {}
+
+#[list(wire, item(is = "Code"), max_items = 4)]
+struct Codes {}
+
+#[set(wire, item(prim = "Nat8"), max_items = 4)]
+struct Roles {}
+
+#[map(wire, key(prim = "Nat8"), value(item(prim = "Nat16")), max_items = 4)]
+struct Scores {}
+
+#[record(
+    wire,
+    fields(
+        field(name = "scores", value(item(is = "Scores"))),
+        field(name = "roles", value(item(is = "Roles"))),
+        field(name = "codes", value(item(is = "Codes"))),
+        field(name = "wide", value(item(prim = "U256")))
+    )
+)]
+struct Profile {}
+
+#[canister]
+struct Directory {}
+
+#[store(canister = Directory, key = "probe.profile.v1")]
+struct Profiles {}
+
+#[entity(wire, store = Profiles, pk(field = "id"), fields(
+    field(name = "profile", value(item(is = "Profile"))),
+    field(name = "id", value(item(prim = "Ulid")))
+))]
+struct User {}
+
+const LIMITS: Limits = Limits {
+    bytes: 2048,
+    allocation: 65536,
+    nodes: 256,
+    depth: 16,
+};
+
+fn payload<T: Serialize>(value: &T) -> Vec<u8> {
+    ic_wire::encode(value, Encoding::Payload, LIMITS).unwrap()
+}
+
+fn main() {
+    let bytes = core::array::from_fn(|i| i as u8);
+    for (tag, action) in [(0, Action::Allow), (1, Action::Suspend)] {
+        let request = UserAdminRequest {
+            user_id: Ulid::from_bytes(bytes),
+            action,
+        };
+        let expected = [bytes.as_slice(), &[tag]].concat();
+        assert_eq!(payload(&request), expected);
+        assert_eq!(
+            ic_wire::decode::<UserAdminRequest>(&expected, Encoding::Payload, LIMITS).unwrap(),
+            request
+        );
+    }
+    let user = User {
+        id: Ulid::from_bytes(bytes),
+        profile: Profile {
+            codes: Codes(vec![Code(130)]),
+            roles: Roles([5, 2].into()),
+            scores: Scores([(4, 150)].into()),
+            wide: U256::from(255_u8),
+        },
+    };
+    // Entity fields follow authored order; record fields and enum tags follow generated order.
+    let expected = [
+        &[1, 130, 1, 2, 2, 5, 1, 4, 150, 1, 4, b'0', b'x', b'f', b'f'][..],
+        &bytes,
+    ]
+    .concat();
+    assert_eq!(payload(&user), expected);
+    assert_eq!(
+        ic_wire::decode::<User>(&expected, Encoding::Payload, LIMITS).unwrap(),
+        user
+    );
+}
+
+#[cfg(all(test, feature = "inspection"))]
+mod tests {
+    use super::*;
+    use ic_wire::typescript::{
+        Method, PayloadLimits, SchemaLimits, SchemaRegistry, ValidatedRegistry,
+    };
+
+    #[derive(Serialize, Deserialize, Wire)]
+    struct PageRequest {
+        after: Option<ic_db::QueryCursor>,
+    }
+
+    #[derive(Serialize, Deserialize, Wire)]
+    struct PageReply {
+        next: Option<ic_db::QueryCursor>,
+    }
+
+    #[test]
+    fn opaque_cursor_resumes_from_the_existing_page_payload() {
+        use ic_db::{Batch, Entity, QueryCursor, Schema, testing::Fixture};
+
+        let fixture = Fixture::new("test.cursor.v1");
+        let mut db = fixture
+            .create(Schema::new(&[User::SCHEMA]).unwrap(), [1; 16])
+            .unwrap();
+        let mut batch = Batch::new();
+        for id in 1..=2 {
+            batch
+                .insert(&User {
+                    id: Ulid::from_u128(id),
+                    profile: Profile {
+                        codes: Codes(vec![]),
+                        roles: Roles(Default::default()),
+                        scores: Scores(Default::default()),
+                        wide: U256::ZERO,
+                    },
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+        let query = || db.query::<User>().limit(1);
+        let first = query().fetch().unwrap();
+        let cursor = first.next.unwrap();
+        for old in [None, Some(cursor.to_bytes())] {
+            let encoded = payload(&old);
+            let request: PageRequest =
+                ic_wire::decode(&encoded, Encoding::Payload, LIMITS).unwrap();
+            let page = match &request.after {
+                Some(after) => query().after(after).fetch().unwrap(),
+                None => query().fetch().unwrap(),
+            };
+            assert_eq!(
+                page.rows[0].id,
+                Ulid::from_u128(if old.is_some() { 2 } else { 1 })
+            );
+            assert_eq!(
+                payload(&PageReply {
+                    next: request.after
+                }),
+                encoded
+            );
+        }
+        let mut bad_version = cursor.to_bytes();
+        bad_version[0] = 0;
+        let mut bad_flag = cursor.to_bytes();
+        bad_flag[1] = 3;
+        for bad in [bad_version, bad_flag, vec![1; 34], vec![1; 1024]] {
+            let limits = Limits {
+                nodes: 8192,
+                allocation: 1 << 20,
+                ..LIMITS
+            };
+            let encoded = ic_wire::encode(&Some(bad), Encoding::Payload, limits).unwrap();
+            assert!(
+                ic_wire::decode::<Option<Vec<u8>>>(&encoded, Encoding::Payload, limits).is_ok()
+            );
+            assert!(ic_wire::decode::<PageRequest>(&encoded, Encoding::Payload, limits).is_err());
+        }
+        let cursor_layout = serde_json::from_str::<serde_json::Value>(
+            &ValidatedRegistry::from_type::<Option<Vec<u8>>>("Cursor", SchemaLimits::default())
+                .unwrap()
+                .metadata_json()
+                .unwrap(),
+        )
+        .unwrap();
+        for registry in [
+            ValidatedRegistry::from_type::<PageRequest>("Page", SchemaLimits::default()),
+            ValidatedRegistry::from_type::<PageReply>("Page", SchemaLimits::default()),
+        ] {
+            let layouts: serde_json::Value =
+                serde_json::from_str(&registry.unwrap().metadata_json().unwrap()).unwrap();
+            assert_eq!(
+                layouts["Page"]["fields"][0]["value"],
+                cursor_layout["Cursor"]
+            );
+        }
+        assert!(
+            ic_wire::decode::<Option<QueryCursor>>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err()
+        );
+    }
+
+    #[test]
+    fn downstream_payloads() {
+        main();
+        for (wide, hex) in [
+            (U256::ZERO, "0x0"),
+            (
+                U256::MAX,
+                "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            ),
+        ] {
+            assert_eq!(payload(&wide), payload(&hex));
+            assert_eq!(
+                ic_wire::decode::<U256>(&payload(&hex), Encoding::Payload, LIMITS).unwrap(),
+                wide
+            );
+        }
+        assert_eq!(payload(&Date::EPOCH), payload(&0_i32));
+        assert_eq!(payload(&Duration::from_millis(190)), payload(&190_u64));
+        assert_eq!(payload(&Timestamp::from_millis(-190)), payload(&-190_i64));
+        assert_eq!(
+            payload(&Decimal::try_new(-125, 2).unwrap()),
+            payload(&"-1.25")
+        );
+        assert_eq!(
+            payload(&Float32::try_new(1.5).unwrap()),
+            1.5_f32.to_le_bytes()
+        );
+        assert_eq!(
+            payload(&Float64::try_new(-1.5).unwrap()),
+            (-1.5_f64).to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn scalar_schema_matches_its_binary_representation() {
+        fn layout<T: Wire + ?Sized>() -> String {
+            ValidatedRegistry::from_type::<T>("Value", SchemaLimits::default())
+                .unwrap()
+                .metadata_json()
+                .unwrap()
+        }
+        assert_eq!(layout::<Date>(), layout::<i32>());
+        assert_eq!(layout::<Timestamp>(), layout::<i64>());
+        assert_eq!(layout::<Duration>(), layout::<u64>());
+        assert_eq!(layout::<Decimal>(), layout::<str>());
+        assert_eq!(layout::<U256>(), layout::<str>());
+        assert_eq!(layout::<Float32>(), layout::<ic_wire::FiniteF32>());
+        assert_eq!(layout::<Float64>(), layout::<ic_wire::FiniteF64>());
+        assert_eq!(layout::<Blob>(), layout::<Vec<u8>>());
+        assert_eq!(layout::<Subaccount>(), layout::<[u8; 32]>());
+        let mut named = SchemaRegistry::new(SchemaLimits::default()).unwrap();
+        named.register::<UserAdminRequest>("Request").unwrap();
+        named.register::<User>("User").unwrap();
+        named.register::<Account>("Account").unwrap();
+        named.finish().unwrap();
+    }
+
+    #[test]
+    fn inspection_uses_the_serde_field_order_and_enum_tags() {
+        let registry =
+            ValidatedRegistry::from_type::<UserAdminRequest>("Request", SchemaLimits::default())
+                .unwrap();
+        let limits = PayloadLimits {
+            bytes: 2048,
+            nodes: 256,
+            depth: 16,
+        };
+        let method = Method {
+            export: "userAdmin",
+            id: 1,
+            request: "Request",
+            response: "Request",
+            request_limits: limits,
+            response_limits: limits,
+        };
+        let manifests = registry.api_manifests(&[("user_admin", method)]).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifests["user_admin"]).unwrap();
+        let request: serde_json::Value =
+            serde_json::from_str(&registry.metadata_json().unwrap()).unwrap();
+        assert_eq!(
+            request["Request"]["fields"][0],
+            serde_json::json!({"name":"user_id","value":{"k":"array","max":16,"item":{"k":"u","bits":8}}})
+        );
+        let variants = &request["Request"]["fields"][1]["value"]["variants"];
+        assert_eq!(variants[0]["name"], "Allow");
+        assert_eq!(variants[0]["id"], 0);
+        assert_eq!(variants[1]["id"], 1);
+        assert_eq!(manifest["endpoint"], "user_admin");
+        assert_eq!(manifest["schemas"]["Request"], request["Request"]);
+        let registry =
+            ValidatedRegistry::from_type::<User>("User", SchemaLimits::default()).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(&registry.metadata_json().unwrap()).unwrap();
+        let fields = &metadata["User"]["fields"];
+        assert_eq!(fields[0]["name"], "profile");
+        assert_eq!(fields[1]["name"], "id");
+        let members = &fields[0]["value"]["fields"];
+        assert_eq!(members[0]["name"], "codes");
+        assert_eq!(
+            members[1],
+            serde_json::json!({"name":"roles","value":{"k":"list","item":{"k":"u","bits":8}}})
+        );
+        assert_eq!(
+            members[2],
+            serde_json::json!({"name":"scores","value":{"k":"list","item":{"k":"tuple","items":[{"k":"u","bits":8},{"k":"u","bits":16}]}}})
+        );
+    }
+}

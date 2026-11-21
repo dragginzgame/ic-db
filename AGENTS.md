@@ -46,8 +46,8 @@ This overlay owns local authority, product boundaries and qualification choices.
 - Retain broad bounded fluent queries, schema types, reference integrity and
   constrained resumable aggregation. SQL, joins and window functions are excluded.
   Ordinary result mapping uses Rust iterators, not engine callback hooks.
-- IC DB owns its durable codec. Keep Wire and transport serialization out of
-  product dependencies and stored bytes. Version durable changes; unsupported
+- IC DB owns its durable codec. Keep Wire out of the default dependency graph and all stored bytes. The optional
+  `wire` feature owns binary Serde inspection for application contracts. Version durable changes; unsupported
   formats refuse intact until a supported transition exists.
 - IC Storage owns allocation/collections. Qualification borrows PocketIC's
   original async client through Testkit's default-feature-free export; a prepared
@@ -128,7 +128,7 @@ Read the owning design contract before changing its behavior:
   the IcyDB comparison ceiling. The design owns current measurements. Do not
   weaken reachable behavior or increase budgets to pass; read/write regressions
   require an explicit tradeoff even when Wasm shrinks.
-- Use Storage’s named stable-memory allocations. Keep Wire out of the product dependency graph. Preserve the DB-owned codecs and reject incompatible backing intact.
+- Use Storage’s named stable-memory allocations. Preserve the DB-owned codecs and reject incompatible backing intact.
 - Storage source changes needed for this experimental integration are authorized.
   Preserve concurrent sibling work and follow Storage's local instructions; this
   permission does not authorize sibling publication or deployment.

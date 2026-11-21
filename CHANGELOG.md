@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.26.8] - Unreleased
+
+### Schema inspection
+
+- Enable the optional `wire` feature to derive endpoint manifests for DTOs
+  containing IC DB scalar values, including the fixed 16-byte `Ulid`. Add
+  `wire` to schema declarations selected for inspection. See the
+  [type inventory](README.md#inspect-application-types-with-ic-wire) for the supported layouts.
+- `ic_db::U256` now wraps ethnum’s integer and supports Wire inspection.
+  Serde retains hexadecimal quantity text and storage retains 32 big-endian
+  bytes. Code using the ethnum type directly can convert with `.into()`.
+
+### 🔍 Queries
+
+- Endpoint page arguments and replies can use `Option<QueryCursor>` with the
+  existing length-prefixed byte encoding. Wire inspection exposes opaque bytes.
+- `filter` and `filter_fields` accept `EndsWith` on direct Text and Blob record
+  members. The suffix can be a literal or another field on the same row.
+  Both use the existing bounded row comparison.
+- Combined length filters use the field’s declared maximum to skip impossible
+  scans. For a three-byte field, a length greater than two and unequal to
+  three now finishes with zero candidates examined. A required literal prefix
+  or suffix, or a required literal substring, also rules out lengths shorter
+  than the pattern’s byte length. This also works when an equality or index
+  prefix fixes the pattern field. List and set membership rules out an empty
+  collection for both literal and field operands.
+- A count using an indexed `filter_in` with repeated copies of one value can
+  count every matching owner from its index entry, including on record-member indexes.
+  Nonunique indexes can also answer directly when the list includes every
+  fixed-width key between its smallest and largest members. The planner checks
+  coverage directly against the supplied keys without allocating a scratch key.
+
 ## [0.26.7] - 2026-11-21
 
 ### 📦 Dependencies

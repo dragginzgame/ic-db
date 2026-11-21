@@ -3,7 +3,7 @@
 use super::{
     declaration,
     field::{Field, Kind, parse_value},
-    metas, once, text,
+    once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -13,7 +13,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     let item = declaration(item, label)?;
     let mut name = None;
     let mut parts = Vec::new();
-    for meta in metas(args)? {
+    let (wire, options) = crate::declaration_options(args)?;
+    for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("item") || (many && meta.path().is_ident("max_items")) {
@@ -42,7 +43,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     let write = field.encode_with(&quote!(&self.0));
     let read = field.read_result();
     let vis = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs)?;
+    let attrs = crate::schema_attrs(&item.attrs, wire)?;
     let order = (!many).then(|| quote!(#[derive(PartialOrd, Ord)]));
     let operand = if many {
         None

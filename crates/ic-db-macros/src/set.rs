@@ -3,7 +3,7 @@
 use super::{
     declaration,
     field::{Field, parse_value},
-    metas, once, text,
+    once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -12,7 +12,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let item = declaration(item, "set")?;
     let mut name = None;
     let mut parts = Vec::new();
-    for meta in metas(args)? {
+    let (wire, options) = crate::declaration_options(args)?;
+    for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("item") || meta.path().is_ident("max_items") {
@@ -34,12 +35,15 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let read = field.read_result();
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs)?;
+    let attrs = crate::schema_attrs(&item.attrs, false)?;
+    let projection =
+        crate::wire_collection(wire, &item.attrs, &ident, &quote!(::std::vec::Vec<#ty>))?;
 
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
         #visibility struct #ident(#[doc="Authored bounded set."] pub ::std::collections::BTreeSet<#ty>);
+        #projection
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

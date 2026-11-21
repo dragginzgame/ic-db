@@ -117,10 +117,9 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
             let count = query().count().unwrap();
             assert_eq!(count.value, expected);
             assert_eq!(query().count_validated().unwrap().value, expected);
-            // Integer lengths strictly between 2 and 4 can only be 3.
+            // The schema caps currency at three bytes, so a length above two must be three.
             let narrowed = query()
                 .filter_length(CURRENCY, ic_db::Comparison::Gt, 2)
-                .filter_length(CURRENCY, ic_db::Comparison::Lt, 4)
                 .count()
                 .unwrap();
             let (expected, accepts_three): (u32, bool) = sql
@@ -147,6 +146,55 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
             }
         }
     }
+    // Prefix and suffix operands constrain the UTF-8 byte length of this member.
+    for (pattern, sql_match) in [
+        (ic_db::Comparison::StartsWith, "instr(currency, ?1) = 1"),
+        (
+            ic_db::Comparison::EndsWith,
+            "substr(currency, -length(?1)) = ?1",
+        ),
+    ] {
+        for needle in ["USD", "é"] {
+            let bytes = u32::try_from(needle.len()).unwrap();
+            let expected: u32 = sql.query_row(
+                &format!("SELECT count(*) FROM products WHERE {sql_match} AND length(CAST(currency AS BLOB)) = ?2"),
+                (needle, bytes), |r| r.get(0),
+            ).unwrap();
+            let query = || db.query::<Product>().filter(CURRENCY, pattern, needle);
+            assert_eq!(
+                query()
+                    .filter_length(CURRENCY, ic_db::Comparison::Eq, bytes)
+                    .count()
+                    .unwrap()
+                    .value,
+                u64::from(expected)
+            );
+            let impossible = query()
+                .filter_length(CURRENCY, ic_db::Comparison::Lt, bytes)
+                .count()
+                .unwrap();
+            assert_eq!((impossible.value, impossible.examined), (0, 0));
+        }
+    }
+    // A long suffix in one OR alternative imposes no minimum on the other.
+    let alternatives = db
+        .query::<Product>()
+        .filter_any_operands(&[
+            (
+                CURRENCY,
+                ic_db::Comparison::EndsWith,
+                ic_db::QueryOperand::Literal("USD".into()),
+            ),
+            (
+                CURRENCY,
+                ic_db::Comparison::Eq,
+                ic_db::QueryOperand::Literal("".into()),
+            ),
+        ])
+        .filter_length(CURRENCY, ic_db::Comparison::Lt, 1)
+        .count()
+        .unwrap();
+    assert_eq!(alternatives.value, 1);
     for (comparison, condition) in [
         (ic_db::Comparison::Eq, "cents IS cents"),
         (ic_db::Comparison::Ne, "cents IS NOT cents"),
@@ -271,6 +319,11 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
             db.query::<Product>()
                 .filter(CURRENCY, ic_db::Comparison::StartsWith, "US"),
             "instr(currency, 'US') = 1",
+        ),
+        (
+            db.query::<Product>()
+                .filter(CURRENCY, ic_db::Comparison::EndsWith, ""),
+            "currency IS NOT NULL",
         ),
         (db.query::<Product>().filter_absent(AMOUNT), "cents IS NULL"),
         (
@@ -568,6 +621,32 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
         assert_eq!(ids, expected, "{predicate}");
         assert_eq!(examined, candidates, "{predicate}");
     }
+    // Duplicate members and the carry from 255 to 256 still describe a complete range.
+    for members in [[256_u16, 256, 256, 256], [257, 255, 257, 256]] {
+        let expected: u32 = sql
+            .query_row(
+                "SELECT count(*) FROM ranked WHERE score IN (?1, ?2, ?3, ?4)",
+                members,
+                |r| r.get(0),
+            )
+            .unwrap();
+        let query = || db.query::<Ranked>().filter_in(SCORE, &members);
+        assert!(matches!(
+            query().work_limit(expected as usize - 1).count(),
+            Err(Error::Limit)
+        ));
+        let counted = query().work_limit(expected as usize + 1).count().unwrap();
+        assert_eq!(
+            (counted.value, counted.examined, counted.fetched),
+            (u64::from(expected), expected as usize, 0)
+        );
+        let checked = query().count_validated().unwrap();
+        assert_eq!(
+            (checked.value, checked.fetched),
+            (u64::from(expected), expected as usize)
+        );
+    }
+
     // Each row in the SQLite interval corresponds to one candidate-budgeted page.
     // The two tied scores at 256 produce consecutive empty pages between matches.
     let expected = sql
@@ -578,6 +657,13 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(expected, [Some(5), None, None, Some(1)]);
+    let gaps = db
+        .query::<Ranked>()
+        .filter_in(SCORE, &[257_u16, 255, 257])
+        .count()
+        .unwrap();
+    assert_eq!(gaps.value, expected.iter().flatten().count() as u64);
+
     let sparse = || {
         db.query::<Ranked>()
             .filter_in(SCORE, &[257_u16, 255, 257])
@@ -839,30 +925,65 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             Err(Error::InvalidOperand)
         ));
         let tag = Tag("128".into());
-        let expected = sql
-            .prepare(
-                "SELECT id FROM observations WHERE instr(payload,header) = 1 ORDER BY payload,id",
+        for (comparison, predicate) in [
+            (ic_db::Comparison::StartsWith, "instr(payload,header) = 1"),
+            (
+                ic_db::Comparison::EndsWith,
+                "length(header) = 0 OR substr(payload, -length(header)) = header",
+            ),
+        ] {
+            let expected = sql
+                .prepare(&format!(
+                    "SELECT id FROM observations WHERE {predicate} ORDER BY payload,id"
+                ))
+                .unwrap()
+                .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let query = || {
+                db.query::<Observation>()
+                    .filter_fields(PAYLOAD, comparison, HEADER)
+            };
+            let page = query().order_asc(PAYLOAD).fetch().unwrap();
+            assert_eq!(
+                page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                expected
+            );
+            let count = query().count().unwrap();
+            assert_eq!((count.value, count.fetched), (expected.len() as u64, 4));
+            assert!(matches!(query().work_limit(3).count(), Err(Error::Limit)));
+        }
+        // A raw zero occupies one byte even though its index encoding occupies two.
+        let single_zero: u32 = sql
+            .query_row(
+                "SELECT count(*) FROM observations WHERE payload = x'00'",
+                [],
+                |r| r.get(0),
             )
-            .unwrap()
-            .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let field_prefix = || {
-            db.query::<Observation>()
-                .filter_fields(PAYLOAD, ic_db::Comparison::StartsWith, HEADER)
-        };
-        let page = field_prefix().order_asc(PAYLOAD).fetch().unwrap();
-        assert_eq!(
-            page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-            expected
-        );
-        let count = field_prefix().count().unwrap();
-        assert_eq!((count.value, count.fetched), (expected.len() as u64, 4));
-        assert!(matches!(
-            field_prefix().work_limit(3).count(),
-            Err(Error::Limit)
-        ));
+        let count = db
+            .query::<Observation>()
+            .filter(PAYLOAD, ic_db::Comparison::EndsWith, &[0_u8])
+            .filter_length(PAYLOAD, ic_db::Comparison::Eq, 1)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, u64::from(single_zero));
+        // An escaped zero in the index key ends in FF, unlike its raw Blob.
+        let expected: u64 = sql
+            .query_row(
+                "SELECT count(*) FROM observations WHERE substr(payload, -1) = x'ff'",
+                [],
+                |r| r.get::<_, u32>(0).map(u64::from),
+            )
+            .unwrap();
+        let count = db
+            .query::<Observation>()
+            .filter(PAYLOAD, ic_db::Comparison::EndsWith, &[0xff_u8])
+            .using_index(PAYLOAD, &[])
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.fetched), (expected, 4));
         assert!(matches!(
             db.query::<Observation>()
                 .filter_fields(PAYLOAD, ic_db::Comparison::StartsWith, LABEL)

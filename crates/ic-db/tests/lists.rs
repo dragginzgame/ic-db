@@ -187,7 +187,7 @@ fn an_empty_blob_needle_must_be_an_element_of_the_list() {
         .create(Schema::new(&[BlobList::SCHEMA]).unwrap(), [4; 16])
         .unwrap();
     let mut batch = Batch::new();
-    for (id, items) in [vec![], vec![vec![1]], vec![vec![]]]
+    for (id, items) in [vec![], vec![vec![1, 2, 3]], vec![vec![]]]
         .into_iter()
         .enumerate()
     {
@@ -205,6 +205,18 @@ fn an_empty_blob_needle_must_be_an_element_of_the_list() {
         .count()
         .unwrap();
     assert_eq!((count.value, count.fetched), (1, 3));
+    for (needle, length, expected) in [(&[][..], 0, 0), (&[][..], 1, 1), (&[1, 2, 3][..], 1, 1)] {
+        let count = db
+            .query::<BlobList>()
+            .filter(BlobList::ITEMS, ic_db::Comparison::Contains, needle)
+            .filter_length(BlobList::ITEMS, ic_db::Comparison::Eq, length)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, expected);
+        if length == 0 {
+            assert_eq!(count.examined, 0);
+        }
+    }
 }
 
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
@@ -572,6 +584,12 @@ fn named_list_reuses_its_bound_and_scalar_wrappers_keep_identity_after_reopen() 
     // same-row needle for Starts, even when the collection is empty.
     for field in ["history", "previous"] {
         let query = || db.query::<Event>();
+        let empty = query()
+            .filter_length(field, Comparison::Eq, 0)
+            .filter_fields(field, Comparison::Contains, "started")
+            .count()
+            .unwrap();
+        assert_eq!((empty.value, empty.examined), (0, 0));
         assert!(matches!(
             query()
                 .filter_fields(field, Comparison::Contains, "expires")

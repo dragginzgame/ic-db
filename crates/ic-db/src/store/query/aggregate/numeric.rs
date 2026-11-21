@@ -6,10 +6,10 @@ use super::{
     Reducer, SummaryMeasure,
 };
 use crate::{
-    Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
+    Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, Value,
     ValueSchema, codec::Encoder,
 };
-use ethnum::I256;
+use ethnum::{I256, U256};
 use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
@@ -327,7 +327,7 @@ impl NumericAggregate {
                     IndexValue::Nat32(n) => U256::from(n),
                     IndexValue::Nat64(n) => U256::from(n),
                     IndexValue::Nat128(n) => U256::from(n),
-                    IndexValue::U256(n) => n,
+                    IndexValue::U256(n) => n.into(),
                     _ => return Err(Error::Corrupt),
                 };
                 *total = total.checked_add(value).ok_or(Error::ArithmeticOverflow)?;
@@ -508,8 +508,9 @@ impl NumericAggregate {
             (Total::Unsigned(n), FieldType::Nat64) => encode!(nat64, Nat64, *n),
             (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, Nat128, *n),
             (Total::Unsigned(n), FieldType::U256) => {
-                output.u256(*n)?;
-                IndexValue::U256(*n)
+                let value = (*n).into();
+                output.u256(value)?;
+                IndexValue::U256(value)
             }
             _ => return Err(Error::Corrupt),
         };

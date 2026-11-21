@@ -22,6 +22,18 @@ as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
 
+## Application Wire schemas
+
+The [downstream probe](experiments/wire-schema/src/main.rs) checks API manifests,
+binary scalar layouts, generated enums, nested collections and an entity whose
+endpoint field order differs from its storage order. `make m0-contracts` runs
+the host checks. To run the byte checks compiled for Wasm from the repository root:
+
+```sh
+cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe --features inspection --target wasm32-unknown-unknown --release
+node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(process.argv[1])); process.exitCode = new WebAssembly.Instance(m).exports.main(0, 0)' qualification/target/wasm32-unknown-unknown/release/ic-db-wire-schema-probe.wasm
+```
+
 ## Native and Wasm boundaries
 
 | Boundary | Why the target matters |

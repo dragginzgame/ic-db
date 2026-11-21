@@ -3,6 +3,7 @@ members = [
     "experiments/schema-owner/consumer",
     "experiments/schema-owner/local",
     "experiments/schema-owner/producer",
+    "experiments/wire-schema",
     "ic-db-entity-growth-canister",
     "ic-db-icydb-baseline-canister",
     "ic-db-icydb-baseline-schema",

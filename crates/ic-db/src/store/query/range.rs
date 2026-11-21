@@ -121,20 +121,59 @@ fn next_field<'a>(
 }
 
 // Both path ranking and key-only counting use the same encodable range proof.
-pub(super) fn bounds_key_term(
+pub(super) fn key_range_proves_clause(
     entity: &EntitySchema,
     index: Option<&IndexSchema>,
     fixed: usize,
-    term: &Term,
+    clause: &[Term],
     prefix_len: usize,
 ) -> bool {
-    next_field(entity, index, fixed).is_some_and(|(name, secondary)| {
-        matches_field(entity, term, name)
-            && matches!(
-                bound_operand(entity, term, secondary, prefix_len),
-                Ok(Some(_))
-            )
+    next_field(entity, index, fixed).is_some_and(|(name, secondary)| match clause {
+        [term] => {
+            matches_field(entity, term, name)
+                && matches!(
+                    bound_operand(entity, term, secondary, prefix_len),
+                    Ok(Some(_))
+                )
+        }
+        _ => membership_interval(entity, name, clause, prefix_len).is_some_and(|(low, high)| {
+            if low == high {
+                return true;
+            }
+            // A nonunique index can have many owners per component. A complete run
+            // of fixed-width values proves membership for every one of those entries.
+            secondary
+                && index.is_some_and(|i| !i.unique)
+                && low.len() == high.len()
+                && entity
+                    .index_field(name)
+                    .and_then(|f| crate::key::fixed_width(crate::key::operand_type(f.value)))
+                    .is_some()
+                && complete_key_run(low, high, clause)
+        }),
     })
+}
+
+// Follow consecutive admitted literals by reference. Carry skips trailing FF
+// bytes in the current key and requires zeros in those positions in its successor.
+fn complete_key_run<'a>(mut current: &'a [u8], high: &[u8], clause: &'a [Term]) -> bool {
+    while current != high {
+        let Some(pivot) = current.iter().rposition(|&byte| byte != u8::MAX) else {
+            return false;
+        };
+        let next = clause
+            .iter()
+            .filter_map(|term| literal(term).map(|(key, _)| key))
+            .find(|key| {
+                key.len() == current.len()
+                    && key[..pivot] == current[..pivot]
+                    && key[pivot] == current[pivot] + 1
+                    && key[pivot + 1..].iter().all(|&byte| byte == 0)
+            });
+        let Some(next) = next else { return false };
+        current = next;
+    }
+    true
 }
 
 fn bounds_index_clause(
@@ -142,12 +181,12 @@ fn bounds_index_clause(
     path: &super::order::IndexPath<'_>,
     clause: &[Term],
 ) -> bool {
-    if let [term] = clause {
-        return bounds_key_term(
+    if clause.len() == 1 {
+        return key_range_proves_clause(
             entity,
             Some(path.index),
             path.fixed,
-            term,
+            clause,
             path.prefix.len(),
         );
     }

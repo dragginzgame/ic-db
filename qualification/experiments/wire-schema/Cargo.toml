@@ -1,0 +1,31 @@
+[package]
+name = "ic-db-wire-schema-probe"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+[target.'cfg(any())'.dev-dependencies]
+toko-tooling.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["toko-tooling"]
+
+[package.metadata.toko-tooling.loc]
+category = "tests"
+
+[features]
+inspection = ["ic-db/wire"]
+
+[dependencies]
+ic-db.workspace = true
+ic-wire = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+ic-db = { workspace = true, features = ["test-support"] }
+ic-wire = { workspace = true, features = ["api-manifest"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

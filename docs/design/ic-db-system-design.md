@@ -514,7 +514,11 @@ product contract. The grammar below settles what those encodings must identify;
 the product's exact tags and byte vectors must be fixed before M1 persists them.
 
 IC DB owns durable row encoding and decoding, independently of transport formats.
-The product has no `ic-wire` dependency. Generate storage traversal in canonical
+The default product excludes IC Wire. The optional `wire` feature describes
+application payloads using the existing binary Serde layouts. The schema author
+selects the declarations included in inspection. As in frozen IcyDB `6d421e3`’s
+0.277 Wire trial, the host owns endpoint transport. IC DB supplies type metadata
+without adding endpoint registration or changing the durable contract. Generate storage traversal in canonical
 field-name order so names need not be repeated in each row; keep primary/index key
 encoding separate because payload byte order does not establish index ordering.
 A field rename still changes schema identity. Database admission enforces field
@@ -1451,6 +1455,10 @@ With `filter_fields`, the prefix can come from another field or direct member
 of the same row. Both operands must be present and must both be Text or both
 be Blob under the existing field type checks. A varying prefix requires a row
 comparison and consumes the scan's candidate budget.
+Direct Text and Blob members also support `EndsWith` against literals and fields.
+Like the suffix predicate in frozen IcyDB `6d421e3` (`db/predicate/semantics/mod.rs`),
+this compares the end of the value. Normal index order supplies no suffix seek.
+The member suffix predicate reads candidate rows within the existing work budget.
 Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
 validated scalar for the bounded complete sorter. A missing parent and missing
 member share one absent sort key. Ordinary direction and primary tie-breaker
@@ -2733,14 +2741,17 @@ result for present values. With a maximum of three bytes, Eq(4) matches no
 rows, Ne(4) matches every row including absence, and Le(3) matches precisely
 the present values. Counts can use cardinality or a covering present-only index
 for those cases. Mandatory length bounds on the same field intersect in the
-integer length domain. For example, a length greater than two and less than
-four must be three. An OR clause is impossible only if every alternative is
+declared integer length domain. For example, a three-byte maximum and a
+mandatory length greater than two together fix the length at three. An OR clause is impossible only if every alternative is
 disproved. A length inequality (`Ne`) alone still permits absence. This adapts
 the bound intersection in frozen IcyDB `6d421e3`, `query/plan/planner/range/bounds.rs`,
 to lengths without constructing storage keys.
 A mandatory literal equality or an explicit index prefix fixes the byte
 length of a Text or Blob. The planner can reject a contradictory clause before
 traversal and an index covering the other filters can count entries directly.
+A mandatory literal prefix, suffix or substring on the same field gives a lower bound on its byte length.
+The same bound applies when a mandatory equality or explicit index prefix fixes the pattern field.
+For list and set membership, a matching collection has at least one element regardless of whether the needle is a literal or comes from another field.
 The length uses the original value, including UTF-8 and raw zero bytes.
 For top-level residual length filters the u32 count comes from the validated field span.
 For a direct Text or Blob member of a record, the scanner takes the byte length
@@ -2805,6 +2816,14 @@ continuation. This retains IcyDB `6d421e3`'s equality and duplicate-result lesso
 from `db/predicate/normalize/tests/owned_membership.rs`, without its sorting,
 deduplication or canonical membership representation. Both fluent methods share
 clause construction; no temporary member collection or new execution path is needed.
+For counts, when both ends of the selected membership interval encode the same
+value, every index entry in the interval proves the clause, including tied
+owners of a record-member value. On a nonunique index with a fixed-width
+component, the same proof holds when the clause includes each encoded value
+from the lowest to the highest. The planner searches the supplied operands for
+each successive encoded key, borrowing their bytes directly. The eight-term
+limit allows at most seven successful steps. A gap retains
+the ordinary residual check unless another proof covers the clause.
 
 `filter_not_in(field, values)` adds consecutive ordinary `Ne` filters in supplied
 order, under the same nonempty-list and eight-comparison bounds. An absent field
@@ -4245,7 +4264,7 @@ subnormal ordering, malformed payloads, zero no-ops/unique refusals, final-state
 swaps, complete-message rollback and unchanged upgrade/reopen. Ordered grouping/DISTINCT use the shared component semantics.
 
 U256 fields use `value(item(prim="U256"))`, optionally with `opt`; the public
-Rust type is `ic_db::U256`, re-exported from feature-free ethnum 1.5.3. The owned
+Rust type is the IC DB-owned `ic_db::U256` wrapping ethnum 1.5.3. The owned
 row codec preserves IcyDB's exact 32-byte big-endian U256 payload, rather than
 applying native-width integers' little-endian row convention. Ordered keys use
 the same fixed-width bytes; index operands must be U256, without implicit Nat128
@@ -4256,9 +4275,9 @@ contracts without U256 keep their identities. Supplied U256 primary keys and exa
 This adapts frozen IcyDB `6d421e3`'s
 `icydb-core/src/db/data/persisted_row/codec/scalar/{mod,tests}.rs` payload and
 malformed-width regressions, plus the high-bit/maximum cases from
-`icydb-schema/src/u256/tests.rs`. It uses IcyDB's underlying integer supplier
-without copying its wrapper, Serde/Wire conversion or NumericValue/Decimal
-machinery. There is one new product dependency, no new product crate, durable
+`icydb-schema/src/u256/tests.rs`. It uses IcyDB's underlying integer supplier. The IC DB wrapper delegates
+Serde to ethnum and describes that same hex text to Wire; the database codec
+and aggregate engine retain their own representations. There is one new product dependency, no new product crate, durable
 state or executor. The later scalar-sum slice above adds explicit U256 aggregate
 semantics; Rust integer methods alone were not aggregate qualification.
 Native/Wasm qualification covers literal bytes and independently framed schema

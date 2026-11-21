@@ -150,6 +150,12 @@ or proving the range empty. Use `fetch()` to resume such scans.
 Omit `using_index` for default primary-key result order. Filter operands must match the exact
 declared type. Pass a borrowed `String` or `Vec<u8>` directly, such as
 `.eq(Document::TITLE, &title)`. A byte literal such as `b"abc"` is a Blob operand.
+Endpoint request and reply fields can use `Option<ic_db::QueryCursor>` directly.
+Binary Serde preserves the length-prefixed `Option<Vec<u8>>` payload. The optional
+`wire` feature describes the cursor as opaque bytes. Decoding rejects invalid
+frame sizes, versions and resume flags. Query execution checks the binding and
+key shape. To handle framing errors as typed application errors, accept bytes
+and call `QueryCursor::from_bytes` explicitly.
 `page.next` resumes the same query through `.after(&cursor)`;
 an empty page can still carry a continuation. IC DB automatically caps each
 query response at 128 KiB of encoded rows. Transport framing remains host-owned. This first slice supports AND
@@ -769,9 +775,10 @@ Keys are ordered scalars or unit enums; values may also be lists or named types.
 or descending keys refuse without overwriting values. Map entries share the row's
 collection budget, and their nested contents consume the same budget. Inspect
 `MapRow`/`Rates` and recursive `MapTree` with `db schema`.
-`value(item(prim = "U256"))` uses `ic_db::U256` (ethnum), with exact 32-byte
+`value(item(prim = "U256"))` uses `ic_db::U256` (an IC DB wrapper around ethnum), with exact 32-byte
 big-endian storage and secondary-index keys. Optional values and collection
 elements/keys retain all 256 bits. Inspect `BigNumbers` with `db schema`.
+Use `From`/`Into` to cross between `ic_db::U256` and `ethnum::U256` when calling supplier-specific integer APIs.
 Scalar sums preserve U256 and explicitly refuse accumulator overflow.
 `prim = "Float32"` / `prim = "Float64"` use finite `ic_db::Float32` /
 `ic_db::Float64` wrappers. Construct with `try_new(value)`; NaN/infinities refuse,
@@ -903,7 +910,51 @@ Floating-point inputs must be finite. Schema macros supply Serde for the
 declared Rust values, including nested records and collections. Writes still
 apply the declared database bounds.
 
-IC DB owns its durable row codec and has no IC Wire dependency. Transport format
+### Inspect application types with IC Wire
+
+Enable IC DB’s optional `wire` feature in a schema crate or application that
+exports endpoint metadata. A shared schema crate can forward a Cargo feature
+such as `inspection = ["ic-db/wire"]`. Its storage-only consumers can leave it
+disabled, including when the declarations carry the `wire` marker. Its build
+script can use just `ic-db/build`. Include Serde as a direct dependency wherever
+the marked declarations compile, including build dependencies for a shared schema. Ordinary
+application DTOs derive `ic_wire::typescript::Wire` with IC Wire’s `derive`
+feature. The host can enable `api-manifest` for offline inspection.
+
+```rust
+use ic_db::design::prelude::*;
+
+#[enum_(wire, variant(name = "Allow"), variant(name = "Suspend"))]
+struct Action {}
+
+#[derive(serde::Serialize, serde::Deserialize, ic_wire::typescript::Wire)]
+struct UserAdminRequest {
+    user_id: Ulid,
+    action: Action,
+}
+```
+
+Select `wire` on each exported entity, record, enum, newtype, list, set or map
+declaration, including nested declarations. A row exports every Serde field in
+its generated Rust order. Define a DTO to expose a subset. This option describes
+endpoint payloads and grants no access to stored data.
+
+| Design value | Binary Wire representation |
+| --- | --- |
+| ULID | Fixed array of 16 unsigned bytes |
+| Date, Timestamp, Duration | Signed 32-bit epoch days, signed 64-bit milliseconds, unsigned 64-bit milliseconds |
+| Decimal, Float32, Float64 | Canonical decimal text, finite binary32, finite binary64 |
+| Blob, Text, Bool, native integers through 128 bits | Wire’s existing byte-element list, text, boolean and integer shapes |
+| Principal, Account, Subaccount | Wire’s Platform implementations for Principal and Account. Standalone Subaccount uses its fixed 32-byte array type. |
+| Entity, record, enum | Generated Serde field order and enum tags. Endpoints serialize entity fields in authored order and record fields and enum variants in canonical name order. |
+| Newtype, list, set, map | Wrapped value, ordered list, ordered list of set elements, ordered list of key/value pairs |
+| U256 | Hexadecimal quantity text, including the `0x` prefix. Rows and index keys use 32 big-endian bytes. |
+
+Database bounds, decimal parsing, date ranges, and set/map uniqueness are enforced
+by their respective owners. The Wire schema describes the binary payload shape.
+Canisters, stores, schema descriptors and generators are application infrastructure.
+
+IC DB owns its durable row codec. Storage-only builds exclude IC Wire. Transport format
 changes cannot change persisted decoding. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
 version 1 or 2 codec contract refuses without changing its data. The named schema

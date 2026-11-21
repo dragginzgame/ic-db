@@ -3,7 +3,7 @@
 use super::{
     declaration,
     field::{Field, parse_value},
-    meta_items, metas, once, text,
+    meta_items, once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -12,7 +12,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let item = declaration(item, "map")?;
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let (mut name, mut key, mut value, mut max) = (None, None, None, None);
-    for meta in metas(args)? {
+    let (wire, options) = crate::declaration_options(args)?;
+    for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("key") {
@@ -48,12 +49,19 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let vr = value.read_result();
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs)?;
+    let attrs = crate::schema_attrs(&item.attrs, false)?;
+    let projection = crate::wire_collection(
+        wire,
+        &item.attrs,
+        &ident,
+        &quote!(::std::vec::Vec<(#kt, #vt)>),
+    )?;
 
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
         #visibility struct #ident(#[doc="Authored bounded map."] pub ::std::collections::BTreeMap<#kt,#vt>);
+        #projection
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

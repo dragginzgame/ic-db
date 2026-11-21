@@ -89,6 +89,36 @@ fn field_patterns_use_each_rows_present_raw_needle() {
         assert_eq!((count.value, count.examined), expected);
         assert_eq!(count.fetched, 0);
     }
+    for (length, expected) in [(1, 0), (2, 1)] {
+        let count = db
+            .query::<Binary>()
+            .filter(Binary::PAYLOAD, C::Contains, &[0, 255])
+            .filter_length(Binary::PAYLOAD, C::Eq, length)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, expected);
+        if length == 1 {
+            assert_eq!(count.examined, 0);
+        }
+    }
+    for needle in [&[255][..], &[][..]] {
+        let prefix = [IndexValue::Blob(needle)];
+        for query in [
+            db.query::<Binary>().eq(Binary::OPTIONAL, needle),
+            db.query::<Binary>().using_index("optional,id", &prefix),
+        ] {
+            let count = query
+                .filter_fields(Binary::PAYLOAD, C::Contains, Binary::OPTIONAL)
+                .filter_length(Binary::PAYLOAD, C::Eq, 0)
+                .count()
+                .unwrap();
+            if needle.is_empty() {
+                assert_eq!(count.value, 1);
+            } else {
+                assert_eq!((count.value, count.examined), (0, 0));
+            }
+        }
+    }
     // A contradicted suffix on fixed operands can be rejected before reading a row.
     for (actual, needle) in [
         (b"\0".as_slice(), b"\xff".as_slice()),
@@ -292,14 +322,14 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
             .collect();
         assert_eq!(actual, distinct);
     }
-    assert_eq!(
+    assert!(
         db.query::<Binary>()
             .min::<Payload>()
             .unwrap()
             .value
             .unwrap()
-            .payload,
-        vec![]
+            .payload
+            .is_empty()
     );
     assert_eq!(
         db.query::<Binary>()
