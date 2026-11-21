@@ -15,6 +15,10 @@ use rusqlite::Connection;
 ))]
 struct Price {}
 
+/// Currency codes accepted by a product.
+#[set(item(prim = "Text", max_bytes = 3), max_items = 3)]
+struct Currencies {}
+
 ///
 /// Product
 /// Exercises a price field that may be absent independently of its amount.
@@ -25,6 +29,9 @@ struct Price {}
     pk(field = "id"),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "accepted", value(opt, many, max_items = 3, item(prim = "Text", max_bytes = 3))),
+        field(name = "unique_codes", value(opt, item(is = "Currencies"))),
+        field(name = "prefix", value(opt, item(prim = "Text", max_bytes = 8))),
         field(name = "price", value(opt, item(is = "Price")))
     )
 )]
@@ -39,30 +46,45 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     let mut db = fixture.create(schema(), [1; 16]).unwrap();
     let sql = Connection::open_in_memory().unwrap();
     sql.execute(
-        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER, currency TEXT)",
+        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER, currency TEXT, prefix TEXT)",
         [],
     )
     .unwrap();
+    sql.execute("CREATE TABLE codes(product INTEGER, code TEXT)", [])
+        .unwrap();
     let mut batch = Batch::new();
-    for (id, (price, currency)) in [
-        (None, None),
-        (Some(None), None),
-        (Some(Some(0_i32)), Some("")),
-        (Some(Some(-15)), Some("USD")),
-        (Some(Some(125)), Some("EUR")),
-        (Some(Some(-15)), Some("USD")),
+    for (id, (price, currency, prefix, codes)) in [
+        (None, None, Some(""), Some(&["USD"][..])),
+        (Some(None), None, None, Some(&[""])),
+        (Some(Some(0_i32)), Some(""), Some("US"), Some(&[""])),
+        (
+            Some(Some(-15)),
+            Some("USD"),
+            Some("U"),
+            Some(&["USD", "USD"]),
+        ),
+        (Some(Some(125)), Some("EUR"), None, None),
+        (Some(Some(-15)), Some("USD"), Some(""), Some(&[])),
     ]
     .into_iter()
     .enumerate()
     {
         sql.execute(
-            "INSERT INTO products VALUES (?1,?2,?3)",
-            (id as u32, price.flatten(), currency),
+            "INSERT INTO products VALUES (?1,?2,?3,?4)",
+            (id as u32, price.flatten(), currency, prefix),
         )
         .unwrap();
+        for code in codes.into_iter().flatten() {
+            sql.execute("INSERT INTO codes VALUES (?1,?2)", (id as u32, code))
+                .unwrap();
+        }
         batch
             .insert(&Product {
                 id: id as u64,
+                accepted: codes.map(|codes| codes.iter().copied().map(String::from).collect()),
+                unique_codes: codes
+                    .map(|codes| Currencies(codes.iter().copied().map(String::from).collect())),
+                prefix: prefix.map(String::from),
                 price: price.map(|amount| Price {
                     amount: amount.map(|c| Decimal::try_new(i128::from(c), 2).unwrap()),
                     currency: currency.map(String::from),
@@ -74,7 +96,162 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     drop(db);
     let db = fixture.open(schema()).unwrap();
     let zero = Decimal::try_new(0, 2).unwrap();
+    for (op, sql_op) in [
+        (ic_db::Comparison::Eq, "="),
+        (ic_db::Comparison::Ne, "IS NOT"),
+        (ic_db::Comparison::Lt, "<"),
+        (ic_db::Comparison::Le, "<="),
+        (ic_db::Comparison::Gt, ">"),
+        (ic_db::Comparison::Ge, ">="),
+    ] {
+        let mut oracle = sql
+            .prepare(&format!(
+                "SELECT COUNT(*) FROM products WHERE length(CAST(currency AS BLOB)) {sql_op} ?1"
+            ))
+            .unwrap();
+        for threshold in [0_u32, 1, 3, 4, u32::MAX] {
+            let expected: u64 = oracle
+                .query_row([threshold], |r| r.get::<_, u32>(0).map(u64::from))
+                .unwrap();
+            let query = || db.query::<Product>().filter_length(CURRENCY, op, threshold);
+            let count = query().count().unwrap();
+            assert_eq!(count.value, expected);
+            assert_eq!(query().count_validated().unwrap().value, expected);
+            // Integer lengths strictly between 2 and 4 can only be 3.
+            let narrowed = query()
+                .filter_length(CURRENCY, ic_db::Comparison::Gt, 2)
+                .filter_length(CURRENCY, ic_db::Comparison::Lt, 4)
+                .count()
+                .unwrap();
+            let (expected, accepts_three): (u32, bool) = sql
+                .query_row(
+                    &format!("SELECT count(*), 3 {sql_op} ?1 FROM products WHERE length(CAST(currency AS BLOB)) = 3 AND 3 {sql_op} ?1"),
+                    [threshold],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(narrowed.value, u64::from(expected));
+            if !accepts_three {
+                assert_eq!(narrowed.examined, 0);
+            }
+            if threshold > 3
+                && matches!(
+                    op,
+                    ic_db::Comparison::Eq
+                        | ic_db::Comparison::Ne
+                        | ic_db::Comparison::Gt
+                        | ic_db::Comparison::Ge
+                )
+            {
+                assert_eq!((count.examined, count.fetched), (0, 0));
+            }
+        }
+    }
+    for (comparison, condition) in [
+        (ic_db::Comparison::Eq, "cents IS cents"),
+        (ic_db::Comparison::Ne, "cents IS NOT cents"),
+        (ic_db::Comparison::Lt, "cents < cents"),
+        (ic_db::Comparison::Gt, "cents > cents"),
+    ] {
+        let expected: u64 = sql
+            .query_row(
+                &format!("SELECT COUNT(*) FROM products WHERE {condition}"),
+                [],
+                |row| row.get::<_, u32>(0).map(u64::from),
+            )
+            .unwrap();
+        let query = || {
+            db.query::<Product>()
+                .filter_fields(AMOUNT, comparison, AMOUNT)
+        };
+        let count = query().work_limit(1).count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, 0, 0)
+        );
+        assert_eq!(query().count_validated().unwrap().value, expected);
+        if expected == 0 {
+            assert_eq!(query().work_limit(1).fetch().unwrap().examined, 0);
+        }
+    }
+    let same_amount = || {
+        db.query::<Product>()
+            .filter_fields(AMOUNT, ic_db::Comparison::Eq, AMOUNT)
+    };
+    assert!(matches!(
+        same_amount().work_limit(1).count_validated(),
+        Err(Error::Limit)
+    ));
+    let either = |comparison| {
+        db.query::<Product>().filter_any_operands(&[
+            (AMOUNT, comparison, ic_db::QueryOperand::Field(AMOUNT)),
+            (
+                Product::ID,
+                ic_db::Comparison::Eq,
+                ic_db::QueryOperand::Literal(0_u64.into()),
+            ),
+        ])
+    };
+    assert_eq!(
+        either(ic_db::Comparison::Eq)
+            .work_limit(1)
+            .count()
+            .unwrap()
+            .value,
+        6
+    );
+    assert_eq!(either(ic_db::Comparison::Lt).count().unwrap().value, 1);
+    assert_eq!(
+        same_amount().eq(Product::ID, 0_u64).count().unwrap().value,
+        1
+    );
+    assert!(matches!(
+        same_amount().eq("missing", 1_u64).count(),
+        Err(Error::InvalidQuery)
+    ));
     for (query, predicate) in [
+        (
+            db.query::<Product>().filter_fields(
+                Product::ACCEPTED,
+                ic_db::Comparison::Contains,
+                CURRENCY,
+            ),
+            "EXISTS (SELECT 1 FROM codes WHERE product = products.id AND code = currency)",
+        ),
+        (
+            db.query::<Product>().filter_fields(
+                Product::UNIQUE_CODES,
+                ic_db::Comparison::Contains,
+                CURRENCY,
+            ),
+            "EXISTS (SELECT 1 FROM codes WHERE product = products.id AND code = currency)",
+        ),
+        (
+            db.query::<Product>().filter_fields(
+                CURRENCY,
+                ic_db::Comparison::StartsWith,
+                Product::PREFIX,
+            ),
+            "instr(currency, prefix) = 1",
+        ),
+        (
+            db.query::<Product>().filter_fields(
+                Product::PREFIX,
+                ic_db::Comparison::StartsWith,
+                CURRENCY,
+            ),
+            "instr(prefix, currency) = 1",
+        ),
+        (
+            db.query::<Product>()
+                .filter_fields(AMOUNT, ic_db::Comparison::Eq, AMOUNT),
+            "cents IS cents",
+        ),
+        (
+            db.query::<Product>()
+                .filter_fields(AMOUNT, ic_db::Comparison::Ge, AMOUNT),
+            "cents >= cents",
+        ),
         (
             db.query::<Product>()
                 .filter_length(CURRENCY, ic_db::Comparison::Eq, 0),
@@ -122,6 +299,31 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
             .collect();
         assert_eq!(ids, expected);
     }
+    let containing = |field| {
+        db.query::<Product>()
+            .filter_fields(Product::ACCEPTED, ic_db::Comparison::Contains, field)
+    };
+    assert_eq!(containing(CURRENCY).count().unwrap().value, 2);
+    let first = containing(CURRENCY).work_limit(1).fetch().unwrap();
+    assert!(first.rows.is_empty());
+    let cursor = first.next.unwrap();
+    assert_eq!(
+        containing(CURRENCY)
+            .after(&cursor)
+            .fetch()
+            .unwrap()
+            .rows
+            .len(),
+        2
+    );
+    assert!(matches!(
+        containing(Product::PREFIX).after(&cursor).fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    assert!(matches!(
+        containing(AMOUNT).fetch(),
+        Err(Error::InvalidQuery)
+    ));
     for (query, order) in [
         (db.query::<Product>().order_asc(AMOUNT), "cents ASC, id ASC"),
         (
@@ -227,6 +429,57 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
             .unwrap();
     }
     db.commit(batch).unwrap();
+
+    for (left, right, predicate) in [
+        (SCORE, OTHER, "score < other"),
+        (Ranked::BUCKET, OTHER, "bucket < other"),
+        (OTHER, Ranked::BUCKET, "other < bucket"),
+    ] {
+        let expected = sql
+            .prepare(&format!(
+                "SELECT id FROM ranked WHERE {predicate} ORDER BY id"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let query = || {
+            db.query::<Ranked>()
+                .filter_fields(left, ic_db::Comparison::Lt, right)
+        };
+        assert_eq!(
+            query()
+                .fetch()
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(query().count().unwrap().value, expected.len() as u64);
+    }
+    let compare = |left, right| {
+        db.query::<Ranked>()
+            .filter_fields(left, ic_db::Comparison::Lt, right)
+            .limit(1)
+    };
+    let cursor = compare(SCORE, OTHER).fetch().unwrap().next.unwrap();
+    for changed in [
+        compare(OTHER, SCORE),
+        compare(SCORE, SCORE),
+        compare(OTHER, OTHER),
+    ] {
+        assert!(matches!(
+            changed.after(&cursor).fetch(),
+            Err(Error::InvalidCursor)
+        ));
+    }
+    assert!(matches!(
+        compare(SCORE, Ranked::ID).fetch(),
+        Err(Error::InvalidQuery)
+    ));
 
     let sorted = |q: ic_db::Query<'_, Ranked>| {
         q.order_asc(OTHER)
@@ -471,6 +724,7 @@ struct OtherPhase {}
     field(name = "phase", value(item(indirect, is = "Phase"))),
     field(name = "label", value(item(prim = "Text", max_bytes = 32))),
     field(name = "payload", value(item(prim = "Blob", max_bytes = 32))),
+    field(name = "header", value(item(prim = "Blob", max_bytes = 4))),
     field(name = "account_part", value(item(prim = "Subaccount"))),
     field(name = "balance", value(item(prim = "Decimal", scale = 2))),
     field(name = "score", value(item(prim = "Int64")))
@@ -501,6 +755,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
     const BALANCE: &str = ic_db::field_path!(Observation::MEASURES, Measures::BALANCE);
     const LABEL: &str = ic_db::field_path!(Observation::MEASURES, Measures::LABEL);
     const PAYLOAD: &str = ic_db::field_path!(Observation::MEASURES, Measures::PAYLOAD);
+    const HEADER: &str = ic_db::field_path!(Observation::MEASURES, Measures::HEADER);
     const TAG: &str = ic_db::field_path!(Observation::MEASURES, Measures::TAG);
     const PHASE: &str = ic_db::field_path!(Observation::MEASURES, Measures::PHASE);
     const PART: &str = ic_db::field_path!(Observation::MEASURES, Measures::ACCOUNT_PART);
@@ -508,7 +763,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
     let schema = || Schema::new(&[Observation::SCHEMA]).unwrap();
     let mut db = fixture.create(schema(), [3; 16]).unwrap();
     let sql = Connection::open_in_memory().unwrap();
-    sql.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, score INTEGER, cents INTEGER, part BLOB, label TEXT COLLATE BINARY, payload BLOB, phase TEXT COLLATE BINARY, tag TEXT COLLATE BINARY)", []).unwrap();
+    sql.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, score INTEGER, cents INTEGER, part BLOB, label TEXT COLLATE BINARY, payload BLOB, phase TEXT COLLATE BINARY, tag TEXT COLLATE BINARY, header BLOB)", []).unwrap();
     for round in 0..2 {
         let mut batch = Batch::new();
         for (id, score, cents, byte) in [
@@ -526,12 +781,12 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
                 (score, cents, byte)
             };
             let part = [byte; 32];
-            let (label, payload): (&str, &[u8]) = match byte {
-                0 => ("", &[0xff]),
-                127 => ("a", &[]),
-                128 => ("a\0", &[0, 0xff]),
-                255 => ("é", &[0]),
-                _ => ("a\0z", &[0, 1]),
+            let (label, payload, header): (&str, &[u8], &[u8]) = match byte {
+                0 => ("", &[0xff], &[]),
+                127 => ("a", &[], &[0]),
+                128 => ("a\0", &[0, 0xff], &[0]),
+                255 => ("é", &[0], &[0, 1]),
+                _ => ("a\0z", &[0, 1], &[0, 1]),
             };
             let tag = format!("{:03}", 255 - byte);
             let (phase, phase_name) = match byte {
@@ -540,7 +795,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
                 _ => (Phase::Ready, "Ready"),
             };
             sql.execute(
-                "INSERT OR REPLACE INTO observations VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT OR REPLACE INTO observations VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                 (
                     id,
                     score,
@@ -550,6 +805,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
                     payload,
                     phase_name,
                     &tag,
+                    header,
                 ),
             )
             .unwrap();
@@ -560,6 +816,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
                     phase: Box::new(phase),
                     label: label.into(),
                     payload: payload.into(),
+                    header: header.into(),
                     account_part: part,
                     balance: Decimal::try_new(i128::from(cents), 2).unwrap(),
                     score,
@@ -582,6 +839,36 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             Err(Error::InvalidOperand)
         ));
         let tag = Tag("128".into());
+        let expected = sql
+            .prepare(
+                "SELECT id FROM observations WHERE instr(payload,header) = 1 ORDER BY payload,id",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let field_prefix = || {
+            db.query::<Observation>()
+                .filter_fields(PAYLOAD, ic_db::Comparison::StartsWith, HEADER)
+        };
+        let page = field_prefix().order_asc(PAYLOAD).fetch().unwrap();
+        assert_eq!(
+            page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            expected
+        );
+        let count = field_prefix().count().unwrap();
+        assert_eq!((count.value, count.fetched), (expected.len() as u64, 4));
+        assert!(matches!(
+            field_prefix().work_limit(3).count(),
+            Err(Error::Limit)
+        ));
+        assert!(matches!(
+            db.query::<Observation>()
+                .filter_fields(PAYLOAD, ic_db::Comparison::StartsWith, LABEL)
+                .count(),
+            Err(Error::InvalidQuery)
+        ));
         for (path, column) in [(LABEL, "label"), (PAYLOAD, "payload"), (TAG, "tag")] {
             let expected = sql.prepare(&format!("SELECT id FROM observations WHERE length(CAST({column} AS BLOB)) >= 2 ORDER BY id"))
                 .unwrap().query_map([], |r| r.get::<_, u32>(0).map(u64::from)).unwrap()
@@ -688,4 +975,272 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             assert_eq!((count.examined, count.fetched), (expected.len(), 0));
         }
     }
+}
+
+#[record(fields(
+    field(name = "value", value(item(prim = "Nat16"))),
+    field(name = "maybe", value(opt, item(prim = "Nat16")))
+))]
+struct Reading {}
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(fields = ["sample", "id"], unique, present_only),
+    index(fields = ["calibration", "sample", "id"], unique, present_only),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "sample", value(opt, item(prim = "Nat16"))),
+        field(name = "calibration", value(opt, item(prim = "Nat16"))),
+        field(name = "reference", value(item(is = "Reading"))),
+        field(name = "previous", value(opt, item(is = "Reading")))
+    )
+)]
+struct Measurement {}
+
+#[test]
+fn sparse_index_requires_schema_or_predicates_to_prove_presence() {
+    use ic_db::Comparison::Eq;
+    const REQUIRED: &str = ic_db::field_path!(Measurement::REFERENCE, Reading::VALUE);
+    const OPTIONAL_MEMBER: &str = ic_db::field_path!(Measurement::REFERENCE, Reading::MAYBE);
+    const OPTIONAL_PARENT: &str = ic_db::field_path!(Measurement::PREVIOUS, Reading::VALUE);
+    let fixture = Fixture::new("test.measurements.v1");
+    let mut db = fixture
+        .create(Schema::new(&[Measurement::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute("CREATE TABLE readings(id INTEGER, sample INTEGER, reference INTEGER, maybe INTEGER, previous INTEGER, calibration INTEGER)", []).unwrap();
+    let mut batch = Batch::new();
+    for (id, sample) in [None, Some(7_u16), Some(9)].into_iter().enumerate() {
+        let maybe = sample.map(|_| 7_u16);
+        sql.execute(
+            "INSERT INTO readings VALUES (?1, ?2, 7, ?3, NULL, 7)",
+            (id as u32, sample, maybe),
+        )
+        .unwrap();
+        batch
+            .insert(&Measurement {
+                id: id as u64,
+                sample,
+                calibration: Some(7),
+                reference: Reading { value: 7, maybe },
+                previous: None,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let expected_ids = |predicate: &str| {
+        sql.prepare(&format!(
+            "SELECT id FROM readings WHERE {predicate} ORDER BY sample,id"
+        ))
+        .unwrap()
+        .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    for (path, column) in [
+        (REQUIRED, "reference"),
+        (OPTIONAL_MEMBER, "maybe"),
+        (OPTIONAL_PARENT, "previous"),
+    ] {
+        let expected = expected_ids(&format!("sample IS {column}"));
+        for (left, right) in [(Measurement::SAMPLE, path), (path, Measurement::SAMPLE)] {
+            let query = || {
+                db.query::<Measurement>()
+                    .filter_fields(left, Eq, right)
+                    .order_asc(Measurement::SAMPLE)
+            };
+            let page = query().fetch().unwrap();
+            assert_eq!(
+                page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                expected
+            );
+            let indexed = query().using_index("sample,id", &[]).fetch();
+            if path == REQUIRED {
+                assert_eq!(page.examined, 2);
+                assert_eq!(indexed.unwrap().rows[0].id, expected[0]);
+            } else {
+                assert!(matches!(indexed, Err(Error::InvalidQuery)));
+            }
+        }
+    }
+
+    for (op, path, fixed, predicate) in [
+        (
+            Eq,
+            OPTIONAL_MEMBER,
+            Some(7_u16),
+            "sample IS maybe AND maybe IS 7",
+        ),
+        (
+            ic_db::Comparison::Ne,
+            OPTIONAL_PARENT,
+            None,
+            "sample IS NOT previous AND previous IS NULL",
+        ),
+    ] {
+        let expected = expected_ids(predicate);
+        for (left, right) in [(Measurement::SAMPLE, path), (path, Measurement::SAMPLE)] {
+            let query = db
+                .query::<Measurement>()
+                .filter_fields(left, op, right)
+                .order_asc(Measurement::SAMPLE);
+            let query = match fixed {
+                Some(value) => query.eq(path, value),
+                None => query.filter_absent(path),
+            };
+            let page = query.work_limit(2).fetch().unwrap();
+            assert_eq!(page.examined, 2);
+            assert_eq!(
+                page.rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+    for (comparison, operator) in [(ic_db::Comparison::Le, "<="), (ic_db::Comparison::Ge, ">=")] {
+        for (path, column) in [
+            (Measurement::ID, "id"),
+            (REQUIRED, "reference"),
+            (OPTIONAL_MEMBER, "maybe"),
+            (OPTIONAL_PARENT, "previous"),
+        ] {
+            let query = || {
+                db.query::<Measurement>()
+                    .filter_fields(path, comparison, path)
+            };
+            let expected = expected_ids(&format!("{column} {operator} {column}")).len() as u64;
+            if path == REQUIRED || path == Measurement::ID {
+                let count = query().work_limit(1).count().unwrap();
+                assert_eq!(
+                    (count.value, count.examined, count.fetched),
+                    (expected, 0, 0)
+                );
+                assert!(matches!(
+                    query().work_limit(1).count_validated(),
+                    Err(Error::Limit)
+                ));
+            } else {
+                assert_eq!(query().count().unwrap().value, expected);
+            }
+        }
+        let query = || {
+            db.query::<Measurement>().filter_fields(
+                Measurement::SAMPLE,
+                comparison,
+                Measurement::SAMPLE,
+            )
+        };
+        let expected = expected_ids(&format!("sample {operator} sample")).len() as u64;
+        let count = query().count().unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, 2, 0)
+        );
+        assert_eq!(query().count_validated().unwrap().value, expected);
+        // The sparse index proves sample is present but says nothing about previous.value.
+        let covered = query()
+            .filter_fields(REQUIRED, comparison, REQUIRED)
+            .using_index("sample,id", &[])
+            .count()
+            .unwrap();
+        assert_eq!(
+            (covered.value, covered.examined, covered.fetched),
+            (expected, 2, 0)
+        );
+        let other = query()
+            .filter_fields(OPTIONAL_PARENT, comparison, OPTIONAL_PARENT)
+            .using_index("sample,id", &[])
+            .count()
+            .unwrap();
+        assert_eq!((other.value, other.fetched), (0, 2));
+    }
+    let calibration_index = "calibration,sample,id";
+    let prefix = [7_u16.into()];
+    for (left, right) in [
+        (Measurement::CALIBRATION, Measurement::SAMPLE),
+        (Measurement::SAMPLE, Measurement::CALIBRATION),
+    ] {
+        let query = |op| db.query::<Measurement>().filter_fields(left, op, right);
+        let matching = || query(Eq).using_index(calibration_index, &prefix);
+        assert_eq!(
+            matching()
+                .fetch()
+                .unwrap()
+                .rows
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            expected_ids("calibration = 7 AND sample IS calibration")
+        );
+        assert_eq!(matching().count().unwrap().value, 1);
+        assert!(matches!(
+            query(Eq).using_index(calibration_index, &[]).fetch(),
+            Err(Error::InvalidQuery)
+        ));
+        // The prefix also matches the row with absent sample. Inequality must retain it.
+        assert!(matches!(
+            query(ic_db::Comparison::Ne)
+                .using_index(calibration_index, &prefix)
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+    let equal_sample = || {
+        db.query::<Measurement>()
+            .filter_fields(Measurement::SAMPLE, Eq, OPTIONAL_MEMBER)
+            .order_asc(Measurement::SAMPLE)
+    };
+    let present_options = [
+        (OPTIONAL_MEMBER, Eq, 7_u16.into()),
+        (OPTIONAL_MEMBER, Eq, 8_u16.into()),
+    ];
+    for (query, guard) in [
+        (
+            equal_sample().filter_present(OPTIONAL_MEMBER),
+            "maybe IS NOT NULL",
+        ),
+        (
+            equal_sample().filter_any(&present_options),
+            "maybe IN (7,8)",
+        ),
+    ] {
+        let page = query.work_limit(2).fetch().unwrap();
+        assert_eq!(page.examined, 2);
+        assert_eq!(
+            page.rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+            expected_ids(&format!("sample IS maybe AND {guard}"))
+        );
+    }
+    // A non-equality against a present literal can still accept an absent member.
+    let nullable = || equal_sample().ne(OPTIONAL_MEMBER, 8_u16);
+    assert_eq!(
+        nullable()
+            .fetch()
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        expected_ids("sample IS maybe AND maybe IS NOT 8")
+    );
+    assert!(matches!(
+        nullable().using_index("sample,id", &[]).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    // An alternative fixing the other operand cannot exclude the both-absent row.
+    let alternatives = [
+        (OPTIONAL_MEMBER, Eq, 7_u16.into()),
+        (Measurement::ID, Eq, 0_u64.into()),
+    ];
+    let query = || {
+        db.query::<Measurement>()
+            .filter_fields(Measurement::SAMPLE, Eq, OPTIONAL_MEMBER)
+            .filter_any(&alternatives)
+    };
+    assert_eq!(query().count().unwrap().value, 2);
+    assert!(matches!(
+        query().using_index("sample,id", &[]).fetch(),
+        Err(Error::InvalidQuery)
+    ));
 }

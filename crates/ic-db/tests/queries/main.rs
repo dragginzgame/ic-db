@@ -1967,6 +1967,42 @@ fn required_text_and_groups_match_rust_oracle() {
 fn length_compares_text_in_utf8_bytes_and_binds_pages() {
     let runtime = host(VectorMemory::default());
     let (db, rows) = text_rows(&runtime);
+    let either_length = |second_field, second_op| {
+        db.query::<TextRow>()
+            .filter_length(TextRow::TEXT, C::Lt, 2)
+            .filter_any_operands(&[
+                (TextRow::TEXT, C::Ge, ic_db::QueryOperand::Length(2)),
+                (second_field, second_op, ic_db::QueryOperand::Length(1)),
+            ])
+    };
+    let empty = either_length(TextRow::TEXT, C::Gt)
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!((empty.rows.len(), empty.examined), (0, 0));
+    assert!(empty.next.is_none());
+    let one_byte = rows
+        .iter()
+        .filter(|r| r.text.as_ref().is_some_and(|v| v.len() == 1))
+        .count();
+    for field in [TextRow::TEXT, TextRow::REQUIRED] {
+        assert_eq!(
+            either_length(field, C::Eq).count().unwrap().value,
+            one_byte as u64
+        );
+    }
+    let absent_or_other = db
+        .query::<TextRow>()
+        .filter_length(TextRow::TEXT, C::Ne, 0)
+        .filter_length(TextRow::TEXT, C::Ne, 1)
+        .count()
+        .unwrap();
+    assert_eq!(
+        absent_or_other.value,
+        rows.iter()
+            .filter(|r| r.text.as_ref().is_none_or(|s| s.len() > 1))
+            .count() as u64
+    );
     for n in [0, 1, 2, 3, u32::MAX] {
         let expected: Vec<_> = rows
             .iter()
@@ -2072,7 +2108,7 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
                 assert_eq!(actual, expected, "{needle:?}");
                 assert_eq!(
                     examined,
-                    if comparison == C::StartsWith {
+                    if comparison == C::StartsWith || needle.is_empty() {
                         matching.len()
                     } else {
                         rows.len()
@@ -2106,7 +2142,7 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
             assert_eq!(actual, expected.into_iter().collect::<Vec<_>>());
             assert_eq!(
                 examined,
-                if comparison == C::StartsWith {
+                if comparison == C::StartsWith || needle.is_empty() {
                     matching.len()
                 } else {
                     rows.len()
@@ -2613,10 +2649,10 @@ fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
         .unwrap();
     assert_eq!((missing.value, missing.examined), (0, 0));
     assert!(matches!(query().work_limit(1).count(), Err(Error::Limit)));
-    let checked = query().count_validated().unwrap();
+    let checked = query().work_limit(2).count_validated().unwrap();
     assert_eq!(
         (checked.value, checked.examined, checked.fetched),
-        (2, 3, 3)
+        (2, 2, 2)
     );
     let first = query().descending().limit(1).fetch().unwrap();
     assert_eq!(ids(&first.rows), [8]);
@@ -2690,17 +2726,41 @@ fn primary_membership_counts_intersect_before_spending_the_probe_budget() {
         (excluded.value, excluded.examined, excluded.fetched),
         (0, 0, 0)
     );
-    let residual = db
-        .query::<Entry>()
-        .filter_in(Entry::ID, &[1_u64, 8])
-        .filter_any(&[
-            (Entry::ID, C::Eq, 2_u64.into()),
-            (Entry::AMOUNT, C::Eq, 80_u64.into()),
-        ])
-        .count()
-        .unwrap();
-    assert_eq!(residual.value, 1);
-    assert!(residual.fetched > 0);
+    let mixed = || {
+        db.query::<Entry>()
+            .filter_in(Entry::ID, &[1_u64, 8, 99, 8])
+            .filter_any(&[
+                (Entry::ID, C::Eq, 1_u64.into()),
+                (Entry::AMOUNT, C::Eq, 80_u64.into()),
+            ])
+    };
+    let count = mixed().work_limit(3).count().unwrap();
+    // ID 1 qualifies by key, ID 8 needs its amount checked, and ID 99 is missing.
+    assert_eq!((count.value, count.examined, count.fetched), (2, 3, 1));
+    let checked = mixed().work_limit(3).count_validated().unwrap();
+    assert_eq!(
+        (checked.value, checked.examined, checked.fetched),
+        (2, 3, 2)
+    );
+    assert!(matches!(mixed().work_limit(2).count(), Err(Error::Limit)));
+    let scattered = |minimum| {
+        db.query::<Entry>()
+            .filter_in(Entry::ID, &[99_u64, 8, 0, 8])
+            .gt(Entry::AMOUNT, minimum)
+            .work_limit(3)
+    };
+    for (minimum, expected, probes) in [(79_u64, true, 2), (80, false, 3)] {
+        let found = scattered(minimum).exists().unwrap();
+        assert_eq!(
+            (
+                found.value,
+                found.examined,
+                found.fetched,
+                found.output_bytes
+            ),
+            (expected, probes, 1, 1)
+        );
+    }
 }
 
 #[test]
@@ -2724,10 +2784,13 @@ fn unique_membership_counts_probe_only_complete_physical_keys() {
         .filter_in(Entry::MAYBE, &[1_u64, 8])
         .eq(Entry::CATEGORY, 0_u8)
         .using_index("maybe", &[])
+        .work_limit(2)
         .count()
         .unwrap();
-    assert_eq!(residual.value, 1);
-    assert!(residual.fetched > 0);
+    assert_eq!(
+        (residual.value, residual.examined, residual.fetched),
+        (1, 2, 2)
+    );
     let members = || {
         db.query::<Entry>()
             .filter_in(Entry::MAYBE, &[None, Some(1_u64), Some(8), Some(99)])
@@ -5075,6 +5138,33 @@ fn sparse_compound_membership_requires_every_optional_component() {
     let count = names().work_limit(2).count().unwrap();
     assert_eq!((count.value, count.examined, count.fetched), (1, 2, 0));
     assert_eq!(names().count_validated().unwrap().value, count.value);
+    let by_length = || {
+        db.query::<SparsePair>()
+            .using_index("id,right", &[5_u64.into()])
+            .filter_in(
+                SparsePair::RIGHT,
+                &[None, Some("ba"), Some("a"), Some("é"), Some("ba")],
+            )
+            .filter_length(SparsePair::RIGHT, C::Eq, 2)
+    };
+    // Both "ba" and "é" occupy two UTF-8 bytes. Only "ba" exists.
+    let count = by_length().work_limit(2).count().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (1, 2, 0));
+    assert_eq!(by_length().count_validated().unwrap().value, count.value);
+    for (left, op, right) in [
+        (SparsePair::LEFT, C::Lt, SparsePair::ID),
+        (SparsePair::ID, C::Gt, SparsePair::LEFT),
+    ] {
+        let query = || {
+            db.query::<SparsePair>()
+                .using_index("left,right,id", &[1_u64.into(), "a".into()])
+                .filter_in(SparsePair::ID, &[0_u64, 3, 1, 3])
+                .filter_fields(left, op, right)
+        };
+        let count = query().work_limit(1).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+        assert_eq!(query().count_validated().unwrap().value, count.value);
+    }
     // The index beginning with ID omits exactly the rows without a right value.
     // Its membership proves presence even without a leading equality or range.
     let right = || db.query::<SparsePair>().filter_present(SparsePair::RIGHT);
@@ -9974,6 +10064,26 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
     assert_eq!(query().count_index_entries().unwrap().value, 4);
     assert_eq!(query().count().unwrap().value, 4);
     assert!(matches!(query().count_validated(), Err(Error::Corrupt)));
+    let exists = |ids: &[u64]| {
+        db.query::<Entry>()
+            .using_index("maybe", &[])
+            .filter_in(Entry::MAYBE, ids)
+            .work_limit(2)
+            .exists()
+    };
+    // Owner 1 precedes the dangling entry for owner 2, regardless of argument order.
+    let first = exists(&[2, 1]).unwrap();
+    assert_eq!((first.value, first.examined, first.fetched), (true, 1, 1));
+    assert!(matches!(exists(&[8, 2]), Err(Error::Corrupt)));
+    // Validation continues beyond the first good owner and discovers the dangling entry.
+    assert!(matches!(
+        db.query::<Entry>()
+            .using_index("maybe", &[])
+            .filter_in(Entry::MAYBE, &[1_u64, 2])
+            .work_limit(2)
+            .count_validated(),
+        Err(Error::Corrupt)
+    ));
     let implicit = db
         .query::<Entry>()
         .filter("category", C::Eq, 0_u8)
@@ -9989,6 +10099,14 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         .unwrap();
     assert_eq!((empty.value, empty.examined, empty.fetched), (0, 0, 0));
     // A residual on a different field still requires the missing owner.
+    assert!(matches!(
+        query()
+            .filter_in(Entry::ID, &[2_u64, 8])
+            .gt(Entry::AMOUNT, 0_u64)
+            .work_limit(2)
+            .count(),
+        Err(Error::Corrupt)
+    ));
     assert!(matches!(
         query().filter(Entry::AMOUNT, C::Gt, 0_u64).count(),
         Err(Error::Corrupt)

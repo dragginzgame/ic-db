@@ -258,6 +258,66 @@ pub struct GroupValue<K, R> {
     pub value: Option<R>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemberProbe {
+    CountKeys,
+    CountWithRows,
+    CountValidated,
+    Exists,
+}
+
+fn probe_members<M: Memory>(
+    source: &super::QuerySource<'_, M>,
+    entity: &EntitySchema,
+    request: &super::Request<'_>,
+    plan: &Plan<'_>,
+    mode: MemberProbe,
+) -> Result<Option<Aggregate<u64>>, Error> {
+    let Some(members) =
+        super::range::point_members(entity, plan, request, mode != MemberProbe::CountKeys)
+    else {
+        return Ok(None);
+    };
+    let db = source.read()?;
+    let mut count = 0;
+    let mut examined = 0;
+    let mut fetched = 0;
+    for (member, needs_row) in members {
+        examined += 1;
+        let key = crate::store_key::StoreKey::new([plan.prefix.as_slice(), member].concat())?;
+        if needs_row || matches!(mode, MemberProbe::CountValidated | MemberProbe::Exists) {
+            let mut found = false;
+            let bounds = (
+                std::ops::Bound::Included(key.clone()),
+                std::ops::Bound::Included(key),
+            );
+            let page = super::execute_inner(
+                &db.map,
+                entity,
+                request,
+                plan,
+                Some(bounds),
+                Some(&mut Accumulator::Exists(&mut found)),
+                None,
+            )?;
+            count += u64::from(found);
+            fetched += page.fetched;
+            if found && mode == MemberProbe::Exists {
+                break;
+            }
+        } else {
+            count += u64::from(db.map.contains_key(&key));
+        }
+    }
+
+    Ok(Some(Aggregate {
+        value: count,
+        examined,
+        fetched,
+        output_bytes: 8,
+    }))
+}
+
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Page completed retained groups, returning at most 1..=32 rows per response.
     /// `limit` still caps the complete selected result and binds the job. Page size
@@ -493,6 +553,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Whether at least one row matches, without materializing an entity.
     /// Can seek a mandatory equality prefix and evaluate remaining filters on its owner rows.
+    /// A bounded list of complete keys can be probed in key order. Each hit is validated.
     /// Stops after validating the first matching row; later rows are not inspected.
     /// Returns false only after observing the end of the selected input.
     /// `limit` does not truncate input. The boolean result occupies one byte.
@@ -507,6 +568,20 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         observe!(query, {
             let mut plan = self.aggregate_plan(None, false)?;
             self.select_aggregate_row_path(&mut plan)?;
+            if let Some(result) = probe_members(
+                &self.db,
+                E::SCHEMA,
+                &self.request,
+                &plan,
+                MemberProbe::Exists,
+            )? {
+                return Ok(Aggregate {
+                    value: result.value != 0,
+                    examined: result.examined,
+                    fetched: result.fetched,
+                    output_bytes: 1,
+                });
+            }
             let mut found = false;
             let page = execute(
                 &self.db.read()?.map,
@@ -526,11 +601,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
-    /// Uses maintained cardinality for unfiltered input and physical index keys for
-    /// fully covered index ranges or primary-key comparison ranges. A partially covered
+    /// Uses maintained cardinality when all rows qualify. Physical index keys can
+    /// answer fully covered index ranges or primary-key comparison ranges. A partially covered
     /// equality prefix narrows the owner rows checked by the remaining predicates.
-    /// Membership counts can probe distinct complete primary or secondary keys
-    /// when the fixed prefix and final component prove every filter and the probes fit. Use
+    /// Membership counts can probe distinct complete primary or secondary keys within
+    /// the work budget. A hit requires an owner read only when its filters need row values. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
     /// Completion must be established within `work_limit`; an exact-boundary
@@ -547,7 +622,18 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 return Err(Error::RowTooLarge);
             }
             let mut plan = self.aggregate_plan(None, false)?;
-            if self.request.predicates.is_empty() && self.request.index.is_none() {
+            if self.request.index.is_none()
+                && self
+                    .request
+                    .clauses()
+                    .zip(plan.clauses())
+                    .all(|(clause, terms)| {
+                        clause.iter().zip(terms).any(|(p, term)| {
+                            p.constant_comparison(E::SCHEMA) == Some(true)
+                                || (term.tests_presence && E::SCHEMA.field_is_required(p.field))
+                        })
+                    })
+            {
                 return Ok(Aggregate {
                     value: self.db.read()?.cardinality::<E>()?,
                     examined: 0,
@@ -556,16 +642,26 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 });
             }
             if plan.index.is_none()
-                && let Some(count) = self.count_members(&plan)?
+                && let Some(count) = probe_members(
+                    &self.db,
+                    E::SCHEMA,
+                    &self.request,
+                    &plan,
+                    MemberProbe::CountKeys,
+                )?
             {
                 return Ok(count);
             }
             if super::order::select_filtered_path(E::SCHEMA, &self.request, &mut plan, true)? {
                 return self.count_keys(&plan);
             }
-            if plan.index.is_some()
-                && let Some(count) = self.count_members(&plan)?
-            {
+            if let Some(count) = probe_members(
+                &self.db,
+                E::SCHEMA,
+                &self.request,
+                &plan,
+                MemberProbe::CountWithRows,
+            )? {
                 return Ok(count);
             }
             let reducer = self.count_reducer(None)?;
@@ -575,6 +671,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Count by validating each visited row, including its selected index entry.
+    /// For bounded exact-key lists, each distinct candidate costs one probe,
+    /// including misses. Every hit is checked before returning the count.
     /// # Errors
     /// Returns the same admission and resource errors as [`Self::count`], and
     /// reports corruption encountered during traversal.
@@ -605,26 +703,6 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
             self.count_keys(&plan)
         })
-    }
-
-    fn count_members(&self, plan: &Plan<'_>) -> Result<Option<Aggregate<u64>>, Error> {
-        let Some(members) = super::range::point_count_members(E::SCHEMA, plan, &self.request)
-        else {
-            return Ok(None);
-        };
-        let db = self.db.read()?;
-        let mut count = 0;
-        for member in &members {
-            let key = crate::store_key::StoreKey::new([plan.prefix.as_slice(), *member].concat())?;
-            count += u64::from(db.map.contains_key(&key));
-        }
-
-        Ok(Some(Aggregate {
-            value: count,
-            examined: members.len(),
-            fetched: 0,
-            output_bytes: 8,
-        }))
     }
 
     fn count_keys(&self, plan: &Plan<'_>) -> Result<Aggregate<u64>, Error> {
@@ -699,6 +777,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         }
         let mut plan = self.aggregate_plan(None, false)?;
         self.select_aggregate_row_path(&mut plan)?;
+        if field.is_none()
+            && let Some(count) = probe_members(
+                &self.db,
+                E::SCHEMA,
+                &self.request,
+                &plan,
+                MemberProbe::CountValidated,
+            )?
+        {
+            return Ok(count);
+        }
         let reducer = self.count_reducer(field)?;
 
         self.scalar_count_value(&plan, reducer)

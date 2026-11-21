@@ -74,6 +74,10 @@ pub enum Comparison {
 }
 
 impl Comparison {
+    fn supports_record_member(self) -> bool {
+        self.is_relational() || self == Self::StartsWith
+    }
+
     fn is_relational(self) -> bool {
         matches!(
             self,
@@ -140,6 +144,25 @@ impl Comparison {
         }
     }
 
+    // Residual predicates have typed operands. Only non-byte ordering needs an encoded key.
+    fn accepts_values(self, left: IndexValue<'_>, right: IndexValue<'_>) -> Option<bool> {
+        match self {
+            Self::Eq => Some(equal_values(left, right)),
+            Self::Ne => Some(!equal_values(left, right)),
+            _ => Some(self.accepts_bytes(scalar_bytes(left)?, scalar_bytes(right)?)),
+        }
+    }
+
+    // Text and Blob operands borrowed from rows or fixed query values are already unframed.
+    fn accepts_bytes(self, actual: &[u8], operand: &[u8]) -> bool {
+        match self {
+            Self::StartsWith => actual.starts_with(operand),
+            Self::EndsWith => actual.ends_with(operand),
+            Self::Contains => memchr::memmem::find(actual, operand).is_some(),
+            _ => self.accepts(Some(actual), Some(operand), false),
+        }
+    }
+
     fn accepts_length(self, actual: Option<u32>, threshold: u32) -> bool {
         let encoded = actual.map(u32::to_be_bytes);
 
@@ -148,6 +171,18 @@ impl Comparison {
             Some(&threshold.to_be_bytes()),
             false,
         )
+    }
+
+    // A result is uniform only when every integer in the inclusive interval agrees.
+    fn uniform_length_result(self, min: u32, max: u32, n: u32) -> Option<bool> {
+        match self {
+            Self::Eq | Self::Ne if min == max || n < min || n > max => {
+                Some(self.accepts_length(Some(min), n))
+            }
+            Self::Lt | Self::Ge if max < n || min >= n => Some(self.accepts_length(Some(min), n)),
+            Self::Le | Self::Gt if max <= n || min > n => Some(self.accepts_length(Some(min), n)),
+            _ => None,
+        }
     }
 
     // One side is absent. Equality/inequality are symmetric; execution,
@@ -311,6 +346,63 @@ struct Predicate<'a> {
     // Consecutive alternatives form one clause; clauses are ANDed.
     or_next: bool,
 }
+
+impl Predicate<'_> {
+    // Each of these predicates matches exactly the rows where the field is present.
+    fn tests_presence(&self, entity: &EntitySchema, operand: &TermOperand) -> bool {
+        match (self.comparison, self.operand) {
+            (Comparison::Ne, QueryOperand::Literal(IndexValue::Absent)) => true,
+            (_, QueryOperand::Length(_)) => {
+                self.present_length_result(entity) == Some(true)
+                    && self.comparison != Comparison::Ne
+            }
+            (
+                Comparison::Le
+                | Comparison::Ge
+                | Comparison::StartsWith
+                | Comparison::EndsWith
+                | Comparison::Contains,
+                QueryOperand::Field(right),
+            ) => right == self.field,
+            (
+                Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains,
+                QueryOperand::Literal(needle),
+            ) => {
+                // An empty Text/Blob collection member still requires a matching element.
+                !matches!(operand, TermOperand::Member { .. })
+                    && scalar_bytes(needle).is_some_and(<[u8]>::is_empty)
+            }
+            _ => false,
+        }
+    }
+
+    // Result for every present length in the declared inclusive range, if uniform.
+    fn present_length_result(&self, entity: &EntitySchema) -> Option<bool> {
+        let QueryOperand::Length(n) = self.operand else {
+            return None;
+        };
+        let max = length_limit(entity.index_field(self.field)?.value)?;
+        self.comparison.uniform_length_result(0, max, n)
+    }
+
+    fn constant_comparison(&self, entity: &EntitySchema) -> Option<bool> {
+        if matches!(self.operand, QueryOperand::Length(_)) {
+            let result = self.present_length_result(entity)?;
+            return (result == self.comparison.accepts_absent(false)
+                || entity.field_is_required(self.field))
+            .then_some(result);
+        }
+        if !matches!(self.operand, QueryOperand::Field(right) if right == self.field) {
+            return None;
+        }
+        match self.comparison {
+            Comparison::Eq => Some(true),
+            Comparison::Ne | Comparison::Lt | Comparison::Gt => Some(false),
+            _ => None,
+        }
+    }
+}
+
 struct Request<'a> {
     groups: aggregate::GroupRequest<'a>,
     predicates: Vec<Predicate<'a>>,
@@ -630,8 +722,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.filter(field, Comparison::Ge, value)
     }
 
-    /// Compare two top-level fields on the same row. Lists and sets support Contains
-    /// with a present scalar field of the element type. Text and Blob also
+    /// Compare fields on the same row. Eq, Ne, Lt, Le, Gt and Ge also accept
+    /// direct scalar record members on either side, as does StartsWith for Text and Blob.
+    /// Top-level lists and sets support Contains
+    /// with a present scalar field or direct record member of the element type. Text and Blob also
     /// support StartsWith, EndsWith and Contains with a present right-hand field.
     /// Types must match; Text and Blob bounds may differ within their respective families.
     /// Two absent values are equal. An ordered comparison requires two present values.
@@ -1067,6 +1161,7 @@ fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u16, E
 }
 
 struct Term {
+    tests_presence: bool,
     position: usize,
     comparison: Comparison,
     operand: TermOperand,
@@ -1087,7 +1182,11 @@ enum TermOperand {
         literal: Vec<u8>,
         absent: bool,
     },
-    Field(usize),
+    Field {
+        right: usize,
+        left_member: Option<crate::member::RecordMember>,
+        right_member: Option<crate::member::RecordMember>,
+    },
     Length {
         member: Option<crate::member::RecordMember>,
         threshold: u32,
@@ -1096,7 +1195,7 @@ enum TermOperand {
 
 enum MemberNeedle {
     Literal(Vec<u8>),
-    Field(usize),
+    Field(usize, Option<crate::member::RecordMember>),
 }
 
 // Operands have already been type-checked. Text and Blob literals carry their
@@ -1105,6 +1204,28 @@ fn scalar_bytes(value: IndexValue<'_>) -> Option<&[u8]> {
     match value {
         IndexValue::Text(text) => Some(text.as_bytes()),
         IndexValue::Blob(bytes) => Some(bytes),
+        _ => None,
+    }
+}
+
+fn equal_values(left: IndexValue<'_>, right: IndexValue<'_>) -> bool {
+    // Admission already checked both enum contracts.
+    match (left, right) {
+        (IndexValue::UnitEnum { ordinal: a, .. }, IndexValue::UnitEnum { ordinal: b, .. }) => {
+            a == b
+        }
+        _ => left == right,
+    }
+}
+
+fn length_limit(field: FieldType) -> Option<u32> {
+    match key::operand_type(field) {
+        FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } => Some(max_bytes),
+        FieldType::List { max_items, .. } => Some(max_items),
+        FieldType::Named(link) => match (link.definition)().body {
+            TypeBody::Map { max_items, .. } | TypeBody::Set { max_items, .. } => Some(max_items),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1125,17 +1246,15 @@ fn contains_member(
     span: &[u8],
     optional: bool,
     item: FieldType,
-    needle: &[u8],
-    scratch: &mut Vec<u8>,
+    needle: IndexValue<'_>,
 ) -> Result<bool, Error> {
     let mut reader = Decoder::new(span)?;
     if optional && !reader.boolean()? {
         return Ok(false);
     }
     for _ in 0..reader.nat32()? {
-        scratch.clear();
-        IndexValue::read(&mut reader, item)?.append_component(false, scratch);
-        if scratch.as_slice() == needle {
+        let value = IndexValue::read(&mut reader, item)?;
+        if equal_values(value, needle) {
             return Ok(true);
         }
     }
@@ -1325,9 +1444,7 @@ impl<'a> Plan<'a> {
             };
             let operand = match (predicate.operand, record_member) {
                 (QueryOperand::Literal(value), Some(member)) => {
-                    if !predicate.comparison.is_relational()
-                        && predicate.comparison != Comparison::StartsWith
-                    {
+                    if !predicate.comparison.supports_record_member() {
                         return Err(Error::InvalidQuery);
                     }
                     let leaf = member.field();
@@ -1345,20 +1462,9 @@ impl<'a> Plan<'a> {
                         absent: value == IndexValue::Absent,
                     }
                 }
-                (QueryOperand::Field(_), Some(_)) => return Err(Error::InvalidQuery),
                 (QueryOperand::Length(length), member) => {
                     let selected = member.map_or(field.value, |m| m.field().value);
-                    let supported = match key::operand_type(selected) {
-                        FieldType::Text { .. }
-                        | FieldType::Blob { .. }
-                        | FieldType::List { .. } => true,
-                        FieldType::Named(link) => matches!(
-                            (link.definition)().body,
-                            TypeBody::Map { .. } | TypeBody::Set { .. }
-                        ),
-                        _ => false,
-                    };
-                    if !supported || !predicate.comparison.is_relational() {
+                    if length_limit(selected).is_none() || !predicate.comparison.is_relational() {
                         return Err(Error::InvalidQuery);
                     }
                     plan.span_fields |= 1 << position;
@@ -1368,10 +1474,18 @@ impl<'a> Plan<'a> {
                         threshold: length,
                     }
                 }
-                (QueryOperand::Field(name), None) => {
-                    let right = entity.field_position(name).ok_or(Error::InvalidQuery)?;
-                    let right_type = entity.fields[right].value;
-                    let left_type = member.unwrap_or(field.value);
+                (QueryOperand::Field(name), left_member) => {
+                    let (right, right_member) = crate::member::resolve_field(entity, name)?;
+                    if (left_member.is_some() || right_member.is_some())
+                        && member.is_none()
+                        && !predicate.comparison.supports_record_member()
+                    {
+                        return Err(Error::InvalidQuery);
+                    }
+                    let right_type =
+                        right_member.map_or(entity.fields[right].value, |m| m.field().value);
+                    let left_type =
+                        left_member.map_or(member.unwrap_or(field.value), |m| m.field().value);
                     let compatible = left_type == right_type
                         || matches!(
                             (left_type, right_type),
@@ -1384,19 +1498,30 @@ impl<'a> Plan<'a> {
                     {
                         return Err(Error::InvalidQuery);
                     }
-                    plan.selected |= 1 << right;
+                    if right_member.is_some() {
+                        plan.span_fields |= 1 << right;
+                    } else {
+                        plan.selected |= 1 << right;
+                    }
 
                     if let Some(item) = member {
                         plan.span_fields |= 1 << position;
 
                         TermOperand::Member {
                             item,
-                            needle: MemberNeedle::Field(right),
+                            needle: MemberNeedle::Field(right, right_member),
                         }
                     } else {
-                        plan.selected |= 1 << position;
-
-                        TermOperand::Field(right)
+                        if left_member.is_some() {
+                            plan.span_fields |= 1 << position;
+                        } else {
+                            plan.selected |= 1 << position;
+                        }
+                        TermOperand::Field {
+                            right,
+                            left_member,
+                            right_member,
+                        }
                     }
                 }
                 (QueryOperand::Literal(value), None) => {
@@ -1435,6 +1560,7 @@ impl<'a> Plan<'a> {
                 }
             };
             plan.terms.push(Term {
+                tests_presence: predicate.tests_presence(entity, &operand),
                 position,
                 comparison: predicate.comparison,
                 operand,
@@ -1502,14 +1628,36 @@ impl<'a> Plan<'a> {
                     }
                     hash.update(threshold.to_le_bytes());
                 }
-                TermOperand::Field(right)
+                TermOperand::Field {
+                    right,
+                    left_member: None,
+                    right_member: None,
+                }
                 | TermOperand::Member {
-                    needle: MemberNeedle::Field(right),
+                    needle: MemberNeedle::Field(right, None),
                     ..
                 } => {
                     // Outside the bounded literal length domain.
                     hash.update(u32::MAX.to_le_bytes());
                     hash.update([*right as u8]);
+                }
+                TermOperand::Member {
+                    needle: MemberNeedle::Field(right, Some(member)),
+                    ..
+                } => {
+                    hash.update((u32::MAX - 4).to_le_bytes());
+                    hash.update([u8::MAX, *right as u8, member.position() as u8]);
+                }
+                TermOperand::Field {
+                    right,
+                    left_member,
+                    right_member,
+                } => {
+                    hash.update((u32::MAX - 4).to_le_bytes());
+                    let slot = |member: &Option<crate::member::RecordMember>| {
+                        member.map_or(u8::MAX, |m| m.position() as u8)
+                    };
+                    hash.update([slot(left_member), *right as u8, slot(right_member)]);
                 }
             }
         }
@@ -1652,7 +1800,15 @@ fn execute<M: Memory>(
     plan: &Plan<'_>,
     mut aggregate: Option<aggregate::Accumulator<'_>>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
-    execute_inner(map, entity, request, plan, aggregate.as_mut(), None)
+    execute_inner(
+        map,
+        entity,
+        request,
+        plan,
+        range::bounds(entity, request, plan)?,
+        aggregate.as_mut(),
+        None,
+    )
 }
 
 // Retained aggregates use the same traversal, but checkpoint at a work boundary.
@@ -1665,6 +1821,7 @@ fn execute_inner<M: Memory>(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &Plan<'_>,
+    bounds: Option<range::Bounds>,
     mut aggregate: Option<&mut aggregate::Accumulator<'_>>,
     mut input_bytes: Option<&mut usize>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
@@ -1675,7 +1832,7 @@ fn execute_inner<M: Memory>(
         fetched: 0,
         output_bytes: 0,
     };
-    let Some(bounds) = range::bounds(entity, request, plan)? else {
+    let Some(bounds) = bounds else {
         return Ok(page);
     };
     let terminal = range::terminal_key(&bounds, plan.descending);
@@ -1762,8 +1919,19 @@ fn execute_inner<M: Memory>(
                 stored_key,
             )?;
         }
-        let mut accepts = |term: &Term| -> Result<bool, Error> {
-            let value = values[term.position];
+        let read = |position: usize, member: Option<crate::member::RecordMember>| {
+            if let Some(member) = member {
+                let (start, end) = spans[position];
+                member.read(
+                    &bytes[usize::from(start)..usize::from(end)],
+                    entity.fields[position].optional,
+                )
+            } else {
+                Ok(values[position])
+            }
+        };
+        let mut accepts = |term: &Term, supplied: &QueryOperand<'_>| -> Result<bool, Error> {
+            let mut value = values[term.position];
             component.clear();
             let (operand, optional) = match &term.operand {
                 TermOperand::Nested {
@@ -1771,19 +1939,11 @@ fn execute_inner<M: Memory>(
                     literal,
                     absent,
                 } => {
-                    let (start, end) = spans[term.position];
-                    let span = &bytes[usize::from(start)..usize::from(end)];
-                    let optional = entity.fields[term.position].optional;
-                    let value = member.read(span, optional)?;
+                    value = read(term.position, Some(*member))?;
                     if *absent {
                         return Ok(term.comparison.accepts_absent(value == IndexValue::Absent));
                     }
-                    value.append_component(false, &mut component);
-                    return Ok(term.comparison.accepts(
-                        (value != IndexValue::Absent).then_some(&component),
-                        Some(literal),
-                        false,
-                    ));
+                    (Some(literal.as_slice()), false)
                 }
                 TermOperand::Literal { absent: true, .. } => {
                     let absent = if plan.span_fields & (1 << term.position) != 0 {
@@ -1795,19 +1955,16 @@ fn execute_inner<M: Memory>(
                     return Ok(term.comparison.accepts_absent(absent));
                 }
                 TermOperand::Member { item, needle } => {
-                    let needle = match needle {
-                        MemberNeedle::Literal(bytes) => bytes.as_slice(),
-                        MemberNeedle::Field(right) => {
-                            let value = values[*right];
-                            if value == IndexValue::Absent {
-                                return Ok(false);
-                            }
-                            right_component.clear();
-                            value.append_component(false, &mut right_component);
-
-                            &right_component
+                    let needle = match (needle, supplied) {
+                        (MemberNeedle::Literal(_), QueryOperand::Literal(value)) => *value,
+                        (MemberNeedle::Field(right, member), QueryOperand::Field(_)) => {
+                            read(*right, *member)?
                         }
+                        _ => return Err(Error::Corrupt),
                     };
+                    if needle == IndexValue::Absent {
+                        return Ok(false);
+                    }
                     let (start, end) = spans[term.position];
 
                     return contains_member(
@@ -1815,7 +1972,6 @@ fn execute_inner<M: Memory>(
                         entity.fields[term.position].optional,
                         *item,
                         needle,
-                        &mut component,
                     );
                 }
                 TermOperand::Length { member, threshold } => {
@@ -1840,17 +1996,30 @@ fn execute_inner<M: Memory>(
                     Some(bytes.as_slice()),
                     entity.fields[term.position].optional,
                 ),
-                TermOperand::Field(right) => {
-                    let rhs = values[*right];
+                TermOperand::Field {
+                    right,
+                    left_member,
+                    right_member,
+                } => {
+                    value = read(term.position, *left_member)?;
+                    let rhs = read(*right, *right_member)?;
+                    if value == IndexValue::Absent || rhs == IndexValue::Absent {
+                        return Ok(term.comparison.accepts_absent(value == rhs));
+                    }
+                    if let Some(matches) = term.comparison.accepts_values(value, rhs) {
+                        return Ok(matches);
+                    }
                     right_component.clear();
                     rhs.append_component(false, &mut right_component);
 
-                    (
-                        (rhs != IndexValue::Absent).then_some(right_component.as_slice()),
-                        false,
-                    )
+                    (Some(right_component.as_slice()), false)
                 }
             };
+            if let QueryOperand::Literal(right) = supplied
+                && let Some(matches) = term.comparison.accepts_values(value, *right)
+            {
+                return Ok(matches);
+            }
             value.append_component(optional, &mut component);
 
             Ok(term.comparison.accepts(
@@ -1860,13 +2029,15 @@ fn execute_inner<M: Memory>(
             ))
         };
         let matches = 'matches: {
-            'clause: for clause in plan.clauses() {
-                for term in clause {
-                    if accepts(term)? {
-                        continue 'clause;
+            let mut clause_matches = false;
+            for (term, predicate) in plan.terms.iter().zip(&request.predicates) {
+                clause_matches = clause_matches || accepts(term, &predicate.operand)?;
+                if !term.or_next {
+                    if !clause_matches {
+                        break 'matches false;
                     }
+                    clause_matches = false;
                 }
-                break 'matches false;
             }
 
             true

@@ -134,6 +134,34 @@ struct EmptyItems {}
 )]
 struct EmptyOnly {}
 
+#[test]
+fn a_zero_item_limit_fixes_the_length_of_every_required_list() {
+    use ic_db::Comparison::{Eq, Ge, Gt, Le, Lt, Ne};
+    let fixture = ic_db::testing::Fixture::new("test.empty.v1");
+    let mut db = fixture
+        .create(Schema::new(&[EmptyOnly::SCHEMA]).unwrap(), [3; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&EmptyOnly {
+            id: 1,
+            items: vec![],
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    for (op, expected) in [(Eq, 1), (Ne, 0), (Lt, 0), (Le, 1), (Gt, 0), (Ge, 1)] {
+        let count = db
+            .query::<EmptyOnly>()
+            .filter_length(EmptyOnly::ITEMS, op, 0)
+            .count()
+            .unwrap();
+        assert_eq!(
+            (count.value, count.examined, count.fetched),
+            (expected, 0, 0)
+        );
+    }
+}
+
 ///
 /// BlobList
 /// Stores `items` under the `id` primary key.
@@ -151,6 +179,34 @@ struct EmptyOnly {}
     )
 )]
 struct BlobList {}
+
+#[test]
+fn an_empty_blob_needle_must_be_an_element_of_the_list() {
+    let fixture = ic_db::testing::Fixture::new("test.blobs.v1");
+    let mut db = fixture
+        .create(Schema::new(&[BlobList::SCHEMA]).unwrap(), [4; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    for (id, items) in [vec![], vec![vec![1]], vec![vec![]]]
+        .into_iter()
+        .enumerate()
+    {
+        batch
+            .insert(&BlobList {
+                id: id as u64,
+                items,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let count = db
+        .query::<BlobList>()
+        .filter(BlobList::ITEMS, ic_db::Comparison::Contains, b"".as_slice())
+        .count()
+        .unwrap();
+    assert_eq!((count.value, count.fetched), (1, 3));
+}
+
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let requests =

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.26.7] - Unreleased
+
+### 📦 Dependencies
+
+- Update the qualification canisters, host driver and local CLI to IC Wire 0.28.0.
+
+### 🔍 Queries
+
+- `filter_fields` accepts direct scalar members of records on either side of
+  equality and ordering comparisons. Text and Blob prefix comparisons can also
+  take either operand from a record. List and set membership filters can take
+  the value to find from a record on the same row. An absent record or member
+  produces no membership match.
+- Row filters compare decoded scalar values, Text and Blob bytes, and list or
+  set elements directly. This avoids building an index key for every comparison.
+- Counts use schema bounds and contradictory length predicates to skip scans.
+  Self-comparisons and empty Text or Blob patterns can use stored cardinality
+  when every row matches. When only present values match, counts can use a
+  present-only index or seek past absent entries in an ordinary index.
+- Equality between fields can use a present-only index when the other field
+  must be present by declaration or filter. An index prefix can fix one side
+  of the comparison, including inequality against an absent value.
+- For bounded exact-key membership, `count()` probes each distinct candidate
+  that survives the index prefix, range and filters. It skips keys exceeding
+  the 512-byte encoded limit and fetches an owner row only when a remaining
+  filter needs it. `exists()` stops at the first validated match.
+  `count_validated()` checks the owner of every hit.
+
 ## [0.26.6] - 2026-11-21
 
 ### ✨ Writes

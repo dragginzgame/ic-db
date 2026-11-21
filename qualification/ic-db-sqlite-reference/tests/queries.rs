@@ -940,64 +940,171 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
     let (sql, host) = fixture();
     let mut db = open(&host);
     let price = Decimal::try_new(125, 2).unwrap();
-    let check =
-        |db: &Database| {
-            let total: u32 = sql
-                .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+    let check = |db: &Database| {
+        let ids = [2_u64, 8, 30, 2];
+        for reverse in [false, true] {
+            let mut terms = [
+                (Item::VISIBLE, Comparison::Eq, true.into()),
+                (Item::ID, Comparison::Ge, 2_u64.into()),
+            ];
+            if reverse {
+                terms.reverse();
+            }
+            let query = || {
+                db.query::<Item>()
+                    .filter_in(Item::ID, &ids)
+                    .filter_any(&terms)
+                    .work_limit(3)
+            };
+            let count = query().count().unwrap();
+            let expected: u32 = sql
+                .query_row(
+                    "SELECT COUNT(*) FROM items WHERE id IN (2,8,30,2) AND (visible OR id>=2)",
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
             assert_eq!(
-                db.query::<Item>().work_limit(1).count().unwrap().value,
-                u64::from(total)
+                (count.value, count.examined, count.fetched),
+                (u64::from(expected), 3, 0)
             );
-            for lane in [0_u8, 1, 2, 3] {
-                let (all, priced, absent): (u32, u32, u32) = sql
-                    .query_row(
-                        "SELECT COUNT(*), COUNT(*) FILTER (WHERE cents=125),
+            let checked = query().count_validated().unwrap();
+            assert_eq!(
+                (checked.value, checked.examined, checked.fetched),
+                (u64::from(expected), 3, expected as usize)
+            );
+        }
+        let alternatives = [
+            (Item::VISIBLE, Comparison::Eq, true.into()),
+            (Item::ID, Comparison::Eq, 8_u64.into()),
+        ];
+        let expected: u32 = sql.query_row(
+            "SELECT COUNT(*) FROM items WHERE id IN (2,8,30,2) AND (visible OR id=8) AND id BETWEEN 7 AND 9",
+            [], |row| row.get(0)).unwrap();
+        for range_first in [false, true] {
+            let query = db.query::<Item>().filter_in(Item::ID, &ids);
+            let query = if range_first {
+                query
+                    .filter_between(Item::ID, 7_u64, 9_u64)
+                    .filter_any(&alternatives)
+            } else {
+                query
+                    .filter_any(&alternatives)
+                    .filter_between(Item::ID, 7_u64, 9_u64)
+            };
+            let count = query.work_limit(1).count().unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (u64::from(expected), 1, 0)
+            );
+        }
+        let residual = db
+            .query::<Item>()
+            .filter_in(Item::ID, &ids)
+            .filter_any(&alternatives)
+            .filter_between(Item::ID, 2_u64, 9_u64)
+            .count()
+            .unwrap();
+        let expected: u32 = sql.query_row(
+            "SELECT COUNT(*) FROM items WHERE id IN (2,8,30,2) AND (visible OR id=8) AND id BETWEEN 2 AND 9",
+            [], |row| row.get(0)).unwrap();
+        assert_eq!(residual.value, u64::from(expected));
+        assert!(residual.fetched > 0);
+        let fixed = [0_u8.into(), 2_u8.into()];
+        let query = || {
+            db.query::<Item>()
+                .using_index("lane,rank", &fixed)
+                .filter_in(Item::ID, &[1_u64, 3, 8, 30])
+        };
+        for lane in [0_u8, 1] {
+            let expected: u32 = sql.query_row(
+                    "SELECT COUNT(*) FROM items WHERE lane=0 AND rank=2 AND id IN (1,3,8,30) AND (lane=?1 OR id=3)",
+                    [lane], |row| row.get(0)).unwrap();
+            let probes = if lane == 0 { 4 } else { 1 };
+            let count = query()
+                .filter_any(&[
+                    (Item::LANE, Comparison::Eq, lane.into()),
+                    (Item::ID, Comparison::Eq, 3_u64.into()),
+                ])
+                .work_limit(probes)
+                .count()
+                .unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (u64::from(expected), probes, 0)
+            );
+        }
+        let residual = query()
+            .filter_any(&[
+                (Item::VISIBLE, Comparison::Eq, true.into()),
+                (Item::ID, Comparison::Eq, 3_u64.into()),
+            ])
+            .count()
+            .unwrap();
+        let expected: u32 = sql.query_row(
+                "SELECT COUNT(*) FROM items WHERE lane=0 AND rank=2 AND id IN (1,3,8,30) AND (visible OR id=3)",
+                [], |row| row.get(0)).unwrap();
+        assert_eq!(residual.value, u64::from(expected));
+        assert!(residual.fetched > 0);
+        let total: u32 = sql
+            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            db.query::<Item>().work_limit(1).count().unwrap().value,
+            u64::from(total)
+        );
+        for lane in [0_u8, 1, 2, 3] {
+            let (all, priced, absent): (u32, u32, u32) = sql
+                .query_row(
+                    "SELECT COUNT(*), COUNT(*) FILTER (WHERE cents=125),
                  COUNT(*) FILTER (WHERE cents IS NULL) FROM items WHERE lane=?1",
-                        [lane],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    [lane],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            let query = || db.query::<Item>().filter("lane", Comparison::Eq, lane);
+            let prefix = query().count().unwrap();
+            assert_eq!(
+                (prefix.value, prefix.fetched),
+                (u64::from(all), 0),
+                "lane {lane}"
+            );
+            let sparse = query()
+                .filter("price", Comparison::Eq, price)
+                .count()
+                .unwrap();
+            assert_eq!(
+                (sparse.value, sparse.fetched),
+                (u64::from(priced), 0),
+                "priced lane {lane}"
+            );
+            // A lost entry and a stale entry in the same prefix can cancel in the total.
+            for id in [2_u32, 3, 9, 14, 15] {
+                let present: bool = sql
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM items WHERE lane=?1 AND cents=125 AND id=?2)",
+                        params![lane, id],
+                        |r| r.get(0),
                     )
                     .unwrap();
-                let query = || db.query::<Item>().filter("lane", Comparison::Eq, lane);
-                let prefix = query().count().unwrap();
-                assert_eq!(
-                    (prefix.value, prefix.fetched),
-                    (u64::from(all), 0),
-                    "lane {lane}"
-                );
-                let sparse = query()
+                let member = query()
                     .filter("price", Comparison::Eq, price)
+                    .filter("id", Comparison::Eq, u64::from(id))
                     .count()
                     .unwrap();
                 assert_eq!(
-                    (sparse.value, sparse.fetched),
-                    (u64::from(priced), 0),
-                    "priced lane {lane}"
-                );
-                // A lost entry and a stale entry in the same prefix can cancel in the total.
-                for id in [2_u32, 3, 9, 14, 15] {
-                    let present: bool = sql.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM items WHERE lane=?1 AND cents=125 AND id=?2)",
-                    params![lane, id], |r| r.get(0),
-                ).unwrap();
-                    let member = query()
-                        .filter("price", Comparison::Eq, price)
-                        .filter("id", Comparison::Eq, u64::from(id))
-                        .count()
-                        .unwrap();
-                    assert_eq!(
-                        (member.value, member.fetched),
-                        (u64::from(present), 0),
-                        "lane {lane}, id {id}"
-                    );
-                }
-                assert_eq!(
-                    query().filter_absent("price").count().unwrap().value,
-                    u64::from(absent),
-                    "absent lane {lane}"
+                    (member.value, member.fetched),
+                    (u64::from(present), 0),
+                    "lane {lane}, id {id}"
                 );
             }
-        };
+            assert_eq!(
+                query().filter_absent("price").count().unwrap().value,
+                u64::from(absent),
+                "absent lane {lane}"
+            );
+        }
+    };
     check(&db);
 
     let mut batch = Batch::new();

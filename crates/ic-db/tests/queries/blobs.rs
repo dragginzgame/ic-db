@@ -68,16 +68,70 @@ fn field_patterns_use_each_rows_present_raw_needle() {
                 id: id as u64,
                 payload: payload.to_vec(),
                 optional: needle.map(<[u8]>::to_vec),
-                unique: None,
+                unique: needle.map(|_| vec![id as u8]),
             })
             .unwrap();
     }
     db.commit(batch).unwrap();
+    for (field, op, threshold, expected) in [
+        (Binary::PAYLOAD, C::Le, 1024, (7, 0)),
+        (Binary::UNIQUE, C::Le, 1024, (6, 6)),
+        (Binary::OPTIONAL, C::Le, 1024, (6, 6)),
+        (Binary::UNIQUE, C::Ge, 0, (6, 6)),
+        (Binary::UNIQUE, C::Gt, 1024, (0, 0)),
+        (Binary::UNIQUE, C::Ne, 1025, (7, 0)),
+    ] {
+        let count = db
+            .query::<Binary>()
+            .filter_length(field, op, threshold)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined), expected);
+        assert_eq!(count.fetched, 0);
+    }
+    // A contradicted suffix on fixed operands can be rejected before reading a row.
+    for (actual, needle) in [
+        (b"\0".as_slice(), b"\xff".as_slice()),
+        (b"\0\xff", b"\xff"),
+        (b"", b""),
+    ] {
+        let query = || {
+            db.query::<Binary>()
+                .eq(Binary::PAYLOAD, actual)
+                .eq(Binary::OPTIONAL, needle)
+                .filter_fields(Binary::PAYLOAD, C::EndsWith, Binary::OPTIONAL)
+        };
+        let expected = pairs
+            .iter()
+            .filter(|(p, n)| *p == actual && *n == Some(needle) && p.ends_with(needle))
+            .count() as u64;
+        let count = query().count().unwrap();
+        assert_eq!(count.value, expected);
+        if !actual.ends_with(needle) {
+            assert_eq!((count.examined, count.fetched), (0, 0));
+        }
+        assert_eq!(query().count_validated().unwrap().value, expected);
+    }
     for (op, expected) in [
         (C::StartsWith, vec![2, 4, 5]),
         (C::EndsWith, vec![1, 4, 5]),
         (C::Contains, vec![1, 2, 3, 4, 5]),
     ] {
+        for field in [Binary::PAYLOAD, Binary::UNIQUE, Binary::OPTIONAL] {
+            for query in [
+                db.query::<Binary>().filter(field, op, b"".as_slice()),
+                db.query::<Binary>().filter_fields(field, op, field),
+            ] {
+                let count = query.count().unwrap();
+                let expected = if field == Binary::PAYLOAD {
+                    (7, 0)
+                } else {
+                    (6, 6)
+                };
+                assert_eq!((count.value, count.examined), expected);
+                assert_eq!(count.fetched, 0);
+            }
+        }
         let rows = db
             .query::<Binary>()
             .filter_fields("payload", op, "optional")
@@ -504,7 +558,14 @@ fn blob_suffixes_and_substrings_match_raw_bytes_without_matching_inside_zero_esc
                             assert!(page_number < 15, "pattern pages must progress");
                         }
                         assert_eq!(actual, expected);
-                        assert_eq!(examined, rows.len(), "patterns remain residual filters");
+                        assert_eq!(
+                            examined,
+                            if indexed && optional && needle.is_empty() {
+                                expected.len()
+                            } else {
+                                rows.len()
+                            }
+                        );
                     }
                 }
             }
@@ -780,6 +841,53 @@ fn escaped_blob_index_bounds_and_unique_changes_preserve_backing() {
         }
         assert_eq!(*backing.borrow(), before);
     }
+    // The unique key has nine prefix bytes, a presence tag and a two-byte
+    // terminator. Each embedded zero contributes two encoded bytes.
+    let boundary = vec![0; 250];
+    let mut oversized = boundary.clone();
+    oversized.push(1);
+    let mut batch = Batch::new();
+    batch
+        .insert(&Binary {
+            id: 2,
+            unique: Some(boundary.clone()),
+            ..row.clone()
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    let mut batch = Batch::new();
+    batch
+        .insert(&Binary {
+            id: 3,
+            unique: Some(oversized.clone()),
+            ..row.clone()
+        })
+        .unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::Limit)));
+    let wide = [IndexValue::Blob(&oversized), IndexValue::Blob(&boundary)];
+    let small = [IndexValue::Blob(&boundary), IndexValue::Blob(&[128])];
+    for (first, second) in [(&wide, &small), (&small, &wide)] {
+        let query = || {
+            db.query::<Binary>()
+                .using_index("unique", &[])
+                .filter_in(Binary::UNIQUE, first)
+                .filter_in(Binary::UNIQUE, second)
+        };
+        let count = query().work_limit(1).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+        assert_eq!(query().count_validated().unwrap().value, count.value);
+    }
+    let impossible = db
+        .query::<Binary>()
+        .using_index("unique", &[])
+        .filter_in(Binary::UNIQUE, &[IndexValue::Blob(&oversized); 2])
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (impossible.value, impossible.examined, impossible.fetched),
+        (0, 0, 0)
+    );
     row.unique = Some(vec![128]);
     let mut batch = Batch::new();
     batch.replace(&row).unwrap();

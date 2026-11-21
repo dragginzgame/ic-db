@@ -226,6 +226,12 @@ impl EntitySchema {
             .map(|position| &self.fields[position])
     }
 
+    pub(crate) fn field_is_required(&self, path: &str) -> bool {
+        crate::member::resolve_field(self, path).is_ok_and(|(parent, member)| {
+            !self.fields[parent].optional && member.is_none_or(|m| !m.field().optional)
+        })
+    }
+
     pub(crate) fn record_member(&self, path: &str) -> Option<(usize, crate::member::RecordMember)> {
         let (parent, child) = path.split_once('.')?;
         let position = self.field_position(parent)?;

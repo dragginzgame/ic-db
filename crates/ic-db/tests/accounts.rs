@@ -326,6 +326,18 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
     let mut b = Batch::new();
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
+    for (field, needle, expected) in [
+        (Collections::LIST, zero, 1),
+        (Collections::LIST, other, 0),
+        (Collections::SET, zero, 1),
+    ] {
+        let count = db
+            .query::<Collections>()
+            .filter(field, ic_db::Comparison::Contains, needle)
+            .count()
+            .unwrap();
+        assert_eq!(count.value, expected);
+    }
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     let mut rk = vec![2];

@@ -11,10 +11,11 @@ IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable co
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.27.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.28.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
-frozen IcyDB comparison retains its separate transitive Wire 0.22.4 selection;
-there is no cross-version Wire type exchange or product Wire dependency.
+mixed-lifecycle driver uses Canic's published limits when exchanging frames
+with Canic 0.246.0 endpoints built with Wire 0.27.1. The frozen IcyDB comparison
+retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
 as users and mappings in existing fixtures do not prescribe product entities or
@@ -348,13 +349,34 @@ The fluent slope exceeds the roughly 4 KB comparison ceiling, especially at
 remain open. These controlled fixtures do not measure a production schema or
 the optional logging and metrics integrations.
 
+### Wasm size snapshot (0.26.7 worktree)
+
+The full records qualification canister measured **1,194,506 raw Wasm bytes**,
+up 16,588 bytes (1.41%) from 1,177,918 at `v0.26.6`. Both builds used
+Rust 1.100.0 and their locked qualification release profiles. The tag build
+remapped its temporary checkout path to the worktree path for embedded source
+locations. The total includes the qualification Wire update and all reachable
+fixture operations.
+
+| Retained-host fixture | 1 entity | 8 entities | 32 entities | Bytes per added entity, 1–8 | Bytes per added entity, 8–32 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct, 0.26.7 worktree | 270,932 | 288,702 | 352,866 | 2,539 | 2,674 |
+| Direct and eight fluent shapes, `v0.26.6` | 320,755 | 350,052 | 457,986 | 4,185 | 4,497 |
+| Direct and eight fluent shapes, 0.26.7 worktree | 326,509 | 355,848 | 463,749 | 4,191 | 4,496 |
+
+The eight-shape fixture grew by 5,754 to 5,796 bytes across the three entity
+counts. At 8–32 entities, the per-entity fluent slope still exceeds the roughly
+4 KB comparison ceiling. Both `make m1-entity-growth` and `make m2-query-growth`
+passed their installed PocketIC checks. The additional 32-entity fluent build
+used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
+
 ### Current coverage and comparison gaps
 
 | Area | IC DB evidence | Legacy comparison | What remains |
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | 4,161 raw bytes per added entity from 1 to 8; 4,497 from 8 to 32 in the 0.26.3 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0263-worktree) |
+| Added reachable entity size | 4,191 raw bytes per added entity from 1 to 8 and 4,496 from 8 to 32 in the 0.26.7 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0267-worktree) |
 | Broad query matrix | 195 cases over balanced/skewed 32/128/511-row populations, before/after upgrade; 4,680 checked executions | 1,908 successful matched pairs; IC DB cheaper in 1,796, legacy cheaper in 112 | Populated prefix counts up to 14.4× and selective grouped queries up to 2.6× legacy instructions. Case frequencies are not a production workload. [Receipt](#broad-query-matrix-019) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
@@ -482,6 +504,16 @@ Projection checks reuse named records, cover optional/nested output, exact
 transitive type admission, unselected corruption and projected-byte retries. The
 Wasm probe resumes a projected cursor after upgrade, rejects it for entity output,
 and compares full decoding against ID-only projection over a 1024-byte blob row.
+
+In the 0.26.7 worktree, a temporary PocketIC comparison added a one-byte
+`EndsWith` filter to that lookup. The stored payload was 1,024 copies of
+`0x07` and the literal was `0x07`. With the same fixture and predicate loop,
+comparing borrowed bytes reduced full-row query instructions from 162,256 to
+111,269 and ID-only projection instructions from 162,096 to 110,622. The
+two numeric control queries increased by 73 and 213 instructions respectively.
+The counter covered query construction and execution after opening the database.
+The standard fixture retains its original lookup for historical comparisons.
+
 The local CLI adapter now uses these fluent operations for Entry, Document and DecimalRow;
 `make m2-cli` separately checks its installed-layout command surface.
 

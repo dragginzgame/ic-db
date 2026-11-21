@@ -330,12 +330,12 @@ fn covers_keys(
         .clauses()
         .zip(plan.clauses())
         .all(|(clause, terms)| {
-            let key_proves_clause = clause.iter().any(|p| {
+            let key_proves_clause = clause.iter().zip(terms).any(|(p, term)| {
                 // Every entry in an admitted sparse path has all its components.
-                (matches!(p.operand, QueryOperand::Literal(IndexValue::Absent))
-                    && p.comparison == Comparison::Ne
-                    && index.is_some_and(|i| i.present_only && i.fields.contains(&p.field)))
-                    || fixed_comparison(p, &|field| prefix_value(fields, values, field))
+                (term.tests_presence
+                    && (entity.field_is_required(p.field)
+                        || index.is_some_and(|i| i.present_only && i.fields.contains(&p.field))))
+                    || fixed_comparison(entity, p, &|field| prefix_value(fields, values, field))
                         == Some(true)
             });
 
@@ -362,35 +362,56 @@ fn rank(index: &IndexSchema, fixed: usize) -> (std::cmp::Reverse<usize>, usize, 
     (std::cmp::Reverse(fixed), index.fields.len(), index.name)
 }
 
-// Both operands have already passed admission. For a field operand, a row
-// omitted by this sparse index can have a present or an absent counterpart.
-fn requires_presence(predicate: &Predicate<'_>, name: &str, entity: &EntitySchema) -> bool {
-    match predicate.operand {
-        QueryOperand::Length(_) => {
-            predicate.field == name && !predicate.comparison.accepts_absent(false)
-        }
-        QueryOperand::Literal(value) => {
-            predicate.field == name
-                && !predicate
-                    .comparison
-                    .accepts_absent(value == IndexValue::Absent)
-        }
-        QueryOperand::Field(right) => {
-            let other = if predicate.field == name {
-                right
-            } else if right == name {
-                predicate.field
-            } else {
-                return false;
-            };
+// Test the predicate directly, without following field-to-field comparisons.
+fn directly_requires_presence(predicate: &Predicate<'_>, name: &str) -> bool {
+    if predicate.field != name {
+        return false;
+    }
+    let other_absent = match predicate.operand {
+        QueryOperand::Length(_) => false,
+        QueryOperand::Literal(value) => value == IndexValue::Absent,
+        QueryOperand::Field(_) => return false,
+    };
 
-            !predicate.comparison.accepts_absent(false)
-                && (!predicate.comparison.accepts_absent(true)
-                    || entity
-                        .fields
-                        .iter()
-                        .any(|field| field.name == other && !field.optional))
+    !predicate.comparison.accepts_absent(other_absent)
+}
+
+fn requires_presence(
+    predicate: &Predicate<'_>,
+    name: &str,
+    entity: &EntitySchema,
+    request: &Request<'_>,
+) -> bool {
+    let QueryOperand::Field(right) = predicate.operand else {
+        return directly_requires_presence(predicate, name);
+    };
+    let other = if predicate.field == name {
+        right
+    } else if right == name {
+        predicate.field
+    } else {
+        return false;
+    };
+
+    // Only components supplied by the caller constrain the result. Unsupplied
+    // components may be absent on rows omitted by the candidate sparse index.
+    if let Some((index_name, values)) = &request.index
+        && let Some(index) = entity.index_by_name(index_name)
+        && let Some(value) = prefix_value(index.fields, values, other)
+    {
+        return !predicate
+            .comparison
+            .accepts_absent(value == IndexValue::Absent);
+    }
+    match predicate.comparison {
+        Comparison::Eq => {
+            entity.field_is_required(other)
+                || request
+                    .clauses()
+                    .any(|clause| clause.iter().all(|p| directly_requires_presence(p, other)))
         }
+        Comparison::Ne => equality(request, other) == Some(IndexValue::Absent),
+        comparison => !comparison.accepts_absent(false) && !comparison.accepts_absent(true),
     }
 }
 
@@ -403,7 +424,7 @@ pub(super) fn requires_present_field(
     request.clauses().any(|clause| {
         clause
             .iter()
-            .all(|predicate| requires_presence(predicate, name, entity))
+            .all(|predicate| requires_presence(predicate, name, entity, request))
     })
 }
 
@@ -491,10 +512,14 @@ pub(super) fn literal_equalities<'r, 'a>(
 }
 
 // The caller supplies either known query values or just the selected key prefix.
-fn fixed_comparison<'a>(
+pub(super) fn fixed_comparison<'a>(
+    entity: &EntitySchema,
     predicate: &Predicate<'_>,
     lookup: &dyn Fn(&str) -> Option<IndexValue<'a>>,
 ) -> Option<bool> {
+    if let Some(result) = predicate.constant_comparison(entity) {
+        return Some(result);
+    }
     let left = lookup(predicate.field)?;
     let right = match predicate.operand {
         QueryOperand::Length(threshold) => {
@@ -510,38 +535,24 @@ fn fixed_comparison<'a>(
         QueryOperand::Field(field) => lookup(field)?,
     };
 
+    if left == IndexValue::Absent || right == IndexValue::Absent {
+        return Some(predicate.comparison.accepts_absent(left == right));
+    }
+    if let Some(result) = predicate.comparison.accepts_values(left, right) {
+        return Some(result);
+    }
     match predicate.comparison {
-        Comparison::Eq => Some(left == right),
-        Comparison::Ne => Some(left != right),
         Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
-            if left == IndexValue::Absent || right == IndexValue::Absent {
-                return Some(false);
-            }
-            // Text and Blob already have the declared byte order. For every
-            // other admitted scalar, compare the same components as a row filter.
+            // Other admitted scalars use the declared component order.
             let mut encoded = Vec::new();
-            let (left, right) = if let (Some(l), Some(r)) =
-                (super::scalar_bytes(left), super::scalar_bytes(right))
-            {
-                (l, r)
-            } else {
-                left.append_component(false, &mut encoded);
-                let split = encoded.len();
-                right.append_component(false, &mut encoded);
-                encoded.split_at(split)
-            };
+            left.append_component(false, &mut encoded);
+            let split = encoded.len();
+            right.append_component(false, &mut encoded);
+            let (left, right) = encoded.split_at(split);
 
             Some(predicate.comparison.accepts(Some(left), Some(right), false))
         }
-        Comparison::StartsWith => {
-            Some(super::scalar_bytes(left)?.starts_with(super::scalar_bytes(right)?))
-        }
-        Comparison::EndsWith => {
-            Some(super::scalar_bytes(left)?.ends_with(super::scalar_bytes(right)?))
-        }
-        Comparison::Contains => Some(
-            memchr::memmem::find(super::scalar_bytes(left)?, super::scalar_bytes(right)?).is_some(),
-        ),
+        _ => None,
     }
 }
 
@@ -559,26 +570,68 @@ fn constrained_value<'a>(
         .or_else(|| equality(request, field))
 }
 
-pub(super) fn prefix_proves_clause(
-    request: &Request<'_>,
+pub(super) fn fixed_prefix_value<'a>(
+    request: &Request<'a>,
     plan: &super::Plan<'_>,
-    clause: &[Predicate<'_>],
-) -> bool {
-    let Some(index) = plan.index else {
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    let index = plan.index?;
+    if index.fields[..plan.fixed_components].contains(&field) {
+        constrained_value(request, Some(index), field)
+    } else {
+        None
+    }
+}
+
+// Only singleton clauses constrain every match. Each bound below also requires
+// a present value. Ne alone would allow absence and cannot narrow this interval.
+fn length_excluded(request: &Request<'_>, predicate: &Predicate<'_>) -> bool {
+    let QueryOperand::Length(threshold) = predicate.operand else {
         return false;
     };
-    let fixed = &index.fields[..plan.fixed_components];
-    let lookup = |field: &str| {
-        if fixed.contains(&field) {
-            constrained_value(request, Some(index), field)
-        } else {
-            None
+    if request.predicates.len() < 2 {
+        return false;
+    }
+    let (mut min, mut max) = (0, u32::MAX);
+    for clause in request.clauses() {
+        let [bound] = clause else { continue };
+        let QueryOperand::Length(n) = bound.operand else {
+            continue;
+        };
+        if bound.field != predicate.field {
+            continue;
         }
-    };
-
-    clause
-        .iter()
-        .any(|p| fixed_comparison(p, &lookup) == Some(true))
+        match bound.comparison {
+            Comparison::Eq => {
+                min = min.max(n);
+                max = max.min(n);
+            }
+            Comparison::Ge => min = min.max(n),
+            Comparison::Le => max = max.min(n),
+            Comparison::Gt => {
+                let Some(lower) = n.checked_add(1) else {
+                    return true;
+                };
+                min = min.max(lower);
+            }
+            Comparison::Lt => {
+                let Some(upper) = n.checked_sub(1) else {
+                    return true;
+                };
+                max = max.min(upper);
+            }
+            _ => continue,
+        }
+        if min > max
+            || predicate
+                .comparison
+                .uniform_length_result(min, max, threshold)
+                == Some(false)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 // A mandatory clause is impossible only if every alternative is disproved.
@@ -590,7 +643,11 @@ pub(super) fn has_conflicting_predicates(
     if request.index.is_none()
         && (request.predicates.len() < 2 || literal_equalities(request).next().is_none())
     {
-        return false;
+        return request.clauses().any(|clause| {
+            clause.iter().all(|p| {
+                p.constant_comparison(entity) == Some(false) || length_excluded(request, p)
+            })
+        });
     }
     let prefix = request.index.as_ref().zip(index);
     let components = prefix
@@ -607,9 +664,9 @@ pub(super) fn has_conflicting_predicates(
     let lookup = |field: &str| constrained_value(request, index, field);
 
     request.clauses().any(|clause| {
-        clause
-            .iter()
-            .all(|predicate| fixed_comparison(predicate, &lookup) == Some(false))
+        clause.iter().all(|p| {
+            fixed_comparison(entity, p, &lookup) == Some(false) || length_excluded(request, p)
+        })
     })
 }
 

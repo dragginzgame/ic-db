@@ -1437,10 +1437,20 @@ validation from traversal in `db/query/predicate/validate.rs`. The executor read
 the child from the validated parent span using the row codec. Absence at either
 level gives the ordinary absent scalar. Presence filters use that scalar's
 presence directly and skip encoding a comparison key.
+For same-row relational comparisons, either operand of `filter_fields` may be
+a direct scalar record member. Both paths are resolved at admission and bound
+to continuation identity. The shared scalar comparator treats two absent
+operands as equal and requires presence on both sides for ordered comparisons.
+This extends frozen IcyDB `6d421e3`'s resolved field-slot comparison
+(`db/predicate/resolved.rs`) to the existing bounded record-member reader.
 Text and Blob members also accept literal `StartsWith` through the same typed
 comparison and encoded prefix bounds as top-level fields. An empty prefix matches
 every present value, including an empty member. An absent parent or member fails
 the prefix predicate. An indexed member can answer the bounded count from keys.
+With `filter_fields`, the prefix can come from another field or direct member
+of the same row. Both operands must be present and must both be Text or both
+be Blob under the existing field type checks. A varying prefix requires a row
+comparison and consumes the scan's candidate budget.
 Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
 validated scalar for the bounded complete sorter. A missing parent and missing
 member share one absent sort key. Ordinary direction and primary tie-breaker
@@ -2628,6 +2638,11 @@ When mandatory equalities or supplied index components fix both fields, the
 planner can disprove Eq or Ne before traversal. A count can prove the comparison
 from a selected key prefix only when that prefix supplies both values.
 Other field comparisons use the row evaluator under the usual candidate budget.
+For residual Eq and Ne, the evaluator compares admitted scalar values directly.
+This follows the typed equality path in frozen IcyDB `6d421e3`,
+`db/predicate/runtime/compare/value.rs`. IC DB admission requires compatible
+types before execution. Literal and field comparisons share scalar equality
+with list and set membership.
 Both fields participate in DISTINCT class admission and continuation identity.
 The fixture CLI accepts `--text FIELD OP VALUE` for a text literal (including
 an empty string), `--bool FIELD true|false` for Boolean equality, and
@@ -2648,16 +2663,44 @@ needle field refuses without altering stable memory. Replaying the previous
 sequence returns the saved progress. The original job counts three rows,
 including an empty needle and a repeated substring. Changing a source note
 during a separate run invalidates it before it can return a count.
-Ordered field comparisons prove presence for both operands. Equality with a
-required field proves presence for its optional counterpart. Equality between
-optional fields and field inequality supply no such proof. These comparisons
+Ordered field comparisons prove presence for both operands. Comparing a
+field with itself for equality succeeds even when the field is absent. After admission, an ordinary
+count uses entity cardinality when every mandatory clause contains a comparison
+that always holds and no index restriction was requested. Self-inequality and strict self-ordering
+are false even for absent fields. A clause containing only those alternatives
+proves an empty traversal. Inclusive self-ordering matches exactly the present
+values. The same presence proof applies to admitted Text and Blob pattern
+comparisons with an empty literal or with the field itself. Collection
+membership still requires an equal element, even when the needle is empty.
+For a required field the presence test holds on every row. A record member carries
+that guarantee only when both its parent and the member are required. For
+an optional field, an ordinary count can use an admitted present-only index
+containing that field, provided the index also answers the other filters.
+An ordinary index also supports this count when the optional field is its
+first component after the fixed prefix. Its `01` presence tag supplies the
+inclusive lower bound. Counts can read that range directly, and ordered pages
+skip the absent entries in either direction. With additional residual filters,
+the range still narrows traversal while the row evaluator checks each candidate.
+Equality with a required field proves presence for its optional counterpart. Equality between
+an optional field and a direct record member supplies the same proof only
+when both the parent record and the member are required. For optional operands,
+equality also proves presence when a mandatory literal or length filter on the
+other operand rejects absence. An OR clause supplies this proof when every
+alternative directly requires that operand to be present. The planner follows
+one field equality for this check. Inequality to a field fixed to absence by a
+mandatory literal equality also rejects an absent indexed operand. An explicit
+index prefix fixes each supplied component for this proof. For example, on
+the present-only index `(calibration, sample, id)`, the prefix `calibration = 7`
+and the comparison `sample == calibration` together require a present sample.
+Inequality with that same prefix can still match an absent sample. These comparisons
 remain row filters and do not establish a constant index bound.
 This keeps the two-field admission check from frozen IcyDB `6d421e3`
 (`db/query/predicate/validate.rs`) and omits its cross-type coercion rules.
 
 `Contains` on a stored list or set tests exact member equality for elements
 supported by the scalar key codec, including scalar newtypes and unit enums.
-The needle may also come from another top-level field on the row. This uses
+The needle may also come from a top-level field or a direct scalar member of
+a record on the same row. This uses
 the same field type compatibility rules as scalar field comparisons, applied
 to the element type. An absent needle is a nonmatch. The right-hand field
 participates in cursor and job identity just as it does for scalar comparisons.
@@ -2674,16 +2717,28 @@ matching rows across two groups. Each matching list contains the needle twice.
 An absent or empty container has no matching member. Text and Blob members are
 compared whole; scalar Text and Blob fields retain byte-substring semantics.
 The row decoder validates the complete container first. The residual predicate
-then reads the bounded item sequence from its field span and compares canonical
-scalar keys using one reusable buffer. The first match suffices. Maps and
+then reads the bounded item sequence from its field span and compares each
+decoded scalar directly with the typed needle. For unit enums, admission checks
+the enum contract once and the scan compares ordinals. The first match suffices. Maps and
 structured elements refuse admission. This retains the list membership semantics
 from frozen IcyDB `6d421e3`, `db/predicate/runtime/compare/value.rs`, using
-the declared element type and the same comparator as scalar equality.
+the declared element type and the same equality semantics as scalar field comparisons.
 
 `filter_length(field, comparison, n)` compares UTF-8 bytes for Text, raw bytes for
 Blob, and item counts for lists, maps and sets, including named lists and scalar
 wrappers. Absent values match only Ne. Eq(0) therefore selects present empty
-values and Gt(0) selects present nonempty values. A mandatory literal equality or an explicit index prefix fixes the byte
+values and Gt(0) selects present nonempty values. The planner uses the inclusive
+range from zero to the declared maximum to recognize comparisons with a uniform
+result for present values. With a maximum of three bytes, Eq(4) matches no
+rows, Ne(4) matches every row including absence, and Le(3) matches precisely
+the present values. Counts can use cardinality or a covering present-only index
+for those cases. Mandatory length bounds on the same field intersect in the
+integer length domain. For example, a length greater than two and less than
+four must be three. An OR clause is impossible only if every alternative is
+disproved. A length inequality (`Ne`) alone still permits absence. This adapts
+the bound intersection in frozen IcyDB `6d421e3`, `query/plan/planner/range/bounds.rs`,
+to lengths without constructing storage keys.
+A mandatory literal equality or an explicit index prefix fixes the byte
 length of a Text or Blob. The planner can reject a contradictory clause before
 traversal and an index covering the other filters can count entries directly.
 The length uses the original value, including UTF-8 and raw zero bytes.
@@ -2808,7 +2863,12 @@ receives transient framing metadata, without another durable representation.
 The Wasm witness checks sparse pages,
 byte refusal, cursor binding and upgrade without changing backing bytes.
 
-Blob suffix matching shares this comparator, checking that the matched suffix
+Text and Blob row filters compare the borrowed field bytes directly with the
+admitted literal or the other field. The row evaluator and fixed-value planner
+share this comparison, including prefix, suffix and substring checks. Embedded
+NUL and literal FF need no escaping on this path. Index bounds and continuation
+bindings still use the encoded literal prepared at admission.
+For operands already encoded as key components, Blob suffix matching checks that the matched suffix
 does not begin at the `FF` continuation of an escaped zero (`00 FF`). Removing
 framing first and checking the preceding byte preserves exact raw-byte semantics
 without decoding buffers or a new predicate representation. Frozen IcyDB's
@@ -3331,7 +3391,12 @@ cursor identities remain unchanged.
 
 Synchronous `exists()` returns `Aggregate<bool>` using the same admitted path and
 scanner. It validates each examined row/index and stops at the first match,
-including a match on the final allowed candidate. False requires observed input
+including for a list of complete primary or secondary keys. When the distinct
+candidate keys fit the work budget, it probes them in physical key order.
+A missing key spends one probe and fetches no owner. An index hit requires owner
+validation even when the key alone satisfies the filters. If the list exceeds
+the probe budget, the range scan can still find a match on the final allowed
+candidate. False requires observed input
 exhaustion; work exhaustion without a match returns `Limit`, including an exact
 boundary whose end has not been observed. Processing the inclusive terminal key of the physical range
 establishes exhaustion within the same candidate budget, including when that
@@ -3362,6 +3427,31 @@ The first counting terminals are synchronous `count()` and
 include every matching row; an absent group key is a group, not a discarded
 operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
 `using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. If the final allowed visit reaches the inclusive terminal key, the count completes. If exhaustion is still unknown, the operation returns `Limit`. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
+
+For membership counts over complete physical keys, a fixed index prefix can
+settle alternatives in a mandatory OR clause. A true alternative admits the
+whole clause. When the prefix disproves an alternative, the remaining key
+comparisons can narrow the set before probing. If a clause includes a row predicate,
+key-only counting can proceed when each remaining candidate satisfies a key
+alternative in that clause. A candidate that still needs a row is tracked
+until all mandatory key filters have had a chance to exclude it, in either
+filter order. When the surviving complete keys fit the work budget, each
+unresolved key uses the ordinary scanner over that single key to validate its
+owner and evaluate the row predicate. Keys already proved by the filters need
+only an existence probe. Missing keys consume one probe and fetch no owner.
+If the probe set exceeds the budget, the bounded range scan may still complete.
+For the same complete keys, `count_validated()` checks every hit with the
+ordinary row and index validator. It visits each distinct candidate once,
+including misses, and skips rows in the gaps between candidates.
+Each candidate supplies its original typed literal alongside its encoded lookup
+key. The planner can therefore check Text or Blob length and compare the
+candidate with a fixed prefix field on either side of a predicate. A surviving
+candidate consumes one probe even when the database has no such key.
+
+An admitted equality operand whose complete encoded key exceeds 512 bytes
+cannot have a stored entry. Point counting discards that candidate before
+charging probes, including when it appears in the first of two intersecting
+lists. Range endpoints still follow their separate bound checks.
 
 `count_field("field")` counts present values of any top-level stored type,
 including present empty blobs/collections. It reads validated presence tags from

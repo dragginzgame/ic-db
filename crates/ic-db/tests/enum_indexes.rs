@@ -117,7 +117,7 @@ struct Permissions {}
 
 #[test]
 fn enum_membership_checks_schema_identity_before_comparing_ordinals() {
-    use ic_db::Comparison::Contains;
+    use ic_db::Comparison::{Contains, Eq, Ne};
     let runtime = host(VectorMemory::default());
     let slot = StableKey::parse("test.db.v1").unwrap();
     let schema = Schema::new(&[Permissions::SCHEMA]).unwrap();
@@ -148,6 +148,17 @@ fn enum_membership_checks_schema_identity_before_comparing_ordinals() {
         Err(Error::InvalidQuery)
     ));
     // Same logical enum under a reordered Rust declaration.
+    for (comparison, expected) in [(Eq, 1), (Ne, 2)] {
+        let rows = query()
+            .filter(Permissions::WANTED, comparison, &Reordered::Ready)
+            .fetch()
+            .unwrap()
+            .rows;
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [expected]
+        );
+    }
     assert_eq!(
         query()
             .filter("allowed", Contains, &Reordered::Ready)
@@ -162,6 +173,10 @@ fn enum_membership_checks_schema_identity_before_comparing_ordinals() {
         (&Changed::Archived).into(),
         0_u8.into(),
     ] {
+        assert!(matches!(
+            query().filter(Permissions::WANTED, Eq, invalid).fetch(),
+            Err(Error::InvalidOperand)
+        ));
         assert!(matches!(
             query().filter("allowed", Contains, invalid).count(),
             Err(Error::InvalidOperand)

@@ -583,6 +583,7 @@ fn prepare<M: Memory>(
                 entity,
                 &request,
                 plan,
+                super::super::range::bounds(entity, &request, plan)?,
                 Some(&mut accumulator),
                 Some(&mut bytes),
             )?;
