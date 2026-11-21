@@ -29,7 +29,7 @@ separate tier-2 coverage target; the obsolete local checkout is not evidence.
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.242.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.246.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -5109,6 +5109,16 @@ The job then completes, returns seven groups, and upgrades again. The saved
 output cursor retrieves the other 25 groups. All five pages match independent
 integer expectations for count, sum bits and rounded average bits, ordered by
 descending rounded average with ascending label ties across pages.
+With a query limit of 12, the first page ends inside a tie and the second
+ends inside another tie at the query cutoff. After upgrading between pages,
+the saved cursor returns the remaining five winners and ends the enumeration.
+After each upgrade, resuming with the other query limit (12 or 32) returns
+`InvalidJob` and preserves stable memory byte for byte. The original request
+can then replay the scan checkpoint or continue from the saved page cursor.
+The driver also resumes that seven-row boundary with a one-row page, then
+requests up to 32 rows from the new cursor. Both calls keep the completed
+sequence and examined count. Replaying the original cursor with seven-row
+pages yields the same ranked suffix.
 
 The write-contention case starts a Float32 scalar average and then a grouped
 average. Each scans 16 candidates and replays its checkpoint before the next
@@ -5136,6 +5146,9 @@ runs through `make m2-queries`. The qualification-only crate seeds an in-memory
 SQLite database and IC DB with the same rows. SQLite is bundled with the test
 crate and introduces no product or CLI dependency.
 
+- Move a priced row between groups so a different group enters the top two by sum while two summary jobs share the source.
+  Compare the completed job’s pages with SQLite before the move and a fresh
+  query with SQLite after it. The partially scanned job must invalidate.
 - Compare automatic whole-entity, category and sparse-index counts before and
   after a mixed write batch, a refused batch and reopen. Check individual keys
   when one row releases a prefix and another enters it at the same price.
@@ -5443,6 +5456,73 @@ through result construction on a warm PocketIC canister. These measurements
 cover the first 20 IDs only. They do not isolate the cost of owner lookup or
 establish a general planner threshold. Measurement Wasm SHA-256:
 `1ca1c863788a5d5d647056770dd116a2cb54b47fe9bf481ff0eae15473cda882`.
+
+### Ordered listing beyond one call's scan budget
+
+The Toko marketplace's most-recent listing orders by creation time after a
+bounded live-listing scan. It defaults to 50 rows, accepts 1–100, supports
+offsets and returns the filtered population size. The 50,000-row scan ceiling
+is a source limit. Actual traffic and population were not measured.
+[Pinned application query](https://github.com/dragginzgame/toko/blob/d7bd2eadcd2e0edd71c2179fe9cd577f36f2c2b5/fleets/toko/market/src/ops/query.rs#L324)
+
+`make m2-listing-costs` models the ordered-page portion with 530 documents,
+a fixed parent, residual visibility, a scalar rank and 20 IDs per page.
+IDs break rank ties in descending order. The highest rank occurs on both
+sides of the 512-candidate work boundary. The automatic compound-index path
+examined 20 candidates for the first 20 IDs (4,295,625 instructions).
+Across 23 calls it returned all 440 qualifying IDs in SQLite order
+(103,666,541 instructions). Sorting on an unindexed copy of the same rank
+returned `Limit` even with the maximum work budget. Measurement Wasm SHA-256
+`032ab1ddf17f4b19b24ca4be088e973b0d9c800f08e89b148b40778e10d11957`.
+
+This supports using an ordering index for this query shape. Full rows, expiry,
+the application's tie behavior and arbitrary offsets remain application questions.
+
+The native SQLite suite pairs a two-ID page with the full filtered count under
+one `DatabaseSession::read()` guard. A second session handle's write receives
+`BorrowConflict` while the guard is held. After release, one batch moves ID 1
+later in rank order and makes ID 2 visible before the cursor. The first page
+contained IDs 1 and 3 with total 4. The continuation returns IDs 8 and 1 with
+total 5, while a fresh page returns IDs 2 and 3 with total 5. Each agrees with
+SQLite computing the count before applying the seek position. Four examined
+candidates suffice for each tested page; an exact count under that same budget
+returns `Limit`. The full count on this small fixture uses its own work budget.
+
+For a different sort field on the same 530-document fixture, the compound-index
+experiment also checks bounded sorting. The order uses the unindexed copy of the
+score. The engine scans the 440 published documents in the selected entry,
+fetches all 440 owners and returns SQLite's top 20 in 81.23M IC instructions.
+When ordering by the indexed score, the first 20 IDs cost 4.25M instructions
+and the result has a live continuation. The complete sort has a terminal result.
+
+### Exact listing totals with a matching compound index
+
+Run `make m2-listing-costs` with the ordinary schema, then with the additional
+and replacement index experiments below. Each fresh installation executes the
+same ordinary `.count()` for entry 1's published documents. The timer includes
+database opening and the terminal call, including a refusal. SQLite supplies
+the expected total. Each call in this table allows 512 examined candidates.
+
+| Documents / matches | Original (entry, score) | Both indexes | Replacement (entry, published, score) |
+| --- | ---: | ---: | ---: |
+| 130 / 40 | 17.39M instructions | 0.86M | 0.77M |
+| 530 / 440 | `Limit` after 82.57M instructions | 4.25M | 4.17M |
+
+At 130 documents the original examined 129 candidates and fetched 129 rows.
+With both equality fields leading the wider index, ordinary count visited one
+key per match and fetched zero rows. Both wider schemas also succeeded with
+work budgets of 41 and 441 respectively. The spare visit allows the traversal
+to establish exhaustion. Cost still grows with the matching population.
+
+At 130 documents the median publication toggle over three rounds cost 1.70M
+instructions with the original index, 2.37M with both and 2.23M with the
+replacement. Those installations occupied five, six and five stable-memory
+pages respectively after seeding. For a listing across both publication states
+ordered by score, only the schemas retaining the original index supplied a
+live continuation; the replacement produced a bounded, terminal top 20.
+Choose the schema according to which orders the application promises.
+These runs qualify simple stored equality filters. A live expiry predicate
+requires its own access-path and budget evidence.
 
 ### Owner lookup cost as listing selectivity changes
 

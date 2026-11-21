@@ -251,6 +251,16 @@ fn advance_job<R: Value>(
     Ok(step)
 }
 
+fn ranked_summary(db: &Database, limit: u8) -> ic_db::Query<'_, Sample> {
+    db.query::<Sample>()
+        .limit(usize::from(limit))
+        .filter_summary(ic_db::SummaryMeasure::Count, ic_db::Comparison::Eq, 5_u64)
+        .order_groups(ic_db::GroupOrder::Summary(
+            ic_db::SummaryMeasure::Average,
+            ic_db::SortDirection::Descending,
+        ))
+}
+
 // start_summary
 // Start a Float64 summary for up to 32 groups and return its job handle.
 // guard  : validates the request frame for method 4.
@@ -264,15 +274,9 @@ fn advance_job<R: Value>(
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn start_summary((): ()) -> Vec<u8> {
+fn start_summary(limit: u8) -> Vec<u8> {
     let (db, mut jobs) = stores();
-    db.query::<Sample>()
-        .limit(32)
-        .filter_summary(ic_db::SummaryMeasure::Count, ic_db::Comparison::Eq, 5_u64)
-        .order_groups(ic_db::GroupOrder::Summary(
-            ic_db::SummaryMeasure::Average,
-            ic_db::SortDirection::Descending,
-        ))
+    ranked_summary(&db, limit)
         .start_group_summary::<Label, Reading, Reading>(
             &mut jobs,
             Timestamp::from_millis(0),
@@ -286,7 +290,7 @@ type SummaryPage = (Vec<(String, u64, u64, u64)>, Option<Vec<u8>>);
 type SummaryReply = (u64, u64, Option<SummaryPage>);
 
 // advance_summary
-// Advance within the requested work limit or return up to seven completed groups after the cursor.
+// Advance within the requested work limit or return the requested page of completed groups after the cursor.
 // guard  : validates the request frame for method 5.
 // limits : 64 KiB request, 64 KiB reply.
 #[ic_platform_runtime::update(
@@ -299,31 +303,24 @@ type SummaryReply = (u64, u64, Option<SummaryPage>);
     on_error = crate::transport::endpoint_error
 )]
 fn advance_summary(
-    (handle, sequence, work, after): (Vec<u8>, u64, u16, Option<Vec<u8>>),
-) -> SummaryReply {
+    (handle, limit, sequence, work, page_size, after): (Vec<u8>, u8, u64, u16, u8, Option<Vec<u8>>),
+) -> Result<SummaryReply, String> {
     let (db, mut jobs) = stores();
     let cursor = after
         .as_deref()
         .map(ic_db::GroupCursor::from_bytes)
         .transpose()
-        .unwrap();
-    let step = db
-        .query::<Sample>()
-        .limit(32)
-        .filter_summary(ic_db::SummaryMeasure::Count, ic_db::Comparison::Eq, 5_u64)
-        .order_groups(ic_db::GroupOrder::Summary(
-            ic_db::SummaryMeasure::Average,
-            ic_db::SortDirection::Descending,
-        ))
+        .map_err(|e| format!("{e:?}"))?;
+    let step = ranked_summary(&db, limit)
         .work_limit(usize::from(work))
-        .group_page(7, cursor.as_ref())
+        .group_page(usize::from(page_size), cursor.as_ref())
         .resume_group_summary::<Label, Reading, Reading>(
             &mut jobs,
-            &JobHandle::from_bytes(&handle).unwrap(),
+            &JobHandle::from_bytes(&handle).map_err(|e| format!("{e:?}"))?,
             sequence,
             Timestamp::from_millis(1),
         )
-        .unwrap();
+        .map_err(|e| format!("{e:?}"))?;
     let page = match step.outcome {
         JobOutcome::Running => None,
         JobOutcome::Complete(page) => Some((
@@ -342,5 +339,5 @@ fn advance_summary(
         )),
         other => panic!("unexpected summary outcome: {other:?}"),
     };
-    (step.sequence, step.examined, page)
+    Ok((step.sequence, step.examined, page))
 }

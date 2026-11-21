@@ -3,7 +3,7 @@
 use super::float_sum::{Binary32Sum, Binary64Sum};
 use super::{
     super::Plan, Aggregate, Completed, GroupOrder, GroupSummaries, GroupSummary, GroupValue, Query,
-    Reducer,
+    Reducer, SummaryMeasure,
 };
 use crate::{
     Decimal, Entity, EntitySchema, Error, FieldType, IndexValue, TypeBody, TypeSchema, U256, Value,
@@ -390,21 +390,33 @@ impl NumericAggregate {
         output: ValueSchema,
         selection: &super::Selection,
     ) -> Result<(Completed, bool), Error> {
-        let (sum_key, sum) = self.encode_result(output, Operation::Sum)?.unzip();
-        let (avg_key, average) = self.encode_result(self.output, Operation::Average)?.unzip();
+        let (sum_key, sum) = self
+            .encode_result(
+                output,
+                Operation::Sum,
+                selection.needs_summary_key(SummaryMeasure::Sum),
+            )?
+            .unzip();
+        let (avg_key, average) = self
+            .encode_result(
+                self.output,
+                Operation::Average,
+                selection.needs_summary_key(SummaryMeasure::Average),
+            )?
+            .unzip();
         let count_key = self.count.to_be_bytes();
         let accepted = selection.accepts(|measure| match measure {
-            Some(super::SummaryMeasure::Count) => Some(&count_key),
-            Some(super::SummaryMeasure::Sum) => sum_key.as_deref(),
-            Some(super::SummaryMeasure::Average) => avg_key.as_deref(),
+            Some(SummaryMeasure::Count) => Some(&count_key),
+            Some(SummaryMeasure::Sum) => sum_key.as_deref(),
+            Some(SummaryMeasure::Average) => avg_key.as_deref(),
             None => None,
         });
         let sort_key = match selection.order {
-            GroupOrder::Summary(super::SummaryMeasure::Count, _) => {
+            GroupOrder::Summary(SummaryMeasure::Count, _) => {
                 Some(self.count.to_be_bytes().to_vec())
             }
-            GroupOrder::Summary(super::SummaryMeasure::Sum, _) => sum_key,
-            GroupOrder::Summary(super::SummaryMeasure::Average, _) => avg_key,
+            GroupOrder::Summary(SummaryMeasure::Sum, _) => sum_key,
+            GroupOrder::Summary(SummaryMeasure::Average, _) => avg_key,
             _ => None,
         };
         Ok((
@@ -418,8 +430,8 @@ impl NumericAggregate {
         ))
     }
 
-    pub(super) fn finish(self) -> Result<Completed, Error> {
-        self.encode_result(self.output, self.operation)
+    pub(super) fn finish(self, needs_key: bool) -> Result<Completed, Error> {
+        self.encode_result(self.output, self.operation, needs_key)
             .map(Completed::Value)
     }
 
@@ -427,6 +439,7 @@ impl NumericAggregate {
         &self,
         schema: ValueSchema,
         operation: Operation,
+        needs_key: bool,
     ) -> Result<Option<EncodedValue>, Error> {
         if self.count == 0 {
             return Ok(None);
@@ -454,7 +467,6 @@ impl NumericAggregate {
                 &self.total
             };
         let mut output = Encoder::new();
-        let mut key = Vec::new();
         if schema.optional {
             output.boolean(true)?;
         }
@@ -464,23 +476,23 @@ impl NumericAggregate {
             ($method:ident, $variant:ident, $value:expr) => {{
                 let value = $value.try_into().map_err(|_| Error::ArithmeticOverflow)?;
                 output.$method(value)?;
-                IndexValue::$variant(value).append_component(schema.optional, &mut key);
+                IndexValue::$variant(value)
             }};
         }
         let divisor = match operation {
             Operation::Sum => 1,
             Operation::Average => self.count,
         };
-        match (total, result_type) {
+        let value = match (total, result_type) {
             (Total::Float32(sum), FieldType::Float32) => {
                 let value = sum.finish(divisor)?;
                 output.float32(value)?;
-                IndexValue::Float32(value).append_component(schema.optional, &mut key);
+                IndexValue::Float32(value)
             }
             (Total::Float64(sum), FieldType::Float64) => {
                 let value = sum.finish(divisor)?;
                 output.float64(value)?;
-                IndexValue::Float64(value).append_component(schema.optional, &mut key);
+                IndexValue::Float64(value)
             }
             (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, *n),
             (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, *n),
@@ -491,7 +503,7 @@ impl NumericAggregate {
                 let coefficient = (*n).try_into().map_err(|_| Error::ArithmeticOverflow)?;
                 let value = Decimal::try_new(coefficient, scale).ok_or(Error::Corrupt)?;
                 output.decimal(value, scale)?;
-                IndexValue::Decimal(value).append_component(schema.optional, &mut key);
+                IndexValue::Decimal(value)
             }
             (Total::Unsigned(n), FieldType::Nat8) => encode!(nat8, Nat8, *n),
             (Total::Unsigned(n), FieldType::Nat16) => encode!(nat16, Nat16, *n),
@@ -500,9 +512,13 @@ impl NumericAggregate {
             (Total::Unsigned(n), FieldType::Nat128) => encode!(nat128, Nat128, *n),
             (Total::Unsigned(n), FieldType::U256) => {
                 output.u256(*n)?;
-                IndexValue::U256(*n).append_component(schema.optional, &mut key);
+                IndexValue::U256(*n)
             }
             _ => return Err(Error::Corrupt),
+        };
+        let mut key = Vec::new();
+        if needs_key {
+            value.append_component(schema.optional, &mut key);
         }
 
         Ok(Some((key, output.finish())))

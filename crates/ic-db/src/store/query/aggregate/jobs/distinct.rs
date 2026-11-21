@@ -1,14 +1,11 @@
 //! Retained tuple DISTINCT counts using the existing exact key-set reducer.
 
 use super::{
-    super::{
-        Accumulator, Completed, GroupCount, Query, Reducer, decode_group_count, decode_record,
-    },
-    AggregateJobs, GroupCursor, GroupPage, JobHandle, JobStep, prepare, start,
+    super::{Completed, GroupCount, Query, Reducer, decode_group_count, decode_record},
+    AggregateJobs, CountInput, GroupCursor, GroupPage, JobHandle, JobStep,
 };
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
-use sha2::{Digest, Sha256};
 
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Start exact enumeration of distinct projected records.
@@ -84,19 +81,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            let (plan, mut reducer) = self.distinct_plan::<K>()?;
-            if self.request.bytes < 8 {
-                return Err(Error::RowTooLarge);
-            }
-
-            start(
-                jobs,
-                binding(plan.binding),
-                self.db.read()?.revision_by_id(E::SCHEMA.id)?,
-                now,
-                expires,
-                &Accumulator::Scalar(&mut reducer),
-            )
+            self.start_count_job(jobs, now, expires, CountInput::Distinct(K::definition()))
         })
     }
 
@@ -117,24 +102,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
         observe!(resume, {
-            let (plan, mut reducer) = self.distinct_plan::<K>()?;
-            let mut record = jobs.load(handle)?;
-            let bytes = self.request.bytes;
-            let changed = prepare(
-                &*self.db.read()?,
-                E::SCHEMA,
-                self.request,
-                &plan,
-                Accumulator::Scalar(&mut reducer),
-                &mut record,
-                binding(plan.binding),
+            self.resume_count_job(
+                jobs,
+                handle,
                 sequence,
                 now,
-            )?;
-
-            record.finish_and_save(jobs, handle, changed, bytes, || {
-                Ok((reducer.finish()?.into_count()?, 8))
-            })
+                CountInput::Distinct(K::definition()),
+            )
         })
     }
 
@@ -187,12 +161,4 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
         })
     }
-}
-
-fn binding(query: [u8; 32]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"ic-db:distinct-count-job:v1\0");
-    hash.update(query);
-
-    hash.finalize().into()
 }

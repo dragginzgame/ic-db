@@ -167,7 +167,7 @@ impl Groups {
         }
         let mut count = 0_u64;
         for position in 0..length {
-            let bytes = reader.blob(MAX_ROW_BYTES)?;
+            let bytes = reader.blob_ref(MAX_ROW_BYTES)?;
             let mut reducer = self.initial.clone();
             let present = if let Reducer::Keys(ordinal) = &mut reducer {
                 *ordinal = position as u8;
@@ -190,11 +190,11 @@ impl Groups {
                     return Err(Error::Corrupt);
                 }
                 let winner = if present {
-                    reader.blob(MAX_ROW_BYTES)?
+                    reader.blob_ref(MAX_ROW_BYTES)?
                 } else {
-                    Vec::new()
+                    &[]
                 };
-                reducer.restore_extremum(entity, u64::from(present), &winner)?;
+                reducer.restore_extremum(entity, u64::from(present), winner)?;
 
                 u64::from(present)
             } else {
@@ -213,7 +213,7 @@ impl Groups {
                 present
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
-            let mut fields = Decoder::new(&bytes)?;
+            let mut fields = Decoder::new(bytes)?;
             let mut key = Vec::new();
             build_comparison_key(entity, self.mask, &mut key, |_, field| {
                 if field.optional && !fields.boolean()? {
@@ -232,6 +232,7 @@ impl Groups {
             {
                 return Err(Error::Corrupt);
             }
+            let bytes = bytes.to_vec();
             self.state_bytes += key.len() + bytes.capacity() + reducer.retained_bytes();
             if self.state_bytes > MAX_STATE_BYTES {
                 return Err(Error::Corrupt);

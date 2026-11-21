@@ -176,46 +176,87 @@ async fn retained_summary_pages_survive_interrupted_scan_and_completed_upgrade()
     for round in 0..5_u8 {
         wire_call::call::<()>(&pic, canister, "seed", 1, &(2_u16, round)).await;
     }
-    let handle: Vec<u8> = wire_call::call(&pic, canister, "start_summary", 4, &()).await;
-    let advance =
-        async |sequence: u64, work: u16, cursor: Option<Vec<u8>>| -> (u64, u64, Option<Page>) {
-            wire_call::call(
-                &pic,
-                canister,
-                "advance_summary",
-                5,
-                &(&handle, sequence, work, cursor),
-            )
-            .await
-        };
-    // Each group has accumulated two maxima and a tiny term, before cancellation.
-    let checkpoint = advance(0, 96, None).await;
-    assert_eq!(checkpoint, (1, 96, None));
-    upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
-        .await
-        .unwrap();
-    assert_eq!(advance(0, 1, None).await, checkpoint);
-
     let mut expected: Vec<_> = (0..32)
         .map(|i| (format!("{i:02}"), 5, i + 1, (i + 3) / 5))
         .collect();
     // The stable sort preserves ascending group keys when rounded averages tie.
     expected.sort_by_key(|row| std::cmp::Reverse(row.3));
-    let mut cursor = None;
-    for page in 0..5 {
-        let sequence = if page == 0 { 1 } else { 2 };
-        let (seq, examined, result) = advance(sequence, 128, cursor.take()).await;
-        assert_eq!((seq, examined), (2, 160));
-        let (rows, next) = result.expect("completed summary");
-        // The large terms cancel. The sum is (i+1) subnormal units and the
-        // average is that integer divided by five, rounded to the nearest unit.
-        assert_eq!(rows, expected[page * 7..((page + 1) * 7).min(32)]);
-        assert_eq!(next.is_some(), page < 4);
-        cursor = next;
-        if page == 0 {
-            upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+    // At limit 12, the first cursor and the final cutoff both split equal averages.
+    assert_eq!(expected[6].3, expected[7].3);
+    assert_eq!(expected[11].3, expected[12].3);
+    for (limit, changed_limit) in [(12_u8, 32_u8), (32, 12)] {
+        let handle: Vec<u8> = wire_call::call(&pic, canister, "start_summary", 4, &limit).await;
+        let advance = async |requested_limit: u8,
+                             sequence: u64,
+                             work: u16,
+                             page_size: u8,
+                             cursor: Option<Vec<u8>>|
+               -> Result<(u64, u64, Option<Page>), String> {
+            wire_call::call(
+                &pic,
+                canister,
+                "advance_summary",
+                5,
+                &(&handle, requested_limit, sequence, work, page_size, cursor),
+            )
+            .await
+        };
+        // Each group has accumulated two maxima and a tiny term, before cancellation.
+        let checkpoint = advance(limit, 0, 96, 7, None).await.unwrap();
+        assert_eq!(checkpoint, (1, 96, None));
+        upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+            .await
+            .unwrap();
+        let assert_limit_refused = async |sequence, cursor| {
+            let before = pic.get_stable_memory(canister).await;
+            assert_eq!(
+                advance(changed_limit, sequence, 128, 7, cursor)
+                    .await
+                    .unwrap_err(),
+                "InvalidJob"
+            );
+            assert!(pic.get_stable_memory(canister).await == before);
+        };
+        assert_limit_refused(1, None).await;
+        assert_eq!(advance(limit, 0, 1, 7, None).await.unwrap(), checkpoint);
+
+        let mut cursor = None;
+        let pages = expected[..usize::from(limit)].chunks(7);
+        let total_pages = pages.len();
+        for (page, wanted) in pages.enumerate() {
+            let sequence = if page == 0 { 1 } else { 2 };
+            let (seq, examined, result) = advance(limit, sequence, 128, 7, cursor.take())
                 .await
                 .unwrap();
+            assert_eq!((seq, examined), (2, 160));
+            let (rows, next) = result.expect("completed summary");
+            // The large terms cancel. The sum is (i+1) subnormal units and the
+            // average is that integer divided by five, rounded to the nearest unit.
+            assert_eq!(rows, wanted);
+            assert_eq!(next.is_some(), page + 1 < total_pages);
+            cursor = next;
+            if page == 0 {
+                upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+                assert_limit_refused(seq, cursor.clone()).await;
+
+                // Resume the same boundary with a smaller page, then grow the
+                // next page past the remaining result. The original cursor is replayable.
+                let (short_seq, short_examined, short) =
+                    advance(limit, seq, 1, 1, cursor.clone()).await.unwrap();
+                assert_eq!((short_seq, short_examined), (seq, examined));
+                let (one, after_one) = short.unwrap();
+                assert_eq!(one, expected[7..8]);
+                let after_one = after_one.expect("more winners after the eighth group");
+
+                let (last_seq, last_examined, rest) =
+                    advance(limit, seq, 1, 32, Some(after_one)).await.unwrap();
+                assert_eq!((last_seq, last_examined), (seq, examined));
+                let (rest, end) = rest.unwrap();
+                assert_eq!(rest, expected[8..usize::from(limit)]);
+                assert!(end.is_none());
+            }
         }
     }
     pic.drop().await;

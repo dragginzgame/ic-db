@@ -1399,6 +1399,7 @@ impl<'a> Plan<'a> {
             order::Path::Primary => {}
             order::Path::Index(path) => plan.use_index(entity, path),
             order::Path::Sort(fields) => {
+                order::select_filtered_path(entity, request, &mut plan, false)?;
                 for &(position, _) in &fields {
                     plan.selected |= 1 << position;
                 }

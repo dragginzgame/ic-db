@@ -1,15 +1,18 @@
 --- a/qualification/ic-db-m0-rollback-driver/tests/listing_costs.rs
 +++ b/qualification/ic-db-m0-rollback-driver/tests/listing_costs.rs
-@@ -79,7 +79,7 @@
-         }
-     }
-     let expected = sql
--        .prepare("SELECT id FROM docs WHERE entry_id=1 AND published=1 ORDER BY score DESC,id DESC")
-+        .prepare("SELECT id FROM docs WHERE entry_id=1 AND published=1 AND id<=100 ORDER BY score DESC,id DESC")
+@@ -111,9 +111,9 @@
+         .collect::<Result<Vec<_>, _>>()
          .unwrap()
-         .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
-         .unwrap()
-@@ -97,13 +97,13 @@
+     };
+-    let expected = ordered_ids();
++    let expected: Vec<_> = ordered_ids().into_iter().filter(|id| *id <= 100).collect();
+     let before = pic.get_stable_memory(canister).await;
+-    check_count(130, false).await;
++    check_count(130, true).await;
+     let measured =
+         async |shape: u8, cursor: &Option<Vec<u8>>, work: u32, bytes: u32, max_id: Option<u64>| {
+             call::<Result<Sample, String>>(
+@@ -125,13 +125,13 @@
              )
              .await
          };
@@ -26,7 +29,7 @@
              assert_eq!(
                  (&a.0, a.1.is_some(), a.2, a.3),
                  (&h.0, h.1.is_some(), h.2, h.3)
-@@ -124,7 +124,7 @@
+@@ -152,7 +152,7 @@
                  "full" => a.0.len() == 20,
                  "sparse" => a.0.is_empty() && a.1.is_some() && a.2 == work,
                  "byte" if a.0.len() == 2 && a.1.is_some() => {
@@ -35,7 +38,7 @@
  
                      wider
                          .0
-@@ -159,7 +159,7 @@
+@@ -187,7 +187,7 @@
      assert_eq!(sorted.0, top);
      assert!(indexed.1.is_some() && sorted.1.is_none());
      assert!(sorted.2 > indexed.2);
@@ -44,7 +47,7 @@
      assert!(sparse.0.is_empty() && sparse.1.is_some() && sparse.2 == 1);
      assert_eq!(
          measured(2, &None, 1, 160, Some(100)).await.unwrap_err(),
-@@ -191,6 +191,22 @@
+@@ -219,6 +219,22 @@
          let indexed = measured(0, &None, 256, 160, Some(u64::from(max_id)))
              .await
              .unwrap();
@@ -67,6 +70,25 @@
          assert_eq!(indexed.0, &ids[..ids.len().min(20)]);
          assert_eq!(indexed.1.is_some(), ids.len() > 20);
          assert_eq!(indexed.2, indexed.3);
+@@ -307,12 +323,13 @@
+     }
+     // Restore the hidden template so its two sort values cannot affect the listing.
+     set_template(false, Some(-10)).await;
+-    check_count(530, false).await;
++    check_count(530, true).await;
+     let expected = ordered_ids();
+-    assert_eq!(
+-        measured(2, &None, 512, 160, None).await.unwrap_err(),
+-        "Limit"
+-    );
++    let sorted = measured(2, &None, 512, 160, None).await.unwrap();
++    assert_eq!(sorted.0, expected[..20]);
++    assert_eq!((sorted.2, sorted.3), (440, 440));
++    assert!(sorted.1.is_none());
++    println!("listing-large-sort,examined={},instructions={}", sorted.2, sorted.4);
+     let mut after = None;
+     let mut returned = 0;
+     let mut pages = 0;
 --- a/qualification/ic-db-m1-records-canister/src/listing_costs.rs
 +++ b/qualification/ic-db-m1-records-canister/src/listing_costs.rs
 @@ -28,7 +28,7 @@

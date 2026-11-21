@@ -8676,6 +8676,7 @@ fn grouped_overflow_cannot_hide_behind_filter_or_limit() {
     assert!(matches!(
         db.query::<SignedGroups>()
             .filter_groups_any(&[(C::Eq, 3_i128.into()), (C::Lt, 0_i128.into())])
+            .order_groups(ic_db::GroupOrder::AggregateAscending)
             .limit(1)
             .group_sum::<CategoryOnly, SignedAmount>(),
         Err(Error::ArithmeticOverflow)

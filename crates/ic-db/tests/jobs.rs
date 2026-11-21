@@ -2241,6 +2241,20 @@ fn descending_group_keys_select_and_page_after_complete_accumulation() {
         expected
     );
     assert!(complete.value.iter().all(|r| r.count == 1));
+    // Six qualifying keys exercise both a full wrap and a partially overwritten buffer.
+    for limit in 1..5 {
+        let rows = query()
+            .limit(limit)
+            .group_count::<GroupKey>()
+            .unwrap()
+            .value;
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.key.amount, r.key.flag))
+                .collect::<Vec<_>>(),
+            expected[..limit]
+        );
+    }
     let ascending = query()
         .order_groups(GroupOrder::Key)
         .group_count::<GroupKey>()
@@ -4989,6 +5003,16 @@ fn completed_pages_retry_the_group_that_did_not_fit() {
         .query::<LabelRow>()
         .start_group_count::<Label>(&mut jobs, time(0), time(100))
         .unwrap();
+    let before = backing.borrow().clone();
+    let mut unpaged = |bytes| {
+        db.query::<LabelRow>()
+            .test_output_limit(bytes)
+            .resume_group_count::<Label>(&mut jobs, &handle, 0, time(1))
+    };
+    assert!(matches!(unpaged(20), Err(Error::RowTooLarge)));
+    assert_eq!(*backing.borrow(), before);
+    assert!(matches!(unpaged(120), Err(Error::Limit)));
+    assert_eq!(*backing.borrow(), before);
     let step = db
         .query::<LabelRow>()
         .test_output_limit(20)

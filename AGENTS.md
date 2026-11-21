@@ -36,7 +36,8 @@ This overlay owns local authority, product boundaries and qualification choices.
 
 - Import `ic_db::design::prelude::*` wherever a Rust module or example declares
   IC DB schema types. Use unqualified schema attributes and import additional
-  runtime APIs explicitly as needed.
+  runtime APIs explicitly as needed. Follow the [schema authoring rules](README.md#schema-authoring-rules)
+  for entity option placement, including `timestamps` immediately after `fields(...)`.
 - Use attribute-owned declarations with empty struct bodies and logical schema
   names/typed paths. Numeric storage handles stay internal. Renames require
   explicit transitions; do not infer identity from declaration order. Alternative

@@ -16,7 +16,15 @@ fn timestamps_expands_identically_to_the_explicit_managed_pair() {
     );
     let common = quote!(pk(field = "id"), index(field = "updated_at"));
     let id = quote!(field(name = "id", value(item(prim = "Nat64"))));
-    let shorthand = expand(quote!(#common, timestamps, fields(#id)), item.clone()).unwrap();
+    let shorthand = expand(
+        quote!(
+            #common,
+            fields(#id),
+            timestamps
+        ),
+        item.clone(),
+    )
+    .unwrap();
     let explicit = expand(
         quote!(#common, fields(
             #id,
@@ -38,7 +46,11 @@ fn timestamps_expands_identically_to_the_explicit_managed_pair() {
     ] {
         assert!(
             expand(
-                quote!(#common, fields(#id, #conflict), timestamps),
+                quote!(
+                    #common,
+                    fields(#id, #conflict),
+                    timestamps
+                ),
                 item.clone()
             )
             .is_err()

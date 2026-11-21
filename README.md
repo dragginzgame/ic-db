@@ -824,7 +824,8 @@ changes the schema contract; it does not silently backfill stored rows. Inspect
 `DefaultRow` with `db schema`. Nested-record and primary-key defaults are not yet
 supported; no existing authoring attributes were removed.
 
-Add the bare `timestamps` flag inside `#[entity(...)]` to declare both
+Place the bare entity option `timestamps` on the line immediately after the
+`fields(...)` block to declare both
 `created_at` and `updated_at` as managed `Timestamp` fields. Both count toward
 the 16-field limit and can be indexed explicitly. For a single role, a custom
 field name or a timestamp newtype, declare nonoptional fields with
@@ -1032,6 +1033,11 @@ Begin each module or example that declares IC DB schema types with
 `#[canister]`, `#[store(...)]`, `#[entity(...)]` and `#[record(...)]` without
 a crate prefix. Import query, write and host APIs separately when needed.
 Modules that only consume an existing schema can import the types they use.
+
+In `#[entity(...)]`, put the store and primary key before the field list.
+When using `timestamps`, write it as the next entity option on its own line
+immediately after the closing `),` of `fields(...)`. This is a formatting
+convention. The macro accepts entity options in any order.
 
 ## Build a shared schema in its owning crate
 

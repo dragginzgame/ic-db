@@ -92,12 +92,19 @@ pub(super) fn group_page<T>(
 ) -> Result<(GroupPage<T>, usize), Error> {
     if groups.selection.order == GroupOrder::FirstOccurrence {
         let keys = groups.first_occurrences()?;
-        let (range, next, used) = select(keys.iter().map(|key| key.len()), bytes, page, handle)?;
-        let rows = keys[range]
-            .iter()
+        let (selected, used) = select(keys.into_iter(), |key| key.len(), bytes, page, handle)?;
+        let rows = selected
+            .rows
+            .into_iter()
             .map(|key| decode(key, Completed::Key))
             .collect::<Result<_, _>>()?;
-        return Ok((GroupPage { rows, next }, used));
+        return Ok((
+            GroupPage {
+                rows,
+                next: selected.next,
+            },
+            used,
+        ));
     }
     let (page, used) = select_rows(groups, limit, bytes, page, handle)?;
     let rows = page
@@ -127,71 +134,70 @@ fn select_rows(
     handle: &JobHandle,
 ) -> Result<(EncodedPage, usize), Error> {
     if matches!(groups.initial, Reducer::Keys(_)) {
-        // Charge in output order, then move just the selected records out of the map.
-        let sizes = groups.rows.values().map(|(key, _)| key.len());
-        let descending = groups.selection.order == GroupOrder::KeyDescending;
-        let (range, next, used) = if descending {
-            select(sizes.rev(), bytes, page, handle)?
-        } else {
-            select(sizes, bytes, page, handle)?
-        };
-        let mut keys = groups.rows.into_values();
-        let rows: &mut dyn Iterator<Item = _> = if descending {
-            &mut keys.by_ref().rev()
-        } else {
-            &mut keys
-        };
-        let rows = rows
-            .skip(range.start)
-            .take(range.len())
-            .map(|(key, _)| (key, Completed::Key))
-            .collect();
+        let mut keys = groups
+            .rows
+            .into_values()
+            .map(|(key, _)| (key, Completed::Key));
+        let mut reversed;
+        let ordered: &mut dyn ExactSizeIterator<Item = _> =
+            if groups.selection.order == GroupOrder::KeyDescending {
+                reversed = keys.rev();
+                &mut reversed
+            } else {
+                &mut keys
+            };
 
-        return Ok((GroupPage { rows, next }, used));
+        return select(ordered, |(key, _)| key.len(), bytes, page, handle);
     }
     // Finalize every group before selection; even an excluded overflow must refuse.
-    let mut rows = groups.into_output()?;
-    rows.truncate(limit);
-    let sizes = rows
-        .iter()
-        .map(|(key, value)| key.len() + value.encoded_len());
-    let (range, next, used) = select(sizes, bytes, page, handle)?;
-    rows.truncate(range.end);
-    rows.drain(..range.start);
-
-    Ok((GroupPage { rows, next }, used))
+    let rows = groups.into_output(limit)?;
+    select(
+        rows.into_iter(),
+        |(key, value)| key.len() + value.encoded_len(),
+        bytes,
+        page,
+        handle,
+    )
 }
 
-fn select(
-    sizes: impl ExactSizeIterator<Item = usize>,
+fn select<T>(
+    rows: impl ExactSizeIterator<Item = T>,
+    size: impl Fn(&T) -> usize,
     bytes: usize,
     page: Option<PageRequest<'_>>,
     handle: &JobHandle,
-) -> Result<(std::ops::Range<usize>, Option<GroupCursor>, usize), Error> {
+) -> Result<(GroupPage<T>, usize), Error> {
     let start = page
         .and_then(|page| page.after)
         .map_or(0, |cursor| usize::from(cursor.position));
-    let total = sizes.len();
+    let total = rows.len();
     if start > total {
         return Err(Error::InvalidCursor);
     }
     let capacity = page.map_or(total, |page| page.size);
-    let mut end = start;
+    let mut selected = Vec::with_capacity(capacity.min(total - start));
     let mut used = 0;
-    for size in sizes.skip(start).take(capacity) {
-        if page.is_some() && size > bytes - used {
-            if end == start {
-                return Err(Error::RowTooLarge);
+    for row in rows.skip(start).take(capacity) {
+        match admit_output(size(&row), bytes, &mut used) {
+            Ok(()) => selected.push(row),
+            // The cursor stays before the uncharged row so the next page retries it.
+            Err(Error::Limit | Error::RowTooLarge) if page.is_some() && !selected.is_empty() => {
+                break;
             }
-            break; // Retry the unreturned group on the next page.
+            Err(error) => return Err(error),
         }
-        admit_output(size, bytes, &mut used)?;
-        end += 1;
     }
+    let end = start + selected.len();
     let next = (end < total).then(|| GroupCursor {
         handle: handle.clone(),
         position: end as u8,
     });
 
-    Ok((start..end, next, used))
+    Ok((
+        GroupPage {
+            rows: selected,
+            next,
+        },
+        used,
+    ))
 }

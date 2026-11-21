@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.26.4] - Unreleased
+
+### Queries
+
+- A bounded sort can now use a filtering index even when the requested order
+  uses a different field. It returns the top rows after exhausting the selected
+  range, or `Limit` if the scan cannot finish.
+- Retained row counts, present-field counts and distinct tuple counts now share
+  the same start and resume path. Existing count checkpoints remain readable.
+- Retained scalar min, max, sum and average now check the output-byte budget
+  before decoding the completed result, using the same check as synchronous queries.
+- Ordering groups by a completed aggregate with `.limit(n)` now buffers at
+  most `n` qualifying groups. Ties go to the smallest group keys in either
+  sort direction, including ties at the cutoff.
+- Restoring a grouped minimum or maximum now validates each winner directly
+  from the checkpoint and copies its record once into the reducer.
+- Retained DISTINCT pages in ascending or descending key order now walk to the
+  cursor once and collect results as they check the output-byte budget.
+- Retained group and DISTINCT pages use the shared byte-budget check once per
+  candidate. A partial page can retry its first unreturned row at the next cursor.
+- In ascending and descending group-key order, `.limit(n)` now buffers at most
+  `n` qualifying results during finalization. Every group still undergoes
+  overflow and state-limit checks, including groups beyond the limit.
+- Grouped summaries encode comparison keys for sum and average only when a
+  group filter or sort uses that measure. Both results still undergo their
+  normal range and rounding checks for every group.
+- Scalar `sum` and `avg` skip comparison-key encoding entirely. Their grouped
+  forms encode a value key when filtering or sorting by the aggregate result.
+
+### Qualification
+
+- Measured automatic exact listing totals with the original, additional and
+  replacement compound indexes. At 530 documents the matching index counted
+  440 published matches without fetching rows and stayed within one call.
+- Checked a live listing and its exact filtered total under one session read
+  guard against SQLite, including a write between pages that changes both
+  the order and the total.
+- Checked a filtered listing with 530 candidates against SQLite on PocketIC.
+  The ordering index paged through all matches. The unindexed sort refused
+  when it could not establish the complete order within one call.
+- Checked ranked Float64 summaries in PocketIC across upgrades when rounded
+  averages tie at both the page boundary and the query limit. Raising or lowering
+  the query limit on resume refuses and preserves the original checkpoint and cursor.
+  The same cursor supports smaller or larger pages across an upgrade.
+- Updated the mixed-lifecycle qualification canister and its driver to Canic 0.246.0.
+- Checked grouped summaries across a write that changes which groups rank in the top two. A running
+  job invalidates, a completed job keeps its original pages, and a fresh query
+  returns the updated counts and sums in SQLite order.
+
 ## [0.26.3] - 2026-11-20
 
 ### Queries

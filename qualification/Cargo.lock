@@ -277,9 +277,9 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.242.0"
+version = "0.246.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a779e80b35d3fa02087c46fd15de93c56d8f1a96564b37d988b53e362075f884"
+checksum = "e44b1f79548759d4dfc9bfa7c39e4284dd1da9fbe5f04bec93120a8e108d1db4"
 dependencies = [
  "ic-platform-runtime 0.23.23",
  "ic-wire 0.27.1",
@@ -1187,9 +1187,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-artifacts"
-version = "0.80.7"
+version = "0.80.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72ce4d058e0c7d95236311ac00bf274feefff7820dcbf70ad9528559db6ca491"
+checksum = "4d8b55a21c287f361bdca10151f5404f5f658024b037284d83f8a7a7e3181041"
 dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.18",
@@ -1197,9 +1197,9 @@ dependencies = [
 
 [[package]]
 name = "ic-host-text"
-version = "0.77.5"
+version = "0.77.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948047dbda816d2ed6dc22a5aef1a0bd4b356b1f007c87b2f48ed92c0904575f"
+checksum = "66f7f31f73e23372ac5fb4ee8f429e0e082fe654bea86edbebd6315d20900042"
 dependencies = [
  "unicode-width",
 ]
@@ -1328,9 +1328,9 @@ dependencies = [
 
 [[package]]
 name = "ic-testkit"
-version = "0.110.3"
+version = "0.110.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b04e07e411ea98842fedb02173150d51869c9c4a6c105dede249369322d7b2c"
+checksum = "5617b2cbdc7adf055c6c7f4bdcbca8ad0ef5b367b65996acda10cad7fb79bb13"
 dependencies = [
  "pocket-ic",
 ]
@@ -2954,9 +2954,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.19+spec-1.1.0"
+version = "0.25.20+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd43688c4858d7264ae1cf9a9f874a67c3feb74a883b1cd7bebd6a4ea8307218"
+checksum = "e76360e201d6dbd6583e17795ba71a88f47365a9139c8450a7979c32303b8e73"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -2966,9 +2966,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.5+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+checksum = "e6769c452d71ba30696c6b37770c439a9cc9110f47f7d5cdbeda79840ef5ea31"
 dependencies = [
  "winnow",
 ]
@@ -3216,9 +3216,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "walkdir"
-version = "2.5.0"
+version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+checksum = "b42e295b7452c4604982280d8586001fcad9b8b201cac67bca9771e7a7475403"
 dependencies = [
  "same-file",
  "winapi-util",
@@ -3489,18 +3489,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.63"
+version = "0.8.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
+checksum = "ed43f3060383c64b000f3c630550aebdfa9d3b76d48de32390483dd2cc7e0865"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.63"
+version = "0.8.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
+checksum = "a5cbd820fe3e35fb38c83b6dc7e6b1618bc46e0cd10073ae94e8d52dc468d8b9"
 dependencies = [
  "proc-macro2",
  "quote",

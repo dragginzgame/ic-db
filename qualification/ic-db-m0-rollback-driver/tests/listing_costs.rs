@@ -78,14 +78,42 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
             }
         }
     }
-    let expected = sql
-        .prepare("SELECT id FROM docs WHERE entry_id=1 AND published=1 ORDER BY score DESC,id DESC")
+    let check_count = async |population: u32, covered: bool| {
+        let total: u32 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM docs WHERE entry_id=1 AND published=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for work in [total + 1, 512] {
+            let (result, instructions): (Result<(u64, u32, u32), String>, u64) =
+                call(pic, canister, "measured_listing_count", 192, &work).await;
+            let candidates = if covered { total } else { population - 1 };
+            if work > candidates {
+                let fetched = if covered { 0 } else { candidates };
+                assert_eq!(result, Ok((u64::from(total), candidates, fetched)));
+            } else {
+                assert_eq!(result.as_ref().unwrap_err(), "Limit");
+            }
+            println!(
+                "listing-count,population={population},work={work},result={result:?},instructions={instructions}"
+            );
+        }
+    };
+    let ordered_ids = || {
+        sql.prepare(
+            "SELECT id FROM docs WHERE entry_id=1 AND published=1 ORDER BY score DESC,id DESC",
+        )
         .unwrap()
-        .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+        .query_map([], |row| row.get::<_, u32>(0).map(u64::from))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+        .unwrap()
+    };
+    let expected = ordered_ids();
     let before = pic.get_stable_memory(canister).await;
+    check_count(130, false).await;
     let measured =
         async |shape: u8, cursor: &Option<Vec<u8>>, work: u32, bytes: u32, max_id: Option<u64>| {
             call::<Result<Sample, String>>(
@@ -255,5 +283,59 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
         "listing-storage,after_delete={}",
         pic.get_stable_memory(canister).await.len()
     );
+    // Cross the one-call work bound after the fixed-population cost measurements.
+    // Both sort fields carry the same rank. Ties span pages and the newest
+    // candidates occur beyond the first 512 rows in primary-key order.
+    for score in [30_i64, 31] {
+        set_template(true, Some(score)).await;
+        let rows: Vec<_> = (131..=530_u64)
+            .filter(|id| id % 2 == (score % 2) as u64)
+            .map(|id| (id, ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()), score))
+            .collect();
+        for chunk in rows.chunks(8) {
+            call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
+                .await
+                .unwrap();
+        }
+        for (id, _, rank) in rows {
+            sql.execute(
+                "INSERT INTO docs VALUES (?1,1,?2,1)",
+                (i64::try_from(id).unwrap(), rank),
+            )
+            .unwrap();
+        }
+    }
+    // Restore the hidden template so its two sort values cannot affect the listing.
+    set_template(false, Some(-10)).await;
+    check_count(530, false).await;
+    let expected = ordered_ids();
+    assert_eq!(
+        measured(2, &None, 512, 160, None).await.unwrap_err(),
+        "Limit"
+    );
+    let mut after = None;
+    let mut returned = 0;
+    let mut pages = 0;
+    let mut total_instructions = 0;
+    loop {
+        let (ids, next, examined, _, instructions) =
+            measured(0, &after, 512, 160, None).await.unwrap();
+        let end = returned + ids.len();
+        assert_eq!(ids, expected[returned..end]);
+        if pages == 0 {
+            assert_eq!(ids.len(), 20);
+            println!("listing-large-first,examined={examined},instructions={instructions}");
+        }
+        returned = end;
+        total_instructions += instructions;
+        pages += 1;
+        if next.is_none() {
+            break;
+        }
+        assert!(pages <= expected.len() && next != after);
+        after = next;
+    }
+    assert_eq!(returned, expected.len());
+    println!("listing-large,returned={returned},pages={pages},instructions={total_instructions}");
     owned.drop().await;
 }

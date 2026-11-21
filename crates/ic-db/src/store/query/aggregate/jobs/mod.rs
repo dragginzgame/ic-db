@@ -12,10 +12,11 @@ pub use storage::AggregateJobs;
 
 use super::{
     super::{Database, Plan, Query, QueryCursor, Request, execute_inner},
-    Accumulator, Reducer, decode_record,
+    Accumulator, Reducer,
     numeric::Operation,
+    scalar_output,
 };
-use crate::{Entity, EntitySchema, Error, Timestamp, Value};
+use crate::{Entity, EntitySchema, Error, Timestamp, TypeSchema, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
 use storage::Record;
@@ -128,6 +129,26 @@ impl Record {
     }
 }
 
+///
+/// CountInput
+/// Selects what contributes to a retained scalar count.
+///
+#[derive(Clone, Copy)]
+enum CountInput<'a> {
+    Rows,
+    Field(&'a str),
+    Distinct(&'static TypeSchema),
+}
+
+impl CountInput<'_> {
+    fn projection(self) -> Option<&'static TypeSchema> {
+        match self {
+            Self::Distinct(projection) => Some(projection),
+            _ => None,
+        }
+    }
+}
+
 impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain an exact count job without scanning input. Expiry must be after the
     /// host-captured `now` and at most one hour later. No write freeze is acquired.
@@ -143,7 +164,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
-        observe!(start, { self.start_count_job(jobs, now, expires, None) })
+        observe!(start, {
+            self.start_count_job(jobs, now, expires, CountInput::Rows)
+        })
     }
 
     /// Retain the count of present values in a named top-level field, of any stored
@@ -161,7 +184,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_count_job(jobs, now, expires, Some(field))
+            self.start_count_job(jobs, now, expires, CountInput::Field(field))
         })
     }
 
@@ -170,22 +193,46 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
-        field: Option<&str>,
+        input: CountInput<'_>,
     ) -> Result<JobHandle, Error> {
-        let plan = self.aggregate_plan(None, false)?;
-        let mut reducer = self.count_reducer(field)?;
+        let plan = self.aggregate_plan(input.projection(), false)?;
+        let (mut reducer, expected) = self.retained_count_state(&plan, input)?;
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
 
         start(
             jobs,
-            field_binding(binding(&plan, &reducer)?, field),
+            expected,
             self.db.read()?.revision_by_id(E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
         )
+    }
+
+    fn retained_count_state(
+        &self,
+        plan: &Plan<'_>,
+        input: CountInput<'_>,
+    ) -> Result<(Reducer, [u8; 32]), Error> {
+        let field = match input {
+            CountInput::Rows => None,
+            CountInput::Field(name) => Some(name),
+            CountInput::Distinct(_) => {
+                let mut hash = Sha256::new();
+                hash.update(b"ic-db:distinct-count-job:v1\0");
+                hash.update(plan.binding);
+                return Ok((
+                    Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?),
+                    hash.finalize().into(),
+                ));
+            }
+        };
+        let reducer = self.count_reducer(field)?;
+        let expected = field_binding(binding(plan, &reducer)?, field);
+
+        Ok((reducer, expected))
     }
 
     /// Advance count within `work_limit` (1..=512) and 64 KiB of source row/key
@@ -207,7 +254,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
         observe!(resume, {
-            self.resume_count_job(jobs, handle, sequence, now, None)
+            self.resume_count_job(jobs, handle, sequence, now, CountInput::Rows)
         })
     }
 
@@ -226,7 +273,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<u64>, Error> {
         observe!(resume, {
-            self.resume_count_job(jobs, handle, sequence, now, Some(field))
+            self.resume_count_job(jobs, handle, sequence, now, CountInput::Field(field))
         })
     }
 
@@ -236,12 +283,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
-        field: Option<&str>,
+        input: CountInput<'_>,
     ) -> Result<JobStep<u64>, Error> {
-        let plan = self.aggregate_plan(None, false)?;
+        let plan = self.aggregate_plan(input.projection(), false)?;
         let mut record = jobs.load(handle)?;
-        let mut reducer = self.count_reducer(field)?;
-        let expected = field_binding(binding(&plan, &reducer)?, field);
+        let (mut reducer, expected) = self.retained_count_state(&plan, input)?;
         let bytes = self.request.bytes;
         let changed = prepare(
             &*self.db.read()?,
@@ -256,7 +302,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         )?;
 
         record.finish_and_save(jobs, handle, changed, bytes, || {
-            Ok((reducer.finish()?.into_count()?, 8))
+            Ok((reducer.finish(false)?.into_count()?, 8))
         })
     }
 
@@ -394,11 +440,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         )?;
 
         record.finish_and_save(jobs, handle, changed, limit, || {
-            let bytes = reducer.finish()?.into_value()?;
-            let size = bytes.as_ref().map_or(0, Vec::len);
-            let value = bytes.as_deref().map(decode_record).transpose()?;
-
-            Ok((value, size))
+            scalar_output(reducer, limit)
         })
     }
 }

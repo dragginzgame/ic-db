@@ -1,7 +1,10 @@
 //! Differential checks against SQLite for shared query semantics.
 
 use ic_db::design::prelude::*;
-use ic_db::{AggregateJobs, Batch, Comparison, Database, GroupOrder, JobOutcome, QueryCursor};
+use ic_db::{
+    AggregateJobs, Batch, Comparison, Database, DatabaseSession, Error, GroupOrder, JobOutcome,
+    QueryCursor,
+};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory,
@@ -204,6 +207,118 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
             }
         }
     }
+}
+
+#[test]
+fn filtered_sort_finishes_only_after_its_complete_index_range() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let query = || {
+        db.query::<Item>()
+            .eq(Item::LANE, 1_u8)
+            .order_by(&[Item::VISIBLE, Item::ID])
+            .limit(1)
+    };
+    // ID 9 is visible; ID 10 sorts first. Both lie outside a two-row primary scan.
+    let winner: u32 = sql
+        .query_row(
+            "SELECT id FROM items WHERE lane=1 ORDER BY visible,id LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let page = query().work_limit(3).fetch_as::<Id>().unwrap();
+    assert_eq!(
+        page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [u64::from(winner)]
+    );
+    assert_eq!((page.examined, page.fetched), (2, 2));
+    assert!(page.next.is_none());
+    assert!(matches!(
+        query().work_limit(1).fetch_as::<Id>(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
+fn live_page_and_filtered_total_share_one_read_boundary() {
+    let (sql, host) = fixture();
+    let session = DatabaseSession::new(open(&host));
+    let expected = |after: Option<(u8, u32)>| {
+        sql.prepare(
+            "WITH visible AS (
+                SELECT rank, id, COUNT(*) OVER () AS total FROM items WHERE lane=0 AND visible=1
+             ) SELECT id, total FROM visible WHERE ?1 IS NULL OR (rank,id)>(?1,?2)
+               ORDER BY rank,id LIMIT 2",
+        )
+        .unwrap()
+        .query_map(params![after.map(|p| p.0), after.map(|p| p.1)], |r| {
+            Ok((
+                u64::from(r.get::<_, u32>(0)?),
+                u64::from(r.get::<_, u32>(1)?),
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    let read_page = |db: &Database, after: Option<&QueryCursor>| {
+        let matching = || {
+            db.query::<Item>()
+                .eq(Item::LANE, 0_u8)
+                .eq(Item::VISIBLE, true)
+        };
+        let mut listing = matching()
+            .order_by(&[Item::RANK, Item::ID])
+            .limit(2)
+            .work_limit(4);
+        if let Some(cursor) = after {
+            listing = listing.after(cursor);
+        }
+        let page = listing.fetch_as::<Id>().unwrap();
+        assert!(matches!(
+            matching().work_limit(4).count(),
+            Err(Error::Limit)
+        ));
+        let total = matching().count().unwrap().value;
+        (
+            page.rows
+                .into_iter()
+                .map(|r| (r.id, total))
+                .collect::<Vec<_>>(),
+            page.next,
+        )
+    };
+
+    let read = session.read().unwrap();
+    let (first, cursor) = read_page(&read, None);
+    assert_eq!(first, expected(None));
+    assert_eq!(first, [(1, 4), (3, 4)]);
+    let cursor = cursor.unwrap();
+    let mut moved = read.get::<Item>(1).unwrap().unwrap();
+    moved.rank = 3;
+    let mut entered = read.get::<Item>(2).unwrap().unwrap();
+    entered.visible = true;
+    let writer = session.clone();
+    assert!(matches!(writer.replace(&moved), Err(Error::BorrowConflict)));
+    drop(read);
+
+    let mut batch = Batch::new();
+    batch.replace(&moved).unwrap();
+    batch.replace(&entered).unwrap();
+    writer.commit(batch).unwrap();
+    sql.execute_batch(
+        "BEGIN; UPDATE items SET rank=3 WHERE id=1;
+        UPDATE items SET visible=1 WHERE id=2; COMMIT;",
+    )
+    .unwrap();
+    let read = session.read().unwrap();
+    let (continued, _) = read_page(&read, Some(&cursor));
+    assert_eq!(continued, expected(Some((2, 3))));
+    assert_eq!(continued, [(8, 5), (1, 5)]);
+    let (fresh, _) = read_page(&read, None);
+    assert_eq!(fresh, expected(None));
+    assert_eq!(fresh, [(2, 5), (3, 5)]);
 }
 
 #[test]
@@ -431,7 +546,10 @@ fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
             (SortDirection::Ascending, "ASC"),
             (SortDirection::Descending, "DESC"),
         ] {
-            for filtered in [false, true] {
+            for (filtered, limit) in [false, true]
+                .into_iter()
+                .flat_map(|filtered| (1..=5).map(move |limit| (filtered, limit)))
+            {
                 let condition = if filtered {
                     "WHERE n >= 2 AND total >= 249 AND mean <= 124"
                 } else {
@@ -447,7 +565,7 @@ fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
             ), summaries AS (SELECT lane,n,total,q + CASE
                 WHEN twice_remainder > n OR (twice_remainder = n AND q%2 != 0)
                 THEN CASE WHEN total < 0 THEN -1 ELSE 1 END ELSE 0 END AS mean
-              FROM parts) SELECT lane,n,total,mean FROM summaries {condition} ORDER BY {column} {keyword}, lane ASC LIMIT 4"
+              FROM parts) SELECT lane,n,total,mean FROM summaries {condition} ORDER BY {column} {keyword}, lane ASC LIMIT {limit}"
             );
                 let expected = sql
                     .prepare(&stmt)
@@ -467,7 +585,7 @@ fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
                     let q = db
                         .query::<Item>()
                         .order_groups(GroupOrder::Summary(measure, direction))
-                        .limit(4);
+                        .limit(limit);
                     if filtered {
                         q.filter_summary(SummaryMeasure::Count, Comparison::Ge, 2_u64)
                             .filter_summary(
@@ -616,6 +734,129 @@ fn summary_alternatives_match_sqlite_and_bind_retained_clause_boundaries() {
             Err(ic_db::Error::Limit)
         ));
     }
+}
+
+#[test]
+fn moving_a_row_between_groups_preserves_completed_summary_pages_only() {
+    use ic_db::{GroupSummary, SortDirection, SummaryMeasure};
+
+    let (sql, host) = fixture();
+    let expected = || {
+        sql.prepare(
+            "SELECT lane, COUNT(cents), SUM(cents) FROM items
+             GROUP BY lane ORDER BY SUM(cents) DESC, lane ASC LIMIT 2",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, u8>(0)?,
+                u64::from(row.get::<_, u32>(1)?),
+                row.get::<_, Option<i64>>(2)?.map(i128::from),
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    let values = |row: GroupSummary<Lane, Price, Price>| {
+        (
+            row.key.lane,
+            row.count,
+            row.sum
+                .and_then(|p| p.price)
+                .and_then(|p| p.coefficient_at_scale(2)),
+        )
+    };
+    let order = GroupOrder::Summary(SummaryMeasure::Sum, SortDirection::Descending);
+    let mut db = open(&host);
+    let mut jobs = AggregateJobs::open(
+        host.open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let now = Timestamp::from_millis(0);
+    let start = |jobs: &mut AggregateJobs| {
+        db.query::<Item>()
+            .order_groups(order)
+            .limit(2)
+            .start_group_summary::<Lane, Price, Price>(jobs, now, Timestamp::from_millis(100))
+            .unwrap()
+    };
+    let completed = start(&mut jobs);
+    let running = start(&mut jobs);
+    let progress = db
+        .query::<Item>()
+        .order_groups(order)
+        .limit(2)
+        .work_limit(1)
+        .resume_group_summary::<Lane, Price, Price>(&mut jobs, &running, 0, now)
+        .unwrap();
+    assert!(matches!(progress.outcome, JobOutcome::Running));
+
+    let before = expected();
+    let first = db
+        .query::<Item>()
+        .order_groups(order)
+        .limit(2)
+        .group_page(1, None)
+        .resume_group_summary::<Lane, Price, Price>(&mut jobs, &completed, 0, now)
+        .unwrap();
+    let JobOutcome::Complete(page) = first.outcome else {
+        panic!("expected completed summary")
+    };
+    assert_eq!(
+        page.rows.into_iter().map(values).collect::<Vec<_>>(),
+        before[..1]
+    );
+    let cursor = page.next.unwrap();
+
+    let mut moved = db.get::<Item>(10).unwrap().unwrap();
+    moved.lane = 2;
+    let mut batch = Batch::new();
+    batch.replace(&moved).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        sql.execute("UPDATE items SET lane=2 WHERE id=10", [])
+            .unwrap(),
+        1
+    );
+
+    let invalidated = db
+        .query::<Item>()
+        .order_groups(order)
+        .limit(2)
+        .resume_group_summary::<Lane, Price, Price>(&mut jobs, &running, progress.sequence, now)
+        .unwrap();
+    assert!(matches!(invalidated.outcome, JobOutcome::Invalidated));
+    let rest = db
+        .query::<Item>()
+        .order_groups(order)
+        .limit(2)
+        .group_page(2, Some(&cursor))
+        .resume_group_summary::<Lane, Price, Price>(&mut jobs, &completed, first.sequence, now)
+        .unwrap();
+    let JobOutcome::Complete(page) = rest.outcome else {
+        panic!("expected remaining groups")
+    };
+    assert!(page.next.is_none());
+    assert_eq!(
+        page.rows.into_iter().map(values).collect::<Vec<_>>(),
+        before[1..]
+    );
+
+    let after = expected();
+    assert_eq!([before[0].0, before[1].0], [1, 0]);
+    assert_eq!([after[0].0, after[1].0], [0, 2]);
+    let fresh = db
+        .query::<Item>()
+        .order_groups(order)
+        .limit(2)
+        .group_summary::<Lane, Price, Price>()
+        .unwrap();
+    assert_eq!(
+        fresh.value.into_iter().map(values).collect::<Vec<_>>(),
+        after
+    );
 }
 
 #[test]

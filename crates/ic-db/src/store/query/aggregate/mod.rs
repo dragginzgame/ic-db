@@ -185,6 +185,14 @@ struct Selection {
 }
 
 impl Selection {
+    fn needs_summary_key(&self, measure: SummaryMeasure) -> bool {
+        matches!(self.order, GroupOrder::Summary(ordered, _) if ordered == measure)
+            || self
+                .predicates
+                .iter()
+                .any(|term| term.measure == Some(measure))
+    }
+
     fn accepts<'a>(&self, key: impl Fn(Option<SummaryMeasure>) -> Option<&'a [u8]>) -> bool {
         self.predicates
             .split_inclusive(|term| !term.or_next)
@@ -401,16 +409,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             &plan,
             Some(Accumulator::Scalar(&mut reducer)),
         )?;
-        let mut output_bytes = 0;
-        let value = reducer
-            .finish()?
-            .into_value()?
-            .map(|bytes| {
-                admit_output(bytes.len(), self.request.bytes, &mut output_bytes)?;
-
-                decode_record(&bytes)
-            })
-            .transpose()?;
+        let (value, output_bytes) = scalar_output(reducer, self.request.bytes)?;
 
         Ok(Aggregate {
             value,
@@ -561,7 +560,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             {
                 return Ok(count);
             }
-            if super::order::select_aggregate_path(E::SCHEMA, &self.request, &mut plan, true)? {
+            if super::order::select_filtered_path(E::SCHEMA, &self.request, &mut plan, true)? {
                 return self.count_keys(&plan);
             }
             if plan.index.is_some()
@@ -691,7 +690,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
         if plan.index.is_none() {
-            super::order::select_aggregate_path(E::SCHEMA, &self.request, plan, false)?;
+            super::order::select_filtered_path(E::SCHEMA, &self.request, plan, false)?;
         }
 
         Ok(())
@@ -722,7 +721,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         )?;
 
         Ok(Aggregate {
-            value: reducer.finish()?.into_count()?,
+            value: reducer.finish(false)?.into_count()?,
             examined: page.examined,
             fetched: page.fetched,
             output_bytes: 8,
@@ -915,6 +914,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 }
 
+fn scalar_output<R: Value>(reducer: Reducer, limit: usize) -> Result<(Option<R>, usize), Error> {
+    let Some(bytes) = reducer.finish(false)?.into_value()? else {
+        return Ok((None, 0));
+    };
+    let mut used = 0;
+    admit_output(bytes.len(), limit, &mut used)?;
+
+    Ok((Some(decode_record(&bytes)?), used))
+}
+
 fn group_output<T>(
     groups: Groups,
     rows: usize,
@@ -923,9 +932,8 @@ fn group_output<T>(
 ) -> Result<(Vec<T>, usize), Error> {
     let mut output_bytes = 0;
     let value = groups
-        .into_output()?
+        .into_output(rows)?
         .into_iter()
-        .take(rows)
         .map(|(key, result)| {
             admit_output(key.len() + result.encoded_len(), bytes, &mut output_bytes)?;
 
@@ -1061,13 +1069,13 @@ impl Reducer {
         }
     }
 
-    fn finish(self) -> Result<Completed, Error> {
+    fn finish(self, needs_numeric_key: bool) -> Result<Completed, Error> {
         match self {
             Self::Keys(_) => Ok(Completed::Key),
             Self::Count { total, .. } => Ok(Completed::Count(total)),
             Self::Distinct { seen, .. } => Ok(Completed::Count(seen.len() as u64)),
             Self::Extremum { selected, .. } => Ok(Completed::Value(selected)),
-            Self::Numeric(state) => state.finish(),
+            Self::Numeric(state) => state.finish(needs_numeric_key),
         }
     }
 
@@ -1249,10 +1257,35 @@ impl Groups {
         Ok(ordered)
     }
 
-    fn into_output(self) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
+    fn into_output(self, limit: usize) -> Result<Vec<(Vec<u8>, Completed)>, Error> {
         // Accumulation has completed. Output filtering cannot relax input/state bounds.
         let mut state_bytes = self.state_bytes;
-        let mut rows = Vec::with_capacity(self.rows.len());
+        let key_order = matches!(
+            self.selection.order,
+            GroupOrder::Key | GroupOrder::KeyDescending
+        );
+        let bounded_rank = !key_order && limit < self.rows.len();
+        let compare = |a: &Completed, b: &Completed| {
+            let (mut sa, mut sb) = ([0; 8], [0; 8]);
+            let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
+            if matches!(
+                self.selection.order,
+                GroupOrder::AggregateDescending
+                    | GroupOrder::Summary(_, super::SortDirection::Descending)
+            ) {
+                order.reverse()
+            } else {
+                order
+            }
+        };
+        let retain = limit.min(self.rows.len());
+        let mut rows = Vec::with_capacity(retain);
+        let mut oldest = 0;
+        let needs_value_key = !self.selection.predicates.is_empty()
+            || matches!(
+                self.selection.order,
+                GroupOrder::AggregateAscending | GroupOrder::AggregateDescending
+            );
         for (record, reducer) in self.rows.into_values() {
             let previous = reducer.retained_bytes();
             let (result, accepted) = if let Some(sum) = self.summary_sum {
@@ -1261,7 +1294,7 @@ impl Groups {
                 };
                 state.finish_summary(sum, &self.selection)?
             } else {
-                let result = reducer.finish()?;
+                let result = reducer.finish(needs_value_key)?;
                 let mut scratch = [0; 8];
                 let key = result.result_key(&mut scratch);
                 let accepted = self.selection.accepts(|_| key);
@@ -1272,28 +1305,31 @@ impl Groups {
                 return Err(Error::Limit);
             }
             if accepted {
-                rows.push((record, result));
+                if bounded_rank {
+                    // Insert after equal values to keep canonical key order across ties.
+                    let position =
+                        rows.partition_point(|(_, value)| !compare(value, &result).is_gt());
+                    if position < retain {
+                        if rows.len() == retain {
+                            rows.pop();
+                        }
+                        rows.insert(position, (record, result));
+                    }
+                } else if rows.len() < retain {
+                    rows.push((record, result));
+                } else if self.selection.order == GroupOrder::KeyDescending {
+                    // The newest qualifying key displaces the smallest retained key.
+                    rows[oldest] = (record, result);
+                    oldest = (oldest + 1) % retain;
+                }
             }
         }
         if self.selection.order == GroupOrder::KeyDescending {
-            // BTreeMap supplied ascending canonical keys; reverse the completed,
-            // filtered rows before any output limit or page is selected.
+            rows.rotate_left(oldest);
             rows.reverse();
-        } else if self.selection.order != GroupOrder::Key {
+        } else if !key_order && !bounded_rank {
             // Stable sorting preserves the map's ascending key order on equal results.
-            rows.sort_by(|(_, a), (_, b)| {
-                let (mut sa, mut sb) = ([0; 8], [0; 8]);
-                let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
-                if matches!(
-                    self.selection.order,
-                    GroupOrder::AggregateDescending
-                        | GroupOrder::Summary(_, super::SortDirection::Descending)
-                ) {
-                    order.reverse()
-                } else {
-                    order
-                }
-            });
+            rows.sort_by(|(_, a), (_, b)| compare(a, b));
         }
 
         Ok(rows)

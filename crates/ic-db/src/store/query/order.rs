@@ -205,9 +205,9 @@ fn prefix_value<'a>(
         .find_map(|(name, value)| (*name == field).then_some(*value))
 }
 
-/// Select the aggregate input path. Predicate coverage saves owner reads only
-/// when the terminal can consume keys alone.
-pub(super) fn select_aggregate_path<'a>(
+/// Select a complete input range before reduction or sorting. Predicate coverage
+/// saves owner reads only when the terminal can consume keys alone.
+pub(super) fn select_filtered_path<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,

@@ -152,7 +152,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
                 expected.iter().map(|r| r.id).collect::<Vec<_>>()
             );
             assert!(page.next.is_none());
-            assert_eq!((page.examined, page.fetched), (8, 8));
+            assert_eq!((page.examined, page.fetched), (6, 6));
             let projected = query().fetch_as::<Summary>().unwrap();
             assert_eq!(
                 projected
@@ -886,7 +886,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
         amounts.rows.iter().map(|r| r.amount).collect::<Vec<_>>(),
         [20, 10]
     );
-    for (category, expected) in [(1_u8, vec![1]), (9, vec![])] {
+    for (category, expected, candidates) in [(1_u8, vec![1], 4), (9, vec![], 0)] {
         let page = db
             .query::<Entry>()
             .filter("category", C::Eq, category)
@@ -898,7 +898,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
             page.rows.iter().map(|r| r.category).collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(page.examined, 8);
+        assert_eq!(page.examined, candidates);
         assert!(page.next.is_none());
     }
     assert!(matches!(

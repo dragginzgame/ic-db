@@ -1633,6 +1633,10 @@ it can be omitted; predicate membership can change. A tie-breaker gives no
 at-most-once identity guarantee. This live behavior is accepted for browsing.
 Exact enumeration, where required, needs a separate explicit contract; resumable
 aggregation must not silently inherit browsing's duplicate/omission behavior.
+For a page and its exact filtered total in one response, execute both terminals
+under one synchronous session read guard. Apply the cursor only to the page.
+The count has its own work budget and can refuse even when the page fits.
+A later request acquires a fresh read boundary for both values.
 Test these cases and schema changes before implementation.
 
 Preferred bounded-scan response: return a possibly empty or partial page with a
@@ -1677,6 +1681,11 @@ the predicate measures and operands, both output contracts and the summary opera
 They checkpoint the existing grouped average's exact total and present count.
 Both synchronous results and completed retained pages use the same group
 finalizer, including range checks on groups beyond the requested page.
+The finalizer encodes a sum or average comparison key only when a group filter
+or ordering uses that measure. Group-key order comes from the accumulated map.
+Scalar sums and averages require only the output record. Single-measure grouped
+sums and averages also encode a comparison key when a result predicate or
+aggregate-value ordering needs one.
 
 ### Constrained resumable aggregation
 
@@ -1865,7 +1874,8 @@ complete 16 KiB job envelope even for a provisional winner. The output budget
 applies only at completion, allowing a smaller final minimum to replace a large
 provisional one. Empty/all-absent input yields `None`; source changes, retry,
 expiry and cancellation use the shared lifecycle. Scalar value finalization and
-save are shared with sum/average.
+save are shared with sum/average. Synchronous and retained scalar value queries
+admit the encoded output size before decoding the caller's result record.
 
 `start_group_min::<KeyRecord, Record>`/`resume_group_min::<KeyRecord, Record>`
 and matching maximum terminals extend the same winner contract to groups.
@@ -1873,7 +1883,9 @@ Persist canonical key-record order, a presence tag and the present winner bytes;
 reconstruct both comparison keys on resume. The outer count records how many
 groups have a winner. All-absent groups remain with `None`; required operands
 cannot restore a winnerless nonempty group. Scalar/grouped winner validation
-shares full presence/value framing checks. Grouping and operand records may
+shares full presence/value framing checks. Restore borrows the winner bytes
+from the checkpoint during validation and copies the validated record into
+the reducer. Grouping and operand records may
 overlap; operation, key, operand and complete selection bind the job. New grouped
 extrema identities preserve all existing payloads and identities. Start/resume
 and output pages share grouped numeric machinery. The 32-group/16 KiB complete
@@ -1896,6 +1908,8 @@ This retains the null-exclusion lesson in frozen IcyDB `6d421e3`'s
 `value_reducer/tests::count_ignores_owned_and_borrowed_nulls` through IC DB's
 existing validated field spans, without a universal value conversion.
 
+All three scalar count terminals use the same job admission, revision check,
+advance and save path. The selected input determines the reducer and job identity.
 Retained scalar DISTINCT counts share synchronous tuple-projection admission and
 the exact comparison-key set. Persist a sorted set of at most 32 keys inside the
 16 KiB whole-job frame, with a separate algorithm identity. On resume,
@@ -3000,9 +3014,16 @@ proof holds, absence in a membership list has no physical entry to probe.
 Without a proof of presence, the query must still count matching absent rows. Frozen IcyDB `6d421e3` also relies on primary-key suffix
 order for fixed secondary prefixes in `db/query/plan/planner/predicate/mod.rs`.
 
-**Bounded complete sorting (0.18).** If automatic path selection cannot supply
-the requested order, the same scanner traverses the primary range and retains
-the best requested 1–32 matching rows. It checks all scanned rows and residual predicates,
+**Bounded complete sorting.** If automatic path selection cannot supply
+the requested order, the scanner retains the best requested 1–32 matching rows.
+Since 0.26.4 the sorter shares filtered input selection with scalar aggregates.
+It may traverse a secondary index whose bounds narrow the input and whose
+membership includes every possible match. The selector preserves primary-key
+range bounds. Each visited secondary entry still requires an owner lookup and
+validation. A broad index range can cost more per candidate than a primary scan.
+This follows the distinction between index access and materialized order in frozen
+IcyDB `6d421e3`'s `materialized_sort_admission.rs`. IC DB's ordinary bounded
+sort accepts that combination. It checks all scanned rows and residual predicates,
 including records after the eventual output limit would have been filled.
 Observe input exhaustion before sorting; reaching the work bound refuses even
 when the last allowed candidate happens to be the final row. Never return a
@@ -3200,6 +3221,8 @@ refuse sooner. The scanner saves no per-key aggregate or frequency.
 After completion, `limit` selects up to 32 keys per page. Retained DISTINCT
 supports canonical ordering via `order_groups(Key)` (the default) or `order_groups(KeyDescending)`.
 Direction binds the job and determines the byte charge order for each page.
+Canonical DISTINCT paging walks the restored map in that direction once,
+moving each returned record into the page after its byte charge fits.
 Both directions read the same canonical checkpoint; the default keeps its
 original binding. `GroupOrder::FirstOccurrence` binds a separate DISTINCT job.
 It keeps the first matching representative in input traversal order (ascending
@@ -3420,8 +3443,7 @@ The stages are input filtering, complete accumulation, group filtering, group
 ordering, output limit and byte admission. Builder call order cannot change these
 stages. Default `GroupOrder::Key` uses ascending canonical keys; `KeyDescending`
 reverses the complete tuple in canonical field-name order, with absence last.
-It reverses the existing completed-group buffer before selecting limits/pages;
-no additional comparator, buffer or execution path is needed. AggregateAscending and
+AggregateAscending and
 AggregateDescending compare completed values and always break ties with ascending
 keys; absent extrema sort first ascending, last descending. The last order call
 wins. Input work and retained group/state caps still apply to groups later excluded;
@@ -3435,6 +3457,17 @@ Only qualifying records and results enter the output buffer. This follows frozen
 IcyDB `6d421e3` at `grouped_fold/generic/page_finalize::push_candidate`. IC DB
 finishes every remaining group even after enough results qualify for the output limit;
 a later overflow still refuses the query.
+For key ordering, the finalizer visits groups in ascending order for the same
+range and resource checks in either direction. It keeps the first qualifying
+groups for ascending output or the last qualifying groups for descending output.
+Both buffers are bounded by the query limit. Retained-job page size selects
+from the ordered result independently.
+For aggregate-value ordering, when the query limit is smaller than the number
+of accumulated groups, the finalizer keeps a sorted buffer of at most that
+limit. Each qualifying group enters after equal-ranked groups, preserving the
+smaller canonical keys across a tie at the cutoff. The 32-group cap bounds
+insertion work. When all groups fit, one stable sort supplies the same order.
+The query limit applies across all pages of a retained result.
 Admitted predicate keys are separately bounded to eight keys of at most 4096
 logical bytes; source literals also retain the row-byte bound before encoding.
 
@@ -5317,7 +5350,8 @@ Read-only investigation on 2026-11-13:
   checkout as obsolete and deleted it. Its schema proposal and consumer-specific
   milestone gates have been removed. GitHub metadata confirms the authorized
   tier-2 source is private `dragginzgame/toko`, default branch `development`.
-  Current remote application contents have not yet been requalified. Future
+  The [ordered listing probe](../../qualification/README.md#ordered-listing-beyond-one-calls-scan-budget)
+  records a subsequent pinned review of one marketplace ordering. Future
   compatibility findings must record the inspected revision; repository access
   alone does not validate the withdrawn local observations.
 

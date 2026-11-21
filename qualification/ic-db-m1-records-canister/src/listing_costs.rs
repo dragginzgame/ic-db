@@ -63,6 +63,37 @@ fn measured_listing(
     ))
 }
 
+// measured_listing_count
+// Time the exact filtered listing total from open through ordinary count.
+// guard  : validates the request frame for method 192.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "measured_listing_count",
+    guard = crate::transport::admit::<192>,
+    decode = crate::transport::decode_measured::<_, 192>,
+    encode = crate::transport::encode::<_, 192>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_listing_count(
+    (work, counter): crate::transport::Measured<u32>,
+) -> (Result<(u64, u32, u32), String>, u64) {
+    let start = counter();
+    let host = runtime();
+    let db = open(&host);
+    let result = db
+        .query::<Document>()
+        .eq(Document::ENTRY_ID, 1_u64)
+        .eq(Document::PUBLISHED, true)
+        .work_limit(work as usize)
+        .count()
+        .map(|a| (a.value, a.examined as u32, a.fetched as u32))
+        .map_err(|e| format!("{e:?}"));
+
+    (result, counter() - start)
+}
+
 // measured_listing_write
 // Time one document write including database open and any caller-side read.
 // guard  : validates the request frame for method 190.
