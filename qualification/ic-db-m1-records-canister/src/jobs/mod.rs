@@ -83,7 +83,7 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
         ),
-        16 => query.start_group_count_distinct::<Category, Amount>(
+        16 | 22 => query.start_group_count_distinct::<Category, Amount>(
             &mut jobs,
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
@@ -258,14 +258,14 @@ fn job_advance(
                 Timestamp::from_millis(now),
             )
             .map(|s| progress(s, |count| Some(count.to_string()))),
-        9 | 16 | 17 => (if operation == 9 {
+        9 | 16 | 17 | 22 => (if operation == 9 {
             query.resume_group_count_distinct::<Category, Category>(
                 &mut jobs,
                 &handle,
                 sequence,
                 Timestamp::from_millis(now),
             )
-        } else if operation == 16 {
+        } else if matches!(operation, 16 | 22) {
             query.resume_group_count_distinct::<Category, Amount>(
                 &mut jobs,
                 &handle,
@@ -612,6 +612,12 @@ fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
         query
             .filter_groups_any(&[(Comparison::Ge, 2_u64.into())])
             .order_groups(GroupOrder::AggregateDescending)
+    } else if operation == 22 {
+        query
+            .filter(Entry::AMOUNT, Comparison::Ne, 999_u64)
+            .filter_groups(Comparison::Ge, 3_u64)
+            .order_groups(GroupOrder::AggregateDescending)
+            .limit(3)
     } else if operation == 14 {
         query.filter_groups_any(&[
             (Comparison::Eq, 0_u64.into()),

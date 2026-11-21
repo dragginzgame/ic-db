@@ -110,19 +110,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         observe!(query, {
             let (mut plan, initial, sum) = self.summary_plan::<K, S, A>()?;
             super::super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
-            let (groups, page) = self.grouped(&plan, initial, Some(sum))?;
-            let (value, output_bytes) = super::group_output(
-                groups,
-                self.request.rows,
-                self.request.bytes,
+            super::group_output(
+                self.grouped(&plan, initial, Some(sum))?,
+                &self.request,
                 decode_summary,
-            )?;
-            Ok(Aggregate {
-                value,
-                output_bytes,
-                examined: page.examined,
-                fetched: page.fetched,
-            })
+            )
         })
     }
 

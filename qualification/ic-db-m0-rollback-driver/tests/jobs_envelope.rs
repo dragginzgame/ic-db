@@ -898,3 +898,85 @@ async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
     cancel(&handle).await;
     owned.drop().await;
 }
+
+#[tokio::test]
+async fn ranked_distinct_counts_match_sqlite_across_upgrade() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-job-envelope"))
+            .unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let sql = rusqlite::Connection::open_in_memory().unwrap();
+    sql.execute("CREATE TABLE offers (category INTEGER, amount INTEGER)", [])
+        .unwrap();
+    for id in 1_u32..=128 {
+        let category = id % 8;
+        let amount = if id % 9 == 0 {
+            999
+        } else {
+            (id / 8) % (1 + category / 2)
+        };
+        sql.execute("INSERT INTO offers VALUES (?, ?)", [category, amount])
+            .unwrap();
+        call::<Result<(), u8>>(
+            &pic,
+            canister,
+            "write",
+            4,
+            &(
+                u64::from(id),
+                u64::from(category),
+                u64::from(amount),
+                u8::from(id > 6),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let expected = sql
+        .prepare(
+            "SELECT category, COUNT(DISTINCT amount) AS n FROM offers WHERE amount != 999
+         GROUP BY category HAVING COUNT(DISTINCT amount) >= 3 ORDER BY n DESC, category LIMIT 3",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok(format!("{}:{}", r.get::<_, u32>(0)?, r.get::<_, u32>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .join(",");
+    assert_eq!(expected, "6:4,7:4,4:3");
+
+    let handle = call::<Result<Vec<u8>, String>>(
+        &pic,
+        canister,
+        "job_start",
+        110,
+        &(22_u8, 0_i64, 100_i64, 0_u64),
+    )
+    .await
+    .unwrap();
+    let mut sequence = 0;
+    for call_number in 1..=19 {
+        let step = advance(&pic, canister, &handle, 22, sequence, 7)
+            .await
+            .unwrap();
+        sequence = step.0;
+        assert_eq!(step.2, (call_number * 7).min(128));
+        if call_number == 19 {
+            assert_eq!((step.4, step.5.as_deref()), (1, Some(expected.as_str())));
+        } else {
+            assert_eq!((step.4, step.5), (0, None));
+        }
+        if call_number == 9 {
+            upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
+    }
+    pic.drop().await;
+}

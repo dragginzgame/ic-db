@@ -25,7 +25,8 @@ pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &
         .index
         .map_or(&[][..], |index| &index.fields[..plan.fixed_components]);
     let mut fields = 0;
-    for position in super::order::literal_equalities(entity, request)
+    for position in request
+        .fixed_equalities(entity)
         .map(|(name, _)| name)
         .chain(prefix.iter().copied())
         .filter_map(|name| entity.field_position(name))

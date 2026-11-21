@@ -1788,13 +1788,15 @@ per job; no spill, new allocation or job interpreter is introduced.
 
 For a projection whose access path orders by the distinct key, product
 `.distinct()` suppresses adjacent equal keys across pages without a retained
-seen-set, following the earlier M0 witness. Predicates must be constant within
-each duplicate class. Prefer that direct path when its proof holds; it does not
+seen-set, following the earlier M0 witness. Residual predicates may vary within a duplicate class. The cursor records whether
+a qualifying row in the current class has already been emitted. Prefer that direct path when its proof holds; it does not
 remove the need for bounded retained keys or full collection for other admitted
 DISTINCT shapes. The product also admits a bounded complete collection for ordered
 projections whose duplicates are not provably adjacent, including varying filters.
 It preserves first-match traversal order, returns no cursor and refuses rather
-than returning partial output. Larger paginated/resumable output remains work.
+than returning partial output. For scattered duplicates across calls, retained DISTINCT can accumulate up to
+255 tuples within its 16 KiB job frame and page the completed keys. The separate
+exact DISTINCT count retains at most 32 keys.
 Live ordered enumeration
 still does not establish a frozen input for an exact count or aggregate.
 
@@ -2818,6 +2820,9 @@ continuation. This retains IcyDB `6d421e3`'s equality and duplicate-result lesso
 from `db/predicate/normalize/tests/owned_membership.rs`, without its sorting,
 deduplication or canonical membership representation. Both fluent methods share
 clause construction; no temporary member collection or new execution path is needed.
+An OR branch on Text or Blob byte length can supply an interval endpoint
+when its bound proves the present empty value. Every branch must identify an
+exact value on the same component for this interval to apply.
 For counts, when both ends of the selected membership interval encode the same
 value, every index entry in the interval proves the clause, including tied
 owners of a record-member value. On a secondary index with a fixed-width
@@ -3125,7 +3130,9 @@ bytes encode the owner primary key. A comparison on that ID tightens the
 physical range, including strict last-ID boundaries in either direction.
 A fully covered count can count those keys directly. With a fixed non-unique
 index prefix covering all declared fields, an ID membership list supplies the
-remaining owner suffix. The existing point-count path probes each distinct
+remaining owner suffix. When only the final declared component remains and it
+is the primary key, the same ID supplies both that component and the appended
+owner suffix. Both copies count toward the physical key-size bound. The existing point-count path probes each distinct
 complete key within budget, including misses for IDs under other prefixes. A synchronous aggregate
 with additional row predicates can still use the prefix when it preserves every usable primary-key bound.
 An individual ID alternative supplies no independent bound; an all-ID literal equality clause can bound the interval as a whole. The scanner checks remaining predicates on each visited owner.
@@ -3424,6 +3431,8 @@ Synchronous `exists()` returns `Aggregate<bool>` using the same admitted path an
 scanner. It validates each examined row/index and stops at the first match,
 including for a list of complete primary or secondary keys. When the distinct
 candidate keys fit the work budget, it probes them in physical key order.
+Before fetching owners for unresolved predicates, point probes apply the same
+contradiction check as range scans. An impossible required clause costs no probes.
 A missing key spends one probe and fetches no owner. An index hit requires owner
 validation even when the key alone satisfies the filters. If the list exceeds
 the probe budget, the range scan can still find a match on the final allowed
@@ -3440,7 +3449,7 @@ inspect later rows after a match. The result occupies one logical byte. Output
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
 every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field if it preserves the available primary-key restrictions. A presence test on the required primary key or an inclusive comparison at a proven physical domain extreme imposes no restriction to preserve. For a row scan the same holds for an ID membership interval spanning both proven domain extremes. Membership still filters every candidate. Terminals supporting individual ID probes preserve that access path. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. The same rule applies when the smallest and largest membership operands span the entire component and trailing keys require an interval scan. For required Booleans the encoded endpoints are 0 and 1. For required unit enums they are zero and the last ordinal in canonical variant-name order. An interval spanning those endpoints covers the full domain, even when the membership filter excludes interior values. An ordinary optional index starts with absence. A membership interval from absence to a proven greatest present value covers that index, while an interval starting at the first present variant skips absence. An admitted present-only index already excludes absent entries, so a full present range can serve as a fallback. A narrower range ranks ahead of it with equal coverage and fixed prefix. For Text and Blob, an empty prefix and an inclusive lower bound of empty both test presence. Neither narrows a required field. A strict upper bound of empty matches no row, including when the field is absent. A Boolean range admitting one present value fixes the component for ordering, DISTINCT and prefix selection. Inequality against a Boolean literal fixes its opposite when the field and its parent are required. An absent optional field also satisfies that inequality. Boolean bounds below false or above true exclude all rows. Inclusive bounds covering both values prove presence and can use maintained counts on required fields. An inclusive upper bound of empty fixes the field to its present empty value for prefix selection and contradiction checks. Membership on a complete physical key gets a point-probe preference only for terminals that can execute those probes. Field counts, grouping, DISTINCT reductions and bounded sorting rank their actual scan intervals. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
+prefix or a mandatory range on the first index field if it preserves the available primary-key restrictions. A presence test on the required primary key or an inclusive comparison at a proven physical domain extreme imposes no restriction to preserve. For a row scan the same holds for an ID membership interval spanning both proven domain extremes. Membership still filters every candidate. Terminals supporting individual ID probes preserve that access path. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. The same rule applies when the smallest and largest membership operands span the entire component and trailing keys require an interval scan. For required Booleans the encoded endpoints are 0 and 1. For required unit enums they are zero and the last ordinal in canonical variant-name order. An interval spanning those endpoints covers the full domain, even when the membership filter excludes interior values. An ordinary optional index starts with absence. A membership interval from absence to a proven greatest present value covers that index, while an interval starting at the first present variant skips absence. An admitted present-only index already excludes absent entries, so a full present range can serve as a fallback. A narrower range ranks ahead of it with equal coverage and fixed prefix. On Text and Blob, byte length equal to zero, at most zero, or less than one fixes the indexed value to the present empty string or blob. Collection length filters retain their existing row semantics. For Text and Blob, an empty prefix and an inclusive lower bound of empty both test presence. Neither narrows a required field. A strict upper bound of empty matches no row, including when the field is absent. A Boolean range admitting one present value fixes the component for ordering, DISTINCT and prefix selection. Inequality against a Boolean literal fixes its opposite when the field and its parent are required. An absent optional field also satisfies that inequality. Boolean bounds below false or above true exclude all rows. Inclusive bounds covering both values prove presence and can use maintained counts on required fields. An inclusive upper bound of empty fixes the field to its present empty value for prefix selection and contradiction checks. Membership on a complete physical key gets a point-probe preference only for terminals that can execute those probes. Field counts, grouping, DISTINCT reductions and bounded sorting rank their actual scan intervals. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
 residual predicates in `db/query/plan/planner/index_select/mod.rs`. An existence check on an index hit
 fetches and validates its owner. An empty prefix range returns false

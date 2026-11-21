@@ -389,6 +389,7 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
 | Added reachable entity size | 4,191 raw bytes per added entity from 1 to 8 and 4,496 from 8 to 32 in the 0.26.7 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0267-worktree) |
+| ID membership and indexed empty Text | Six matched handler costs on 0.26.10 and the 0.26.11 candidate | Release-to-release comparison | Early existence costs 17.1% more, late existence costs 33.8% less. [Filter costs](#filter-costs-before-02611) |
 | Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,676 of 1,908 successful pairs. The median paired ratio was 0.384. | Owner-validated prefix counts reached 31.39× legacy. This workload uses three Nat64 fields. [Planner checkpoint](#planner-checkpoint-after-0269) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
@@ -3245,6 +3246,46 @@ to IDs. Transport encoding and decoding are outside the counter. The runner
 saves the Wasm, build information and output in `target/evidence/ranked-listing`
 under the qualification workspace.
 
+### Filter costs before 0.26.11
+
+The v0.26.10 engine and 0.26.11 candidate ran the same release-profile
+qualification host, locked dependencies, fixture and driver on PocketIC.
+The driver checks the answers and stable backing. Instructions cover database
+open and execution inside each handler. Transport and installation are outside
+the counter. Run `make m2-filter-costs` to repeat the candidate cases.
+
+| Workload | v0.26.10 instructions | Candidate instructions | Change | Examined / fetched, old → new |
+| --- | ---: | ---: | ---: | --- |
+| ID list, count two matches | 519,982 | 530,280 | +2.0% | 3 / 3 → 5 / 0 |
+| ID list, first match early | 353,058 | 413,530 | +17.1% | 1 / 1 → 2 / 1 |
+| ID list, count one late match | 1,117,116 | 594,000 | −46.8% | 8 / 8 → 5 / 0 |
+| ID list, first match late | 1,108,057 | 733,179 | −33.8% | 8 / 8 → 5 / 1 |
+| Two empty titles among eight published documents | 981,010 | 306,570 | −68.8% | 8 / 8 → 2 / 0 |
+| Ordinary validated amount scan, four matches | 339,206 | 339,191 | −0.004% | 6 / 6 → 6 / 6 |
+
+Both ID fixtures supply the same five IDs against a fixed category on
+`(category, id)`. An absent ID costs a probe. The earlier scan can find a row
+on its first visit, while the candidate tests the missing ID zero first. The
+late-hit fixture has seven index entries before the first matching ID. Direct
+probes bound work by list length even as more intervening rows enter the index.
+
+| Matched host | v0.26.10 Wasm / code bytes | Candidate Wasm / code bytes |
+| --- | ---: | ---: |
+| Broad query matrix | 388,017 / 358,951 | 389,686 / 360,488 |
+| Records host with filter measurements | 1,221,419 / 1,160,453 | 1,214,805 / 1,153,675 |
+
+Both versions used the same source directory for the size comparison, with
+the current measurement host held fixed and the engine selected independently.
+These are uncompressed whole-host sizes. Local Wasm and focused logs are in
+`qualification/target/evidence/filter-costs-02611`.
+
+The full matrix checked 2,340 IC DB reads per build across balanced and skewed
+32-, 128- and 511-row fixtures, before and after upgrade. All outcomes agreed.
+Candidate instruction changes ranged from -0.094% to +0.054%,
+with a median of +0.011%. All 2,340 frozen IcyDB instruction counts
+repeated exactly. The paired CSVs are in `query-matrix-02611-control` and
+`query-matrix-02611-matched` under the same evidence directory.
+
 ### Planner checkpoint after 0.26.9
 
 On 2026-11-21 the unreleased planner and tagged IC DB v0.26.9 each ran the
@@ -5515,9 +5556,24 @@ runs through `make m2-queries`. The qualification-only crate seeds an in-memory
 SQLite database and IC DB with the same rows. SQLite is bundled with the test
 crate and introduces no product or CLI dependency.
 
+- Rank lanes by their count of distinct visible rank/price pairs across 128 rows.
+  Include absent prices, require six distinct offers, and break count ties by lane.
+  Compare the top three with SQLite in one call and in seven-candidate steps.
+  Each retained result page contains one completed group.
+- The installed-Wasm companion in `make m2-job-envelope` ranks categories by
+  distinct numeric amounts on a separate 128-row fixture. It upgrades to the
+  same executable after row 63 and checks the top three against SQLite at row
+  128. In PocketIC, the first advance after upgrade used 2,233,805 instructions
+  and 9,321,934 cycles. The other 18 advances used 992,614–1,071,545
+  instructions and 8,080,103–8,159,333 cycles each. These are advance calls
+  only. Installation, upgrade, seeding and job creation are outside the figures.
 - Move a priced row between groups so a different group enters the top two by sum while two summary jobs share the source.
   Compare the completed job’s pages with SQLite before the move and a fresh
   query with SQLite after it. The partially scanned job must invalidate.
+- Check existence and counts for a list of IDs containing a duplicate, a missing ID,
+  and a visible row replaced by another ID in one batch. Compare with SQLite
+  after commit, after a refused write, and after reopen. A one-candidate scan
+  may prove existence on its first match. An unresolved scan must return a work-limit error.
 - Compare automatic whole-entity, category and sparse-index counts before and
   after a mixed write batch, a refused batch and reopen. Check individual keys
   when one row releases a prefix and another enters it at the same price.

@@ -156,6 +156,20 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     drop(db);
     let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
     assert_eq!(db.page::<E>(None, 32).unwrap().rows, rows);
+    // The raw-key oracle above checked both copies of each owner ID. Probe
+    // those same entries through the fluent API after reopening the store.
+    let candidates = [ids[last], ids[0], ids[last]];
+    for &target in &[ids[0], ids[1]] {
+        let prefix = [target.into()];
+        let count = db
+            .query::<E>()
+            .using_index("next,id", &prefix)
+            .filter_in(E::SCHEMA.primary_key, &candidates)
+            .work_limit(2)
+            .count_validated()
+            .unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (1, 2, 1));
+    }
     assert_eq!(
         db.index_prefix::<E>("rank", &[0_u64.into()], 1).unwrap()[0].key(),
         ids[last]
@@ -379,6 +393,30 @@ fn account_default_alias_is_one_primary_and_reference_identity() {
     let mut b = Batch::new();
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
+    let zone = [true.into()];
+    for explicit in [true, false] {
+        let query = || {
+            let q = db
+                .query::<AccountRow>()
+                .filter_in(AccountRow::ID, &[absent, zero])
+                .work_limit(1);
+            if explicit {
+                q.using_index("zone,id", &zone)
+            } else {
+                q.eq(AccountRow::ZONE, true)
+            }
+        };
+        let count = query().count().unwrap();
+        assert_eq!((count.value, count.examined), (1, 1));
+        if explicit {
+            assert_eq!(count.fetched, 0);
+        }
+        let checked = query().count_validated().unwrap();
+        assert_eq!(
+            (checked.value, checked.examined, checked.fetched),
+            (1, 1, 1)
+        );
+    }
     assert_eq!(db.get::<AccountRow>(zero).unwrap(), Some(row.clone()));
     let saved = db.get::<AccountRow>(absent).unwrap().unwrap();
     assert_eq!(saved.id.subaccount, None);

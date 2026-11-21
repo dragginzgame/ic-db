@@ -36,6 +36,48 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         .await
         .unwrap();
     }
+    // An exact count retains 32 keys. Its 33rd distinct value must allow
+    // cancellation at the previous checkpoint and a fresh enumeration.
+    let count: Selection = (
+        "Entry".into(),
+        "distinct-count:amount".into(),
+        (None, None, None),
+        32,
+        (None, None),
+        None,
+        RowFilters::default(),
+        Default::default(),
+    );
+    let refused = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &count)
+        .await
+        .unwrap();
+    let advance_count = async |sequence: u64, work: u32| {
+        call::<Result<Step, String>>(
+            pic,
+            canister,
+            "aggregate_resume",
+            121,
+            &(
+                &count,
+                &refused,
+                sequence,
+                work,
+                4096_u32,
+                1_u32,
+                None::<Vec<u8>>,
+            ),
+        )
+        .await
+    };
+    let prefix = advance_count(0, 32).await.unwrap();
+    assert_eq!((prefix.1.as_str(), prefix.2), ("Running", 32));
+    assert!(prefix.5.1.is_empty());
+    let checkpoint = pic.get_stable_memory(canister).await;
+    assert_eq!(advance_count(prefix.0, 1).await.unwrap_err(), "Limit");
+    assert_eq!(pic.get_stable_memory(canister).await, checkpoint);
+    call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &refused)
+        .await
+        .unwrap();
     for (order, reverse_input) in [
         (None, false),
         (Some("key-desc"), false),
@@ -60,6 +102,14 @@ async fn distinct_keys_page_past_32_after_upgrade() {
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
                 .unwrap();
+        if order.is_none() {
+            assert_eq!(
+                call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &refused)
+                    .await
+                    .unwrap_err(),
+                "InvalidJob"
+            );
+        }
         let mut sequence = 0_u64;
         let mut cursor = None::<Vec<u8>>;
         let mut output = Vec::new();
@@ -121,6 +171,9 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         }
         assert_eq!(output, expected);
         assert!(cursor.is_none());
+        call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
+            .await
+            .unwrap();
     }
     owned.drop().await;
 }
@@ -320,8 +373,16 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
         .unwrap();
     }
     for (select, expected) in [
-        ("category,count", "128"),
-        ("category,distinct-count:amount", "32"),
+        ("category,count", vec![vec!["0", "128"], vec!["1", "128"]]),
+        (
+            "category,distinct-count:amount",
+            vec![vec!["0", "32"], vec!["1", "32"]],
+        ),
+        ("distinct-count:category", vec![vec!["2"]]),
+        (
+            "category,distinct-count:category",
+            vec![vec!["0", "1"], vec!["1", "1"]],
+        ),
     ] {
         let selection: Selection = (
             "Entry".into(),
@@ -365,7 +426,7 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
                 assert!(step.5.1.is_empty());
             } else {
                 assert_eq!((step.1.as_str(), step.2), ("Complete", 256));
-                assert_eq!(step.5.1, [["0", expected], ["1", expected]]);
+                assert_eq!(step.5.1, expected);
                 assert!(step.5.2.is_none());
             }
         }

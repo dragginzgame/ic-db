@@ -85,6 +85,18 @@ fn bound_operand<'a>(
     if secondary && term.tests_presence && entity.fields[term.position].optional {
         return Ok((prefix_len < crate::MAX_INDEX_KEY_BYTES).then_some((Comparison::Ge, &[1])));
     }
+    if let TermOperand::Length { member, threshold } = &term.operand {
+        let field = member.map_or(&entity.fields[term.position], |m| m.field());
+        if term
+            .comparison
+            .empty_length_value(*threshold, field.value)
+            .is_some()
+        {
+            let key = crate::key::empty_bytes_component(field.optional);
+            return Ok((prefix_len + key.len() <= crate::MAX_INDEX_KEY_BYTES)
+                .then_some((Comparison::Eq, key)));
+        }
+    }
     let Some((bytes, _)) = literal(term) else {
         return Ok(None);
     };
@@ -92,7 +104,7 @@ fn bound_operand<'a>(
         Comparison::Eq | Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => bytes,
         // Drop the terminator but retain escaping and the optional-present tag.
         Comparison::StartsWith if secondary => {
-            bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
+            crate::key::bytes_prefix(bytes).ok_or(Error::InvalidQuery)?
         }
         _ => return Ok(None),
     };
@@ -249,7 +261,7 @@ pub(super) fn has_secondary_bound(
     })
 }
 
-// A disjunction of literal equalities on one key component fits one inclusive scan between
+// A disjunction of exact values on one key component fits one inclusive scan between
 // its extrema. The original predicate still rejects every gap in that scan.
 fn membership_interval<'a>(
     entity: &EntitySchema,
@@ -258,14 +270,11 @@ fn membership_interval<'a>(
     prefix_len: usize,
 ) -> Option<(&'a [u8], &'a [u8])> {
     let mut operands = clause.iter().map(|term| {
-        if matches_field(entity, term, field) && term.comparison == Comparison::Eq {
-            bound_operand(entity, term, false, prefix_len)
-                .ok()
-                .flatten()
-                .map(|(_, bytes)| bytes)
-        } else {
-            None
+        if !matches_field(entity, term, field) {
+            return None;
         }
+        let (comparison, bytes) = bound_operand(entity, term, false, prefix_len).ok()??;
+        (comparison == Comparison::Eq).then_some(bytes)
     });
     let mut low = operands.next()??;
     let mut high = low;
@@ -276,109 +285,6 @@ fn membership_interval<'a>(
     }
 
     Some((low, high))
-}
-
-// Membership on the last component of a physical key supplies all possible keys. Other
-// key-only clauses can narrow that set before we spend any storage probes.
-pub(super) fn point_members<'a>(
-    entity: &EntitySchema,
-    plan: &'a Plan<'_>,
-    request: &Request<'_>,
-    allow_row_checks: bool,
-) -> Option<impl ExactSizeIterator<Item = (&'a [u8], bool)>> {
-    if plan.terms.len() < 2 {
-        return None;
-    }
-    let position = match plan.index {
-        None => plan.primary,
-        Some(index) if index.is_unique_lookup(plan.fixed_components + 1) => {
-            entity.field_position(index.fields[plan.fixed_components])?
-        }
-        // Non-unique indexes append the owner ID after all declared components.
-        Some(index) if !index.unique && plan.fixed_components == index.fields.len() => plan.primary,
-        Some(_) => return None,
-    };
-    let field = entity.fields[position].name;
-    let (seed_index, (seed, literals)) =
-        plan.clauses()
-            .zip(request.clauses())
-            .enumerate()
-            .find(|(_, (clause, _))| {
-                clause.len() > 1
-                    && clause.iter().all(|term| {
-                        term.position == position
-                            && term.comparison == Comparison::Eq
-                            && matches!(term.operand, TermOperand::Literal { .. })
-                    })
-            })?;
-    let mut members = Vec::new();
-    for (term, predicate) in seed.iter().zip(literals) {
-        let (key, absent) = literal(term)?;
-        if absent {
-            // An admitted present-only index has no physical key for absence.
-            plan.index.filter(|index| index.present_only)?;
-            continue;
-        }
-        // This is an exact, complete key. One too large to store cannot match.
-        if plan.prefix.len() + key.len() > crate::MAX_INDEX_KEY_BYTES {
-            continue;
-        }
-        let super::QueryOperand::Literal(value) = &predicate.operand else {
-            return None;
-        };
-        // Keep physical key order so existence stops at the same first candidate as a scan.
-        if let Err(at) = members.binary_search_by_key(&key, |&(existing, _, _)| existing) {
-            members.insert(at, (key, value, false));
-        }
-    }
-    for (i, (clause, terms)) in request.clauses().zip(plan.clauses()).enumerate() {
-        if i == seed_index {
-            continue;
-        }
-        members.retain_mut(|(key, value, unresolved)| {
-            let lookup = |name: &str| {
-                if name == field {
-                    Some(**value)
-                } else {
-                    super::order::fixed_prefix_value(entity, request, plan, name)
-                }
-            };
-            let mut needs_row = false;
-            for (predicate, term) in clause.iter().zip(terms) {
-                // Same-field literal bounds already have the candidate's key framing.
-                let result = if term.position == position
-                    && term.comparison.is_relational()
-                    && let TermOperand::Literal { bytes, absent } = &term.operand
-                {
-                    Some(term.comparison.accepts(
-                        Some(key),
-                        (!absent).then_some(bytes.as_slice()),
-                        entity.fields[position].optional,
-                    ))
-                } else {
-                    super::order::fixed_comparison(entity, predicate, &lookup)
-                };
-                match result {
-                    Some(true) => return true,
-                    Some(false) => {}
-                    None => needs_row = true,
-                }
-            }
-            // A later mandatory clause may still exclude a candidate that needs its row.
-            *unresolved |= needs_row;
-            needs_row
-        });
-    }
-    if members.len() > request.work
-        || (!allow_row_checks && members.iter().any(|(_, _, unresolved)| *unresolved))
-    {
-        return None;
-    }
-    Some(
-        members
-            .into_iter()
-            .map(|(key, _, unresolved)| (key, unresolved)),
-    )
 }
 
 // A secondary candidate must retain every restriction the primary scan could seek.
@@ -445,21 +351,23 @@ pub(super) fn bounds(
         }
     };
     if let Some((field, secondary)) = next_field(entity, plan.index, plan.fixed_components) {
+        // A secondary component can precede more fields or an owner suffix. Its end
+        // is the successor of the whole prefix; a primary key ends at the key itself.
+        let component_key = |operand: &[u8], after: bool| {
+            let bytes = [plan.prefix.as_slice(), operand].concat();
+            StoreKey::new(if after && secondary {
+                successor(bytes)?
+            } else {
+                bytes
+            })
+        };
         for clause in plan.clauses() {
             let [term] = clause else {
                 if let Some((low, high)) =
                     membership_interval(entity, field, clause, plan.prefix.len())
                 {
-                    lower.tighten(
-                        StoreKey::new([plan.prefix.as_slice(), low].concat())?,
-                        true,
-                        Ordering::Greater,
-                    );
-                    // Secondary components can have trailing fields and owner IDs.
-                    // Stop after all keys sharing the greatest member's prefix.
-                    let end = [plan.prefix.as_slice(), high].concat();
-                    let end = if secondary { successor(end)? } else { end };
-                    upper.tighten(StoreKey::new(end)?, !secondary, Ordering::Less);
+                    lower.tighten(component_key(low, false)?, true, Ordering::Greater);
+                    upper.tighten(component_key(high, true)?, !secondary, Ordering::Less);
                 }
                 continue;
             };
@@ -471,39 +379,32 @@ pub(super) fn bounds(
             else {
                 continue;
             };
-            let mut bytes = plan.prefix.clone();
-            bytes.extend_from_slice(operand);
-            let end = if secondary
-                && matches!(
-                    comparison,
-                    Comparison::Eq | Comparison::Gt | Comparison::Le | Comparison::StartsWith
-                ) {
-                successor(bytes.clone())?
-            } else {
-                bytes.clone()
-            };
-            let key = StoreKey::new(bytes)?;
-            let end = StoreKey::new(end)?;
             // Less-than predicates require presence too. Their upper bound alone
             // would include the optional absent component (00) before present (01).
             if secondary
                 && entity.fields[term.position].optional
                 && matches!(comparison, Comparison::Lt | Comparison::Le)
             {
-                let mut present = plan.prefix.clone();
-                present.push(1);
-                lower.tighten(StoreKey::new(present)?, true, Ordering::Greater);
+                lower.tighten(component_key(&[1], false)?, true, Ordering::Greater);
             }
 
             match comparison {
                 Comparison::Eq | Comparison::StartsWith => {
-                    lower.tighten(key, true, Ordering::Greater);
-                    upper.tighten(end, !secondary, Ordering::Less);
+                    lower.tighten(component_key(operand, false)?, true, Ordering::Greater);
+                    upper.tighten(component_key(operand, true)?, !secondary, Ordering::Less);
                 }
-                Comparison::Gt => lower.tighten(end, secondary, Ordering::Greater),
-                Comparison::Ge => lower.tighten(key, true, Ordering::Greater),
-                Comparison::Lt => upper.tighten(key, false, Ordering::Less),
-                Comparison::Le => upper.tighten(end, !secondary, Ordering::Less),
+                Comparison::Gt => {
+                    lower.tighten(component_key(operand, true)?, secondary, Ordering::Greater)
+                }
+                Comparison::Ge => {
+                    lower.tighten(component_key(operand, false)?, true, Ordering::Greater)
+                }
+                Comparison::Lt => {
+                    upper.tighten(component_key(operand, false)?, false, Ordering::Less)
+                }
+                Comparison::Le => {
+                    upper.tighten(component_key(operand, true)?, !secondary, Ordering::Less)
+                }
                 _ => {}
             }
         }

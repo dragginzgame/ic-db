@@ -565,6 +565,128 @@ fn grouped_decimal_averages_agree_across_reopen_and_work_limits() {
 }
 
 #[test]
+fn top_lanes_by_distinct_visible_offers_match_sqlite_across_checkpoints() {
+    let (sql, host) = fixture();
+    let mut db = open(&host);
+    // Extend the 13-item fixture to 128. Visible offers repeat across chunks;
+    // hidden offers have a separate price that would inflate the counts.
+    for start in (14_u32..=128).step_by(16) {
+        let mut batch = Batch::new();
+        for id in start..=(start + 15).min(128) {
+            let lane = (id % 6) as u8;
+            let rank = ((id / 6) % u32::from(1 + lane / 2)) as u8;
+            let visible = id % 7 != 0;
+            let cents = if !visible {
+                Some(999_i64)
+            } else if lane == 0 {
+                None
+            } else {
+                [None, Some(125), Some(250)][(id / 18 % 3) as usize]
+            };
+            sql.execute(
+                "INSERT INTO items VALUES (?,?,?,?,?)",
+                params![id, lane, rank, visible, cents],
+            )
+            .unwrap();
+            batch
+                .insert(&Item {
+                    id: u64::from(id),
+                    lane,
+                    rank,
+                    visible,
+                    price: cents.map(|n| Decimal::try_new(i128::from(n), 2).unwrap()),
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+
+    let expected = sql
+        .prepare(
+            "WITH offers AS (SELECT DISTINCT lane, rank, cents FROM items WHERE visible)
+         SELECT lane, COUNT(*) AS n FROM offers GROUP BY lane HAVING COUNT(*) >= 6
+         ORDER BY n DESC, lane ASC LIMIT 3",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get::<_, u8>(0)?, u64::from(r.get::<_, u32>(1)?)))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(expected, [(4, 9), (5, 9), (2, 6)]);
+    let query = || {
+        db.query::<Item>()
+            .eq(Item::VISIBLE, true)
+            .filter_groups(Comparison::Ge, 6_u64)
+            .order_groups(GroupOrder::AggregateDescending)
+            .limit(3)
+    };
+    let values = |g: ic_db::GroupCount<Lane>| (g.key.lane, g.count);
+    let sync = query()
+        .work_limit(129)
+        .group_count_distinct::<Lane, RankedPrice>()
+        .unwrap();
+    assert_eq!(
+        sync.value.into_iter().map(values).collect::<Vec<_>>(),
+        expected
+    );
+    assert!(matches!(
+        query()
+            .work_limit(7)
+            .group_count_distinct::<Lane, RankedPrice>(),
+        Err(Error::Limit)
+    ));
+
+    let mut jobs = AggregateJobs::open(
+        host.open_memory(&StableKey::parse("test.jobs.v1").unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let now = Timestamp::from_millis(0);
+    let handle = query()
+        .start_group_count_distinct::<Lane, RankedPrice>(
+            &mut jobs,
+            now,
+            Timestamp::from_millis(100),
+        )
+        .unwrap();
+    let mut cursor = None;
+    let mut sequence = 0;
+    let mut examined = 0;
+    let mut output = Vec::new();
+    loop {
+        let step = query()
+            .work_limit(7)
+            .group_page(1, cursor.as_ref())
+            .resume_group_count_distinct::<Lane, RankedPrice>(&mut jobs, &handle, sequence, now)
+            .unwrap();
+        assert!((examined..=examined + 7).contains(&step.examined));
+        sequence = step.sequence;
+        match step.outcome {
+            JobOutcome::Running => {
+                assert!(cursor.is_none() && step.examined > examined && step.examined <= 128);
+                assert_eq!(step.output_bytes, 0);
+            }
+            JobOutcome::Complete(page) => {
+                assert_eq!(step.examined, 128);
+                assert_eq!(page.rows.len(), 1);
+                output.extend(page.rows.into_iter().map(values));
+                assert_eq!(output, expected[..output.len()]);
+                cursor = page.next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            _ => panic!("unchanged listing fixture must complete"),
+        }
+        examined = step.examined;
+    }
+    assert_eq!(output, expected);
+    jobs.cancel(&handle).unwrap();
+}
+
+#[test]
 fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
     use ic_db::{SortDirection, SummaryMeasure};
     let (sql, host) = fixture();
@@ -941,6 +1063,53 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
     let mut db = open(&host);
     let price = Decimal::try_new(125, 2).unwrap();
     let check = |db: &Database| {
+        // The batch below deletes 9 and inserts 14. Missing 30 and repeated 9
+        // exercise both the complete key probes and the smaller-budget scan.
+        let candidates = [30_u64, 14, 9, 9];
+        let first_present: u32 = sql
+            .query_row("SELECT MIN(id) FROM items WHERE id IN (9,14,30)", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for visible in [true, false] {
+            let expected: u32 = sql
+                .query_row(
+                    "SELECT COUNT(*) FROM items WHERE id IN (9,14,30) AND visible=?1",
+                    [visible],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let query = || {
+                db.query::<Item>()
+                    .filter_in(Item::ID, &candidates)
+                    .eq(Item::VISIBLE, visible)
+            };
+            let found = query().work_limit(3).exists().unwrap();
+            let probes = if expected == 0 {
+                3
+            } else if first_present == 9 {
+                1
+            } else {
+                2
+            };
+            assert_eq!(
+                (found.value, found.examined, found.fetched),
+                (expected > 0, probes, 1)
+            );
+            let count = query().work_limit(3).count().unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (u64::from(expected), 3, 1)
+            );
+            assert!(matches!(query().work_limit(1).count(), Err(Error::Limit)));
+            let bounded = query().work_limit(1).exists();
+            if visible && first_present == 9 {
+                let hit = bounded.unwrap();
+                assert_eq!((hit.value, hit.examined, hit.fetched), (true, 1, 1));
+            } else {
+                assert!(matches!(bounded, Err(Error::Limit)));
+            }
+        }
         let ids = [2_u64, 8, 30, 2];
         for reverse in [false, true] {
             let mut terms = [

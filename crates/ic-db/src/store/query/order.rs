@@ -121,7 +121,7 @@ pub(super) fn select<'a>(
             || request
                 .cursor
                 .is_some_and(|c| c.position.first() == Some(&2))
-            || literal_equalities(entity, request).next().is_none());
+            || request.fixed_equalities(entity).next().is_none());
     if default_primary {
         return Ok(Path::Primary);
     }
@@ -236,7 +236,7 @@ pub(super) fn select_filtered_path<'a>(
     entity: &'a EntitySchema,
     request: &Request<'_>,
     plan: &mut super::Plan<'a>,
-    probe: Option<super::aggregate::MemberProbe>,
+    probe: Option<super::probe::MemberProbe>,
 ) -> Result<bool, Error> {
     if let Some((_, values)) = &request.index {
         return Ok(plan.index.is_some_and(|index| {
@@ -272,7 +272,7 @@ pub(super) fn select_filtered_path<'a>(
         let Some(path) = automatic_prefix(entity, index, &values)? else {
             continue;
         };
-        let covered = probe == Some(super::aggregate::MemberProbe::CountWithRows)
+        let covered = probe == Some(super::probe::MemberProbe::CountWithRows)
             && covers_keys(
                 entity,
                 request,
@@ -503,41 +503,6 @@ fn satisfies(
     wanted.eq(supplied)
 }
 
-// A disjunction fixes a field only if every alternative asserts the same equality.
-pub(super) fn literal_equalities<'r, 'a>(
-    entity: &'r EntitySchema,
-    request: &'r Request<'a>,
-) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
-    fn fixed<'a>(entity: &EntitySchema, p: &Predicate<'a>) -> Option<(&'a str, IndexValue<'a>)> {
-        let QueryOperand::Literal(value) = p.operand else {
-            return None;
-        };
-        // Ordered comparisons exclude absence, including on optional fields.
-        let fixed = match (p.comparison, value) {
-            (Comparison::Eq, _) => value,
-            (Comparison::Ne, IndexValue::Bool(excluded)) if entity.field_is_required(p.field) => {
-                IndexValue::Bool(!excluded)
-            }
-            (Comparison::Le, _) if super::scalar_bytes(value).is_some_and(<[u8]>::is_empty) => {
-                value
-            }
-            (Comparison::Gt, IndexValue::Bool(false))
-            | (Comparison::Ge, IndexValue::Bool(true)) => IndexValue::Bool(true),
-            (Comparison::Lt, IndexValue::Bool(true))
-            | (Comparison::Le, IndexValue::Bool(false)) => IndexValue::Bool(false),
-            _ => return None,
-        };
-        Some((p.field, fixed))
-    }
-    request.clauses().filter_map(move |clause| {
-        let (predicate, rest) = clause.split_first()?;
-        let equality = fixed(entity, predicate)?;
-        rest.iter()
-            .all(|other| fixed(entity, other) == Some(equality))
-            .then_some(equality)
-    })
-}
-
 // The caller supplies either known query values or just the selected key prefix.
 pub(super) fn fixed_comparison<'a>(
     entity: &EntitySchema,
@@ -725,7 +690,7 @@ pub(super) fn has_conflicting_predicates(
     index: Option<&IndexSchema>,
 ) -> bool {
     if request.index.is_none()
-        && (request.predicates.len() < 2 || literal_equalities(entity, request).next().is_none())
+        && (request.predicates.len() < 2 || request.fixed_equalities(entity).next().is_none())
     {
         return request.clauses().any(|clause| {
             clause.iter().all(|p| {
@@ -739,7 +704,7 @@ pub(super) fn has_conflicting_predicates(
         .into_iter()
         .flat_map(|((_, values), index)| index.fields.iter().copied().zip(values.iter().copied()));
     if components
-        .chain(literal_equalities(entity, request))
+        .chain(request.fixed_equalities(entity))
         .any(|(field, value)| {
             value == IndexValue::Absent && requires_present_field(entity, request, field)
         })
@@ -761,7 +726,8 @@ fn equality<'a>(
     request: &Request<'a>,
     field: &str,
 ) -> Option<IndexValue<'a>> {
-    literal_equalities(entity, request)
+    request
+        .fixed_equalities(entity)
         .find(|(name, _)| *name == field)
         .map(|(_, value)| value)
 }

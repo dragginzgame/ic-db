@@ -2147,6 +2147,16 @@ fn length_compares_text_in_utf8_bytes_and_binds_pages() {
             expected
         );
     }
+    for (op, threshold) in [(C::Eq, 0), (C::Le, 0), (C::Lt, 1)] {
+        let query = || {
+            db.query::<TextRow>()
+                .filter_length(TextRow::TEXT, op, threshold)
+        };
+        for path in [query(), query().using_index("text,id", &[])] {
+            let count = path.work_limit(2).count().unwrap();
+            assert_eq!((count.value, count.examined, count.fetched), (1, 1, 0));
+        }
+    }
     let fixed = || db.query::<TextRow>().eq(TextRow::TEXT, "β");
     let matches = fixed()
         .filter_length(TextRow::TEXT, C::Eq, 2)
@@ -2179,6 +2189,141 @@ fn length_compares_text_in_utf8_bytes_and_binds_pages() {
             .fetch(),
         Err(Error::InvalidCursor)
     ));
+}
+
+#[test]
+fn scattered_ids_complete_a_nonunique_index_ending_in_the_owner_id() {
+    let runtime = host(VectorMemory::default());
+    let (db, _) = text_rows(&runtime);
+    let prefix = [IndexValue::Absent];
+    // 1 exists under a different prefix, 99 is missing, and 0 appears twice.
+    let ids = [22_u64, 0, 1, 99, 0];
+    for explicit in [false, true] {
+        let query = || {
+            let q = db
+                .query::<TextRow>()
+                .filter_in(TextRow::ID, &ids)
+                .work_limit(4);
+            if explicit {
+                q.using_index("text,id", &prefix)
+            } else {
+                q.filter_absent(TextRow::TEXT)
+            }
+        };
+        let count = query().count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (2, 4, 0));
+        let checked = query().count_validated().unwrap();
+        assert_eq!(
+            (checked.value, checked.examined, checked.fetched),
+            (2, 4, 2)
+        );
+        let hit = query().exists().unwrap();
+        assert_eq!((hit.value, hit.examined, hit.fetched), (true, 1, 1));
+    }
+}
+
+#[test]
+fn empty_length_alternatives_bound_only_single_value_branches() {
+    use ic_db::QueryOperand::{Length, Literal};
+
+    let runtime = host(VectorMemory::default());
+    let (db, rows) = text_rows(&runtime);
+    let endpoint = "\u{1}";
+    let interval = rows
+        .iter()
+        .filter_map(|row| row.text.as_deref())
+        .filter(|text| *text <= endpoint)
+        .count();
+    let matches = rows
+        .iter()
+        .filter_map(|row| row.text.as_deref())
+        .filter(|text| text.is_empty() || *text == endpoint)
+        .count();
+    assert!(matches < interval);
+    for (op, threshold) in [(C::Eq, 0), (C::Le, 0), (C::Lt, 1)] {
+        let alternatives = [
+            (TextRow::TEXT, op, Length(threshold)),
+            (TextRow::TEXT, C::Eq, Literal(endpoint.into())),
+        ];
+        let count = db
+            .query::<TextRow>()
+            .filter_any_operands(&alternatives)
+            .work_limit(interval + 1)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined), (matches as u64, interval));
+    }
+    // Length <= 1 also matches "A" and "a", beyond the literal endpoint.
+    let wider = db
+        .query::<TextRow>()
+        .filter_any_operands(&[
+            (TextRow::TEXT, C::Le, Length(1)),
+            (TextRow::TEXT, C::Eq, Literal(endpoint.into())),
+        ])
+        .count()
+        .unwrap();
+    let expected = rows
+        .iter()
+        .filter_map(|row| row.text.as_deref())
+        .filter(|text| text.len() <= 1)
+        .count();
+    assert!(expected > matches);
+    assert_eq!(wider.value, expected as u64);
+}
+
+#[test]
+fn empty_text_pages_resume_after_matching_rows_change() {
+    let runtime = host(VectorMemory::default());
+    let (mut db, mut rows) = text_rows(&runtime);
+    let mut batch = Batch::new();
+    rows[4].text = Some(String::new());
+    batch.replace(&rows[4]).unwrap();
+    db.commit(batch).unwrap();
+
+    let page = |db: &Database, cursor: Option<&QueryCursor>| {
+        let mut query = db
+            .query::<TextRow>()
+            .filter_length(TextRow::TEXT, C::Eq, 0)
+            .gte(TextRow::BUCKET, 1_u8)
+            .work_limit(1);
+        if let Some(cursor) = cursor {
+            query = query.after(cursor);
+        }
+        query.fetch().unwrap()
+    };
+    // ID 1 has empty text, but its bucket fails the residual predicate.
+    let first = page(&db, None);
+    assert!(first.rows.is_empty());
+    assert_eq!(first.examined, 1);
+    let cursor = first.next.unwrap().to_bytes();
+
+    let mut batch = Batch::new();
+    for (id, text) in [(0, Some("")), (1, None), (4, Some("\0")), (13, Some(""))] {
+        rows[id].text = text.map(str::to_owned);
+        rows[id].bucket = 1;
+        batch.replace(&rows[id]).unwrap();
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = Database::open(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[TextRow::SCHEMA]).unwrap(),
+    )
+    .unwrap();
+    let cursor = QueryCursor::from_bytes(&cursor).unwrap();
+    // ID 0 entered behind the cursor. ID 4 now contains one NUL byte.
+    let next = page(&db, Some(&cursor));
+    assert_eq!(next.examined, 1);
+    assert_eq!(next.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [13]);
+    if let Some(after) = next.next {
+        let end = page(&db, Some(&after));
+        assert_eq!((end.examined, end.rows.len()), (0, 0));
+        assert!(end.next.is_none());
+    }
+    let fresh = page(&db, None);
+    assert_eq!(fresh.rows[0].id, 0);
 }
 
 #[test]
@@ -3595,6 +3740,56 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
         .unwrap();
     assert_eq!((sparse.value, sparse.examined), (true, 1));
     assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
+fn impossible_residuals_skip_complete_key_probes() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let ids = [2_u64, 4, 80];
+    let category = [0_u8.into()];
+    for explicit in [false, true] {
+        let query = || {
+            let query = db.query::<Entry>().filter_in(Entry::ID, &ids);
+            if explicit {
+                query.using_index("category", &category)
+            } else {
+                query
+            }
+        };
+        let impossible = || {
+            query()
+                .filter_length(Entry::PAYLOAD, C::Ge, 3)
+                .filter_length(Entry::PAYLOAD, C::Lt, 3)
+        };
+        let exists = impossible().exists().unwrap();
+        assert_eq!(
+            (exists.value, exists.examined, exists.fetched),
+            (false, 0, 0)
+        );
+        for count in [
+            impossible().count().unwrap(),
+            impossible().count_validated().unwrap(),
+        ] {
+            assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
+        }
+        let viable = query()
+            .filter_length(Entry::PAYLOAD, C::Ge, 3)
+            .filter_any_operands(&[
+                (Entry::PAYLOAD, C::Lt, ic_db::QueryOperand::Length(3)),
+                (
+                    Entry::AMOUNT,
+                    C::Eq,
+                    ic_db::QueryOperand::Literal(40_u64.into()),
+                ),
+            ])
+            .exists()
+            .unwrap();
+        assert_eq!(
+            (viable.value, viable.examined, viable.fetched),
+            (true, 2, 2)
+        );
+    }
 }
 
 #[test]

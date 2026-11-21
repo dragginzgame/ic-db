@@ -3,6 +3,7 @@
 mod aggregate;
 mod distinct;
 mod order;
+mod probe;
 mod range;
 mod sort;
 
@@ -117,7 +118,7 @@ impl Comparison {
                 // Compare escaped content, never the presence byte or terminator.
                 // In particular, optional empty text must not match suffix U+0001.
                 fn content(key: &[u8], optional: bool) -> Option<&[u8]> {
-                    key.get(usize::from(optional)..)?.strip_suffix(&[0, 0])
+                    crate::key::bytes_prefix(key.get(usize::from(optional)..)?)
                 }
 
                 actual
@@ -171,6 +172,18 @@ impl Comparison {
             Some(&threshold.to_be_bytes()),
             false,
         )
+    }
+
+    // These byte-length predicates admit exactly one present scalar value.
+    fn empty_length_value(self, threshold: u32, field: FieldType) -> Option<IndexValue<'static>> {
+        if !matches!((self, threshold), (Self::Eq | Self::Le, 0) | (Self::Lt, 1)) {
+            return None;
+        }
+        match key::operand_type(field) {
+            FieldType::Text { .. } => Some(IndexValue::Text("")),
+            FieldType::Blob { .. } => Some(IndexValue::Blob(&[])),
+            _ => None,
+        }
     }
 
     // A result is uniform only when every integer in the inclusive interval agrees.
@@ -387,7 +400,36 @@ struct Predicate<'a> {
     or_next: bool,
 }
 
-impl Predicate<'_> {
+impl<'a> Predicate<'a> {
+    // The only field value that can satisfy this predicate, when known.
+    fn fixed_equality(&self, entity: &EntitySchema) -> Option<(&'a str, IndexValue<'a>)> {
+        if let QueryOperand::Length(n) = self.operand {
+            let empty = self
+                .comparison
+                .empty_length_value(n, entity.index_field(self.field)?.value)?;
+            return Some((self.field, empty));
+        }
+        let QueryOperand::Literal(value) = self.operand else {
+            return None;
+        };
+        // Ordered comparisons exclude absence, including on optional fields.
+        let fixed = match (self.comparison, value) {
+            (Comparison::Eq, _) => value,
+            (Comparison::Ne, IndexValue::Bool(excluded))
+                if entity.field_is_required(self.field) =>
+            {
+                IndexValue::Bool(!excluded)
+            }
+            (Comparison::Le, _) if scalar_bytes(value).is_some_and(<[u8]>::is_empty) => value,
+            (Comparison::Gt, IndexValue::Bool(false))
+            | (Comparison::Ge, IndexValue::Bool(true)) => IndexValue::Bool(true),
+            (Comparison::Lt, IndexValue::Bool(true))
+            | (Comparison::Le, IndexValue::Bool(false)) => IndexValue::Bool(false),
+            _ => return None,
+        };
+        Some((self.field, fixed))
+    }
+
     // Each of these predicates matches exactly the rows where the field is present.
     fn tests_presence(&self, entity: &EntitySchema, operand: &TermOperand) -> bool {
         match (self.comparison, self.operand) {
@@ -498,6 +540,20 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
+    // A disjunction fixes a field only when every alternative fixes it to the same value.
+    fn fixed_equalities<'r>(
+        &'r self,
+        entity: &'r EntitySchema,
+    ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
+        self.clauses().filter_map(move |clause| {
+            let (predicate, rest) = clause.split_first()?;
+            let equality = predicate.fixed_equality(entity)?;
+            rest.iter()
+                .all(|other| other.fixed_equality(entity) == Some(equality))
+                .then_some(equality)
+        })
+    }
+
     fn clauses(&self) -> impl Iterator<Item = &[Predicate<'a>]> {
         self.predicates.split_inclusive(|p| !p.or_next)
     }
@@ -707,6 +763,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// returns `Limit` if work, result count or combined bytes cannot fit; it
     /// never returns a partial result. An individually oversized row returns
     /// `RowTooLarge`. Comparison keys are bounded to 4096 bytes.
+    /// For enumeration across calls, [`Self::start_distinct`] and [`Self::resume_distinct`]
+    /// retain up to 255 tuples within a 16 KiB job frame, then page the completed result.
     /// Non-identity sorted DISTINCT retains the best `limit` distinct tuples. Its order
     /// must lead with all varying projected fields. A mandatory literal equality
     /// fixes a field. Remove duplicates before applying `limit` and output bytes.

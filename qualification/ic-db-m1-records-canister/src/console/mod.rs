@@ -857,6 +857,12 @@ fn execute<'a, E: Entity>(
         "distinct-count:category" => query
             .count_distinct::<CategoryOnly>()
             .map(|r| display_scalar(&r, "count")),
+        "distinct-count:amount" => query
+            .count_distinct::<AmountOnly>()
+            .map(|r| display_scalar(&r, "count")),
+        "distinct-count:note" => query
+            .count_distinct::<NoteOnly>()
+            .map(|r| display_scalar(&r, "count")),
         "category,distinct-count:amount" => query
             .group_count_distinct::<CategoryOnly, AmountOnly>()
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),

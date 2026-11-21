@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.26.11] - Unreleased
+
+### Queries
+
+- On a non-unique index such as `(category, id)`, fixing the category lets
+  counts and existence checks probe a list of IDs directly. Each distinct ID
+  costs one probe, including a missing ID or one belonging to another category.
+  On an explicitly selected index, equivalent Account IDs with an omitted or
+  all-zero subaccount also fit a single-probe count.
+
+- For a list of IDs, `exists()`, `count()` and `count_validated()` can now
+  return an empty result without probing keys when other required filters
+  contradict each other, such as a payload length both below and at least three.
+
+- A zero-byte length filter on Text or Blob can seek the present empty value
+  through an index. This covers length equal to zero, at most zero, or less
+  than one. Automatic and explicitly selected indexes both restrict the range
+  to the present empty value. In an OR filter such as byte length < 1 or text
+  equal to `"A"`, the index scan ends at the largest alternative and checks
+  intervening values. Absent values are excluded.
+
+### CLI
+
+- The local fixture accepts `db query Entry --select distinct-count:amount`
+  and `db query Document --select distinct-count:note` in a single query call.
+  An absent note contributes one distinct value. Use
+  `db query Document --select count:note` to count rows with a present note.
+- Entry category counts now use the same selector in single-call and resumable queries.
+  Try `db aggregate Entry --select distinct-count:category --work 2` or
+  `db aggregate Entry --select category,distinct-count:category --work 2 --page-size 1`.
+
+### Qualification
+
+- Compared installed Wasm against 0.26.10. With a fixed category and five
+  candidate IDs, first-match existence used 17.1% more instructions for an
+  early hit and 33.8% fewer for a late hit. Counting two empty indexed titles
+  among eight used 68.8% fewer instructions. [Matched costs](qualification/README.md#filter-costs-before-02611)
+- Verified live pagination of indexed empty text across a database reopen.
+  A page ending on a filtered-out row can resume after that row leaves the index
+  range. Rows entering ahead of the cursor remain visible to the resumed query.
+- Verified that a retained DISTINCT count over 40 different amounts preserves
+  its checkpoint when the 33rd value exceeds its 32-key bound. After cancellation,
+  a new enumeration returns all 40 values and rejects the old cancellation handle.
+- Checked a top-three grouped DISTINCT query against SQLite on 128 rows.
+  A retained query examining seven rows per step returned the same ranked
+  groups as the single-call query, including the tie at the cutoff.
+- Verified on installed Wasm that a grouped distinct-count ranking resumed
+  after a same-version canister upgrade and matched SQLite. [Measurements](qualification/README.md#sqlite-reference-checks)
+
 ## [0.26.10] - 2026-11-21
 
 ### Queries

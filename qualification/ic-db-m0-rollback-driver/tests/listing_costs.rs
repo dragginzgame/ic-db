@@ -339,3 +339,58 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
     println!("listing-large,returned={returned},pages={pages},instructions={total_instructions}");
     owned.drop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the query-measurements Wasm; run make m2-filter-costs"]
+async fn measured_membership_and_empty_text_return_expected_counts() {
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    // Eight published documents include two empty titles. The seeded unpublished
+    // document is outside the selected index prefix.
+    let rows: Vec<_> = (2..10_u64)
+        .map(|id| (id, if id <= 3 { "" } else { "abc" }, true))
+        .collect();
+    call::<Result<(), u8>>(pic, canister, "text_index_batch", 23, &(rows, false))
+        .await
+        .unwrap();
+    let measure = async |profile: &str, cases: &[(u8, &str, u64)]| {
+        let before = pic.get_stable_memory(canister).await;
+        for &(shape, label, expected) in cases {
+            let (value, examined, fetched, instructions): (u64, u32, u32, u64) =
+                call(pic, canister, "measured_filter_count", 193, &shape).await;
+            assert_eq!(value, expected, "{profile} {label}");
+            println!("filter-cost,{profile},{label},{value},{examined},{fetched},{instructions}");
+        }
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+    };
+    measure(
+        "early-hit",
+        &[
+            (0, "membership-count", 2),
+            (1, "membership-exists", 1),
+            (2, "empty-text-count", 2),
+            (3, "ordinary-scan", 4),
+        ],
+    )
+    .await;
+
+    // Put the only matching ID at the end of a category containing seven
+    // nonmembers (1, 4, 7, 8, 9, 10, 11). Keep the probe list identical.
+    for id in [1_u64, 2, 6, 7, 8, 9, 10, 11, 12] {
+        let category = u64::from(id == 2 || id == 6);
+        let mode = u8::from(id > 6);
+        call::<Result<(), u8>>(pic, canister, "write", 4, &(id, category, id * 10, mode))
+            .await
+            .unwrap();
+    }
+    measure(
+        "late-hit",
+        &[(0, "membership-count", 1), (1, "membership-exists", 1)],
+    )
+    .await;
+    owned.drop().await;
+}

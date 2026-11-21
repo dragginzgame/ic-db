@@ -153,3 +153,58 @@ fn measured_listing_write(
 type ListingRequest = (u8, Option<Vec<u8>>, u32, u32, Option<u64>);
 
 type ListingSample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
+
+// measured_filter_count
+// Measure filtered counts and first-match existence including database open.
+// guard  : validates the request frame for method 193.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "measured_filter_count",
+    guard = crate::transport::admit::<193>,
+    decode = crate::transport::decode_measured::<_, 193>,
+    encode = crate::transport::encode::<_, 193>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_filter_count((shape, counter): crate::transport::Measured<u8>) -> (u64, u32, u32, u64) {
+    use crate::schema::Entry;
+
+    let start = counter();
+    let host = runtime();
+    let db = open(&host);
+    let (value, examined, fetched) = match shape {
+        0 | 1 => {
+            let q = db
+                .query::<Entry>()
+                .using_index("category,id", &[0_u64.into()])
+                .filter_in(Entry::ID, &[0_u64, 2, 3, 6, 12]);
+            if shape == 0 {
+                let a = q.count().unwrap();
+                (a.value, a.examined, a.fetched)
+            } else {
+                let a = q.exists().unwrap();
+                (u64::from(a.value), a.examined, a.fetched)
+            }
+        }
+        2 => {
+            let a = db
+                .query::<Document>()
+                .using_index("published,title", &[true.into()])
+                .filter_length(Document::TITLE, ic_db::Comparison::Eq, 0)
+                .count()
+                .unwrap();
+            (a.value, a.examined, a.fetched)
+        }
+        3 => {
+            let a = db
+                .query::<Entry>()
+                .gte(Entry::AMOUNT, 30_u64)
+                .count_validated()
+                .unwrap();
+            (a.value, a.examined, a.fetched)
+        }
+        _ => panic!("unknown filter shape"),
+    };
+    (value, examined as u32, fetched as u32, counter() - start)
+}

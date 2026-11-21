@@ -166,6 +166,7 @@ fn start_entry(
         "count:amount" => query.start_count_field("amount", jobs, now, expires),
         "distinct:amount" => query.start_distinct::<AmountOnly>(jobs, now, expires),
         "distinct-count:amount" => query.start_count_distinct::<AmountOnly>(jobs, now, expires),
+        "distinct-count:category" => query.start_count_distinct::<CategoryOnly>(jobs, now, expires),
         "sum:amount" => query.start_sum::<TotalAmount>(jobs, now, expires),
         "avg:amount" => query.start_avg::<AverageAmount>(jobs, now, expires),
         "min:amount" => query.start_min::<AmountOnly>(jobs, now, expires),
@@ -176,6 +177,9 @@ fn start_entry(
         }
         "category,distinct-count:amount" => {
             query.start_group_count_distinct::<CategoryOnly, AmountOnly>(jobs, now, expires)
+        }
+        "category,distinct-count:category" => {
+            query.start_group_count_distinct::<CategoryOnly, CategoryOnly>(jobs, now, expires)
         }
         "category,summary:amount" => query
             .start_group_summary::<CategoryOnly, TotalAmount, AverageAmount>(jobs, now, expires),
@@ -497,6 +501,9 @@ fn resume_entry<'a>(
         "distinct-count:amount" => query
             .resume_count_distinct::<AmountOnly>(jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
+        "distinct-count:category" => query
+            .resume_count_distinct::<CategoryOnly>(jobs, handle, sequence, now)
+            .map(|s| display(s, |v| scalar("count", Some(v.to_string())))),
         "sum:amount" => query
             .resume_sum::<TotalAmount>(jobs, handle, sequence, now)
             .map(|s| display(s, |v| scalar("amount", v.map(|r| r.amount.to_string())))),
@@ -517,6 +524,9 @@ fn resume_entry<'a>(
             .map(|s| display(s, |p| counts(p, "category", |k| k.category.to_string()))),
         "category,distinct-count:amount" => query
             .resume_group_count_distinct::<CategoryOnly, AmountOnly>(jobs, handle, sequence, now)
+            .map(|s| display(s, |p| counts(p, "category", |k| k.category.to_string()))),
+        "category,distinct-count:category" => query
+            .resume_group_count_distinct::<CategoryOnly, CategoryOnly>(jobs, handle, sequence, now)
             .map(|s| display(s, |p| counts(p, "category", |k| k.category.to_string()))),
         "category,summary:amount" => query
             .resume_group_summary::<CategoryOnly, TotalAmount, AverageAmount>(

@@ -166,7 +166,7 @@ enum Command {
         #[arg(value_parser=["Entry", "Document", "DecimalRow", "BinaryObject"])]
         entity: String,
         /// Entry: distinct:amount pages distinct values with --page-size; --group-order first accepts --order-by and --desc;
-        /// count/count:amount/distinct-count:amount or min/max/sum/avg:amount;
+        /// count/count:amount, distinct-count:amount or distinct-count:category, and min/max/sum/avg:amount;
         /// Entry supports category,summary:amount; DecimalRow supports zone,summary:value and zone,summary:maybe.
         /// For single measures, prefix with category, for Entry groups. Document: count/count:note/count:priority,
         /// distinct-count:note, min/max:note, min/max:priority, sum:priority/sum:score;
@@ -241,10 +241,10 @@ enum Command {
         order: OrderArgs,
         #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
         work: u32,
-        /// full, id, id,amount, category, count, count:FIELD, distinct-count:category,
+        /// full, id, id,amount, category, count, count:FIELD,
         /// category,count or category,count:FIELD. Field counts exclude absence.
-        /// category,distinct-count:amount or category,distinct-count:category for Entry;
-        /// entry_id,distinct-count:note for Document. Distinct tuples include absence.
+        /// Entry supports distinct-count:amount or distinct-count:category, optionally grouped by category.
+        /// Document supports distinct-count:note, optionally grouped by entry_id. Distinct tuples include absence.
         /// title or note projects a single Document text field.
         /// exists for any entity: one boolean, stopping at the first match.
         /// min:amount/max:amount for Entry; min:note/max:note and

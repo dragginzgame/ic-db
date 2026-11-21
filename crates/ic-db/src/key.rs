@@ -624,6 +624,22 @@ impl<'a> From<&'a [u8]> for IndexValue<'a> {
     }
 }
 
+// Empty Text and Blob components share the terminator. Optional present values
+// include the presence tag before the payload.
+pub(crate) fn empty_bytes_component(optional: bool) -> &'static [u8] {
+    const PRESENT_EMPTY: &[u8] = &[1, 0, 0];
+    if optional {
+        PRESENT_EMPTY
+    } else {
+        &PRESENT_EMPTY[1..]
+    }
+}
+
+// Keep any optional tag and escaped payload for a physical prefix seek.
+pub(crate) fn bytes_prefix(component: &[u8]) -> Option<&[u8]> {
+    component.strip_suffix(empty_bytes_component(false))
+}
+
 // IcyDB's terminated-byte rule, also used for raw bytes: preserve lexical order
 // and component boundaries, including empty values and embedded zeroes.
 fn append_bytes(value: &[u8], out: &mut Vec<u8>) {
@@ -633,5 +649,5 @@ fn append_bytes(value: &[u8], out: &mut Vec<u8>) {
             out.push(255);
         }
     }
-    out.extend([0, 0]);
+    out.extend_from_slice(empty_bytes_component(false));
 }

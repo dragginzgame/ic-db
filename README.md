@@ -332,13 +332,12 @@ let page = db.query::<Entry>()
     .fetch_as::<CategoryOnly>()?;
 ```
 
-Live DISTINCT pages require a leading index projection after any fixed index prefix.
-Filters may read projected fields or fields fixed by that prefix, so each duplicate
-group has one filter result. For example, add
-`.gte(Entry::CATEGORY, 1_u64)` to the query above.
+In this example the category index keeps equal categories together. Add
+`.gte(Entry::AMOUNT, 40_u64)` to return each category with at least one
+qualifying entry. A page can end after an entry fails that filter. Follow
+`next` even on an empty page so a later entry in the same category can qualify.
 Full entities and projections containing the primary
-key are already unique and allow ordinary filters. Duplicate candidates
-consume work, so an empty page can still continue.
+key are already unique and allow ordinary filters. Duplicate candidates also consume work.
 Continuation preserves duplicate suppression; live pages do not provide a frozen
 input for exact aggregates.
 
@@ -355,7 +354,9 @@ bytes and 128 KiB of key/row buffers. The query's `limit` is a result capacity f
 this path: exceeding it, the combined output-byte budget, or the work budget
 returns `Limit`, never a partial result. Even a scan ending exactly at the work
 budget can refuse until exhaustion is observed. An individually oversized row
-returns `RowTooLarge`. Cursors refuse; larger paginated DISTINCT remains later work.
+returns `RowTooLarge`. For a scan spanning calls, start a retained job with
+`start_distinct::<K>` and page the completed result with `resume_distinct::<K>`.
+The job can hold up to 255 tuples if their state fits its 16 KiB frame.
 Try `db query Entry --select category --distinct` in the fixture CLI.
 
 Check existence without fetching an entity or counting all matches:
@@ -502,7 +503,7 @@ caps the total selected groups across pages, independently of `--page-size`;
 it never truncates aggregate input. The CLI follows server cursors
 without accumulating values itself. Each invocation uses the local disposable
 fixture; this command does not connect to a deployed database. See `db aggregate
---help` for work, response-byte and group-page bounds.
+--help` for per-call work and group-page options.
 
 `start_distinct::<Record>` and `resume_distinct::<Record>` enumerate up to 255
 distinct projected tuples within one 16 KiB job frame. To keep the first matching

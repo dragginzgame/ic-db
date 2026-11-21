@@ -459,6 +459,7 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
             ("count", "2"),
             ("count:amount", "2"),
             ("distinct-count:category", "1"),
+            ("distinct-count:amount", "2"),
         ] {
             let count = call(Some(40), Some(0), 4, terminal).await.unwrap();
             assert_eq!(count.1, vec![vec![expected]]);
@@ -486,6 +487,12 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
                 .unwrap();
             assert_eq!(count.1, vec![vec!["1"]]);
             assert_eq!((count.3, count.4), (1, fetched));
+        }
+        for (terminal, expected) in [("count:note", "0"), ("distinct-count:note", "1")] {
+            let result = query("Document", RowFilters::default(), None, None, 2, terminal)
+                .await
+                .unwrap();
+            assert_eq!(result.1, vec![vec![expected]]);
         }
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }

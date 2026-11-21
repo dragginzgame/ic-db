@@ -74,6 +74,8 @@ fn field_patterns_use_each_rows_present_raw_needle() {
     }
     db.commit(batch).unwrap();
     for (field, op, threshold, expected) in [
+        (Binary::PAYLOAD, C::Eq, 0, (2, 2)),
+        (Binary::OPTIONAL, C::Lt, 1, (2, 2)),
         (Binary::PAYLOAD, C::Le, 1024, (7, 0)),
         (Binary::UNIQUE, C::Le, 1024, (6, 6)),
         (Binary::OPTIONAL, C::Le, 1024, (6, 6)),

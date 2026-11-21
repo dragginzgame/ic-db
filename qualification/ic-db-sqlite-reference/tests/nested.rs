@@ -1065,6 +1065,53 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
             assert_eq!((count.value, count.fetched), (expected.len() as u64, 4));
             assert!(matches!(query().work_limit(3).count(), Err(Error::Limit)));
         }
+        let empty_payloads: u32 = sql
+            .query_row(
+                "SELECT count(*) FROM observations WHERE length(payload) = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let empty = || {
+            db.query::<Observation>()
+                .filter_length(PAYLOAD, ic_db::Comparison::Eq, 0)
+        };
+        for query in [empty(), empty().using_index(PAYLOAD, &[])] {
+            let count = query
+                .work_limit(empty_payloads as usize + 1)
+                .count()
+                .unwrap();
+            assert_eq!(
+                (count.value, count.examined, count.fetched),
+                (u64::from(empty_payloads), empty_payloads as usize, 0)
+            );
+        }
+        let wanted: u32 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE length(payload) < 1 OR payload = x'00ff'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let alternatives = [
+            (
+                PAYLOAD,
+                ic_db::Comparison::Lt,
+                ic_db::QueryOperand::Length(1),
+            ),
+            (
+                PAYLOAD,
+                ic_db::Comparison::Eq,
+                ic_db::QueryOperand::Literal(IndexValue::Blob(&[0, 255])),
+            ),
+        ];
+        let count = db
+            .query::<Observation>()
+            .filter_any_operands(&alternatives)
+            .work_limit(4)
+            .count()
+            .unwrap();
+        assert_eq!((count.value, count.examined), (u64::from(wanted), 3));
         // A raw zero occupies one byte even though its index encoding occupies two.
         let single_zero: u32 = sql
             .query_row(

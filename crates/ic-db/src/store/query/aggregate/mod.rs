@@ -5,6 +5,7 @@ pub(super) mod jobs;
 mod numeric;
 
 use super::distinct::DistinctKeys;
+use super::probe::{MemberProbe, probe_members};
 use super::{
     Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan, Query,
     QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
@@ -258,66 +259,6 @@ pub struct GroupValue<K, R> {
     pub value: Option<R>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum MemberProbe {
-    CountKeys,
-    CountWithRows,
-    CountValidated,
-    Exists,
-}
-
-fn probe_members<M: Memory>(
-    source: &super::QuerySource<'_, M>,
-    entity: &EntitySchema,
-    request: &super::Request<'_>,
-    plan: &Plan<'_>,
-    mode: MemberProbe,
-) -> Result<Option<Aggregate<u64>>, Error> {
-    let Some(members) =
-        super::range::point_members(entity, plan, request, mode != MemberProbe::CountKeys)
-    else {
-        return Ok(None);
-    };
-    let db = source.read()?;
-    let mut count = 0;
-    let mut examined = 0;
-    let mut fetched = 0;
-    for (member, needs_row) in members {
-        examined += 1;
-        let key = crate::store_key::StoreKey::new([plan.prefix.as_slice(), member].concat())?;
-        if needs_row || matches!(mode, MemberProbe::CountValidated | MemberProbe::Exists) {
-            let mut found = false;
-            let bounds = (
-                std::ops::Bound::Included(key.clone()),
-                std::ops::Bound::Included(key),
-            );
-            let page = super::execute_inner(
-                &db.map,
-                entity,
-                request,
-                plan,
-                Some(bounds),
-                Some(&mut Accumulator::Exists(&mut found)),
-                None,
-            )?;
-            count += u64::from(found);
-            fetched += page.fetched;
-            if found && mode == MemberProbe::Exists {
-                break;
-            }
-        } else {
-            count += u64::from(db.map.contains_key(&key));
-        }
-    }
-
-    Ok(Some(Aggregate {
-        value: count,
-        examined,
-        fetched,
-        output_bytes: 8,
-    }))
-}
-
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Page completed retained groups, returning at most 1..=32 rows per response.
     /// `limit` still caps the complete selected result and binds the job. Page size
@@ -535,20 +476,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         initial: Reducer,
     ) -> Result<Aggregate<Vec<GroupValue<K, R>>>, Error> {
         super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
-        let (groups, page) = self.grouped(&plan, initial, None)?;
-        let (value, output_bytes) = group_output(
-            groups,
-            self.request.rows,
-            self.request.bytes,
+        group_output(
+            self.grouped(&plan, initial, None)?,
+            &self.request,
             decode_group_value,
-        )?;
-
-        Ok(Aggregate {
-            value,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes,
-        })
+        )
     }
 
     /// Whether at least one row matches, without materializing an entity.
@@ -641,15 +573,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                     output_bytes: 8,
                 });
             }
-            if plan.index.is_none()
-                && let Some(count) = probe_members(
-                    &self.db,
-                    E::SCHEMA,
-                    &self.request,
-                    &plan,
-                    MemberProbe::CountKeys,
-                )?
-            {
+            if let Some(count) = probe_members(
+                &self.db,
+                E::SCHEMA,
+                &self.request,
+                &plan,
+                MemberProbe::CountKeys,
+            )? {
                 return Ok(count);
             }
             if super::order::select_filtered_path(
@@ -906,20 +836,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);
             *mask &= !(grouped | fixed);
         }
-        let (groups, page) = self.grouped(&plan, reducer, None)?;
-        let (value, output_bytes) = group_output(
-            groups,
-            self.request.rows,
-            self.request.bytes,
+        group_output(
+            self.grouped(&plan, reducer, None)?,
+            &self.request,
             decode_group_count,
-        )?;
-
-        Ok(Aggregate {
-            value,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes,
-        })
+        )
     }
 
     fn count_reducer(&self, field: Option<&str>) -> Result<Reducer, Error> {
@@ -1021,23 +942,31 @@ fn scalar_output<R: Value>(reducer: Reducer, limit: usize) -> Result<(Option<R>,
 }
 
 fn group_output<T>(
-    groups: Groups,
-    rows: usize,
-    bytes: usize,
+    (groups, page): (Groups, QueryPage<Vec<u8>>),
+    request: &super::Request<'_>,
     decode: fn(&[u8], Completed) -> Result<T, Error>,
-) -> Result<(Vec<T>, usize), Error> {
+) -> Result<Aggregate<Vec<T>>, Error> {
     let mut output_bytes = 0;
     let value = groups
-        .into_output(rows)?
+        .into_output(request.rows)?
         .into_iter()
         .map(|(key, result)| {
-            admit_output(key.len() + result.encoded_len(), bytes, &mut output_bytes)?;
+            admit_output(
+                key.len() + result.encoded_len(),
+                request.bytes,
+                &mut output_bytes,
+            )?;
 
             decode(&key, result)
         })
         .collect::<Result<_, Error>>()?;
 
-    Ok((value, output_bytes))
+    Ok(Aggregate {
+        value,
+        examined: page.examined,
+        fetched: page.fetched,
+        output_bytes,
+    })
 }
 
 fn decode_group_count<K: Value>(key: &[u8], result: Completed) -> Result<GroupCount<K>, Error> {
