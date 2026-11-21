@@ -389,3 +389,14 @@ release-lint:
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-v2 --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown -- -D warnings
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features retained-console --target wasm32-unknown-unknown -- -D warnings
+
+.PHONY: m2-nested-path-costs
+m2-nested-path-costs:
+	@set -eu; out="$(CURDIR)/qualification/target/evidence/m2"; mkdir -p "$$out"; \
+	for tier in 1 8 32 indexed member; do \
+	  count=$$tier; features=""; case "$$tier" in indexed) count=32; features=flat-index-control;; member) count=32; features=member-index-control;; esac; \
+	  IC_DB_PATH_COUNT=$$count cargo build --features "$$features" --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-aggregation-canister --example nested_paths --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "$$out/nested-paths-build.jsonl"; \
+	  artifact=$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "nested_paths") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "$$out/nested-paths-build.jsonl"); \
+	  cp "$$artifact" "$$out/nested-paths-$$tier.wasm"; \
+	done; \
+	IC_DB_NESTED_PATH_DIR="$$out" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test nested_paths -- --ignored --nocapture

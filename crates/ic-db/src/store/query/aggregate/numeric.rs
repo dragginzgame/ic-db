@@ -412,9 +412,6 @@ impl NumericAggregate {
             None => None,
         });
         let sort_key = match selection.order {
-            GroupOrder::Summary(SummaryMeasure::Count, _) => {
-                Some(self.count.to_be_bytes().to_vec())
-            }
             GroupOrder::Summary(SummaryMeasure::Sum, _) => sum_key,
             GroupOrder::Summary(SummaryMeasure::Average, _) => avg_key,
             _ => None,

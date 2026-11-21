@@ -268,6 +268,88 @@ fn recursive_graphs_require_a_base_and_values_share_depth_and_node_bounds() {
 }
 
 #[test]
+fn nested_scalar_filters_bind_the_leaf_and_propagate_an_absent_parent() {
+    const X: &str = ic_db::field_path!(Asset::META, Meta::X);
+    const LABEL: &str = ic_db::field_path!(Asset::META, Meta::LABEL);
+    let runtime = host(VectorMemory::default());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(
+        runtime.open_memory(&key).unwrap(),
+        Schema::new(&[Asset::SCHEMA]).unwrap(),
+        [6; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, meta) in [(1, None), (2, Some(("", 0))), (3, Some(("abc", 8)))] {
+        batch
+            .insert(&Asset {
+                id,
+                payload: Event::Idle,
+                meta: meta.map(|(label, x)| Meta {
+                    label: label.into(),
+                    x,
+                }),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<Asset>().eq(X, 0_u16).fetch().unwrap().rows[0].id,
+        2
+    );
+    assert_eq!(
+        db.query::<Asset>().filter_absent(X).count().unwrap().value,
+        1
+    );
+    assert_eq!(
+        db.query::<Asset>()
+            .gt(X, 0_u16)
+            .try_one()
+            .unwrap()
+            .unwrap()
+            .id,
+        3
+    );
+    let page = db
+        .query::<Asset>()
+        .filter_present(X)
+        .limit(1)
+        .fetch()
+        .unwrap();
+    let cursor = page.next.unwrap();
+    assert!(matches!(
+        db.query::<Asset>()
+            .filter_present(LABEL)
+            .after(&cursor)
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    assert_eq!(
+        db.query::<Asset>()
+            .filter_present(X)
+            .after(&cursor)
+            .fetch()
+            .unwrap()
+            .rows[0]
+            .id,
+        3
+    );
+    assert!(db.query::<Asset>().eq(X, "8").fetch().is_err());
+    assert!(matches!(
+        db.query::<Asset>()
+            .filter(LABEL, ic_db::Comparison::Contains, "ab")
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Asset>()
+            .eq(ic_db::field_path!(Asset::PAYLOAD, Meta::X), 0_u16)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_mutation() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -304,6 +386,12 @@ fn persisted_nested_values_reopen_and_corrupt_unindexed_payloads_refuse_before_m
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
     let before = backing.borrow().clone();
+    assert!(matches!(
+        db.query::<Asset>()
+            .filter_absent(ic_db::field_path!(Asset::META, Meta::LABEL))
+            .count(),
+        Err(Error::Corrupt)
+    ));
     for delete in [true, false] {
         let mut batch = Batch::new();
         if delete {
@@ -567,4 +655,133 @@ fn an_empty_record_has_a_finite_constructor_and_no_payload_bytes() {
     };
     assert_eq!(row.encode().unwrap(), [7, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(EmptyRow::decode(&[7, 0, 0, 0, 0, 0, 0, 0]).unwrap(), row);
+}
+
+#[record(fields(
+    field(name = "left", value(item(prim = "Nat16"))),
+    field(name = "right", value(item(prim = "Nat16")))
+))]
+struct Readings {}
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(name = "by_reading", fields = ["first.right"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "first", value(item(is = "Readings"))),
+        field(name = "second", value(item(is = "Readings")))
+    )
+)]
+struct Meter {}
+
+#[test]
+fn member_index_binds_both_path_parts_before_reopen() {
+    let schema = Meter::SCHEMA;
+    let index = &schema.indexes[0];
+    let with_path = |path: &'static str| {
+        let indexes = Box::leak(Box::new([ic_db::IndexSchema {
+            fields: Box::leak(Box::new([path])),
+            ..*index
+        }]));
+        Schema::new(&[Box::leak(Box::new(ic_db::EntitySchema {
+            indexes,
+            ..*schema
+        }))])
+    };
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let memory = || runtime.open_memory(&key).unwrap();
+    let mut db = Database::create(memory(), Schema::new(&[schema]).unwrap(), [3; 16]).unwrap();
+    let mut batch = Batch::new();
+    for (id, right) in [(0, 99), (1, 12)] {
+        batch
+            .insert(&Meter {
+                id,
+                first: Readings { left: 11, right },
+                second: Readings {
+                    left: 21,
+                    right: 22,
+                },
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    let before = backing.borrow().clone();
+    for path in ["first.left", "second.right"] {
+        assert!(matches!(
+            Database::open(memory(), with_path(path).unwrap()),
+            Err(Error::IncompatibleSchema)
+        ));
+        assert!(*backing.borrow() == before);
+    }
+    for path in [
+        "missing.right",
+        "first.missing",
+        "first.right.more",
+        "id.right",
+    ] {
+        assert!(matches!(with_path(path), Err(Error::InvalidSchema)));
+    }
+    let db = Database::open(memory(), with_path("first.right").unwrap()).unwrap();
+    let page = db
+        .query::<Meter>()
+        .eq(ic_db::field_path!(Meter::FIRST, Readings::RIGHT), 12_u16)
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows[0].id, 1);
+    drop(db);
+
+    // Change only the owner's indexed member behind the maintained key.
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(memory());
+    let mut key = vec![2];
+    key.extend(schema.id.to_be_bytes());
+    key.extend(1_u64.to_be_bytes());
+    let mut bytes = raw.get(&key).unwrap();
+    bytes[2..4].copy_from_slice(&13_u16.to_le_bytes());
+    raw.insert(key, bytes);
+    drop(raw);
+    let db = Database::open(memory(), with_path("first.right").unwrap()).unwrap();
+    assert!(matches!(
+        db.query::<Meter>()
+            .eq(ic_db::field_path!(Meter::FIRST, Readings::RIGHT), 12_u16)
+            .fetch(),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn stored_composites_still_refuse_member_index_admission() {
+    #[list(item(prim = "Nat8"), max_items = 4)]
+    struct Bytes {}
+    #[record(fields(
+        field(name = "record", value(item(is = "Readings"))),
+        field(name = "event", value(item(is = "Event"))),
+        field(name = "bytes", value(item(is = "Bytes")))
+    ))]
+    struct Composite {}
+    #[entity(store = ic_db::testing::FixtureStore, pk(field = "id"), fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "data", value(item(is = "Composite")))
+    ))]
+    struct Row {}
+
+    Schema::new(&[Row::SCHEMA]).unwrap();
+    for path in ["data.record", "data.event", "data.bytes"] {
+        let indexes = Box::leak(Box::new([ic_db::IndexSchema {
+            fields: Box::leak(Box::new([path])),
+            ..Meter::SCHEMA.indexes[0]
+        }]));
+        let entity = Box::leak(Box::new(ic_db::EntitySchema {
+            indexes,
+            ..*Row::SCHEMA
+        }));
+        assert!(
+            matches!(Schema::new(&[entity]), Err(Error::InvalidSchema)),
+            "{path}"
+        );
+    }
 }

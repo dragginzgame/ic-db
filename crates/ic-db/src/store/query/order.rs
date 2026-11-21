@@ -33,10 +33,17 @@ fn automatic_prefix<'a>(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SortField {
+    pub position: usize,
+    pub member: Option<crate::member::RecordMember>,
+    pub descending: bool,
+}
+
 pub(super) enum Path<'a> {
     Primary,
     Index(IndexPath<'a>),
-    Sort(Vec<(usize, bool)>),
+    Sort(Vec<SortField>),
 }
 
 pub(super) fn select<'a>(
@@ -46,21 +53,28 @@ pub(super) fn select<'a>(
 ) -> Result<Path<'a>, Error> {
     // Plan admission bounds the order to four fields. Indexed paths allocate no
     // additional sort metadata; materialize it only for the complete fallback.
-    let mut positions = [(0, false); 4];
+    let mut positions = [SortField {
+        position: 0,
+        member: None,
+        descending: false,
+    }; 4];
     if let Some(order) = &request.order {
         if order.is_empty() {
             return Err(Error::InvalidQuery);
         }
         for (i, name) in order.iter().enumerate() {
-            let position = entity.field_position(name).ok_or(Error::InvalidQuery)?;
-            let field = &entity.fields[position];
-            if !key::supports(field.value)
+            let (position, member) = crate::member::resolve_field(entity, name)?;
+            if (member.is_none() && !key::supports(entity.fields[position].value))
                 || order[..i].contains(name)
                 || (*name == entity.primary_key && i + 1 != order.len())
             {
                 return Err(Error::InvalidQuery);
             }
-            positions[i] = (position, request.order_descending & (1 << i) != 0);
+            positions[i] = SortField {
+                position,
+                member,
+                descending: request.order_descending & (1 << i) != 0,
+            };
         }
     }
     let single_row = equality(request, entity.primary_key).is_some();
@@ -143,16 +157,27 @@ pub(super) fn select<'a>(
     if request.cursor.is_some() || !matches!(output, super::PlanOutput::Rows) {
         return Err(Error::InvalidQuery);
     }
-    let mut positions =
-        positions[..request.order.as_ref().ok_or(Error::InvalidQuery)?.len()].to_vec();
+    // Every requested field has been admitted. Equal components contribute
+    // neither ordering nor tie-breaking bytes to the complete sort.
+    let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
+    let mut varying = Vec::with_capacity(order.len() + 1);
+    for (i, name) in order.iter().enumerate() {
+        if equality(request, name).is_none() {
+            varying.push(positions[i]);
+        }
+    }
     let primary = entity
         .field_position(entity.primary_key)
         .ok_or(Error::InvalidQuery)?;
-    if positions.last().map(|(position, _)| *position) != Some(primary) {
-        positions.push((primary, false));
+    if varying.last().map(|field| field.position) != Some(primary) {
+        varying.push(SortField {
+            position: primary,
+            member: None,
+            descending: false,
+        });
     }
 
-    Ok(Path::Sort(positions))
+    Ok(Path::Sort(varying))
 }
 
 /// A full unique key has at most one owner, so using it preserves primary order.

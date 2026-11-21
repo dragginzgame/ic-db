@@ -85,6 +85,7 @@ mod defaults;
 mod float;
 mod key;
 mod managed;
+mod member;
 mod primary;
 mod schema;
 mod session;
@@ -384,7 +385,7 @@ pub mod __private {
         const NAME: &'static str;
     }
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
-    pub use crate::key::encode_index;
+    pub use crate::key::{MemberOperand, encode_index};
     pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
     pub use crate::schema::{check_schema_member, handle};
@@ -394,4 +395,27 @@ pub mod __private {
         /// None means the row is outside an explicitly present-only unique index.
         pub indexes: Vec<Option<Vec<u8>>>,
     }
+}
+
+/// Join two generated field-name constants for a scalar record member.
+/// For example, `ic_db::field_path!(Product::PRICE, Price::AMOUNT)` is a
+/// static field name accepted by scalar literal filters and row ordering.
+#[macro_export]
+macro_rules! field_path {
+    ($record:path, $member:path $(,)?) => {{
+        const BYTES: [u8; $record.len() + 1 + $member.len()] = {
+            let mut bytes = [0; $record.len() + 1 + $member.len()];
+            let (parent, tail) = bytes.split_at_mut($record.len());
+            parent.copy_from_slice($record.as_bytes());
+            tail[0] = b'.';
+            tail.split_at_mut(1).1.copy_from_slice($member.as_bytes());
+            bytes
+        };
+        const {
+            match ::core::str::from_utf8(&BYTES) {
+                Ok(path) => path,
+                Err(_) => panic!("invalid field name"),
+            }
+        }
+    }};
 }

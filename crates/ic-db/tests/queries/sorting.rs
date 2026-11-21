@@ -443,7 +443,7 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
             .insert(&SortRow {
                 id: i as u64,
                 label: label.map(str::to_owned),
-                payload: vec![],
+                payload: vec![0; 2048],
             })
             .unwrap();
     }
@@ -510,6 +510,29 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
     );
     assert_eq!(page.examined, input.len());
     assert!(page.next.is_none());
+    // The escaped Blob alone exceeds the comparison-key cap, but it is the
+    // same for every matching row. Only label and the owner tie-breaker vary.
+    let payload = [0_u8; 2048];
+    let sorted = || {
+        db.query::<SortRow>()
+            .eq(SortRow::PAYLOAD, payload.as_slice())
+            .order_asc(SortRow::PAYLOAD)
+            .order_desc(SortRow::LABEL)
+    };
+    let labels = sorted().distinct().fetch_as::<LabelOnly>().unwrap();
+    assert_eq!(
+        labels
+            .rows
+            .iter()
+            .map(|r| r.label.as_deref())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let rows = sorted().fetch().unwrap();
+    assert_eq!(
+        rows.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [2, 0, 4, 5, 6, 3, 1]
+    );
     // A legal row can still exceed the independently bounded sort key.
     let mut batch = Batch::new();
     batch

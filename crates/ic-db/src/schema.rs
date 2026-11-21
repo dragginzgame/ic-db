@@ -226,6 +226,19 @@ impl EntitySchema {
             .map(|position| &self.fields[position])
     }
 
+    pub(crate) fn record_member(&self, path: &str) -> Option<(usize, crate::member::RecordMember)> {
+        let (parent, child) = path.split_once('.')?;
+        let position = self.field_position(parent)?;
+        let member =
+            crate::member::RecordMember::resolve(self.fields[position].value, child).ok()?;
+        Some((position, member))
+    }
+
+    pub(crate) fn index_field(&self, name: &str) -> Option<&FieldSchema> {
+        self.field_by_name(name)
+            .or_else(|| self.record_member(name).map(|(_, member)| member.field()))
+    }
+
     pub(crate) fn index_by_name(&self, name: &str) -> Option<&IndexSchema> {
         self.indexes.iter().find(|index| index.name == name)
     }
@@ -244,9 +257,10 @@ impl EntitySchema {
     // only selected key values; no entity or owned text/blob materialization.
     pub(crate) fn inspect_row(&self, bytes: &[u8]) -> Result<RowInfo, Error> {
         let mut values = [IndexValue::Absent; MAX_FIELDS];
-        self.inspect_values(bytes, self.key_fields(), &mut values)?;
+        let mut spans = [(0, 0); MAX_FIELDS];
+        self.inspect_fields(bytes, self.key_fields(), &mut values, Some(&mut spans))?;
 
-        self.row_info(&values)
+        self.row_info(&values, bytes, &spans)
     }
 
     pub(crate) fn key_fields(&self) -> u16 {
@@ -266,14 +280,6 @@ impl EntitySchema {
     // One bounded borrowed field view serves mutation integrity and predicates.
     // Unselected fields are still validated, never silently trusted or materialized.
     // Callers supply fresh absent slots; filling in place avoids copying the view.
-    pub(crate) fn inspect_values<'a>(
-        &self,
-        bytes: &'a [u8],
-        selected: u16,
-        keys: &mut [IndexValue<'a>; MAX_FIELDS],
-    ) -> Result<(), Error> {
-        self.inspect_fields(bytes, selected, keys, None)
-    }
     // Projection captures validated byte ranges, including presence tags. There
     // is still one row decoder and one shared depth/node/collection budget.
     pub(crate) fn inspect_fields<'a>(
@@ -310,7 +316,12 @@ impl EntitySchema {
         Ok(())
     }
 
-    pub(crate) fn row_info(&self, keys: &[IndexValue<'_>; MAX_FIELDS]) -> Result<RowInfo, Error> {
+    pub(crate) fn row_info<'a>(
+        &self,
+        keys: &[IndexValue<'a>; MAX_FIELDS],
+        bytes: &'a [u8],
+        spans: &[(u16, u16); MAX_FIELDS],
+    ) -> Result<RowInfo, Error> {
         let position = |name: &str| self.field_position(name).ok_or(Error::Corrupt);
         let indexes = self
             .indexes
@@ -318,8 +329,16 @@ impl EntitySchema {
             .map(|index| {
                 let mut components = [(IndexValue::Absent, false); 4];
                 for (slot, name) in components.iter_mut().zip(index.fields) {
-                    let position = position(name)?;
-                    *slot = (keys[position], self.fields[position].optional);
+                    *slot = if let Some(position) = self.field_position(name) {
+                        (keys[position], self.fields[position].optional)
+                    } else {
+                        let (parent, member) = self.record_member(name).ok_or(Error::Corrupt)?;
+                        let (start, end) = spans[parent];
+                        (
+                            member.read(&bytes[usize::from(start)..usize::from(end)], false)?,
+                            false,
+                        )
+                    };
                     if slot.0 == IndexValue::Absent && !slot.1 {
                         return Err(Error::Corrupt);
                     }
@@ -465,15 +484,32 @@ impl Schema {
                 bytes.push(u8::from(index.unique) | (u8::from(index.present_only) << 1));
                 bytes.extend((index.fields.len() as u32).to_le_bytes());
                 for field in index.fields {
-                    if !entity
-                        .fields
-                        .iter()
-                        .any(|declared| declared.name == *field && key::supports(declared.value))
-                        || !fields.insert(field)
-                    {
+                    if !fields.insert(field) {
                         return Err(Error::InvalidSchema);
                     }
-                    name(&mut bytes, field)?;
+                    if let Some(declared) = entity.field_by_name(field) {
+                        if !key::supports(declared.value) {
+                            return Err(Error::InvalidSchema);
+                        }
+                        name(&mut bytes, field)?;
+                    } else {
+                        let (parent, member) =
+                            entity.record_member(field).ok_or(Error::InvalidSchema)?;
+                        let parent = &entity.fields[parent];
+                        let leaf = member.field();
+                        if index.unique
+                            || index.fields.len() != 1
+                            || parent.optional
+                            || leaf.optional
+                        {
+                            return Err(Error::InvalidSchema);
+                        }
+                        // Outside the 1..=64 length domain of a flat field. Each path part
+                        // owns its own frame, including when the index has an explicit name.
+                        bytes.extend(u32::MAX.to_le_bytes());
+                        name(&mut bytes, parent.name)?;
+                        name(&mut bytes, leaf.name)?;
+                    }
                 }
             }
             if entity

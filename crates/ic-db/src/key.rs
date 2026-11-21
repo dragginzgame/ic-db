@@ -101,8 +101,8 @@ impl<'a> IndexValue<'a> {
             ) => {
                 let expected = (link.definition)();
 
+                // Exact equality transfers the operand's whole-definition check to the field.
                 if unit_enum_len(definition).is_some_and(|len| usize::from(ordinal) < len)
-                    && unit_enum_len(expected).is_some()
                     && link.name == definition.name
                     && definition == expected
                 {
@@ -306,6 +306,19 @@ pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Op
     }
 
     Some(bytes)
+}
+
+// Method dispatch at the generated field access copies scalar operands and
+// auto-borrows String/Vec. A Subaccount by value keeps its own key encoding.
+#[doc(hidden)]
+pub trait MemberOperand<'a> {
+    fn __ic_db_member_operand(self) -> IndexValue<'a>;
+}
+
+impl<'a, T: Into<IndexValue<'a>>> MemberOperand<'a> for T {
+    fn __ic_db_member_operand(self) -> IndexValue<'a> {
+        self.into()
+    }
 }
 
 impl<'a, T: Into<IndexValue<'a>>> From<Option<T>> for IndexValue<'a> {

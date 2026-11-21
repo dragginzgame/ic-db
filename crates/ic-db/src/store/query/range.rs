@@ -48,18 +48,39 @@ impl Endpoint {
     }
 }
 
+// A physical component names the complete scalar. Siblings share the parent slot.
+fn matches_field(entity: &EntitySchema, term: &Term, path: &str) -> bool {
+    let parent = entity.fields[term.position].name;
+    match &term.operand {
+        TermOperand::Nested { member, .. } => {
+            path.split_once('.') == Some((parent, member.field().name))
+        }
+        _ => path == parent,
+    }
+}
+
+fn literal(term: &Term) -> Option<(&[u8], bool)> {
+    match &term.operand {
+        TermOperand::Literal { bytes, absent }
+        | TermOperand::Nested {
+            literal: bytes,
+            absent,
+            ..
+        } => Some((bytes, *absent)),
+        _ => None,
+    }
+}
+
 // Report the actual encoded operand used to tighten this path. A residual
 // operand may exceed the physical key bound even when its query is valid.
 fn bound_operand(term: &Term, secondary: bool, prefix_len: usize) -> Result<Option<&[u8]>, Error> {
-    let TermOperand::Literal { bytes, absent } = &term.operand else {
+    let Some((bytes, absent)) = literal(term) else {
         return Ok(None);
     };
     let operand = match term.comparison {
-        Comparison::Eq | Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
-            bytes.as_slice()
-        }
+        Comparison::Eq | Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => bytes,
         // All present optional components start with 01, including empty values.
-        Comparison::Ne if secondary && *absent => &[1][..],
+        Comparison::Ne if secondary && absent => &[1][..],
         // Drop the terminator but retain escaping and the optional-present tag.
         Comparison::StartsWith if secondary => {
             bytes.strip_suffix(&[0, 0]).ok_or(Error::InvalidQuery)?
@@ -98,7 +119,7 @@ pub(super) fn bounds_key_term(
     prefix_len: usize,
 ) -> bool {
     next_field(entity, index, fixed).is_some_and(|(name, secondary)| {
-        name == entity.fields[term.position].name
+        matches_field(entity, term, name)
             && matches!(bound_operand(term, secondary, prefix_len), Ok(Some(_)))
     })
 }
@@ -131,9 +152,12 @@ pub(super) fn has_secondary_bound(
 ) -> bool {
     plan.clauses().any(|clause| {
         if let [term] = clause
-            && let TermOperand::Literal { bytes, .. } = &term.operand
+            && let Some((bytes, _)) = literal(term)
         {
-            let field = &entity.fields[term.position];
+            let field = match &term.operand {
+                TermOperand::Nested { member, .. } => member.field(),
+                _ => &entity.fields[term.position],
+            };
             // The lowest/highest possible fixed-width key excludes no candidates
             // at an inclusive bound. An optional field has a separate absence tag.
             if !field.optional
@@ -161,7 +185,7 @@ fn membership_interval<'a>(
     prefix_len: usize,
 ) -> Option<(&'a [u8], &'a [u8])> {
     let mut operands = clause.iter().map(|term| {
-        if entity.fields[term.position].name == field && term.comparison == Comparison::Eq {
+        if matches_field(entity, term, field) && term.comparison == Comparison::Eq {
             bound_operand(term, false, prefix_len).ok().flatten()
         } else {
             None
@@ -304,7 +328,7 @@ pub(super) fn bounds(
                 }
                 continue;
             };
-            if entity.fields[term.position].name != field {
+            if !matches_field(entity, term, field) {
                 continue;
             }
             let Some(operand) = bound_operand(term, secondary, plan.prefix.len())? else {

@@ -569,7 +569,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Add an AND term over a top-level field. Lists and sets support exact scalar membership with `Contains`.
+    /// Add an AND term. A top-level list or set supports exact scalar membership with `Contains`.
+    /// A direct scalar record member selected by [`crate::field_path!`] accepts
+    /// Eq, Ne, Lt, Le, Gt and Ge against a literal.
     /// Eq/Ne with `IndexValue::Absent` also accept any optional stored field,
     /// including blobs and containers. Empty values are present, not absent.
     /// All operands are admitted before storage reads, including contradictory terms.
@@ -724,7 +726,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         ])
     }
 
-    /// Add an OR clause of exact top-level comparisons, ANDed with other filters.
+    /// Add an OR clause of literal comparisons, ANDed with other filters.
+    /// Alternatives may compare different direct scalar members of a record.
     /// Each clause must contain at least one comparison; all filters together
     /// may contain at most eight. Empty/oversized clauses refuse with `Error::Limit`
     /// at execution. Every operand is admitted, even if another alternative matches.
@@ -828,7 +831,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Replace the current order with 1..=4 distinct top-level ordered fields, then the primary key.
+    /// Replace the current order with 1..=4 distinct ordered scalar fields, then the primary key.
+    /// A direct record member can be selected with [`crate::field_path!`].
     /// An explicitly listed primary key must be last. All fields share one
     /// direction, reversed by `descending`. Prefer a complete ordered path.
     /// Otherwise scan to completion while retaining the best `limit` rows within
@@ -1076,6 +1080,11 @@ enum TermOperand {
         item: FieldType,
         needle: MemberNeedle,
     },
+    Nested {
+        member: crate::member::RecordMember,
+        literal: Vec<u8>,
+        absent: bool,
+    },
     Field(usize),
     Length(u32),
 }
@@ -1219,7 +1228,7 @@ struct Plan<'a> {
     binding: [u8; 32],
     projection: Option<u16>,
     distinct: distinct::Strategy,
-    sort: Option<Vec<(usize, bool)>>,
+    sort: Option<Vec<order::SortField>>,
     descending: bool,
 }
 impl<'a> Plan<'a> {
@@ -1292,10 +1301,34 @@ impl<'a> Plan<'a> {
             descending: request.descending ^ request.primary_descending(entity),
         };
         for predicate in &request.predicates {
-            let position = entity
-                .field_position(predicate.field)
-                .ok_or(Error::InvalidQuery)?;
+            let (position, member) = crate::member::resolve_field(entity, predicate.field)?;
             let field = &entity.fields[position];
+            if let Some(member) = member {
+                if !predicate.comparison.is_relational() {
+                    return Err(Error::InvalidQuery);
+                }
+                let leaf = member.field();
+                let QueryOperand::Literal(value) = predicate.operand else {
+                    return Err(Error::InvalidQuery);
+                };
+                predicate
+                    .comparison
+                    .admit(leaf.value, field.optional || leaf.optional, value)?;
+                let mut literal = Vec::new();
+                value.append_component(false, &mut literal);
+                plan.span_fields |= 1 << position;
+                plan.terms.push(Term {
+                    position,
+                    comparison: predicate.comparison,
+                    operand: TermOperand::Nested {
+                        member,
+                        literal,
+                        absent: value == IndexValue::Absent,
+                    },
+                    or_next: predicate.or_next,
+                });
+                continue;
+            }
             let member = if predicate.comparison == Comparison::Contains {
                 member_type(field.value)
             } else {
@@ -1400,23 +1433,20 @@ impl<'a> Plan<'a> {
             order::Path::Index(path) => plan.use_index(entity, path),
             order::Path::Sort(fields) => {
                 order::select_filtered_path(entity, request, &mut plan, false)?;
-                for &(position, _) in &fields {
-                    plan.selected |= 1 << position;
+                for field in &fields {
+                    if field.member.is_some() {
+                        plan.span_fields |= 1 << field.position;
+                    } else {
+                        plan.selected |= 1 << field.position;
+                    }
                 }
                 plan.sort = Some(fields);
             }
         }
         if request.distinct {
-            plan.distinct = distinct::admit(
-                entity,
-                request,
-                plan.projection,
-                plan.index,
-                plan.fixed_components,
-                plan.sort.is_some(),
-            )?;
-            if plan.distinct == distinct::Strategy::Complete {
-                plan.selected |= plan.projection.ok_or(Error::InvalidQuery)?;
+            plan.distinct = distinct::admit(entity, request, &plan)?;
+            if let distinct::Strategy::Complete { key_fields } = plan.distinct {
+                plan.selected |= key_fields;
             }
         }
         let mut hash = Sha256::new();
@@ -1430,6 +1460,16 @@ impl<'a> Plan<'a> {
             hash.update([term.position as u8, term.comparison as u8]);
 
             match &term.operand {
+                TermOperand::Nested {
+                    member,
+                    literal,
+                    absent,
+                } => {
+                    hash.update((u32::MAX - 2).to_le_bytes());
+                    hash.update([member.position() as u8, u8::from(*absent)]);
+                    hash.update((literal.len() as u32).to_le_bytes());
+                    hash.update(literal);
+                }
                 TermOperand::Literal { bytes, .. }
                 | TermOperand::Member {
                     needle: MemberNeedle::Literal(bytes),
@@ -1469,7 +1509,13 @@ impl<'a> Plan<'a> {
             hash.update([order.len() as u8]);
             for name in order {
                 // Field names were admitted by order selection above.
-                hash.update([entity.field_position(name).ok_or(Error::InvalidQuery)? as u8]);
+                if let Some(position) = entity.field_position(name) {
+                    hash.update([position as u8]);
+                } else {
+                    // A top-level position is at most 15. Frame each admitted nested path.
+                    hash.update([u8::MAX, name.len() as u8]);
+                    hash.update(name.as_bytes());
+                }
             }
         }
         if request.order_descending != 0 {
@@ -1548,7 +1594,7 @@ fn consume_index_component(
     name: &str,
     remaining: &mut &[u8],
 ) -> Result<(), Error> {
-    let field = entity.field_by_name(name).ok_or(Error::InvalidQuery)?;
+    let field = entity.index_field(name).ok_or(Error::InvalidQuery)?;
 
     key::consume_component(remaining, field, index.present_only, Error::InvalidCursor)
 }
@@ -1614,9 +1660,10 @@ fn execute_inner<M: Memory>(
     };
     let terminal = range::terminal_key(&bounds, plan.descending);
     let mut entries = map.range((bounds.0.as_ref(), bounds.1.as_ref()));
-    let mut collected = if plan.distinct == distinct::Strategy::Complete {
+    let mut collected = if let distinct::Strategy::Complete { key_fields } = plan.distinct {
         Some(distinct::Collection::new(
             plan.projection.ok_or(Error::InvalidQuery)?,
+            key_fields,
         ))
     } else {
         None
@@ -1675,21 +1722,48 @@ fn execute_inner<M: Memory>(
             &bytes,
             plan.selected,
             &mut values,
-            (plan.span_fields != 0
-                || plan.projection.is_some()
-                || aggregate.as_ref().is_some_and(|a| a.needs_spans()))
+            (plan.index.is_some()
+                || plan.span_fields != 0
+                || match &aggregate {
+                    Some(accumulator) => accumulator.needs_spans(),
+                    None => plan.projection.is_some(),
+                })
             .then_some(&mut spans),
         )?;
         if RowKey::from_index(values[plan.primary])? != owner {
             return Err(Error::Corrupt);
         }
         if plan.index.is_some() {
-            validate_index_entry(entity, &entity.row_info(&values)?, owner, stored_key)?;
+            validate_index_entry(
+                entity,
+                &entity.row_info(&values, &bytes, &spans)?,
+                owner,
+                stored_key,
+            )?;
         }
         let mut accepts = |term: &Term| -> Result<bool, Error> {
             let value = values[term.position];
             component.clear();
             let (operand, optional) = match &term.operand {
+                TermOperand::Nested {
+                    member,
+                    literal,
+                    absent,
+                } => {
+                    let (start, end) = spans[term.position];
+                    let span = &bytes[usize::from(start)..usize::from(end)];
+                    let optional = entity.fields[term.position].optional;
+                    let value = member.read(span, optional)?;
+                    if *absent {
+                        return Ok(term.comparison.accepts_absent(value == IndexValue::Absent));
+                    }
+                    value.append_component(false, &mut component);
+                    return Ok(term.comparison.accepts(
+                        (value != IndexValue::Absent).then_some(&component),
+                        Some(literal),
+                        false,
+                    ));
+                }
                 TermOperand::Literal { absent: true, .. }
                     if plan.span_fields & (1 << term.position) != 0 =>
                 {

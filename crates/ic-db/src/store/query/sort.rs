@@ -45,15 +45,23 @@ impl Collection {
         let order = plan.sort.as_ref().ok_or(Error::InvalidQuery)?;
         // Trailing fields only order representatives of the same projected
         // value. Its leading components suffice for both ranking and equality.
-        for &(position, descending) in order.iter().take(self.prefix_len.unwrap_or(order.len())) {
+        for field in order.iter().take(self.prefix_len.unwrap_or(order.len())) {
             let start = key.len();
-            values[position].append_component(entity.fields[position].optional, &mut key);
+            let position = field.position;
+            let optional = entity.fields[position].optional;
+            if let Some(member) = &field.member {
+                let (start, end) = spans[position];
+                let value = member.read(&bytes[usize::from(start)..usize::from(end)], optional)?;
+                value.append_component(optional || member.field().optional, &mut key);
+            } else {
+                values[position].append_component(optional, &mut key);
+            }
             if key.len() > MAX_COMPARISON_KEY {
                 return Err(Error::Limit);
             }
             // Components are prefix-free (including text terminators and absence).
             // Complementing one component reverses it without changing later ties.
-            if descending {
+            if field.descending {
                 for byte in &mut key[start..] {
                     *byte = !*byte;
                 }

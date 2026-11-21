@@ -303,3 +303,98 @@ fn selected_index_read_checks_unrelated_complete_key_bound() {
     ));
     assert_eq!(*backing.borrow(), before);
 }
+
+///
+/// Labels
+/// Holds bounded text and raw bytes for two member indexes.
+///
+#[record(fields(
+    field(name = "text", value(item(prim = "Text", max_bytes = 512))),
+    field(name = "blob", value(item(prim = "Blob", max_bytes = 512)))
+))]
+struct Labels {}
+
+///
+/// LabeledRow
+/// Exercises both member indexes at the complete physical key limit.
+///
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(field = "labels.text"),
+    index(field = "labels.blob"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "labels", value(item(is = "Labels")))
+    )
+)]
+struct LabeledRow {}
+
+#[test]
+fn nested_text_and_blob_keys_charge_escaped_bytes_before_committing() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let slot = StableKey::parse("test.keys.v1").unwrap();
+    let memory = || runtime.open_memory(&slot).unwrap();
+    let schema = Schema::new(&[LabeledRow::SCHEMA]).unwrap();
+    let mut db = Database::create(memory(), schema.clone(), [2; 16]).unwrap();
+    // 9 header + 246 escaped zeros (492) + 1 nonzero + 2 terminator + 8 owner.
+    let mut blob = vec![0; 246];
+    blob.push(255);
+    let row = LabeledRow {
+        id: 1,
+        labels: Labels {
+            text: format!("{}x", "\0".repeat(246)),
+            blob,
+        },
+    };
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    let mut db = Database::open(memory(), schema).unwrap();
+    for text in [true, false] {
+        let before = backing.borrow().clone();
+        let mut oversized = row.clone();
+        if text {
+            oversized.labels.text.push('x');
+        } else {
+            oversized.labels.blob.push(255);
+        }
+        let mut batch = Batch::new();
+        batch
+            .insert(&LabeledRow {
+                id: 2,
+                labels: Labels {
+                    text: String::new(),
+                    blob: Vec::new(),
+                },
+            })
+            .unwrap();
+        batch.replace(&oversized).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::Limit)));
+        assert_eq!(*backing.borrow(), before);
+    }
+    let mut batch = Batch::new();
+    batch.delete::<LabeledRow>(1).unwrap();
+    db.commit(batch).unwrap();
+    for (path, value) in [
+        (
+            ic_db::field_path!(LabeledRow::LABELS, Labels::TEXT),
+            ic_db::IndexValue::from(&row.labels.text),
+        ),
+        (
+            ic_db::field_path!(LabeledRow::LABELS, Labels::BLOB),
+            ic_db::IndexValue::from(&row.labels.blob),
+        ),
+    ] {
+        assert_eq!(
+            db.query::<LabeledRow>()
+                .eq(path, value)
+                .count()
+                .unwrap()
+                .value,
+            0
+        );
+    }
+}

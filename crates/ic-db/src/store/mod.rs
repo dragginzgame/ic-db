@@ -856,7 +856,7 @@ fn admit_index_prefix(
     }
     let mut prefix = index_prefix(entity.id, index.id);
     for (value, name) in values.iter().zip(index.fields) {
-        let field = entity.field_by_name(name).ok_or(Error::InvalidSchema)?;
+        let field = entity.index_field(name).ok_or(Error::InvalidSchema)?;
         value.admit(field.value, field.optional)?;
         if index.present_only && *value == IndexValue::Absent {
             return Err(Error::InvalidOperand);
@@ -872,7 +872,7 @@ fn admit_index_prefix(
         key::minimum_bytes(entity.key_type()?)?
     };
     for name in &index.fields[values.len()..] {
-        let field = entity.field_by_name(name).ok_or(Error::InvalidSchema)?;
+        let field = entity.index_field(name).ok_or(Error::InvalidSchema)?;
         completion += if field.optional && !index.present_only {
             1
         } else {
@@ -904,7 +904,7 @@ fn visit_index_components(
         };
         let mut remaining = values.as_slice();
         for name in index.fields {
-            let field = entity.field_by_name(name).ok_or(Error::Corrupt)?;
+            let field = entity.index_field(name).ok_or(Error::Corrupt)?;
             key::consume_component(&mut remaining, field, index.present_only, Error::Corrupt)?;
         }
         if !remaining.is_empty() {

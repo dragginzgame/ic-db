@@ -101,6 +101,31 @@ let page = db.query::<Entry>()
     .fetch()?;
 ```
 
+For a scalar inside a named record, join the two generated field constants.
+The query checks the member against the entity's compiled schema before scanning.
+
+```rust
+const AMOUNT: &str = ic_db::field_path!(Product::PRICE, Price::AMOUNT);
+let page = db.query::<Product>().gt(AMOUNT, minimum).order_asc(AMOUNT).limit(10).fetch()?;
+```
+
+An absent price or amount matches `filter_absent(AMOUNT)`. This first version
+supports literal comparisons and bounded sorting one record deep. Both kinds of absence
+sort together before present amounts in ascending order. The primary key breaks ties.
+A nonunique index may select a required scalar member of a required record.
+Primitive-backed `#[newtype]` members use the underlying scalar order. Unit
+enums use canonical variant-name order and require an operand of the declared
+enum type. Text uses UTF-8 byte order and Blob
+uses raw byte order. The 512-byte physical key limit includes escaped zeros,
+the terminator, the index header and the owner key.
+For example, an entity can declare
+`index(name = "by_reading", fields = ["first.right"])`. Ordinary `.eq()` selects
+the index. For an ordered range, combine `.gte(path, low).lt(path, high)` with
+`.order_asc(path)`. A sibling field can still filter the resulting rows.
+The full member path is part of the schema fingerprint. If a record
+declares a field called `name`, `Record::NAME`
+denotes that field and `<Record as ic_db::Value>::NAME` denotes the type.
+
 For an entity with a unique compound index on `issuer` and `subject`, use
 ordinary equality filters. The result is an `Option<UserRoute>`:
 
@@ -868,7 +893,7 @@ Unit enums also support `#[set(item(is = "Status"), max_items = 3)]` and
 `#[map(key(is = "Status"), value(item(prim = "Nat64")), max_items = 3)]`.
 Their canonical variant-name order agrees with secondary indexes. Stored duplicate,
 reversed or invalid variants refuse before collection construction. Inspect
-`db schema EnumCollectionsRow` for an example. Payload-enum/nested/collection
+`db schema EnumCollectionsRow` for an example. Payload-enum and collection
 indexes, nested references and other named collection keys/elements remain work.
 Schema values implement Serde by default. Endpoint arguments can use a bare
 `ic_db::Ulid` (fixed 16-byte array in binary formats, canonical text in JSON).

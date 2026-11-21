@@ -237,7 +237,7 @@ impl SubAssign for Duration {
 
 /// Signed Unix-millisecond timestamp, including instants before 1970.
 /// Sub-millisecond conversions floor; arithmetic operators saturate only after
-/// the complete wide operation. This value never reads the clock.
+/// the complete wide operation.
 #[derive(
     Clone,
     Copy,
@@ -256,6 +256,13 @@ impl SubAssign for Duration {
 pub struct Timestamp(i64);
 
 impl Timestamp {
+    /// Current Unix time, truncated to whole milliseconds.
+    /// Uses IC execution time on Wasm and the system clock on native hosts.
+    #[must_use]
+    pub fn now() -> Self {
+        Self::EPOCH + Duration::from_nanos_truncating(crate::clock::time_ns())
+    }
+
     /// Unix epoch.
     pub const EPOCH: Self = Self(0);
     /// Minimum timestamp.

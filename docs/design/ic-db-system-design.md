@@ -695,7 +695,7 @@ payload, recursive graph/depth and exact-admission lessons (`6d421e3`,
 `icydb-core/src/db/schema/enum_catalog/codec/tests.rs`). It does not copy catalog
 publication, persisted variant assignments, per-slot framing or Wire conversion.
 Independent bytes/hashes and native/Wasm boundary, rollback and reopen witnesses
-qualify this implementation. Nested references/indexes, payload-enum/record/collection
+qualify this implementation. Broader nested indexes, nested references, payload-enum/record/collection
 keys and set elements, tuples and other retained types remain later increments.
 
 Named value wrappers use the existing field codecs. `#[list(item(...), max_items = N)]`
@@ -788,7 +788,7 @@ Key order is the same exact scalar/unit-enum order as sets. Values use ordinary 
 optional, bounded-list and named-type semantics, without an ordering requirement.
 Keys cannot be optional or containers. Named keys admit unit enums and primitive-backed newtypes. Boxing
 a unit enum preserves its logical order and stored contract.
-Nested entity references, normalizers and member indexes remain unimplemented.
+Nested entity references, normalizers and map member indexes remain unimplemented.
 
 Map bytes are a u32 entry count followed by ordered key/value pairs. One shared
 set/map traversal rejects non-increasing keys before a Rust collection can erase
@@ -1425,6 +1425,43 @@ is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
 
+A scalar literal predicate may select one child of a named record. The static
+`field_path!` spelling joins generated field names. Admission resolves the pair
+before planning and binds the child position and exact literal to the query.
+This follows frozen IcyDB `6d421e3`'s separation of schema-aware predicate
+validation from traversal in `db/query/predicate/validate.rs`. The executor reads
+the child from the validated parent span using the row codec. Absence at either
+level gives the ordinary absent scalar. Presence filters use that scalar's
+presence directly and skip encoding a comparison key.
+Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
+validated scalar for the bounded complete sorter. A missing parent and missing
+member share one absent sort key. Ordinary direction and primary tie-breaker
+rules apply. A physical member index admits one required indexable scalar in a
+required record, with nonunique membership. Typed writes copy scalar operands or borrow Text and Blob at the generated
+field access. Subaccount retains its by-value operand identity. Text and Blob
+reuse the flat index codec's zero escaping, terminator and complete-key cap.
+Frozen IcyDB `6d421e3` uses the same byte ordering in
+`db/index/key/ordered/segments.rs`. Member admission shares the flat index scalar check. A primitive-backed
+newtype uses the inner key encoding. A unit enum carries its compiled definition
+when admitting operands and uses canonical variant ordinals in keys. This retains
+the enum identity check exercised in frozen IcyDB's
+`db/index/key/build/accepted_enum_tests.rs` using IC DB's existing schema graph. Literal equality and range bounds use the existing ordered key encoding. Range
+admission matches both parent and member. Each bound applies to every owner
+tied on its scalar value. A default-order row query still preserves primary-key
+order. A count fully covered by the range can count index entries directly.
+A typed write reads the member directly. Owner verification, replacement and
+deletion derive the same component from the validated parent span. Frozen IcyDB `6d421e3` uses the same field-path key
+builder for maintenance and integrity verification
+(`db/index/plan/mod.rs` and `db/index/plan/integrity.rs`). Preserve that
+agreement between typed writes, stored-row decoding and owner verification.
+The [matched index control](../../qualification/README.md#direct-record-member-growth-and-read-cost-0265-development)
+and physical-key probe cover a required Nat16 member on insert, lookup,
+replacement and deletion. The experiment supported reusing the existing key
+codec and owner verification. A product index must bind both parent and member
+in its schema contract. Changing the member under the same logical index name
+requires an admitted transition and rebuilding the index. The fingerprint frames parent and member separately under a tag outside the
+flat-field length domain. Existing flat indexes retain their grammar.
+
 An ordinary indexed read validates the complete owner row and its membership
 in the visited index before residual filtering. Frozen IcyDB’s integrity
 verifier derives the expected physical key for one index from the owner;
@@ -1682,7 +1719,8 @@ They checkpoint the existing grouped average's exact total and present count.
 Both synchronous results and completed retained pages use the same group
 finalizer, including range checks on groups beyond the requested page.
 The finalizer encodes a sum or average comparison key only when a group filter
-or ordering uses that measure. Group-key order comes from the accumulated map.
+or ordering uses that measure. Count ordering compares the completed counts
+directly. Group-key order comes from the accumulated map.
 Scalar sums and averages require only the output record. Single-measure grouped
 sums and averages also encode a comparison key when a result predicate or
 aggregate-value ordering needs one.
@@ -2334,7 +2372,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | Milestone | Delivered and checked | Remaining boundary |
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
-| M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, nested indexes/references, composite primary keys and additional authoring policies |
+| M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, broader member indexes, nested references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, richer operation combinations and representative contention/query-growth costs |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
@@ -3070,7 +3108,10 @@ resource refusal and direction-bound cursors across upgrades.
 
 Sorted DISTINCT accepts inherently unique entity/primary-bearing projections.
 For other projections, require all varying projected fields to lead the explicit
-order, ignoring components fixed by a mandatory literal equality. If every
+order, ignoring components fixed by a mandatory literal equality. This includes
+a direct scalar member fixed on its complete path. The complete sorter validates the requested
+order, then omits fixed components from the physical sort key for both ordinary
+and DISTINCT results. Fixing a sibling leaves the sort member free to vary. If every
 projected field is fixed, matching rows form one class with an empty comparison
 key. An empty input still returns zero rows and a full scan is still required.
 Trailing fields only distinguish source rows with an equal projection. Encode
@@ -3165,7 +3206,10 @@ from `db/executor/projection/materialize/distinct` and
 For ordered scalar/unit-enum projections without the adjacency proof, the same
 scanner collects all matching input in one synchronous operation. A bounded
 comparison-key set detects nonadjacent duplicates using the same exact tuple
-encoding as grouping and DISTINCT counts. The scanner searches a sorted vector
+encoding as grouping and DISTINCT counts. It compares all varying projected
+fields and omits fields fixed by mandatory literal equality or the selected
+index prefix. Each emitted row still includes the complete projection and is
+charged at its full size. The scanner searches a sorted vector
 of owned keys by borrowing its scratch buffer. Only a newly seen tuple retains
 a key and a projected row. Keep only the first matching projected
 record per key, in physical traversal order (reversed for descending queries).
@@ -3307,7 +3351,10 @@ selection as existence and check every visited owner before counting matches.
 groups with zero present operands. `count_distinct::<Record>()` counts projected
 tuples, including absence, using a bounded comparison-key set; output `limit` does
 not truncate this scalar count. Filtering out absence before distinct counting
-expresses distinct-present counting.
+expresses distinct-present counting. The synchronous scalar count shares the
+fixed-field proof with projected DISTINCT. Its comparison key contains only
+varying fields. A fully fixed tuple still requires a matching row, and the
+scan must establish exhaustion. Retained jobs keep their full checkpoint keys.
 Grouping uses exact top-level ordered scalar/unit-enum record fields. It does not
 require an index or contiguous groups: a bounded transient map uses the existing
 ordered component codec for tuple equality and order. Output keys follow canonical
@@ -3355,6 +3402,10 @@ tuples inside each group, with overlap between the projections allowed. It share
 one distinct reducer with scalar `count_distinct`: store comparison keys only,
 using the same tuple encoder as group keys. An absent tuple participates, so an
 all-absent group counts one. This remains separate from present-field counting.
+Within a synchronous group, operand fields fixed by the group key, mandatory
+literal equality or the selected index prefix consume no per-tuple key bytes.
+The complete group key still counts against its own resource limits. Retained
+jobs validate and store complete operand keys in their existing format.
 Scalar distinct counting no longer retains a group map and projected-record copies.
 
 Each set admits at most 32 distinct keys, independently of the 32-group cap. The
@@ -3893,13 +3944,14 @@ Preserve duration integer/suffix parsing with checked scaling and timestamp inte
 or strict RFC3339 parsing, including offsets and fractional flooring. Timestamp
 calendar parsing shares `Date::parse` rather than duplicating calendar admission.
 The timestamp numeric domain is wider than the parser's four-digit calendar;
-display uses integer milliseconds. Omit Serde/Wire, runtime clock access, timers
+display uses integer milliseconds. Omit Serde/Wire, timers
 and managed write policies. No dependency or durable state is added. Native/Wasm
 witnesses carry the relevant IcyDB flooring, offset, invalid-calendar, overflow and
 full-range arithmetic cases, and independently check bytes, schema identity,
 collection ordering, unique swaps/refusals, rollback and upgrade preservation.
 Managed created/updated timestamps are implemented as the separate write policy
-described in section 4; these scalar constructors do not read a clock.
+described in section 4. Applications can explicitly capture a batch time with
+`Timestamp::now()`, which reads the IC execution clock on Wasm and system time on native hosts.
 
 Decimal fields use `value(item(prim="Decimal", scale=2))`; declared scale 0–28
 is required, including for list elements and scalar set/map keys. The maintainer

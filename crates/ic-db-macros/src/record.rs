@@ -78,6 +78,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     } else {
         quote!(reader)
     };
+    let field_constants = super::field_constants(&fields, &item.ident)?;
     let ident = item.ident;
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs)?;
@@ -86,6 +87,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #ident { #(#[doc="Authored stored field."] pub #ids: #types,)* }
+        impl #ident { #(#field_constants)* }
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

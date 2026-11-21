@@ -665,6 +665,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Retain at most 32 distinct comparison keys, each at most 4096 bytes, within
     /// the shared 128-KiB state bound. No projected records are retained. `limit`
     /// never truncates this count. The scalar result occupies eight bytes.
+    /// A mandatory literal equality or fixed index prefix excludes that field
+    /// from the comparison key. An empty input still counts zero tuples.
     /// # Errors
     /// Ordinary count/projection errors and distinct-state exhaustion refuse.
     /// # Panics
@@ -674,18 +676,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.bytes < 8 {
                 return Err(Error::RowTooLarge);
             }
-            let (mut plan, reducer) = self.distinct_plan::<K>()?;
+            let mut plan = self.aggregate_plan(Some(K::definition()), false)?;
             self.select_aggregate_row_path(&mut plan)?;
+            let projected = plan.projection.ok_or(Error::InvalidQuery)?;
+            let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);
 
-            self.scalar_count_value(&plan, reducer)
+            self.scalar_count_value(&plan, Reducer::distinct(projected & !fixed))
         })
-    }
-
-    fn distinct_plan<K: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
-        let plan = self.aggregate_plan(Some(K::definition()), false)?;
-        let reducer = Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?);
-
-        Ok((plan, reducer))
     }
 
     fn select_aggregate_row_path(&self, plan: &mut Plan<'static>) -> Result<(), Error> {
@@ -767,6 +764,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Absence is a tuple component, as for [`Self::count_distinct`]; an all-absent
     /// group has one distinct tuple, not zero. Projections may overlap. No index
     /// is required. Complete input before group filtering/order and output limits.
+    /// Each group's set compares only operand fields that can vary within it.
     /// Retain at most 32 groups and 32 distinct tuples per group, with one shared
     /// 128-KiB state allowance and a 4096-byte cap per comparison key.
     /// # Errors
@@ -807,9 +805,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     fn group_count_values<K: Value>(
         self,
         mut plan: Plan<'static>,
-        reducer: Reducer,
+        mut reducer: Reducer,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         self.select_aggregate_row_path(&mut plan)?;
+        if let Reducer::Distinct { mask, .. } = &mut reducer {
+            let grouped = plan.projection.ok_or(Error::InvalidQuery)?;
+            let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);
+            *mask &= !(grouped | fixed);
+        }
         let (groups, page) = self.grouped(&plan, reducer, None)?;
         let (value, output_bytes) = group_output(
             groups,
@@ -1267,7 +1270,14 @@ impl Groups {
         let bounded_rank = !key_order && limit < self.rows.len();
         let compare = |a: &Completed, b: &Completed| {
             let (mut sa, mut sb) = ([0; 8], [0; 8]);
-            let order = a.result_key(&mut sa).cmp(&b.result_key(&mut sb));
+            let order = match (self.selection.order, a, b) {
+                (
+                    GroupOrder::Summary(SummaryMeasure::Count, _),
+                    Completed::Summary { count: left, .. },
+                    Completed::Summary { count: right, .. },
+                ) => left.cmp(right),
+                _ => a.result_key(&mut sa).cmp(&b.result_key(&mut sb)),
+            };
             if matches!(
                 self.selection.order,
                 GroupOrder::AggregateDescending

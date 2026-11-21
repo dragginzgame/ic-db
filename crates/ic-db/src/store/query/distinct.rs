@@ -1,7 +1,7 @@
 //! Projected equality: adjacent live pages or one bounded complete collection.
 
 use super::{
-    INDEX_PREFIX_BYTES, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Request, admit_ordered_fields,
+    INDEX_PREFIX_BYTES, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Plan, Request, admit_ordered_fields,
     admit_output, comparison_key, consume_index_component, copy_projection, projection_size,
 };
 use crate::{EntitySchema, Error, IndexSchema, IndexValue};
@@ -14,43 +14,54 @@ pub(super) enum Strategy {
     Identity,
     FirstMatch,
     Adjacent(usize),
-    Complete,
+    Complete { key_fields: u16 },
     Sorted { prefix_len: usize },
+}
+
+// A fixed member does not fix its parent. Only complete top-level fields
+// can be omitted from a projected tuple's comparison key.
+pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &Plan<'_>) -> u16 {
+    let prefix = plan
+        .index
+        .map_or(&[][..], |index| &index.fields[..plan.fixed_components]);
+    let mut fields = 0;
+    for position in super::order::literal_equalities(request)
+        .map(|(name, _)| name)
+        .chain(prefix.iter().copied())
+        .filter_map(|name| entity.field_position(name))
+    {
+        fields |= 1 << position;
+    }
+    fields
 }
 
 pub(super) fn admit(
     entity: &EntitySchema,
     request: &Request<'_>,
-    projection: Option<u16>,
-    index: Option<&IndexSchema>,
-    fixed: usize,
-    sorted: bool,
+    plan: &Plan<'_>,
 ) -> Result<Strategy, Error> {
-    let Some(mut remaining) = projection else {
+    let Some(projected) = plan.projection else {
         return Ok(Strategy::Identity);
     };
     let position = |name: &str| entity.field_position(name).ok_or(Error::InvalidQuery);
     let primary = 1 << position(entity.primary_key)?;
-    if remaining & primary != 0 {
+    if projected & primary != 0 {
         return Ok(Strategy::Identity);
     }
-    admit_ordered_fields(entity, remaining)?;
+    admit_ordered_fields(entity, projected)?;
     // Fixed fields and projected fields together can identify one matching owner.
-    let mut constants = 0_u16;
-    for (name, _) in super::order::literal_equalities(request) {
-        constants |= 1 << position(name)?;
-    }
+    let index = plan.index;
+    let fixed = plan.fixed_components;
     let fields = index.map_or(&[][..], |selected| selected.fields);
     let (prefix_fields, suffix_fields) = fields.split_at(fixed);
-    for name in prefix_fields {
-        constants |= 1 << position(name)?;
-    }
+    let constants = fixed_fields(entity, request, plan);
     // On an ordered traversal, one validated match proves the entire projected
     // result for a fresh single-result probe when no projected field can vary.
+    let varying = projected & !constants;
     if request.single_result_probe
         && request.cursor.is_none()
-        && !sorted
-        && remaining & !constants == 0
+        && plan.sort.is_none()
+        && varying == 0
     {
         return Ok(Strategy::FirstMatch);
     }
@@ -61,7 +72,7 @@ pub(super) fn admit(
         .index
         .as_ref()
         .map_or(&[][..], |(_, values)| values.as_slice());
-    let known = remaining | constants;
+    let known = projected | constants;
     if entity.indexes.iter().any(|unique| {
         unique.unique
             && unique.fields.iter().all(|name| {
@@ -80,16 +91,15 @@ pub(super) fn admit(
     }) {
         return Ok(Strategy::Identity);
     }
-    if sorted {
+    if let Some(order) = &plan.sort {
         // Constant components cannot distinguish two matching rows. Stop the
         // key once it distinguishes every varying component of the projection.
-        remaining &= !constants;
-        let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
+        let mut remaining = varying;
         let mut prefix_len = 0;
         while remaining != 0 {
-            let name = order.get(prefix_len).ok_or(Error::InvalidQuery)?;
-            let bit = 1 << position(name)?;
-            if (constants | remaining) & bit == 0 {
+            let field = order.get(prefix_len).ok_or(Error::InvalidQuery)?;
+            let bit = 1 << field.position;
+            if field.member.is_some() || remaining & bit == 0 {
                 return Err(Error::InvalidQuery);
             }
             remaining &= !bit;
@@ -98,12 +108,19 @@ pub(super) fn admit(
 
         return Ok(Strategy::Sorted { prefix_len });
     }
-    for name in prefix_fields {
-        remaining &= !(1 << position(name)?);
+    let mut remaining = projected;
+    for field in prefix_fields
+        .iter()
+        .filter_map(|name| entity.field_position(name))
+    {
+        remaining &= !(1 << field);
     }
     let mut components = fixed;
     for name in suffix_fields {
-        let bit = 1 << position(name)?;
+        let Some(field) = entity.field_position(name) else {
+            break;
+        };
+        let bit = 1 << field;
         // Cross a nonprojected constant only to reach a varying projected field.
         // Keep the physical prefix in the cursor comparison, including that constant.
         let crosses_constant = constants & bit != 0 && remaining & !constants != 0;
@@ -123,7 +140,11 @@ pub(super) fn admit(
         return Err(Error::InvalidQuery);
     }
 
-    Ok(Strategy::Complete)
+    // The adjacency proof may have consumed a varying index component before
+    // failing. The seen set still needs every varying projected component.
+    Ok(Strategy::Complete {
+        key_fields: varying,
+    })
 }
 
 pub(super) fn boundary<'a>(
@@ -153,16 +174,18 @@ pub(super) fn boundary<'a>(
 // Only canonical comparison keys and the first matching projected bytes are kept.
 // No full entities, replay positions or retained job payloads are introduced.
 pub(super) struct Collection {
-    mask: u16,
+    projected: u16,
+    key_fields: u16,
     seen: DistinctKeys,
     pub(super) rows: Vec<Vec<u8>>,
     state_bytes: usize,
     pub(super) output_bytes: usize,
 }
 impl Collection {
-    pub(super) fn new(mask: u16) -> Self {
+    pub(super) fn new(projected: u16, key_fields: u16) -> Self {
         Self {
-            mask,
+            projected,
+            key_fields,
             seen: DistinctKeys::new(),
             rows: Vec::new(),
             state_bytes: 0,
@@ -179,7 +202,7 @@ impl Collection {
         spans: &[(u16, u16)],
         scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
-        comparison_key(entity, self.mask, values, scratch)?;
+        comparison_key(entity, self.key_fields, values, scratch)?;
         let Err(position) = self
             .seen
             .binary_search_by(|key| key.as_ref().cmp(scratch.as_slice()))
@@ -189,12 +212,12 @@ impl Collection {
         if self.rows.len() == MAX_DISTINCT_VALUES || self.rows.len() == request.rows {
             return Err(Error::Limit);
         }
-        let size = projection_size(spans, self.mask);
+        let size = projection_size(spans, self.projected);
         admit_output(size, request.bytes, &mut self.output_bytes)?;
         if self.state_bytes + scratch.len() + size > MAX_STATE_BYTES {
             return Err(Error::Limit);
         }
-        let row = copy_projection(bytes, spans, self.mask, size);
+        let row = copy_projection(bytes, spans, self.projected, size);
         let charge = scratch.len() + row.capacity();
         if self.state_bytes + charge > MAX_STATE_BYTES {
             return Err(Error::Limit);

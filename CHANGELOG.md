@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.26.5] - Unreleased
+
+### ✨ Features
+
+- Capture the current millisecond database timestamp with `Timestamp::now()`. [#20 — Add Timestamp::now() for application database writes](https://github.com/dragginzgame/ic-db/issues/20)
+
+### 🔍 Queries
+
+- Grouped summaries ordered by count compare the completed counts directly,
+  saving one allocation per group. Tied counts still use ascending group-key order.
+
+- Scalar aggregates that use decoded values can skip recording each field's
+  byte offsets during a primary scan. The scanner still validates the full row.
+
+- Synchronous grouped DISTINCT counts omit fields fixed by the query or group
+  from each group's comparison keys. The full group key still appears in the result.
+
+- Synchronous scalar `count_distinct` now uses the same fixed-field proof as
+  projected DISTINCT. A fully fixed tuple counts once if any row matches.
+
+- Bounded complete DISTINCT now compares only projected fields that can vary.
+  Fields fixed by equality or an index prefix still appear in the output and
+  count toward its byte limit.
+
+- Bounded sorts omit order fields fixed by mandatory literal equality from
+  each row’s sort key. A large fixed Text or Blob can precede the varying sort
+  fields without consuming the 4 KiB comparison-key budget.
+
+- A bounded DISTINCT sort can order by a nested scalar before the projected
+  fields when a mandatory literal equality fixes that exact member.
+
+- `filter_present` and `filter_absent` on a direct scalar member now skip
+  construction of a comparison key after reading the validated member.
+
+- Flat and nested enum index queries now validate the operand's variant list
+  once and compare its full definition with the indexed field.
+
+- A nonunique index can select one required scalar in a required record, including bounded Text, Blob,
+  primitive-backed newtypes and unit enums,
+  e.g. `index(name = "by_reading", fields = ["first.right"])`. Fluent equality can seek it automatically.
+  Range comparisons on that path can bound an ordered scan or an index-only count. Changing either part of the path requires a schema
+  transition even when the index keeps its name.
+
+- Use the same nested scalar path with `order_asc`, `order_desc` or mixed-direction
+  ordering. The bounded sorter returns a terminal result after scanning the complete input.
+
+- Scalar literal filters can select a direct member of a named record.
+  Use `.gt(ic_db::field_path!(Product::PRICE, Price::AMOUNT), amount)`.
+  An absent parent or member makes the selected value absent. Record fields
+  now generate the same name constants and collision diagnostics as entity fields.
+
+### 🎯 Qualification
+
+- Checked nested OR filters against SQLite when sibling fields match different
+  rows or both match the same row. Exact counts enforce the candidate budget.
+
+- `make m2-nested-path-costs` compares Wasm size at 1, 8 and 32 reachable
+  record paths and measures flat and nested filtering and sorting in PocketIC.
+  A matched scalar index control also reports lookup and batch write costs.
+
 ## [0.26.4] - 2026-11-21
 
 ### Queries

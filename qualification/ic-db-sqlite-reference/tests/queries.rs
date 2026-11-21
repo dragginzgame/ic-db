@@ -55,6 +55,14 @@ struct Lane {}
 #[record(fields(field(name = "price", value(opt, item(prim = "Decimal", scale = 2)))))]
 struct Price {}
 
+/// Projects the fixed lane together with the varying rank and price.
+#[record(fields(
+    field(name = "lane", value(item(prim = "Nat8"))),
+    field(name = "rank", value(item(prim = "Nat8"))),
+    field(name = "price", value(opt, item(prim = "Decimal", scale = 2)))
+))]
+struct RankedPrice {}
+
 fn fixture() -> (Connection, MemoryRuntime<VectorMemory>) {
     let sql = Connection::open_in_memory().unwrap();
     sql.execute_batch("CREATE TABLE items(id INTEGER PRIMARY KEY, lane INTEGER, rank INTEGER, visible INTEGER, cents INTEGER)").unwrap();
@@ -319,6 +327,74 @@ fn live_page_and_filtered_total_share_one_read_boundary() {
     let (fresh, _) = read_page(&read, None);
     assert_eq!(fresh, expected(None));
     assert_eq!(fresh, [(2, 5), (3, 5)]);
+}
+
+#[test]
+fn complete_distinct_keeps_varying_components_of_a_partially_matching_index() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    // The index fixes lane and orders rank. Prices can recur within a rank,
+    // and NULL at two different ranks represents two different projected rows.
+    let prefix = [0_u8.into()];
+    let query = || db.query::<Item>().using_index("lane,rank", &prefix);
+    let page = query()
+        .order_asc(Item::RANK)
+        .distinct()
+        .fetch_as::<RankedPrice>()
+        .unwrap();
+    let expected = sql
+        .prepare(
+            "SELECT lane, rank, cents FROM items WHERE lane = 0
+             GROUP BY lane, rank, cents ORDER BY rank, MIN(id)",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            let cents = row.get::<_, Option<i64>>(2)?;
+            Ok((
+                row.get::<_, u8>(0)?,
+                row.get::<_, u8>(1)?,
+                cents.map(i128::from),
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        query().count_distinct::<RankedPrice>().unwrap().value,
+        expected.len() as u64
+    );
+    // Lane is fixed by the index prefix and price by the current group.
+    // Count the remaining ranks even in the group whose price is NULL.
+    let mut counts = std::collections::BTreeMap::new();
+    for &(_, _, price) in &expected {
+        *counts.entry(price).or_insert(0_u64) += 1;
+    }
+    let groups = query()
+        .group_count_distinct::<Price, RankedPrice>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .into_iter()
+            .map(|g| (
+                g.key.price.map(|p| p.coefficient_at_scale(2).unwrap()),
+                g.count
+            ))
+            .collect::<Vec<_>>(),
+        counts.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        page.rows
+            .into_iter()
+            .map(|r| (
+                r.lane,
+                r.rank,
+                r.price.map(|p| p.coefficient_at_scale(2).unwrap())
+            ))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(page.next.is_none());
 }
 
 #[test]

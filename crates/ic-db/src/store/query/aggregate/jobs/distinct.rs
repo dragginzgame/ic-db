@@ -67,7 +67,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Retain an exact count of projected K tuples, including an absent tuple.
-    /// Uses synchronous `count_distinct` admission and equality without an index.
+    /// Checkpoints encode the full projected tuple, including fixed fields,
+    /// so saved keys can be validated on resume.
     /// Retain at most 32 distinct keys inside the 16 KiB whole-job frame;
     /// no spill. Query/projection/algorithm bind the job; work/byte limits may vary.
     /// # Errors
@@ -113,7 +114,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Retain distinct R tuples separately in each K group, including absent tuples.
-    /// Projections may overlap. Uses synchronous `group_count_distinct` admission.
+    /// Projections may overlap. Checkpoints store full operand keys for validation on resume.
     /// Keep at most 32 groups and 32 distinct keys per group inside one 16 KiB
     /// whole-job frame. Key/operand projections, group selection and limit bind
     /// the job. Work/output-byte limits may vary; no automatic spill.

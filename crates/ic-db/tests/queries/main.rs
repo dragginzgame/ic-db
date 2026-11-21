@@ -75,6 +75,13 @@ struct OptionalOnly {}
 #[record(fields(field(name = "payload", value(item(prim = "Blob", max_bytes = 2048)))))]
 struct PayloadOnly {}
 
+/// Projects a complete Blob alongside its category for DISTINCT budget checks.
+#[record(fields(
+    field(name = "category", value(item(prim = "Nat8"))),
+    field(name = "payload", value(item(prim = "Blob", max_bytes = 2048)))
+))]
+struct CategoryPayload {}
+
 ///
 /// WrongWidth
 /// Carries the `Nat32` value of `id`.
@@ -5853,6 +5860,89 @@ fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
         present().limit(3).fetch_as::<OptionalOnly>(),
         Err(Error::Limit)
     ));
+}
+
+#[test]
+fn complete_distinct_returns_fixed_fields_without_charging_them_as_comparison_keys() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    let payload = vec![0; 2048];
+    let mut batch = Batch::new();
+    for id in 1..=4 {
+        batch
+            .replace(&Entry {
+                payload: payload.clone(),
+                ..row(id)
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let query = || db.query::<Entry>().eq(Entry::PAYLOAD, payload.as_slice());
+    let count = query().count_distinct::<CategoryPayload>().unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (2, 8, 8));
+    assert_eq!(query().count_distinct::<PayloadOnly>().unwrap().value, 1);
+    let groups = query()
+        .group_count_distinct::<CategoryOnly, CategoryPayload>()
+        .unwrap();
+    assert_eq!(
+        groups
+            .value
+            .iter()
+            .map(|g| (g.key.category, g.count))
+            .collect::<Vec<_>>(),
+        [(0, 1), (1, 1)]
+    );
+    assert_eq!((groups.examined, groups.fetched), (8, 8));
+    assert_eq!(
+        query()
+            .eq(Entry::ID, 99_u64)
+            .count_distinct::<PayloadOnly>()
+            .unwrap()
+            .value,
+        0
+    );
+    assert!(matches!(
+        query().work_limit(1).count_distinct::<PayloadOnly>(),
+        Err(Error::Limit)
+    ));
+    let page = query().distinct().fetch_as::<CategoryPayload>().unwrap();
+    assert_eq!(
+        page.rows.iter().map(|r| r.category).collect::<Vec<_>>(),
+        [1, 0]
+    );
+    assert!(page.rows.iter().all(|r| r.payload == payload));
+    assert_eq!(page.examined, 8);
+    assert!(page.next.is_none());
+    assert!(matches!(
+        query()
+            .distinct()
+            .test_output_limit(2048)
+            .fetch_as::<CategoryPayload>(),
+        Err(Error::RowTooLarge)
+    ));
+    assert!(matches!(
+        db.query::<Entry>().distinct().fetch_as::<CategoryPayload>(),
+        Err(Error::Limit)
+    ));
+    // 2,047 zero bytes encode to exactly 4 KiB. Appending even the one-byte
+    // category would exceed the limit if the reducer repeated the group key.
+    let mut batch = Batch::new();
+    for id in 1..=4 {
+        batch
+            .replace(&Entry {
+                payload: vec![0; 2047],
+                ..row(id)
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let groups = db
+        .query::<Entry>()
+        .group_count_distinct::<PayloadOnly, CategoryPayload>()
+        .unwrap();
+    assert_eq!(groups.value.len(), 2);
+    assert_eq!(groups.value[0].key.payload, vec![0; 2047]);
+    assert_eq!(groups.value[0].count, 2);
 }
 
 #[test]

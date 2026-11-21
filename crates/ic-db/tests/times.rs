@@ -321,3 +321,20 @@ fn collection_order_and_unindexed_validation() {
     assert!(matches!(db.commit(b), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
 }
+
+#[test]
+fn current_timestamp_uses_unix_milliseconds() {
+    let before = std::time::SystemTime::now();
+    let actual = Timestamp::now().as_millis();
+    let after = std::time::SystemTime::now();
+    let millis = |instant: std::time::SystemTime| {
+        i64::try_from(
+            instant
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    };
+    assert!((millis(before)..=millis(after)).contains(&actual));
+}

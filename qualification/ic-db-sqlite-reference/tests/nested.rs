@@ -1,0 +1,531 @@
+//! Compare direct record-member predicates with nullable SQLite scalar columns.
+
+use ic_db::design::prelude::*;
+use ic_db::{Batch, Error, testing::Fixture};
+use rusqlite::Connection;
+
+///
+/// Price
+/// Stores an optional amount at scale two.
+///
+
+#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
+struct Price {}
+
+///
+/// Product
+/// Exercises a price field that may be absent independently of its amount.
+///
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "price", value(opt, item(is = "Price")))
+    )
+)]
+struct Product {}
+
+#[test]
+fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
+    const AMOUNT: &str = ic_db::field_path!(Product::PRICE, Price::AMOUNT);
+    let fixture = Fixture::new("test.products.v1");
+    let schema = || Schema::new(&[Product::SCHEMA]).unwrap();
+    let mut db = fixture.create(schema(), [1; 16]).unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute(
+        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER)",
+        [],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, price) in [
+        None,
+        Some(None),
+        Some(Some(0_i32)),
+        Some(Some(-15)),
+        Some(Some(125)),
+        Some(Some(-15)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sql.execute(
+            "INSERT INTO products VALUES (?1,?2)",
+            (id as u32, price.flatten()),
+        )
+        .unwrap();
+        batch
+            .insert(&Product {
+                id: id as u64,
+                price: price.map(|amount| Price {
+                    amount: amount.map(|c| Decimal::try_new(i128::from(c), 2).unwrap()),
+                }),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    let db = fixture.open(schema()).unwrap();
+    let zero = Decimal::try_new(0, 2).unwrap();
+    for (query, predicate) in [
+        (db.query::<Product>().filter_absent(AMOUNT), "cents IS NULL"),
+        (
+            db.query::<Product>().filter_present(AMOUNT),
+            "cents IS NOT NULL",
+        ),
+        (db.query::<Product>().eq(AMOUNT, zero), "cents = 0"),
+        (db.query::<Product>().gt(AMOUNT, zero), "cents > 0"),
+        (db.query::<Product>().ne(AMOUNT, zero), "cents IS NOT 0"),
+    ] {
+        let expected = sql
+            .prepare(&format!(
+                "SELECT id FROM products WHERE {predicate} ORDER BY id"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let ids: Vec<_> = query
+            .fetch()
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(ids, expected);
+    }
+    for (query, order) in [
+        (db.query::<Product>().order_asc(AMOUNT), "cents ASC, id ASC"),
+        (
+            db.query::<Product>().order_desc(AMOUNT),
+            "cents DESC, id ASC",
+        ),
+        (
+            db.query::<Product>()
+                .order_desc(AMOUNT)
+                .order_desc(Product::ID),
+            "cents DESC, id DESC",
+        ),
+    ] {
+        let expected = sql
+            .prepare(&format!("SELECT id FROM products ORDER BY {order} LIMIT 5"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let page = query.limit(5).fetch().unwrap();
+        assert_eq!(
+            page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(page.examined, 6);
+        assert!(page.next.is_none());
+    }
+    assert!(matches!(
+        db.query::<Product>()
+            .order_asc(AMOUNT)
+            .limit(1)
+            .work_limit(5)
+            .fetch(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        db.query::<Product>().order_asc(Product::PRICE).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Product>()
+            .eq(Product::ID, 0_u64)
+            .order_asc("price.missing")
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[record(fields(
+    field(name = "score", value(item(prim = "Nat16"))),
+    field(name = "other", value(item(prim = "Nat16")))
+))]
+struct Rating {}
+
+#[record(fields(field(name = "bucket", value(item(prim = "Nat16")))))]
+struct Bucket {}
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(fields = ["rating.score"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "bucket", value(item(prim = "Nat16"))),
+        field(name = "rating", value(item(is = "Rating")))
+    )
+)]
+struct Ranked {}
+
+#[test]
+fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
+    const SCORE: &str = ic_db::field_path!(Ranked::RATING, Rating::SCORE);
+    const OTHER: &str = ic_db::field_path!(Ranked::RATING, Rating::OTHER);
+    let fixture = Fixture::new("test.ranked.v1");
+    let mut db = fixture
+        .create(Schema::new(&[Ranked::SCHEMA]).unwrap(), [2; 16])
+        .unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute(
+        "CREATE TABLE ranked(id INTEGER PRIMARY KEY, score INTEGER, other INTEGER, bucket INTEGER)",
+        [],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, score) in [65535_u16, 255, 256, 0, 256, 257, 254]
+        .into_iter()
+        .enumerate()
+    {
+        let other = if id == 2 { 0_u16 } else { 500 };
+        let bucket = score % 3;
+        sql.execute(
+            "INSERT INTO ranked VALUES (?1,?2,?3,?4)",
+            (id as u32, score, other, bucket),
+        )
+        .unwrap();
+        batch
+            .insert(&Ranked {
+                id: id as u64,
+                bucket,
+                rating: Rating { score, other },
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+
+    let sorted = |q: ic_db::Query<'_, Ranked>| {
+        q.order_asc(OTHER)
+            .order_desc(Ranked::BUCKET)
+            .distinct()
+            .limit(2)
+            .fetch_as::<Bucket>()
+    };
+    let expected = sql
+        .prepare("SELECT DISTINCT bucket FROM ranked WHERE other = 500 ORDER BY other, bucket DESC LIMIT 2")
+        .unwrap()
+        .query_map([], |r| r.get::<_, u16>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>().unwrap();
+    let page = sorted(db.query::<Ranked>().eq(OTHER, 500_u16)).unwrap();
+    assert_eq!(
+        page.rows.into_iter().map(|r| r.bucket).collect::<Vec<_>>(),
+        expected
+    );
+    assert!(page.next.is_none());
+    assert!(matches!(
+        sorted(db.query::<Ranked>().eq(OTHER, 500_u16).work_limit(1)),
+        Err(Error::Limit)
+    ));
+    for query in [
+        db.query::<Ranked>().eq(SCORE, 256_u16),
+        db.query::<Ranked>().filter_in(OTHER, &[0_u16, 500]),
+    ] {
+        assert!(matches!(sorted(query), Err(Error::InvalidQuery)));
+    }
+
+    use ic_db::Comparison::{Ge, Gt, Le, Lt};
+    for (filters, predicate, candidates) in [
+        (
+            &[(SCORE, Ge, 255_u16), (SCORE, Le, 256)][..],
+            "score BETWEEN 255 AND 256",
+            3,
+        ),
+        (
+            &[(SCORE, Gt, 255), (SCORE, Lt, 257)],
+            "score > 255 AND score < 257",
+            2,
+        ),
+        (&[(SCORE, Gt, u16::MAX)], "score > 65535", 0),
+        (&[(SCORE, Lt, 0)], "score < 0", 0),
+        (
+            &[(SCORE, Ge, 256), (SCORE, Lt, 256)],
+            "score >= 256 AND score < 256",
+            0,
+        ),
+        (
+            &[(SCORE, Gt, 255), (OTHER, Lt, 256)],
+            "score > 255 AND other < 256",
+            4,
+        ),
+    ] {
+        let expected = sql
+            .prepare(&format!(
+                "SELECT id FROM ranked WHERE {predicate} ORDER BY score, id"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut cursor = None;
+        let mut ids = Vec::new();
+        let mut examined = 0;
+        loop {
+            let mut query = db.query::<Ranked>().order_asc(SCORE).work_limit(1);
+            for &(field, op, value) in filters {
+                query = query.filter(field, op, value);
+            }
+            if let Some(after) = &cursor {
+                query = query.after(after);
+            }
+            let page = query.fetch().unwrap();
+            examined += page.examined;
+            assert!(examined <= candidates, "{predicate}");
+            ids.extend(page.rows.into_iter().map(|row| row.id));
+            cursor = page.next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ids, expected, "{predicate}");
+        assert_eq!(examined, candidates, "{predicate}");
+    }
+    // The interval crosses both rows at 256, but neither belongs to the requested set.
+    let sparse = db
+        .query::<Ranked>()
+        .filter_in(SCORE, &[257_u16, 255, 257])
+        .order_desc(SCORE)
+        .order_desc(Ranked::ID)
+        .fetch()
+        .unwrap();
+    assert_eq!(sparse.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [5, 1]);
+    assert_eq!(sparse.examined, 4);
+
+    let count = db
+        .query::<Ranked>()
+        .gt(SCORE, 255_u16)
+        .lt(SCORE, 257_u16)
+        .count()
+        .unwrap();
+    assert_eq!((count.value, count.examined, count.fetched), (2, 2, 0));
+
+    // A sibling can match outside the indexed alternative. At 256 one owner
+    // matches both alternatives; it must still appear exactly once.
+    for score in [255_u16, 256] {
+        let expected = sql
+            .prepare("SELECT id FROM ranked WHERE score >= 255 AND (score = ?1 OR other = 0) ORDER BY score, id")
+            .unwrap()
+            .query_map([score], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let query = || {
+            db.query::<Ranked>().gte(SCORE, 255_u16).filter_any(&[
+                (SCORE, ic_db::Comparison::Eq, score.into()),
+                (OTHER, ic_db::Comparison::Eq, 0_u16.into()),
+            ])
+        };
+        let count = query().count().unwrap();
+        assert_eq!(count.value, expected.len() as u64);
+        assert_eq!((count.examined, count.fetched), (5, 5));
+        assert!(matches!(query().work_limit(4).count(), Err(Error::Limit)));
+        let page = query().order_asc(SCORE).fetch().unwrap();
+        assert_eq!(
+            page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[newtype(item(prim = "Text", max_bytes = 32))]
+struct Tag {}
+
+#[enum_(
+    variant(name = "Ready"),
+    variant(name = "Archived"),
+    variant(name = "Draft")
+)]
+struct Phase {}
+
+#[enum_(
+    variant(name = "Ready"),
+    variant(name = "Archived"),
+    variant(name = "Draft")
+)]
+struct OtherPhase {}
+
+#[record(fields(
+    field(name = "tag", value(item(is = "Tag"))),
+    field(name = "phase", value(item(indirect, is = "Phase"))),
+    field(name = "label", value(item(prim = "Text", max_bytes = 32))),
+    field(name = "payload", value(item(prim = "Blob", max_bytes = 32))),
+    field(name = "account_part", value(item(prim = "Subaccount"))),
+    field(name = "balance", value(item(prim = "Decimal", scale = 2))),
+    field(name = "score", value(item(prim = "Int64")))
+))]
+struct Measures {}
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(fields = ["measures.account_part"]),
+    index(fields = ["measures.label"]),
+    index(fields = ["measures.tag"]),
+    index(fields = ["measures.phase"]),
+    index(fields = ["measures.payload"]),
+    index(fields = ["measures.balance"]),
+    index(fields = ["measures.score"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "measures", value(item(is = "Measures")))
+    )
+)]
+struct Observation {}
+
+#[test]
+fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
+    use ic_db::IndexValue;
+    const SCORE: &str = ic_db::field_path!(Observation::MEASURES, Measures::SCORE);
+    const BALANCE: &str = ic_db::field_path!(Observation::MEASURES, Measures::BALANCE);
+    const LABEL: &str = ic_db::field_path!(Observation::MEASURES, Measures::LABEL);
+    const PAYLOAD: &str = ic_db::field_path!(Observation::MEASURES, Measures::PAYLOAD);
+    const TAG: &str = ic_db::field_path!(Observation::MEASURES, Measures::TAG);
+    const PHASE: &str = ic_db::field_path!(Observation::MEASURES, Measures::PHASE);
+    const PART: &str = ic_db::field_path!(Observation::MEASURES, Measures::ACCOUNT_PART);
+    let fixture = Fixture::new("test.measures.v1");
+    let schema = || Schema::new(&[Observation::SCHEMA]).unwrap();
+    let mut db = fixture.create(schema(), [3; 16]).unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, score INTEGER, cents INTEGER, part BLOB, label TEXT COLLATE BINARY, payload BLOB, phase TEXT COLLATE BINARY, tag TEXT COLLATE BINARY)", []).unwrap();
+    for round in 0..2 {
+        let mut batch = Batch::new();
+        for (id, score, cents, byte) in [
+            (1_u32, i64::MIN, 200, 128_u8),
+            (2, 1, -101, 255),
+            (3, -1, 0, 0),
+            (4, i64::MAX, -100, 127),
+        ] {
+            if round == 1 && id != 2 {
+                continue;
+            }
+            let (score, cents, byte) = if round == 1 {
+                (-2, 201, 1)
+            } else {
+                (score, cents, byte)
+            };
+            let part = [byte; 32];
+            let (label, payload): (&str, &[u8]) = match byte {
+                0 => ("", &[0xff]),
+                127 => ("a", &[]),
+                128 => ("a\0", &[0, 0xff]),
+                255 => ("é", &[0]),
+                _ => ("a\0z", &[0, 1]),
+            };
+            let tag = format!("{:03}", 255 - byte);
+            let (phase, phase_name) = match byte {
+                0 | 127 => (Phase::Archived, "Archived"),
+                128 | 1 => (Phase::Draft, "Draft"),
+                _ => (Phase::Ready, "Ready"),
+            };
+            sql.execute(
+                "INSERT OR REPLACE INTO observations VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                (
+                    id,
+                    score,
+                    cents,
+                    part.as_slice(),
+                    label,
+                    payload,
+                    phase_name,
+                    &tag,
+                ),
+            )
+            .unwrap();
+            let row = Observation {
+                id: u64::from(id),
+                measures: Measures {
+                    tag: Tag(tag),
+                    phase: Box::new(phase),
+                    label: label.into(),
+                    payload: payload.into(),
+                    account_part: part,
+                    balance: Decimal::try_new(i128::from(cents), 2).unwrap(),
+                    score,
+                },
+            };
+            if round == 0 {
+                batch.insert(&row)
+            } else {
+                batch.replace(&row)
+            }
+            .unwrap();
+        }
+        db.commit(batch).unwrap();
+        drop(db);
+        db = fixture.open(schema()).unwrap();
+        assert!(matches!(
+            db.query::<Observation>()
+                .eq(PHASE, &OtherPhase::Draft)
+                .count(),
+            Err(Error::InvalidOperand)
+        ));
+        let tag = Tag("128".into());
+        for (path, upper, column, sql_value) in [
+            (
+                TAG,
+                IndexValue::from(&tag),
+                "tag",
+                String::from("128").into(),
+            ),
+            (
+                PHASE,
+                IndexValue::from(&Phase::Draft),
+                "phase",
+                String::from("Draft").into(),
+            ),
+            (
+                SCORE,
+                IndexValue::from(0_i64),
+                "score",
+                rusqlite::types::Value::Integer(0),
+            ),
+            (
+                BALANCE,
+                Decimal::try_new(2, 0).unwrap().into(),
+                "cents",
+                200_i64.into(),
+            ),
+            (LABEL, "a\0z".into(), "label", String::from("a\0z").into()),
+            (
+                PAYLOAD,
+                (&[0, 0xff]).into(),
+                "payload",
+                vec![0_u8, 0xff].into(),
+            ),
+            (PART, [128_u8; 32].into(), "part", vec![128_u8; 32].into()),
+        ] {
+            let expected = sql
+                .prepare(&format!(
+                    "SELECT id FROM observations WHERE {column} <= ?1 ORDER BY {column}, id"
+                ))
+                .unwrap()
+                .query_map([sql_value], |r| r.get::<_, u32>(0).map(u64::from))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let page = db
+                .query::<Observation>()
+                .lte(path, upper)
+                .order_asc(path)
+                .fetch()
+                .unwrap();
+            assert_eq!(
+                page.rows.into_iter().map(|r| r.id).collect::<Vec<_>>(),
+                expected
+            );
+            let count = db.query::<Observation>().lte(path, upper).count().unwrap();
+            assert_eq!(count.value, expected.len() as u64);
+            assert_eq!((count.examined, count.fetched), (expected.len(), 0));
+        }
+    }
+}

@@ -1859,6 +1859,228 @@ checks cover mixed directions, fixed fields, live cursors and bounded DISTINCT.
 
 ### Bounded sorting execution envelope (0.18)
 
+The 0.26.5 development SQLite fixture orders a direct optional Decimal member
+after reopen. Missing parents, missing members, equal prices and mixed directions
+are checked against SQLite's nullable integer cents. The PocketIC workload below
+continues to exercise the shared sorter on top-level fields across upgrade.
+Compared with the 0.26.4 run, the complete measurement Wasm grew from 1,190,701
+to 1,194,068 bytes with nested filtering and ordering included. The pre-upgrade
+511-row mixed-direction top 32 took 15,575,307 instructions (previously
+15,536,196). These figures describe the fixture as a whole. They do not measure
+nested Decimal traversal cost or per-entity growth.
+
+#### Direct record member growth and read cost (0.26.5 development)
+
+The pre-index baseline for `make m2-nested-path-costs` used three release builds of one fixed schema
+with four record fields. A runtime selector chooses a compiled field path. All
+builds expose the same endpoint and use the same fluent query terminal.
+
+| Reachable nested paths | Total Wasm bytes | Code section bytes |
+| ---: | ---: | ---: |
+| 1 | 312,848 | 286,493 |
+| 8 | 312,973 | 286,506 |
+| 32 | 313,342 | 286,523 |
+
+The driver checked all selectors plus a flat control in each installed build.
+All queries run against the same 24 rows. The driver checks the ordered IDs
+for each operation, including single-match equality.
+PocketIC instructions cover query construction through entity materialization,
+excluding database opening, endpoint transport and reply construction.
+
+| Field in the 32-path build | Filter | Sort | Filter and sort |
+| --- | ---: | ---: | ---: |
+| Flat scalar | 843,427 | 908,655 | 873,747 |
+| First scalar in record | 846,032 | 915,500 | 881,589 |
+| Last scalar after seven scalars and an eight-item list | 928,641 | 998,109 | 992,103 |
+
+The combined query reads the selected member during filtering and again when
+constructing sort keys for qualifying rows. At the last member it costs 13.6%
+more than the flat control. This experiment varies caller paths on one entity.
+Additional entity codecs, physical indexes and deeper traversal need their own
+measurements.
+
+A fourth build adds one ordinary index on the flat scalar to the 32-path fixture.
+That scalar equals the first nested member on every row. Both builds contain
+the same endpoints. The indexed Wasm is 318,861 bytes (+5,519), including
+291,969 code bytes (+5,446). This is the first physical secondary index in this
+fixture, so the delta includes code made reachable by its first use.
+
+| Operation | No index, instructions | One flat index, instructions |
+| --- | ---: | ---: |
+| Exact flat lookup, one match | 724,464 | 206,983 |
+| Insert 24 rows | 4,304,032 | 8,139,048 |
+| Replace all 24 rows, changing every indexed value | 4,847,114 | 15,009,623 |
+| Delete all 24 rows | 4,975,160 | 9,724,703 |
+
+Write counts cover row construction where applicable, batch preparation and
+commit on an opened database. Separate calls reopen the store and verify the
+changed and deleted results through both the flat and nested fields. These
+costs qualify ordinary index maintenance. The separate probe below changes the source of the physical key.
+
+**Declared member index.** The current five-build `make m2-nested-path-costs`
+adds a real index on `one.h`. The schema, endpoint set, 32 reachable paths
+and 24 rows match the flat-index control. Each equality lookup returns the
+same ID; the last member's threshold accounts for its distinct stored values.
+
+| Measurement | No index | Flat index | Last-member index |
+| --- | ---: | ---: | ---: |
+| Total Wasm bytes | 314,511 | 320,057 | 320,065 |
+| Code section bytes | 287,657 | 293,130 | 293,138 |
+| Exact lookup on the last member, instructions | 809,570 | 824,533 | 219,978 |
+| Insert 24 rows | 4,304,032 | 8,139,672 | 8,176,920 |
+| Replace 24 indexed values | 4,856,618 | 15,025,055 | 15,208,319 |
+| Delete 24 rows | 4,984,664 | 9,739,511 | 9,888,647 |
+
+Against the pre-index baseline above, shared implementation growth was 1,169
+Wasm bytes on the 32-path build without an index. Going from one path to 32
+still added 494 total bytes and 30 code bytes. The flat index's own exact lookup
+used 206,926 instructions in that equality-only run.
+
+**Range bounds.** Matched PocketIC member-index builds used the same 24 rows,
+schema and caller. Only the shared range code differed. The endpoint measures
+query construction through result materialization.
+
+| Member query | Equality-only build | Range-enabled build |
+| --- | ---: | ---: |
+| Ascending member order, last two matching rows | 2,361,338 instructions | 333,426 instructions |
+| Default primary order, eight matching rows | 941,256 instructions | 941,463 instructions |
+| Descending member order, ascending ID tie-breaker, eight matching rows | 1,012,918 instructions | 1,045,559 instructions |
+| Exact lookup | 219,974 instructions | 220,316 instructions |
+| Total Wasm bytes | 320,245 | 320,520 |
+| Code section bytes | 293,252 | 293,556 |
+
+The ascending query seeks to the first qualifying entry. The mixed order still
+needs a bounded sort and each index candidate requires an owner fetch. The
+SQLite check covers inclusive/exclusive limits, tied owners spanning pages,
+empty ranges, and a residual comparison on a sibling. With both bounds on the
+indexed member, the two-match count examined two entries and fetched zero rows.
+
+**Broader scalar admission.** On the same 32-path Nat16 member-index workload,
+admitting the other copyable built-in scalars changed total Wasm from 320,456
+to 320,484 bytes and the code section from 293,556 to 293,568 bytes. The
+two-match ordered range used 333,426 instructions in both builds. These
+figures measure shared code on the existing schema. The native SQLite witness
+compares signed Int64 boundaries,
+Decimal values against integer cents, and Subaccount order against 32-byte
+SQLite BLOBs, including reopen and replacement.
+
+**Bounded Text and Blob members.** The same Nat16 member fixture measured
+320,466 Wasm bytes (293,550 code bytes) after adding borrowed member operands.
+This was 18 bytes smaller in both measures and the ordered two-match range
+again used 333,426 instructions. Two disposable PocketIC variants changed the
+last member in each nested record to a two-byte Text or Blob with a leading
+zero and a declared 32-byte bound. Both passed the existing read, replacement
+and deletion oracle. Exact lookups used 225,846 instructions for Text and
+224,077 for Blob. The two-match ordered range used 343,309 and 339,827,
+respectively. These are short-value fixture costs.
+
+The SQLite witness also checks Text under binary collation and Blob under byte
+ordering in the same multi-index entity. The native key-bound test accepts a
+512-byte complete index key for each and checks backing preservation when the
+escaped component grows by one byte.
+
+**Named scalar members.** Removing the extra admission restriction changed the
+existing Nat16 member fixture from 320,466 to 320,456 Wasm bytes. Its two-row
+ordered range still took 333,426 instructions. Two disposable installed builds
+used a Nat16 newtype or a unit enum with 56 variants at the last member of the
+same record. The enum declarations were in reverse order relative to the key
+order. Both builds passed the read, replacement and deletion checks.
+
+| Selected member | Complete fixture Wasm bytes | Exact lookup instructions | Two-match ordered range instructions |
+| --- | ---: | ---: | ---: |
+| Nat16 | 320,456 | 220,316 | 333,426 |
+| Nat16 newtype | 320,481 | 222,169 | 336,253 |
+| 56-variant unit enum | 324,522 | 361,694 | 516,511 |
+
+A second run on the same 56-variant fixture removed a duplicate validation
+of the enum definition during operand admission. Wasm fell to 324,498 bytes,
+exact lookup to 341,724 instructions and the two-match range to 506,526.
+
+Fixture totals include caller code and generated schema. The SQLite witness
+compares a Text newtype with a binary-collated column and a boxed unit enum
+with its canonical variant names across reopen and replacement. A different
+logical enum with identical variant names refuses as an operand. Native schema
+admission tests also refuse record, payload-enum and named-list members.
+
+A matched 24-row PocketIC scan used a nested presence filter on a present
+64-byte all-zero Blob followed by numeric equality. Skipping comparison-key
+encoding reduced instructions from 1,043,234 to 924,306 and grew fixture Wasm
+from 315,148 to 315,154 bytes. A separate presence reader reached 915,480
+instructions but added 319 bytes over baseline and slowed ordinary nested
+reads in this fixture. The engine retains the shared member reader. These
+measurements include Blob zero escaping in the original comparison.
+
+Matched release builds of the one-path presence fixture grew from 315,266 to
+315,310 Wasm bytes when sorted DISTINCT admission recognized a fixed nested
+member. The [SQLite comparison](ic-db-sqlite-reference/tests/nested.rs) exercises
+a mandatory equality, a sibling equality, a disjunction and work exhaustion.
+
+A subsequent matched build grew from 315,294 to 315,378 Wasm bytes when the
+bounded sorter omitted fixed components. The native sort regression uses a
+2,048-byte all-zero Blob: its escaped key alone exceeds 4 KiB. Ordinary and
+DISTINCT sorts both complete when equality fixes the Blob, while a varying
+oversized key still refuses.
+
+Matched one-path Wasm builds measured 315,346 bytes before and 315,231 after
+excluding fixed projected fields from complete DISTINCT comparison keys. A
+native regression checks that a fixed 2,048-byte Blob is returned and charged
+to output. The SQLite comparison covers a fixed index prefix followed by a
+varying projected index field and a nullable projected field outside the index.
+
+Adding a reachable synchronous scalar DISTINCT count to the one-path fixture
+gave matched release builds of 333,496 bytes before and 333,507 after sharing
+the projected DISTINCT fixed-field proof. The native Blob regression verifies
+two varying classes, one fully fixed class, empty input and work exhaustion.
+
+With synchronous grouped DISTINCT count also reachable, matched release Wasm
+builds measured 354,788 bytes before and 354,895 after omitting fields fixed
+within each group. A 4 KiB encoded Blob group key with two distinct categories
+now returns the complete Blob and a count of two. SQLite independently checks
+counts for overlapping projections with a fixed index prefix and a nullable
+group field.
+
+On a matched 24-row PocketIC primary scan, recording field offsets according
+to the accumulator's needs reduced scalar DISTINCT count from 790,994 to
+789,456 instructions. The grouped DISTINCT control went from 959,161 to
+959,445 and an ordinary filtered query from 924,379 to 924,377. All three
+returned the same expected results. Complete Wasm grew from 355,272 to
+355,286 bytes. Group output, index verification and span-based predicates
+still require offsets; omitting offsets preserves whole-row validation.
+
+On a matched 24-group PocketIC fixture with a three-group output limit, direct
+comparison of completed counts reduced count-ranked summaries from 1,247,460
+to 1,212,434 instructions. All counts tied and the smallest three group keys
+were returned. Ranking by sum returned the three largest sums and went from
+1,253,949 to 1,255,839 instructions. The filtered row query and both DISTINCT
+count controls kept their instruction counts. Wasm grew from 359,910 to
+359,960 bytes. SQLite also checks unequal counts, ties and both directions.
+
+**Disposable physical-key probe.** A separate PocketIC experiment kept the
+single-component, nonunique Nat16 index and changed its key source. Typed
+inserts and replacements encoded the selected member directly. Stored-row
+checks used the existing validated record span and member reader. The nested
+builds deliberately stored a different value in the flat field. Each call
+reopened the database and the driver checked the returned IDs after inserts,
+replacements and deletions.
+
+| Measurement | Flat control | First member | Last member after seven scalars and an eight-item list |
+| --- | ---: | ---: | ---: |
+| Total Wasm bytes | 318,893 | 319,652 | 319,663 |
+| Code section bytes | 291,969 | 292,584 | 292,595 |
+| Exact lookup instructions | 206,983 | 208,742 | 212,714 |
+| Insert 24 rows | 8,139,048 | 8,139,120 | 8,139,120 |
+| Replace 24 indexed values | 15,009,623 | 15,051,887 | 15,147,215 |
+| Delete 24 rows | 9,724,703 | 9,766,895 | 9,862,223 |
+
+All builds used the flat index's name and schema identity to isolate extraction.
+This also allowed a negative control. Switching from the first-member writer
+to the last-member reader produced `Corrupt` on an existing owner. Stable
+memory was identical after the refusal, and restoring the first-member reader
+returned the expected ID. A product declaration must fingerprint the actual
+member path and refuse an incompatible reopen before ordinary access. The
+numbers include fixture code and exclude general schema admission, automatic
+path selection and optional-member indexing.
+
 `make m2-sort-costs` builds the records host with `query-measurements` and runs
 the existing independent sorting oracle through `measured_query`. The wrapper
 calls the exact console query function; no second executor or input fixture is

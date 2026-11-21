@@ -15,6 +15,10 @@ category = "tests"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+flat-index-control = []
+member-index-control = []
+
 [dependencies]
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
@@ -26,6 +30,10 @@ toko-tooling.workspace = true
 
 [[example]]
 name = "float64_sum"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "nested_paths"
 crate-type = ["cdylib"]
 
 [lints]

@@ -33,6 +33,8 @@ use field::Field;
 /// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Entity names default to the type name; `name = "StableName"` overrides it.
+/// A nonunique single-component index can name a required indexable scalar
+/// in a required record, e.g. `index(field = "labels.text")`.
 /// Index names default to comma-separated ordered fields; `name` overrides them.
 /// A unique index on `User(issuer, subject)` generates `UserByIssuerAndSubject`
 /// with named fields for `session.get_unique(&key)`. A sparse unique key takes
@@ -286,6 +288,28 @@ fn declaration(item: Tokens, kind: &str) -> syn::Result<ItemStruct> {
     Ok(item)
 }
 
+fn field_constants(fields: &[Field], owner: &syn::Ident) -> syn::Result<Vec<Tokens>> {
+    let mut constant_names = BTreeSet::new();
+    let mut field_constants = Vec::with_capacity(fields.len());
+    for field in fields {
+        let source = &field.name;
+        let constant = source
+            .strip_prefix("r#")
+            .unwrap_or(source)
+            .to_ascii_uppercase();
+        if !constant_names.insert(constant.clone()) {
+            return Err(syn::Error::new_spanned(
+                owner,
+                format!("fields generate the same associated constant `{constant}`"),
+            ));
+        }
+        let ident = syn::parse_str::<syn::Ident>(&constant)?;
+        let doc = format!("Logical field name `{source}` for fluent queries.");
+        field_constants.push(quote! { #[doc = #doc] pub const #ident: &'static str = #source; });
+    }
+    Ok(field_constants)
+}
+
 fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let item = declaration(item, "entity")?;
     let mut logical_name = None;
@@ -389,23 +413,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .map(|field| syn::parse_str(&field.name))
         .collect::<syn::Result<_>>()?;
-    let mut constant_names = BTreeSet::new();
-    let mut field_constants = Vec::with_capacity(authored.len());
-    for field in &authored {
-        let source = &field.name;
-        let constant = source
-            .strip_prefix("r#")
-            .unwrap_or(source)
-            .to_ascii_uppercase();
-        if !constant_names.insert(constant.clone()) {
-            return Err(fail(&format!(
-                "fields generate the same associated constant `{constant}`"
-            )));
-        }
-        let ident = syn::parse_str::<syn::Ident>(&constant)?;
-        let doc = format!("Logical field name `{source}` for fluent queries.");
-        field_constants.push(quote! { #[doc = #doc] pub const #ident: &'static str = #source; });
-    }
+    let field_constants = field_constants(&authored, &item.ident)?;
     let key_type = authored
         .iter()
         .find(|field| field.name == primary && field.required_key())
@@ -460,6 +468,30 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     }
     let mut unique_keys = unique::Keys::default();
     for index in indexes {
+        let index_name = &index.name;
+        let unique = index.unique;
+        let present_only = index.present_only;
+        let names = &index.fields;
+        descriptions.push(quote! { ::ic_db::IndexSchema { id: ::ic_db::__private::handle(#index_name), name: #index_name, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
+        if let [path] = index.fields.as_slice()
+            && let Some((parent, member)) = path.split_once('.')
+        {
+            if index.unique
+                || index.present_only
+                || !authored.iter().any(|f| f.name == parent && !f.optional)
+            {
+                return Err(fail(
+                    "a record-member index requires a single required indexable scalar member on a required record and cannot be unique",
+                ));
+            }
+            let parent: syn::Ident = syn::parse_str(parent)?;
+            let member: syn::Ident = syn::parse_str(member)?;
+            encoded_indexes.push(quote! {{
+                use ::ic_db::__private::MemberOperand as _;
+                ::ic_db::__private::encode_index(&[(row.#parent.#member.__ic_db_member_operand(), false)], false)
+            }});
+            continue;
+        }
         let unique_fields: BTreeSet<_> = index.fields.iter().collect();
         if index.fields.is_empty()
             || index.fields.len() > 4
@@ -479,9 +511,6 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             .iter()
             .map(|name| syn::parse_str(name))
             .collect::<syn::Result<_>>()?;
-        let index_name = index.name;
-        let unique = index.unique;
-        let present_only = index.present_only;
         let has_optional = index.fields.iter().any(|name| {
             authored
                 .iter()
@@ -509,10 +538,8 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             })
             .collect();
         if unique {
-            unique_keys.add(&item, &index_name, &fields, &authored, &index.fields);
+            unique_keys.add(&item, index_name, &fields, &authored, &index.fields);
         }
-        let names = index.fields;
-        descriptions.push(quote! { ::ic_db::IndexSchema { id: ::ic_db::__private::handle(#index_name), name: #index_name, fields: &[#(#names),*], unique: #unique, present_only: #present_only } });
         encoded_indexes
             .push(quote! { ::ic_db::__private::encode_index(&[#(#operands),*], #present_only) });
     }
