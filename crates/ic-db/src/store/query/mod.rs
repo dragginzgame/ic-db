@@ -154,6 +154,29 @@ impl Comparison {
         }
     }
 
+    // Planning compares admitted literals with the same absence and key order as traversal.
+    fn accepts_fixed_values(self, left: IndexValue<'_>, right: IndexValue<'_>) -> Option<bool> {
+        if left == IndexValue::Absent || right == IndexValue::Absent {
+            return Some(self.accepts_absent(left == right));
+        }
+        if let Some(result) = self.accepts_values(left, right) {
+            return Some(result);
+        }
+        match self {
+            Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
+                // Other admitted scalars use the declared component order.
+                let mut encoded = Vec::new();
+                left.append_component(false, &mut encoded);
+                let split = encoded.len();
+                right.append_component(false, &mut encoded);
+                let (left, right) = encoded.split_at(split);
+
+                Some(self.accepts(Some(left), Some(right), false))
+            }
+            _ => None,
+        }
+    }
+
     // Text and Blob operands borrowed from rows or fixed query values are already unframed.
     fn accepts_bytes(self, actual: &[u8], operand: &[u8]) -> bool {
         match self {
@@ -401,6 +424,20 @@ struct Predicate<'a> {
 }
 
 impl<'a> Predicate<'a> {
+    // The opposite operand of a field-to-field comparison, in either spelling.
+    fn compared_field(&self, name: &str) -> Option<&'a str> {
+        let QueryOperand::Field(right) = self.operand else {
+            return None;
+        };
+        if self.field == name {
+            Some(right)
+        } else if right == name {
+            Some(self.field)
+        } else {
+            None
+        }
+    }
+
     // The only field value that can satisfy this predicate, when known.
     fn fixed_equality(&self, entity: &EntitySchema) -> Option<(&'a str, IndexValue<'a>)> {
         if let QueryOperand::Length(n) = self.operand {
@@ -420,7 +457,21 @@ impl<'a> Predicate<'a> {
             {
                 IndexValue::Bool(!excluded)
             }
+            (cmp @ (Comparison::Ge | Comparison::Le), _)
+                if value.is_integer_extreme(cmp == Comparison::Ge) =>
+            {
+                value
+            }
             (Comparison::Le, _) if scalar_bytes(value).is_some_and(<[u8]>::is_empty) => value,
+            (cmp @ (Comparison::Ge | Comparison::Le), IndexValue::UnitEnum { ordinal, .. })
+                if key::is_fixed_extreme(
+                    entity.index_field(self.field)?.value,
+                    &[ordinal],
+                    cmp == Comparison::Ge,
+                ) =>
+            {
+                value
+            }
             (Comparison::Gt, IndexValue::Bool(false))
             | (Comparison::Ge, IndexValue::Bool(true)) => IndexValue::Bool(true),
             (Comparison::Lt, IndexValue::Bool(true))
@@ -540,34 +591,93 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
-    // A disjunction fixes a field only when every alternative fixes it to the same value.
+    // Every surviving alternative must fix the same field to the same value.
     fn fixed_equalities<'r>(
         &'r self,
         entity: &'r EntitySchema,
     ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
         self.clauses().filter_map(move |clause| {
             let (predicate, rest) = clause.split_first()?;
-            if let Some(equality) = predicate.fixed_equality(entity) {
-                return rest
-                    .iter()
-                    .all(|other| other.fixed_equality(entity) == Some(equality))
-                    .then_some(equality);
+            if !rest.is_empty() {
+                let mut candidate = predicate.fixed_equality(entity)?;
+                for alternative in rest {
+                    let other = alternative.fixed_equality(entity)?;
+                    if candidate.0 != other.0 {
+                        return None;
+                    }
+                    if equal_values(candidate.1, other.1) {
+                        continue;
+                    }
+                    if self.predicates.len() == clause.len() {
+                        return None;
+                    }
+                    if self.excludes_literal(other.0, other.1) {
+                        continue;
+                    }
+                    if !self.excludes_literal(candidate.0, candidate.1) {
+                        return None;
+                    }
+                    candidate = other;
+                }
+                // If every alternative was excluded, the retained candidate
+                // contradicts a mandatory clause during admission.
+                return Some(candidate);
             }
-            // Two mandatory inclusive bounds on the same literal fix one value.
-            // Leave both admitted terms intact for evaluation and cursor binding.
-            let ([], Comparison::Ge, QueryOperand::Literal(lower)) =
-                (rest, predicate.comparison, predicate.operand)
-            else {
+            if let Some(equality) = predicate.fixed_equality(entity) {
+                return Some(equality);
+            }
+            // A mandatory lower and upper bound can isolate one value. Only
+            // integers have a proven successor here. Keep the original terms
+            // for row evaluation and continuation identity.
+            let QueryOperand::Literal(value) = predicate.operand else {
                 return None;
+            };
+            let lower = match predicate.comparison {
+                Comparison::Ge => value,
+                Comparison::Gt if self.predicates.len() > 1 => value.integer_successor()?,
+                _ => return None,
             };
             self.clauses()
                 .any(|clause| {
                     let [upper] = clause else { return false };
-                    upper.comparison == Comparison::Le
-                        && upper.field == predicate.field
-                        && upper.operand == QueryOperand::Literal(lower)
+                    if upper.field != predicate.field {
+                        return false;
+                    }
+                    match (upper.comparison, upper.operand) {
+                        (Comparison::Le, QueryOperand::Literal(value)) => lower == value,
+                        (Comparison::Lt, QueryOperand::Literal(value)) => {
+                            lower.integer_successor() == Some(value)
+                        }
+                        _ => false,
+                    }
                 })
                 .then_some((predicate.field, lower))
+        })
+    }
+
+    fn excludes_literal(&self, field: &str, value: IndexValue<'_>) -> bool {
+        // One mandatory clause rules out a candidate only if every alternative
+        // rejects that value on this field. Other fields can still satisfy an OR.
+        self.clauses().any(|clause| {
+            clause.iter().all(|predicate| {
+                if predicate.field != field {
+                    return false;
+                }
+                let QueryOperand::Literal(literal) = predicate.operand else {
+                    return false;
+                };
+                match predicate.comparison {
+                    Comparison::Eq
+                    | Comparison::Ne
+                    | Comparison::Lt
+                    | Comparison::Le
+                    | Comparison::Gt
+                    | Comparison::Ge => {
+                        predicate.comparison.accepts_fixed_values(value, literal) == Some(false)
+                    }
+                    _ => false,
+                }
+            })
         })
     }
 

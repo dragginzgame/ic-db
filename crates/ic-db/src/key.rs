@@ -327,65 +327,52 @@ impl<'a, T: Into<IndexValue<'a>>> From<Option<T>> for IndexValue<'a> {
     }
 }
 
-impl From<u8> for IndexValue<'_> {
-    fn from(value: u8) -> Self {
-        Self::Nat8(value)
-    }
+// Integer operands preserve their exact width in both conversion and range proofs.
+macro_rules! integer_operands {
+    ($($variant:ident($integer:ty)),+ $(,)?) => {
+        $(
+            impl From<$integer> for IndexValue<'_> {
+                fn from(value: $integer) -> Self {
+                    Self::$variant(value)
+                }
+            }
+        )+
+
+        impl IndexValue<'_> {
+            pub(crate) fn integer_successor(self) -> Option<Self> {
+                match self {
+                    $(Self::$variant(n) => n.checked_add(<$integer>::from(true)).map(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            pub(crate) fn is_integer_extreme(self, upper: bool) -> bool {
+                match self {
+                    $(Self::$variant(n) => n == if upper { <$integer>::MAX } else { <$integer>::MIN },)+
+                    _ => false,
+                }
+            }
+        }
+    };
 }
-impl From<u16> for IndexValue<'_> {
-    fn from(value: u16) -> Self {
-        Self::Nat16(value)
-    }
-}
-impl From<u32> for IndexValue<'_> {
-    fn from(value: u32) -> Self {
-        Self::Nat32(value)
-    }
-}
-impl From<u64> for IndexValue<'_> {
-    fn from(value: u64) -> Self {
-        Self::Nat64(value)
-    }
-}
-impl From<u128> for IndexValue<'_> {
-    fn from(value: u128) -> Self {
-        Self::Nat128(value)
-    }
-}
-impl From<i8> for IndexValue<'_> {
-    fn from(value: i8) -> Self {
-        Self::Int8(value)
-    }
-}
-impl From<i16> for IndexValue<'_> {
-    fn from(value: i16) -> Self {
-        Self::Int16(value)
-    }
-}
-impl From<i32> for IndexValue<'_> {
-    fn from(value: i32) -> Self {
-        Self::Int32(value)
-    }
-}
-impl From<i64> for IndexValue<'_> {
-    fn from(value: i64) -> Self {
-        Self::Int64(value)
-    }
-}
-impl From<i128> for IndexValue<'_> {
-    fn from(value: i128) -> Self {
-        Self::Int128(value)
-    }
-}
+
+integer_operands!(
+    Nat8(u8),
+    Nat16(u16),
+    Nat32(u32),
+    Nat64(u64),
+    Nat128(u128),
+    U256(U256),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    Int128(i128),
+);
+
 impl From<Principal> for IndexValue<'_> {
     fn from(value: Principal) -> Self {
         Self::Principal(value)
-    }
-}
-
-impl From<U256> for IndexValue<'_> {
-    fn from(value: U256) -> Self {
-        Self::U256(value)
     }
 }
 

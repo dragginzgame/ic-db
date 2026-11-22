@@ -27,6 +27,7 @@ struct Currencies {}
 #[entity(
     store = ic_db::testing::FixtureStore,
     pk(field = "id"),
+    index(fields = ["prefix", "id"], unique, present_only),
     fields(
         field(name = "id", value(item(prim = "Nat64"))),
         field(name = "accepted", value(opt, many, max_items = 3, item(prim = "Text", max_bytes = 3))),
@@ -38,6 +39,78 @@ struct Currencies {}
 struct Product {}
 
 #[test]
+fn sparse_equality_uses_presence_proven_on_the_other_field() {
+    use ic_db::{
+        Comparison::{Eq, Ne},
+        IndexValue,
+    };
+    const CURRENCY: &str = ic_db::field_path!(Product::PRICE, Price::CURRENCY);
+    const AMOUNT: &str = ic_db::field_path!(Product::PRICE, Price::AMOUNT);
+    let fixture = Fixture::new("test.peer.v1");
+    let mut db = fixture
+        .create(Schema::new(&[Product::SCHEMA]).unwrap(), [2; 16])
+        .unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute(
+        "CREATE TABLE items(id INTEGER, cents INTEGER, prefix TEXT, currency TEXT)",
+        [],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    for (id, cents, prefix, currency) in [
+        (1_u32, 100, Some("EUR"), Some("EUR")),
+        (2, 100, None, None),
+        (3, 200, None, None),
+        (4, 100, Some("EUR"), Some("USD")),
+    ] {
+        sql.execute(
+            "INSERT INTO items VALUES (?1,?2,?3,?4)",
+            (id, cents, prefix, currency),
+        )
+        .unwrap();
+        batch
+            .insert(&Product {
+                id: u64::from(id),
+                accepted: None,
+                unique_codes: None,
+                prefix: prefix.map(str::to_owned),
+                price: Some(Price {
+                    amount: Some(Decimal::try_new(cents.into(), 2).unwrap()),
+                    currency: currency.map(str::to_owned),
+                }),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let clause = [
+        (CURRENCY, Ne, IndexValue::Absent),
+        (AMOUNT, Eq, Decimal::try_new(200, 2).unwrap().into()),
+    ];
+    for (left, right) in [(Product::PREFIX, CURRENCY), (CURRENCY, Product::PREFIX)] {
+        for cents in [100, 200] {
+            let expected: u32 = sql.query_row("SELECT id FROM items WHERE cents=?1 AND (currency IS NOT NULL OR cents=200) AND prefix IS currency", [cents], |row| row.get(0)).unwrap();
+            let query = || {
+                db.query::<Product>()
+                    .eq(AMOUNT, Decimal::try_new(cents.into(), 2).unwrap())
+                    .filter_any(&clause)
+                    .filter_fields(left, Eq, right)
+            };
+            let hinted = query().using_index("prefix,id", &[]).fetch();
+            let page = if cents == 100 {
+                hinted.unwrap()
+            } else {
+                assert!(matches!(hinted, Err(Error::InvalidQuery)));
+                query().fetch().unwrap()
+            };
+            assert_eq!(
+                page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+                [u64::from(expected)]
+            );
+        }
+    }
+}
+
+#[test]
 fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     const AMOUNT: &str = ic_db::field_path!(Product::PRICE, Price::AMOUNT);
     const CURRENCY: &str = ic_db::field_path!(Product::PRICE, Price::CURRENCY);
@@ -46,7 +119,7 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     let mut db = fixture.create(schema(), [1; 16]).unwrap();
     let sql = Connection::open_in_memory().unwrap();
     sql.execute(
-        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER, currency TEXT, prefix TEXT)",
+        "CREATE TABLE products(id INTEGER PRIMARY KEY, cents INTEGER, currency TEXT, prefix TEXT, has_price INTEGER)",
         [],
     )
     .unwrap();
@@ -70,8 +143,14 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     .enumerate()
     {
         sql.execute(
-            "INSERT INTO products VALUES (?1,?2,?3,?4)",
-            (id as u32, price.flatten(), currency, prefix),
+            "INSERT INTO products VALUES (?1,?2,?3,?4,?5)",
+            (
+                id as u32,
+                price.flatten(),
+                currency,
+                prefix,
+                price.is_some(),
+            ),
         )
         .unwrap();
         for code in codes.into_iter().flatten() {
@@ -95,6 +174,42 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     db.commit(batch).unwrap();
     drop(db);
     let db = fixture.open(schema()).unwrap();
+    let sparse = || db.query::<Product>().using_index("prefix,id", &[]);
+    let expected: u32 = sql
+        .query_row(
+            "SELECT id FROM products WHERE NOT has_price AND prefix IS NOT currency",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    for (left, right) in [(Product::PREFIX, CURRENCY), (CURRENCY, Product::PREFIX)] {
+        let page = sparse()
+            .filter_absent(Product::PRICE)
+            .filter_fields(left, ic_db::Comparison::Ne, right)
+            .fetch()
+            .unwrap();
+        assert_eq!(
+            page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [u64::from(expected)]
+        );
+        // Two absent fields compare equal, so equality cannot require a prefix.
+        assert!(matches!(
+            sparse()
+                .filter_absent(Product::PRICE)
+                .filter_fields(left, ic_db::Comparison::Eq, right)
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+        // A present price can carry a currency even when prefix is absent.
+        assert!(matches!(
+            sparse()
+                .filter_present(Product::PRICE)
+                .filter_fields(left, ic_db::Comparison::Ne, right)
+                .fetch(),
+            Err(Error::InvalidQuery)
+        ));
+    }
+
     for (lower, upper) in [(125_i32, -15_i32), (-15, -15), (-15, 0)] {
         let expected: i64 = sql
             .query_row(
@@ -1388,8 +1503,10 @@ fn sparse_index_requires_schema_or_predicates_to_prove_presence() {
                 Some(value) => query.eq(path, value),
                 None => query.filter_absent(path),
             };
-            let page = query.work_limit(2).fetch().unwrap();
-            assert_eq!(page.examined, 2);
+            // Equality seeks sample 7. Inequality with absence visits both present samples.
+            let candidates = if fixed.is_some() { 1 } else { 2 };
+            let page = query.work_limit(candidates).fetch().unwrap();
+            assert_eq!(page.examined, candidates);
             assert_eq!(
                 page.rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
                 expected

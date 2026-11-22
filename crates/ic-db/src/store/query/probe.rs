@@ -103,11 +103,18 @@ fn point_members<'a>(
                             && matches!(term.operand, TermOperand::Literal { .. })
                     })
             })?;
+    let fixed = super::order::transferred_equality(entity, request, field);
     let mut members = Vec::new();
     for (term, predicate) in seed.iter().zip(literals) {
         let TermOperand::Literal { bytes, absent } = &term.operand else {
             return None;
         };
+        let super::QueryOperand::Literal(value) = &predicate.operand else {
+            return None;
+        };
+        if fixed.is_some_and(|fixed| !super::equal_values(fixed, *value)) {
+            continue;
+        }
         let key = bytes.as_slice();
         if *absent {
             // An admitted present-only index has no physical key for absence.
@@ -120,9 +127,6 @@ fn point_members<'a>(
         {
             continue;
         }
-        let super::QueryOperand::Literal(value) = &predicate.operand else {
-            return None;
-        };
         // Keep physical key order so existence stops at the same first candidate as a scan.
         if let Err(at) = members.binary_search_by_key(&key, |&(existing, _, _)| existing) {
             members.insert(at, (key, value, false));

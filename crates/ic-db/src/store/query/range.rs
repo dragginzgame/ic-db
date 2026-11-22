@@ -363,14 +363,26 @@ pub(super) fn bounds(
     if empty_input(entity, request, plan) {
         return Ok(None);
     }
+    let mut first_key = plan.prefix.clone();
+    let next = next_field(entity, plan.index, plan.fixed_components);
+    let exact = match next {
+        None => true, // Complete unique index key.
+        Some((_, true)) => false,
+        Some((field, false)) => {
+            // The primary key also terminates a non-unique index after its declared fields.
+            if let Some(id) = super::order::transferred_equality(entity, request, field) {
+                id.append_component(false, &mut first_key);
+                true
+            } else {
+                false
+            }
+        }
+    };
     let mut lower = Endpoint {
-        key: StoreKey::new(plan.prefix.clone())?,
+        key: StoreKey::new(first_key)?,
         inclusive: true,
     };
-    let full_unique = plan
-        .index
-        .is_some_and(|index| index.is_unique_lookup(plan.fixed_components));
-    let mut upper = if full_unique {
+    let mut upper = if exact {
         Endpoint {
             key: lower.key.clone(),
             inclusive: true,
@@ -381,7 +393,7 @@ pub(super) fn bounds(
             inclusive: false,
         }
     };
-    if let Some((field, secondary)) = next_field(entity, plan.index, plan.fixed_components) {
+    if let Some((field, secondary)) = next {
         // A secondary component can precede more fields or an owner suffix. Its end
         // is the successor of the whole prefix; a primary key ends at the key itself.
         let component_key = |operand: &[u8], after: bool| {

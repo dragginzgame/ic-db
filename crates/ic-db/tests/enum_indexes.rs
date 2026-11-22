@@ -349,6 +349,78 @@ fn enum_keys_preserve_identity_order_uniqueness_and_reopen() {
 }
 
 #[test]
+fn inclusive_enum_extremes_fix_the_ordered_index_prefix() {
+    use ic_db::Comparison::{Ge, Le};
+    let runtime = host(VectorMemory::default());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [13; 16]).unwrap();
+    let mut batch = Batch::new();
+    for (id, state) in [
+        State::Ready,
+        State::Archived,
+        State::Draft,
+        State::Ready,
+        State::Archived,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut record = row(id as u64, state);
+        record.maybe = (id < 3).then_some(state);
+        batch.insert(&record).unwrap();
+    }
+    db.commit(batch).unwrap();
+    for (comparison, state, expected) in [(Le, State::Archived, [4, 1]), (Ge, State::Ready, [3, 0])]
+    {
+        let zone = [true.into()];
+        for hinted in [false, true] {
+            let query = || {
+                let q = db
+                    .query::<Row>()
+                    .eq(Row::ZONE, true)
+                    .filter(Row::STATE, comparison, &state)
+                    .order_desc(Row::ID)
+                    .limit(1)
+                    .work_limit(1);
+                if hinted {
+                    q.using_index("zone,state,id", &zone)
+                } else {
+                    q
+                }
+            };
+            let first = query().fetch().unwrap();
+            assert_eq!(
+                first.rows.first().map(|r| r.id),
+                Some(expected[0]),
+                "{state:?} hinted={hinted}"
+            );
+            let second = query().after(&first.next.unwrap()).fetch().unwrap();
+            assert_eq!(second.rows[0].id, expected[1]);
+        }
+    }
+    let present = db
+        .query::<Row>()
+        .lte(Row::MAYBE, &State::Archived)
+        .fetch()
+        .unwrap();
+    assert_eq!(present.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [1]);
+    assert!(matches!(
+        db.query::<Row>().gte(Row::STATE, &Other::Ready).fetch(),
+        Err(Error::InvalidOperand)
+    ));
+    // Both Archived and Draft qualify, so this traversal cannot supply ID order.
+    assert!(matches!(
+        db.query::<Row>()
+            .using_index("zone,state,id", &[])
+            .eq(Row::ZONE, true)
+            .lte(Row::STATE, &State::Draft)
+            .order_desc(Row::ID)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn sparse_membership_and_corrupt_ordinals_refuse_without_mutation() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());

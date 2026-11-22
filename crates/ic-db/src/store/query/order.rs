@@ -398,29 +398,18 @@ fn directly_requires_presence(predicate: &Predicate<'_>, name: &str) -> bool {
     !predicate.comparison.accepts_absent(other_absent)
 }
 
-fn requires_presence(
+fn requires_presence<'a>(
     predicate: &Predicate<'_>,
     name: &str,
     entity: &EntitySchema,
     request: &Request<'_>,
+    lookup: &dyn Fn(&str) -> Option<IndexValue<'a>>,
 ) -> bool {
-    let QueryOperand::Field(right) = predicate.operand else {
+    let Some(other) = predicate.compared_field(name) else {
         return directly_requires_presence(predicate, name);
     };
-    let other = if predicate.field == name {
-        right
-    } else if right == name {
-        predicate.field
-    } else {
-        return false;
-    };
 
-    // Only components supplied by the caller constrain the result. Unsupplied
-    // components may be absent on rows omitted by the candidate sparse index.
-    if let Some((index_name, values)) = &request.index
-        && let Some(index) = entity.index_by_name(index_name)
-        && let Some(value) = prefix_value(index.fields, values, other)
-    {
+    if let Some(value) = lookup(other) {
         return !predicate
             .comparison
             .accepts_absent(value == IndexValue::Absent);
@@ -428,11 +417,11 @@ fn requires_presence(
     match predicate.comparison {
         Comparison::Eq => {
             entity.field_is_required(other)
-                || request
-                    .clauses()
-                    .any(|clause| clause.iter().all(|p| directly_requires_presence(p, other)))
+                || presence_clause(entity, request, other, lookup, &|p| {
+                    directly_requires_presence(p, other)
+                })
         }
-        Comparison::Ne => equality(entity, request, other) == Some(IndexValue::Absent),
+        Comparison::Ne => false,
         comparison => !comparison.accepts_absent(false) && !comparison.accepts_absent(true),
     }
 }
@@ -443,10 +432,42 @@ pub(super) fn requires_present_field(
     request: &Request<'_>,
     name: &str,
 ) -> bool {
+    let explicit_index = request
+        .index
+        .as_ref()
+        .and_then(|(name, _)| entity.index_by_name(name));
+    let lookup = |field: &str| constrained_value(entity, request, explicit_index, field);
+    presence_clause(entity, request, name, &lookup, &|p| {
+        requires_presence(p, name, entity, request, &lookup)
+    })
+}
+
+// Look through one field equality only. The peer must have its own direct
+// presence constraint; equalities cannot supply evidence for each other.
+fn presence_clause<'a>(
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    name: &str,
+    lookup: &dyn Fn(&str) -> Option<IndexValue<'a>>,
+    requires: &dyn Fn(&Predicate<'_>) -> bool,
+) -> bool {
     request.clauses().any(|clause| {
-        clause
-            .iter()
-            .all(|predicate| requires_presence(predicate, name, entity, request))
+        let mut needs_presence = false;
+        for predicate in clause {
+            if requires(predicate) {
+                needs_presence = true;
+                continue;
+            }
+            // An alternative on another field can still match an absent row.
+            // Discard it only when the request itself fixes a contradictory value.
+            if clause.len() == 1
+                || predicate.field == name
+                || fixed_comparison(entity, predicate, lookup) != Some(false)
+            {
+                return false;
+            }
+        }
+        needs_presence
     })
 }
 
@@ -558,25 +579,7 @@ pub(super) fn fixed_comparison<'a>(
         QueryOperand::Field(field) => lookup(field)?,
     };
 
-    if left == IndexValue::Absent || right == IndexValue::Absent {
-        return Some(predicate.comparison.accepts_absent(left == right));
-    }
-    if let Some(result) = predicate.comparison.accepts_values(left, right) {
-        return Some(result);
-    }
-    match predicate.comparison {
-        Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
-            // Other admitted scalars use the declared component order.
-            let mut encoded = Vec::new();
-            left.append_component(false, &mut encoded);
-            let split = encoded.len();
-            right.append_component(false, &mut encoded);
-            let (left, right) = encoded.split_at(split);
-
-            Some(predicate.comparison.accepts(Some(left), Some(right), false))
-        }
-        _ => None,
-    }
+    predicate.comparison.accepts_fixed_values(left, right)
 }
 
 // An explicit prefix takes precedence over a requested equality on the same field.
@@ -757,8 +760,44 @@ fn equality<'a>(
     request: &Request<'a>,
     field: &str,
 ) -> Option<IndexValue<'a>> {
-    request
-        .fixed_equalities(entity)
-        .find(|(name, _)| *name == field)
-        .map(|(_, value)| value)
+    direct_equality(entity, request, field).or_else(|| transferred_equality(entity, request, field))
+}
+
+fn direct_equality<'a>(
+    entity: &EntitySchema,
+    request: &Request<'a>,
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    // Member reads return absence before decoding children of an absent record.
+    request.fixed_equalities(entity).find_map(|(name, value)| {
+        let fixes_field = name == field
+            || (value == IndexValue::Absent
+                && entity
+                    .record_member(field)
+                    .is_some_and(|(slot, _)| entity.fields[slot].name == name));
+        fixes_field.then_some(value)
+    })
+}
+
+// Transfer a fixed value through one mandatory field equality. The physical
+// primary range and automatic secondary prefixes consume this same proof.
+pub(super) fn transferred_equality<'a>(
+    entity: &EntitySchema,
+    request: &Request<'a>,
+    field: &str,
+) -> Option<IndexValue<'a>> {
+    if request.predicates.len() < 2 {
+        return None;
+    }
+    request.clauses().find_map(|clause| {
+        let [predicate] = clause else { return None };
+        if predicate.comparison != Comparison::Eq {
+            return None;
+        }
+        let value = direct_equality(entity, request, predicate.compared_field(field)?)?;
+        // Comparable fields can have different byte limits or decimal scales.
+        let target = entity.index_field(field)?;
+        value.admit(target.value, target.optional).ok()?;
+        Some(value)
+    })
 }

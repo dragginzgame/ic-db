@@ -1857,6 +1857,29 @@ fn primary_range_encoding_handles_signed_extremes_and_variable_width_keys() {
         [-1, 0, 1]
     );
     assert_eq!(page.examined, 3);
+    for (comparison, bound, expected) in [
+        (C::Le, i64::MIN, &[i64::MIN][..]),
+        (C::Ge, i64::MAX, &[i64::MAX][..]),
+        (C::Le, -1, &[i64::MIN, -1][..]),
+        (C::Ge, 1, &[1, i64::MAX][..]),
+    ] {
+        let page = db
+            .query::<SignedRange>()
+            .filter(SignedRange::ID, comparison, bound)
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
+    }
+    // A strict lower bound at MAX has no successor. It cannot wrap to MIN.
+    assert!(
+        db.query::<SignedRange>()
+            .gt(SignedRange::ID, i64::MAX)
+            .lte(SignedRange::ID, i64::MIN)
+            .fetch()
+            .unwrap()
+            .rows
+            .is_empty()
+    );
     for (i, &id) in principals.iter().enumerate() {
         // A one-byte FF principal precedes a two-byte 0000 principal.
         let count = db
@@ -2330,6 +2353,17 @@ fn empty_text_pages_resume_after_matching_rows_change() {
 fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
     let runtime = host(VectorMemory::default());
     let (db, rows) = text_rows(&runtime);
+    // Valid on required (4096 bytes), too wide to seek on text (64 bytes).
+    let long = "x".repeat(65);
+    let page = db
+        .query::<TextRow>()
+        .eq(TextRow::REQUIRED, &long)
+        .filter_fields(TextRow::TEXT, C::Eq, TextRow::REQUIRED)
+        .order_asc(TextRow::TEXT)
+        .fetch()
+        .unwrap();
+    assert!(page.rows.is_empty() && page.next.is_none());
+
     for comparison in [C::StartsWith, C::EndsWith, C::Contains] {
         for needle in [
             "", "a", "a\0", "a\0b", "A", "é", "e\u{301}", "β", "clair", "\0", "\u{1}", "\0\u{1}",
@@ -5270,6 +5304,98 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
             .fetch(),
         Err(Error::InvalidQuery)
     ));
+}
+
+#[test]
+fn a_field_equality_seeks_the_primary_key_and_checks_the_owner() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for (left, right) in [(Entry::ID, Entry::MAYBE), (Entry::MAYBE, Entry::ID)] {
+        // ID 7 matches, ID 6 has an absent maybe, and ID 9 does not exist.
+        for (key, expected, examined) in [(7_u64, Some(7), 1), (6, None, 1), (9, None, 0)] {
+            let query = || {
+                db.query::<Entry>()
+                    .eq(Entry::MAYBE, key)
+                    .filter_fields(left, C::Eq, right)
+                    .work_limit(1)
+            };
+            for reverse in [false, true] {
+                let q = query();
+                let page = if reverse { q.descending() } else { q }.fetch().unwrap();
+                assert_eq!(ids(&page.rows), expected.into_iter().collect::<Vec<_>>());
+                assert_eq!(page.examined, examined);
+                assert!(page.next.is_none());
+            }
+            assert_eq!(query().exists().unwrap().value, expected.is_some());
+            assert_eq!(
+                query().count().unwrap().value,
+                u64::from(expected.is_some())
+            );
+            assert_eq!(
+                query().count_validated().unwrap().value,
+                u64::from(expected.is_some())
+            );
+        }
+    }
+}
+
+#[test]
+fn membership_probes_skip_ids_excluded_by_a_field_equality() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let category = [1_u8.into()];
+    for hinted in [false, true] {
+        for work in [1, 8] {
+            // ID 3 exists, but its maybe field is absent. ID 5 is outside the list.
+            for (target, matches, probes) in [(7_u64, true, 1), (3, false, 1), (5, false, 0)] {
+                let query = || {
+                    let q = db
+                        .query::<Entry>()
+                        .filter_in(Entry::ID, &[1_u64, 3, 7, 9])
+                        .eq(Entry::MAYBE, target)
+                        .filter_fields(Entry::MAYBE, C::Eq, Entry::ID)
+                        .work_limit(work);
+                    if hinted {
+                        q.using_index("category", &category)
+                    } else {
+                        q
+                    }
+                };
+                let page = query().fetch().unwrap();
+                assert_eq!(
+                    ids(&page.rows),
+                    matches.then_some(target).into_iter().collect::<Vec<_>>()
+                );
+                assert!(page.next.is_none());
+                assert_eq!(page.examined, probes);
+                for count in [query().count().unwrap(), query().count_validated().unwrap()] {
+                    assert_eq!(
+                        (count.value, count.examined, count.fetched),
+                        (u64::from(matches), probes, probes)
+                    );
+                }
+                let exists = query().exists().unwrap();
+                assert_eq!(
+                    (exists.value, exists.examined, exists.fetched),
+                    (matches, probes, probes)
+                );
+            }
+        }
+    }
+    // A surviving index key that does not exist costs a probe, but no owner read.
+    let missing = db
+        .query::<Entry>()
+        .using_index("category", &category)
+        .filter_in(Entry::ID, &[1_u64, 9])
+        .eq(Entry::MAYBE, 9_u64)
+        .filter_fields(Entry::ID, C::Eq, Entry::MAYBE)
+        .work_limit(1)
+        .count_validated()
+        .unwrap();
+    assert_eq!(
+        (missing.value, missing.examined, missing.fetched),
+        (0, 1, 0)
+    );
 }
 
 #[test]

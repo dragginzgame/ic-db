@@ -170,6 +170,24 @@ fn typed_keys_pages_unique_exchange_and_final_references() {
     db.commit(batch).unwrap();
     assert_eq!(db.get::<KeyRow>(Ulid::MIN).unwrap(), Some(rows[0].clone()));
     assert_eq!(db.get::<KeyRow>(Ulid::MAX).unwrap(), Some(rows[5].clone()));
+    let ids = [rows[0].id(), rows[5].id()];
+    let matches = db
+        .query::<KeyRow>()
+        .filter_in(KeyRow::ID, &ids)
+        .fetch()
+        .unwrap();
+    assert_eq!(matches.rows, [rows[0].clone(), rows[5].clone()]);
+    let references = db
+        .query::<Numbered>()
+        .eq(Numbered::TARGET, ids.first().unwrap())
+        .fetch()
+        .unwrap();
+    assert_eq!(references.rows.len(), 1);
+    assert_eq!(references.rows[0].id, 1);
+    assert!(matches!(
+        db.query::<Numbered>().eq(Numbered::ID, ids[0]).fetch(),
+        Err(Error::InvalidOperand)
+    ));
     let first = db.page::<KeyRow>(None, 3).unwrap();
     assert_eq!(first.rows, rows[..3]);
     assert_eq!(first.next_after, Some(rows[2].id));

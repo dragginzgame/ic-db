@@ -34,6 +34,25 @@ impl<E: crate::Entity> Id<E> {
         self.0
     }
 }
+// Fluent predicates admit scalar operands against the selected field's type.
+impl<'a, E: crate::Entity> From<Id<E>> for IndexValue<'a>
+where
+    E::Key: Into<IndexValue<'a>>,
+{
+    fn from(id: Id<E>) -> Self {
+        id.key().into()
+    }
+}
+
+impl<'a, E: crate::Entity> From<&Id<E>> for IndexValue<'a>
+where
+    E::Key: Into<IndexValue<'a>>,
+{
+    fn from(id: &Id<E>) -> Self {
+        (*id).into()
+    }
+}
+
 impl<E: crate::Entity> Copy for Id<E> {}
 impl<E: crate::Entity> Clone for Id<E> {
     fn clone(&self) -> Self {

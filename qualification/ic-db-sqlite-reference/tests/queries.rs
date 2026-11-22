@@ -155,7 +155,14 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        for (hinted, singleton_range) in [(false, false), (true, false), (false, true)] {
+        // Each predicate shape fixes the Nat8 lane to zero.
+        use Comparison::{Eq, Ge, Le};
+        for (hinted, bounds) in [
+            (false, &[Eq][..]),
+            (true, &[Eq][..]),
+            (false, &[Ge, Le][..]),
+            (false, &[Le][..]),
+        ] {
             let page = |after: Option<&QueryCursor>, bytes| {
                 let prefix = [0_u8.into()];
                 let mut q = db
@@ -164,11 +171,9 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
                     .filter("visible", Comparison::Eq, true)
                     .test_output_limit(bytes)
                     .work_limit(2);
-                q = if singleton_range {
-                    q.filter_between(Item::LANE, 0_u8, 0_u8)
-                } else {
-                    q.eq(Item::LANE, 0_u8)
-                };
+                for &comparison in bounds {
+                    q = q.filter(Item::LANE, comparison, 0_u8);
+                }
                 if hinted {
                     q = q.using_index("lane,rank", &prefix);
                 }
@@ -219,6 +224,403 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
             }
         }
     }
+}
+
+// These indexed fixtures allow one candidate per call. Bound the retries so
+// an empty page that repeats its cursor cannot hang the comparison.
+fn assert_id_pages(expected: &[u64], fetch: impl Fn(Option<&QueryCursor>) -> ic_db::QueryPage<Id>) {
+    let mut cursor = None;
+    let mut seen = Vec::new();
+    for _ in 0..=expected.len() {
+        let page = fetch(cursor.as_ref());
+        assert!(page.examined <= 1 && page.rows.len() <= 1);
+        seen.extend(page.rows.into_iter().map(|row| row.id));
+        cursor = page.next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(cursor.is_none());
+    assert_eq!(seen, expected);
+}
+
+#[test]
+fn a_fixed_rank_seeks_the_matching_lane_and_rank() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let expected = sql
+        .prepare("SELECT id FROM items WHERE rank=1 AND lane=rank ORDER BY id DESC")
+        .unwrap()
+        .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for (left, right) in [(Item::RANK, Item::LANE), (Item::LANE, Item::RANK)] {
+        assert_id_pages(&expected, |after| {
+            let mut q = db
+                .query::<Item>()
+                .eq(Item::RANK, 1_u8)
+                .filter_fields(left, Comparison::Eq, right)
+                .order_desc(Item::ID)
+                .limit(1)
+                .work_limit(1);
+            if let Some(after) = after {
+                q = q.after(after);
+            }
+            q.fetch_as::<Id>().unwrap()
+        });
+    }
+    // Inside an OR the equality cannot restrict the index prefix.
+    let mixed = db
+        .query::<Item>()
+        .eq(Item::RANK, 1_u8)
+        .filter_any_operands(&[
+            (
+                Item::LANE,
+                Comparison::Eq,
+                ic_db::QueryOperand::Field(Item::RANK),
+            ),
+            (
+                Item::VISIBLE,
+                Comparison::Eq,
+                ic_db::QueryOperand::Literal(false.into()),
+            ),
+        ])
+        .order_desc(Item::ID)
+        .fetch_as::<Id>()
+        .unwrap();
+    let expected = sql
+        .prepare(
+            "SELECT id FROM items WHERE rank=1 AND (lane=rank OR NOT visible) ORDER BY id DESC",
+        )
+        .unwrap()
+        .query_map([], |r| r.get::<_, u32>(0).map(u64::from))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        mixed.rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn integer_bounds_fix_one_lane_for_ordered_pages() {
+    use Comparison::{Ge, Gt, Le, Lt};
+    let (sql, host) = fixture();
+    let db = open(&host);
+    for (lower, lo, upper, hi) in [(Ge, 1_u8, Lt, 2_u8), (Gt, 0, Le, 1), (Gt, 0, Lt, 2)] {
+        let statement = format!(
+            "SELECT id FROM items WHERE lane {} ?1 AND lane {} ?2 ORDER BY rank DESC, id DESC",
+            if lower == Ge { ">=" } else { ">" },
+            if upper == Le { "<=" } else { "<" }
+        );
+        let expected = sql
+            .prepare(&statement)
+            .unwrap()
+            .query_map(params![lo, hi], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_id_pages(&expected, |continuation| {
+            let mut q = db
+                .query::<Item>()
+                .filter(Item::LANE, upper, hi)
+                .filter(Item::LANE, lower, lo)
+                .order_desc(Item::RANK)
+                .order_desc(Item::ID)
+                .work_limit(1)
+                .limit(1);
+            if let Some(after) = continuation {
+                q = q.after(after);
+            }
+            q.fetch_as::<Id>().unwrap()
+        });
+    }
+    // An interval containing lanes 1 and 2 cannot deliver global rank order.
+    assert!(matches!(
+        db.query::<Item>()
+            .using_index("lane,rank", &[])
+            .gt(Item::LANE, 0_u8)
+            .lt(Item::LANE, 3_u8)
+            .order_asc(Item::RANK)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn membership_intersections_and_exclusions_leave_one_lane_for_index_order() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let members = [0_u8, 1, 1, 2];
+    for (include, others, clause) in [
+        (true, [1_u8, 3], "lane IN (1,3)"),
+        (false, [0_u8, 2], "lane NOT IN (0,2)"),
+    ] {
+        let expected = sql.prepare(&format!("SELECT id FROM items WHERE lane IN (0,1,1,2) AND {clause} ORDER BY rank DESC, id DESC"))
+            .unwrap().query_map([], |row| row.get::<_, u32>(0).map(u64::from)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        for reverse in [false, true] {
+            assert_id_pages(&expected, |continuation| {
+                let mut q = db.query::<Item>();
+                if !reverse {
+                    q = q.filter_in(Item::LANE, &members);
+                }
+                q = if include {
+                    q.filter_in(Item::LANE, &others)
+                } else {
+                    q.filter_not_in(Item::LANE, &others)
+                };
+                if reverse {
+                    q = q.filter_in(Item::LANE, &members);
+                }
+                q = q
+                    .order_desc(Item::RANK)
+                    .order_desc(Item::ID)
+                    .limit(1)
+                    .work_limit(1);
+                if let Some(after) = continuation {
+                    q = q.after(after);
+                }
+                q.fetch_as::<Id>().unwrap()
+            });
+        }
+    }
+    let empty = db
+        .query::<Item>()
+        .filter_in(Item::LANE, &[0_u8, 1])
+        .filter_not_in(Item::LANE, &[0_u8, 1])
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert!(empty.rows.is_empty() && empty.next.is_none());
+    assert_eq!(empty.examined, 0);
+
+    let disjoint = db
+        .query::<Item>()
+        .filter_in(Item::LANE, &[0_u8, 1])
+        .filter_in(Item::LANE, &[2_u8, 3])
+        .work_limit(1)
+        .fetch()
+        .unwrap();
+    assert!(disjoint.rows.is_empty() && disjoint.next.is_none());
+    assert_eq!(disjoint.examined, 0);
+
+    let hinted = || {
+        db.query::<Item>()
+            .using_index("lane,rank", &[])
+            .filter_in(Item::LANE, &[0_u8, 1])
+            .order_asc(Item::RANK)
+    };
+    for q in [
+        hinted().filter_in(Item::LANE, &[1_u8, 2, 0]),
+        hinted().filter_any(&[
+            (Item::LANE, Comparison::Eq, 1_u8.into()),
+            (Item::VISIBLE, Comparison::Eq, true.into()),
+        ]),
+        hinted().ne(Item::RANK, 0_u8),
+        hinted().filter_any(&[
+            (Item::LANE, Comparison::Ne, 0_u8.into()),
+            (Item::VISIBLE, Comparison::Eq, true.into()),
+        ]),
+    ] {
+        assert!(matches!(q.fetch(), Err(Error::InvalidQuery)));
+    }
+}
+
+#[test]
+fn ranges_narrow_membership_for_ranked_pages() {
+    use Comparison::{Ge, Gt, Le, Lt};
+    let (sql, host) = fixture();
+    let db = open(&host);
+    for (cmp, op, bound) in [
+        (Lt, "<", 1_u8),
+        (Le, "<=", 0),
+        (Gt, ">", 1),
+        (Ge, ">=", 2),
+        (Gt, ">", 2),
+    ] {
+        let expected = sql
+            .prepare(&format!(
+                "SELECT id FROM items WHERE lane IN (0,1,2) AND lane {op} ?1 ORDER BY rank, id"
+            ))
+            .unwrap()
+            .query_map([bound], |r| r.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut seen = Vec::new();
+        let mut after = None;
+        for _ in 0..=expected.len() {
+            let mut q = db
+                .query::<Item>()
+                .filter_in(Item::LANE, &[0_u8, 1, 2])
+                .filter(Item::LANE, cmp, bound)
+                .order_asc(Item::RANK)
+                .limit(1)
+                .work_limit(1);
+            if let Some(cursor) = &after {
+                q = q.after(cursor);
+            }
+            let page = q.fetch_as::<Id>().unwrap();
+            if expected.is_empty() {
+                assert_eq!(page.examined, 0);
+            }
+            seen.extend(page.rows.into_iter().map(|row| row.id));
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(after.is_none());
+        assert_eq!(seen, expected);
+    }
+    // The range removes absence as well as the upper Decimal value.
+    let low = Decimal::try_new(124, 2).unwrap();
+    let high = Decimal::try_new(125, 2).unwrap();
+    let expected: u32 = sql.query_row(
+        "SELECT id FROM items WHERE lane=0 AND (cents IS NULL OR cents IN (124,125)) AND cents<125",
+        [], |row| row.get(0),
+    ).unwrap();
+    let page = db
+        .query::<Item>()
+        .eq(Item::LANE, 0_u8)
+        .filter_in(Item::PRICE, &[None, Some(low), Some(high)])
+        .lt(Item::PRICE, high)
+        .order_desc(Item::ID)
+        .work_limit(1)
+        .fetch_as::<Id>()
+        .unwrap();
+    assert_eq!(
+        page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [u64::from(expected)]
+    );
+    assert_eq!(page.examined, 1);
+    assert!(matches!(
+        db.query::<Item>()
+            .using_index("lane,rank", &[])
+            .filter_in(Item::LANE, &[0_u8, 1, 2])
+            .lt(Item::LANE, 2_u8)
+            .order_asc(Item::RANK)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn sparse_price_order_ignores_an_impossible_or_alternative() {
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let expected = sql.prepare("SELECT id FROM items WHERE lane=0 AND (cents IS NOT NULL OR lane=2) ORDER BY cents, id")
+        .unwrap().query_map([], |r| r.get::<_, u32>(0).map(u64::from)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    let scope = [0_u8.into()];
+    let clause = [
+        (Item::PRICE, Comparison::Ne, ic_db::IndexValue::Absent),
+        (Item::LANE, Comparison::Eq, 2_u8.into()),
+    ];
+    for hinted in [false, true] {
+        assert_id_pages(&expected, |continuation| {
+            let query = db.query::<Item>().filter_any(&clause);
+            let mut query = if hinted {
+                query.using_index("lane,price,id", &scope)
+            } else {
+                query.eq(Item::LANE, 0_u8)
+            }
+            .order_asc(Item::PRICE)
+            .order_asc(Item::ID)
+            .limit(1)
+            .work_limit(1);
+            if let Some(cursor) = continuation {
+                query = query.after(cursor);
+            }
+            query.fetch_as::<Id>().unwrap()
+        });
+    }
+    // Lane 2 contains an unpriced item. Its OR branch keeps the sparse path unsafe.
+    let unpriced: u32 = sql
+        .query_row(
+            "SELECT id FROM items WHERE lane=2 AND cents IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let page = db
+        .query::<Item>()
+        .eq(Item::LANE, 2_u8)
+        .filter_any(&clause)
+        .order_asc(Item::PRICE)
+        .fetch_as::<Id>()
+        .unwrap();
+    assert_eq!(
+        page.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [u64::from(unpriced)]
+    );
+    assert!(matches!(
+        db.query::<Item>()
+            .using_index("lane,price,id", &[2_u8.into()])
+            .filter_any(&clause)
+            .order_asc(Item::PRICE)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
+fn sparse_price_order_checks_both_operands_of_a_field_comparison() {
+    use ic_db::QueryOperand::{Field, Literal};
+    let (sql, host) = fixture();
+    let db = open(&host);
+    let clause = [
+        (
+            Item::PRICE,
+            Comparison::Ne,
+            Literal(ic_db::IndexValue::Absent),
+        ),
+        (Item::LANE, Comparison::Gt, Field(Item::RANK)),
+    ];
+    let query = || {
+        db.query::<Item>()
+            .filter_any_operands(&clause)
+            .order_asc(Item::PRICE)
+            .order_asc(Item::ID)
+    };
+    let expected = sql.prepare("SELECT id FROM items WHERE lane=0 AND rank=2 AND (cents IS NOT NULL OR lane>rank) ORDER BY cents,id")
+        .unwrap().query_map([], |r| r.get::<_, u32>(0).map(u64::from)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    assert_id_pages(&expected, |continuation| {
+        let mut q = query()
+            .eq(Item::LANE, 0_u8)
+            .eq(Item::RANK, 2_u8)
+            .limit(1)
+            .work_limit(1);
+        if let Some(cursor) = continuation {
+            q = q.after(cursor);
+        }
+        q.fetch_as::<Id>().unwrap()
+    });
+    let lane = [2_u8.into()];
+    let hinted = || query().using_index("lane,price,id", &lane);
+    assert!(matches!(hinted().fetch(), Err(Error::InvalidQuery)));
+    assert!(matches!(
+        hinted().eq(Item::RANK, 1_u8).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    let unpriced: u32 = sql
+        .query_row(
+            "SELECT id FROM items WHERE lane=2 AND rank=1 AND cents IS NULL AND lane>rank",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let page = query()
+        .eq(Item::LANE, 2_u8)
+        .eq(Item::RANK, 1_u8)
+        .fetch_as::<Id>()
+        .unwrap();
+    assert_eq!(
+        page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [u64::from(unpriced)]
+    );
 }
 
 #[test]

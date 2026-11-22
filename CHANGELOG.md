@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.27.1]
+
+### 🔍 Queries
+
+- Use typed IDs directly in fluent predicates, for example `.eq(Route::USER_ID, user.id())` or `.filter_in(User::ID, &ids)`. They compare exactly like the underlying keys.
+
+- An inclusive upper bound on the minimum or lower bound on the maximum fixes an integer or unit enum to one value. For example, `.lte(Item::LANE, 0_u8)` can page by rank on a `(lane, rank)` index. Enum extrema follow canonical variant names.
+
+- A pair of integer bounds can also fix a compound-index prefix. For example, `.gt(Item::LANE, 0_u8).lt(Item::LANE, 2_u8)` pages by rank within lane 1.
+
+- A membership filter and exclusions can fix the same prefix. With a `(lane, rank)` index, `.filter_in(Item::LANE, &[0_u8, 1, 2]).ne(Item::LANE, 0_u8).ne(Item::LANE, 2_u8)` can page by rank in lane 1.
+
+- Two `filter_in` calls on the same field can also supply a compound-index prefix. Lists `[0, 1, 2]` and `[1, 3]` fix lane 1. Disjoint literal lists finish empty without examining rows.
+
+- Range filters can narrow a membership list to an index prefix. With `.filter_in(Item::LANE, &[0_u8, 1, 2]).lt(Item::LANE, 1_u8)`, a `(lane, rank)` index can page by rank in lane 0.
+
+- A listing restricted to lane 0 can use a present-only price index for `price is present OR lane = 2`. If the lane-2 alternative can match, the planner still requires a path that includes unpriced rows.
+
+- Sparse-index admission also checks field-to-field alternatives. With lane fixed to 0 and rank to 2, `price is present OR lane > rank` can page through the present-only price index.
+
+- Filtering an optional record as absent also fixes its direct scalar members to absence. With `price` absent, `prefix != price.currency` can use a present-only prefix index in either operand order.
+
+- A present-only index can also serve an equality between two optional fields when the filters prove the other field is present. If two absent values can still match, automatic selection keeps those rows.
+
+- With `rank = 1` and `lane = rank`, the planner can seek the `(1, 1)` prefix of a `(lane, rank)` index. Both field-comparison operand orders use the same proof.
+
+- When a field equality fixes the primary key, row queries seek that ID directly and still check the other field on the stored row. A missing ID completes with zero candidates examined.
+
+- Membership counts and existence checks skip IDs ruled out by a mandatory field equality before probing storage. A fixed category index can also seek the matching owner ID directly.
+
 ## [0.27.0] - 2026-11-22
 
 ### ⚠️ Breaking
