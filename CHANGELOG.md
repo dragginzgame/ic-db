@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.27.2]
+
+### 🔍 Queries
+
+- Conflicting prefix or suffix filters on Text and Blob can finish with zero candidates examined when another filter fixes the comparison field. For example, if `code = "ab"`, a name cannot start with both `code` and `"é"`.
+
+- Counts can use maintained cardinality when an integer or unit-enum filter covers every value of a required field. For example, `.gte(Item::LANE, 0_u8).count()` examines zero candidates for a required Nat8 lane. A strict bound beyond either endpoint finishes empty, including on optional fields.
+
+- Two bounds can fix a compound-index component to one unit-enum variant. With variants `Archived`, `Draft`, and `Ready`, a query for `state > Archived` and `state < Ready` can page in index order within `Draft`.
+
+- Strict bounds between consecutive integers or unit-enum variants finish empty without examining candidates, even when the listing uses another field for ordering.
+
+- An explicit index prefix can supply the value for a field equality. On a `(lane, rank)` index restricted to lane 1, `rank = lane` seeks directly to `(1, 1)` and pages by ID in either direction. Adding an exact ID seeks the complete key.
+
+### 🛠️ Tooling
+
+- Both workspaces use Toko Tooling 0.46.2 for coordinated Cargo release metadata and publication evidence paths.
+
 ## [0.27.1] - 2026-11-22
 
 ### 🔍 Queries

@@ -438,6 +438,18 @@ impl<'a> Predicate<'a> {
         }
     }
 
+    // Endpoints of admitted present scalar values. Text and Blob have an empty minimum.
+    fn at_extreme(&self, entity: &EntitySchema, value: IndexValue<'_>, upper: bool) -> bool {
+        match value {
+            IndexValue::Bool(b) => b == upper,
+            IndexValue::UnitEnum { ordinal, .. } => entity
+                .index_field(self.field)
+                .is_some_and(|field| key::is_fixed_extreme(field.value, &[ordinal], upper)),
+            IndexValue::Text("") | IndexValue::Blob([]) => !upper,
+            _ => value.is_integer_extreme(upper),
+        }
+    }
+
     // The only field value that can satisfy this predicate, when known.
     fn fixed_equality(&self, entity: &EntitySchema) -> Option<(&'a str, IndexValue<'a>)> {
         if let QueryOperand::Length(n) = self.operand {
@@ -458,24 +470,12 @@ impl<'a> Predicate<'a> {
                 IndexValue::Bool(!excluded)
             }
             (cmp @ (Comparison::Ge | Comparison::Le), _)
-                if value.is_integer_extreme(cmp == Comparison::Ge) =>
+                if self.at_extreme(entity, value, cmp == Comparison::Ge) =>
             {
                 value
             }
-            (Comparison::Le, _) if scalar_bytes(value).is_some_and(<[u8]>::is_empty) => value,
-            (cmp @ (Comparison::Ge | Comparison::Le), IndexValue::UnitEnum { ordinal, .. })
-                if key::is_fixed_extreme(
-                    entity.index_field(self.field)?.value,
-                    &[ordinal],
-                    cmp == Comparison::Ge,
-                ) =>
-            {
-                value
-            }
-            (Comparison::Gt, IndexValue::Bool(false))
-            | (Comparison::Ge, IndexValue::Bool(true)) => IndexValue::Bool(true),
-            (Comparison::Lt, IndexValue::Bool(true))
-            | (Comparison::Le, IndexValue::Bool(false)) => IndexValue::Bool(false),
+            (Comparison::Gt, IndexValue::Bool(false)) => IndexValue::Bool(true),
+            (Comparison::Lt, IndexValue::Bool(true)) => IndexValue::Bool(false),
             _ => return None,
         };
         Some((self.field, fixed))
@@ -484,9 +484,10 @@ impl<'a> Predicate<'a> {
     // Each of these predicates matches exactly the rows where the field is present.
     fn tests_presence(&self, entity: &EntitySchema, operand: &TermOperand) -> bool {
         match (self.comparison, self.operand) {
-            (Comparison::Ne, QueryOperand::Literal(IndexValue::Absent))
-            | (Comparison::Ge, QueryOperand::Literal(IndexValue::Bool(false)))
-            | (Comparison::Le, QueryOperand::Literal(IndexValue::Bool(true))) => true,
+            (Comparison::Ne, QueryOperand::Literal(IndexValue::Absent)) => true,
+            (cmp @ (Comparison::Le | Comparison::Ge), QueryOperand::Literal(value)) => {
+                self.at_extreme(entity, value, cmp == Comparison::Le)
+            }
             (_, QueryOperand::Length(_)) => {
                 self.present_length_result(entity) == Some(true)
                     && self.comparison != Comparison::Ne
@@ -500,10 +501,7 @@ impl<'a> Predicate<'a> {
                 QueryOperand::Field(right),
             ) => right == self.field,
             (
-                Comparison::Ge
-                | Comparison::StartsWith
-                | Comparison::EndsWith
-                | Comparison::Contains,
+                Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains,
                 QueryOperand::Literal(needle),
             ) => {
                 // An empty Text/Blob collection member still requires a matching element.
@@ -527,9 +525,9 @@ impl<'a> Predicate<'a> {
         if let QueryOperand::Literal(value) = self.operand {
             // Absence also fails these comparisons at the edges of the present domain.
             return match (self.comparison, value) {
-                (Comparison::Lt, IndexValue::Bool(false))
-                | (Comparison::Gt, IndexValue::Bool(true)) => Some(false),
-                (Comparison::Lt, _) if scalar_bytes(value).is_some_and(<[u8]>::is_empty) => {
+                (cmp @ (Comparison::Lt | Comparison::Gt), value)
+                    if self.at_extreme(entity, value, cmp == Comparison::Gt) =>
+                {
                     Some(false)
                 }
                 _ => None,
@@ -627,14 +625,14 @@ impl<'a> Request<'a> {
                 return Some(equality);
             }
             // A mandatory lower and upper bound can isolate one value. Only
-            // integers have a proven successor here. Keep the original terms
+            // integers and admitted unit enums have a proven successor here. Keep the original terms
             // for row evaluation and continuation identity.
             let QueryOperand::Literal(value) = predicate.operand else {
                 return None;
             };
             let lower = match predicate.comparison {
                 Comparison::Ge => value,
-                Comparison::Gt if self.predicates.len() > 1 => value.integer_successor()?,
+                Comparison::Gt if self.predicates.len() > 1 => value.discrete_successor()?,
                 _ => return None,
             };
             self.clauses()
@@ -644,9 +642,11 @@ impl<'a> Request<'a> {
                         return false;
                     }
                     match (upper.comparison, upper.operand) {
-                        (Comparison::Le, QueryOperand::Literal(value)) => lower == value,
+                        (Comparison::Le, QueryOperand::Literal(value)) => {
+                            equal_values(lower, value)
+                        }
                         (Comparison::Lt, QueryOperand::Literal(value)) => {
-                            lower.integer_successor() == Some(value)
+                            consecutive_values(lower, value)
                         }
                         _ => false,
                     }
@@ -1447,6 +1447,11 @@ fn scalar_bytes(value: IndexValue<'_>) -> Option<&[u8]> {
         IndexValue::Blob(bytes) => Some(bytes),
         _ => None,
     }
+}
+
+fn consecutive_values(low: IndexValue<'_>, high: IndexValue<'_>) -> bool {
+    low.discrete_successor()
+        .is_some_and(|next| equal_values(next, high))
 }
 
 fn equal_values(left: IndexValue<'_>, right: IndexValue<'_>) -> bool {

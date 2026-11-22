@@ -2473,9 +2473,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.46.1"
+version = "0.46.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac71f9087f21831b7c4c278dddb72ef2b7c081ebf008de62173eeab182a1c216"
+checksum = "4ba519e61553775ef678a64e140be06b9dc303fb259fa51cc3abc326254368a0"
 
 [[package]]
 name = "tower"

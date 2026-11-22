@@ -63,7 +63,10 @@ inherited_members() {
             case "$manifest" in "$directory"/*) ;; *) echo 'workspace member is outside the selected root' >&2; exit 1 ;; esac
             [[ -f "$manifest" && ! -L "$manifest" ]] || exit 1
             "${YQ:-yq}" -p toml -o json '.' "$manifest" |
-                jq -e '.package.version.workspace == true' > /dev/null
+                jq -e '.package.version | objects | .workspace == true' > /dev/null || {
+                    printf 'release member must inherit workspace.package.version: %s\n' "$manifest" >&2
+                    exit 1
+                }
         done
 }
 
@@ -73,7 +76,7 @@ admit_workspace_graph() {
     local directory="$1" version="$2" evidence="$3" lock_directory="$4" status
     local metadata_status=(0 0)
     mkdir -p "$evidence" || return
-    if (cd "$directory" && cargo metadata --locked --format-version 1) \
+    if (cd "$directory" && cargo metadata --locked --all-features --format-version 1) \
         2>&1 > "$evidence/metadata.json" | tee "$evidence/metadata.stderr" >&2; then
         :
     else

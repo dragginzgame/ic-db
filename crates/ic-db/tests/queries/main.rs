@@ -2350,9 +2350,44 @@ fn empty_text_pages_resume_after_matching_rows_change() {
 }
 
 #[test]
+fn incompatible_fixed_field_prefixes_and_suffixes_skip_traversal() {
+    let runtime = host(VectorMemory::default());
+    let (db, _) = text_rows(&runtime);
+    for (comparison, compatible) in [(C::StartsWith, "a"), (C::EndsWith, "b")] {
+        let query = |needle| {
+            db.query::<TextRow>()
+                .eq(TextRow::REQUIRED, "ab")
+                .filter_fields(TextRow::TEXT, comparison, TextRow::REQUIRED)
+                .filter(TextRow::TEXT, comparison, needle)
+        };
+        let page = query("é").work_limit(1).fetch().unwrap();
+        assert!(page.rows.is_empty() && page.next.is_none());
+        assert_eq!(page.examined, 0);
+        assert_eq!(query(compatible).count().unwrap().value, 2);
+    }
+}
+
+#[test]
 fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
     let runtime = host(VectorMemory::default());
     let (db, rows) = text_rows(&runtime);
+    // The optional text component precedes both the declared ID and the owner suffix.
+    for (reverse, expected) in [(false, [3, 12]), (true, [12, 3])] {
+        let query = || {
+            let q = db
+                .query::<TextRow>()
+                .using_index("text,id", &[])
+                .eq(TextRow::REQUIRED, "ab")
+                .filter_fields(TextRow::TEXT, C::Eq, TextRow::REQUIRED)
+                .limit(1)
+                .work_limit(1);
+            if reverse { q.descending() } else { q }
+        };
+        let first = query().fetch().unwrap();
+        let second = query().after(first.next.as_ref().unwrap()).fetch().unwrap();
+        assert_eq!([first.rows[0].id, second.rows[0].id], expected);
+        assert_eq!((first.examined, second.examined), (1, 1));
+    }
     // Valid on required (4096 bytes), too wide to seek on text (64 bytes).
     let long = "x".repeat(65);
     let page = db
@@ -5304,6 +5339,42 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
             .fetch(),
         Err(Error::InvalidQuery)
     ));
+}
+
+#[test]
+fn full_integer_domain_counts_and_impossible_ranges_skip_candidates() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let total = db.query::<Entry>().count().unwrap().value;
+    for query in [
+        db.query::<Entry>().gte(Entry::CATEGORY, u8::MIN),
+        db.query::<Entry>().lte(Entry::CATEGORY, u8::MAX),
+    ] {
+        let count = query.work_limit(1).count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (total, 0, 0));
+    }
+    for query in [
+        db.query::<Entry>().lt(Entry::MAYBE, u64::MIN),
+        db.query::<Entry>().gt(Entry::MAYBE, u64::MAX),
+    ] {
+        let page = query.work_limit(1).fetch().unwrap();
+        assert!(page.rows.is_empty() && page.next.is_none());
+        assert_eq!(page.examined, 0);
+    }
+    let present = db
+        .query::<Entry>()
+        .filter_present(Entry::MAYBE)
+        .count()
+        .unwrap();
+    assert!(present.value < total);
+    assert_eq!(
+        db.query::<Entry>()
+            .gte(Entry::MAYBE, 0_u64)
+            .count()
+            .unwrap()
+            .value,
+        present.value
+    );
 }
 
 #[test]

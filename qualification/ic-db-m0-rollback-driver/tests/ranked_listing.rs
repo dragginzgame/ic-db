@@ -8,6 +8,7 @@ const BY_PROJECT: u8 = 0;
 const BY_TIME: u8 = 1;
 const BY_PRICE: u8 = 2;
 const BY_PRICE_AND_TIME: u8 = 3;
+const FIXED_OWNER: u8 = 4;
 
 type Page = (Vec<u64>, Option<Vec<u8>>, usize, usize);
 
@@ -130,6 +131,21 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
     assert_eq!(ids, expected);
     assert!(next.is_none());
     println!("indexed: limit=20 examined={work} fetched={reads} instructions={instructions}");
+
+    let owner: u32 = sql
+        .query_row(
+            "SELECT id FROM items WHERE project_id=1 AND open AND cents<=10000 AND id=project_id",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let (page, instructions) = read(FIXED_OWNER, 10_000, 128, 2, None).await;
+    let (ids, next, work, reads) = page.unwrap();
+    assert_eq!(ids, [u64::from(owner)]);
+    assert!(next.is_none());
+    println!(
+        "fixed owner: ids={ids:?} examined={work} fetched={reads} instructions={instructions}"
+    );
 
     // Even the last candidate cannot prove that no better row follows it.
     assert!(

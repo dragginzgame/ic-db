@@ -82,6 +82,27 @@ pub(crate) fn operand_type(field: FieldType) -> FieldType {
     field
 }
 impl<'a> IndexValue<'a> {
+    // Planner operands have passed admission, including the complete enum definition.
+    pub(crate) fn discrete_successor(self) -> Option<Self> {
+        if let Self::UnitEnum {
+            definition,
+            ordinal,
+        } = self
+        {
+            let crate::TypeBody::Enum(variants) = &definition.body else {
+                return None;
+            };
+            let next = ordinal.checked_add(1)?;
+
+            return (usize::from(next) < variants.len()).then_some(Self::UnitEnum {
+                definition,
+                ordinal: next,
+            });
+        }
+
+        self.integer_successor()
+    }
+
     pub(crate) fn admit(self, field: FieldType, optional: bool) -> Result<(), Error> {
         if self == Self::Absent {
             return if optional {
@@ -339,7 +360,7 @@ macro_rules! integer_operands {
         )+
 
         impl IndexValue<'_> {
-            pub(crate) fn integer_successor(self) -> Option<Self> {
+            fn integer_successor(self) -> Option<Self> {
                 match self {
                     $(Self::$variant(n) => n.checked_add(<$integer>::from(true)).map(Self::$variant),)+
                     _ => None,

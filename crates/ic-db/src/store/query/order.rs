@@ -432,11 +432,7 @@ pub(super) fn requires_present_field(
     request: &Request<'_>,
     name: &str,
 ) -> bool {
-    let explicit_index = request
-        .index
-        .as_ref()
-        .and_then(|(name, _)| entity.index_by_name(name));
-    let lookup = |field: &str| constrained_value(entity, request, explicit_index, field);
+    let lookup = |field: &str| equality(entity, request, field);
     presence_clause(entity, request, name, &lookup, &|p| {
         requires_presence(p, name, entity, request, &lookup)
     })
@@ -582,21 +578,6 @@ pub(super) fn fixed_comparison<'a>(
     predicate.comparison.accepts_fixed_values(left, right)
 }
 
-// An explicit prefix takes precedence over a requested equality on the same field.
-fn constrained_value<'a>(
-    entity: &EntitySchema,
-    request: &Request<'a>,
-    index: Option<&IndexSchema>,
-    field: &str,
-) -> Option<IndexValue<'a>> {
-    request
-        .index
-        .as_ref()
-        .zip(index)
-        .and_then(|((_, values), index)| prefix_value(index.fields, values, field))
-        .or_else(|| equality(entity, request, field))
-}
-
 pub(super) fn fixed_prefix_value<'a>(
     entity: &EntitySchema,
     request: &Request<'a>,
@@ -605,7 +586,7 @@ pub(super) fn fixed_prefix_value<'a>(
 ) -> Option<IndexValue<'a>> {
     let index = plan.index?;
     if index.fields[..plan.fixed_components].contains(&field) {
-        constrained_value(entity, request, Some(index), field)
+        equality(entity, request, field)
     } else {
         None
     }
@@ -616,15 +597,22 @@ pub(super) fn fixed_prefix_value<'a>(
 fn excluded_by_bounds(
     entity: &EntitySchema,
     request: &Request<'_>,
-    index: Option<&IndexSchema>,
     predicate: &Predicate<'_>,
 ) -> bool {
     if request.predicates.len() < 2 {
         return false;
     }
-    if let (op @ (Comparison::StartsWith | Comparison::EndsWith), QueryOperand::Literal(value)) =
-        (predicate.comparison, predicate.operand)
-        && let Some(bytes) = super::scalar_bytes(value)
+    let operand_bytes = |operand| {
+        let value = match operand {
+            QueryOperand::Literal(value) => value,
+            QueryOperand::Field(name) => equality(entity, request, name)?,
+            QueryOperand::Length(_) => return None,
+        };
+
+        super::scalar_bytes(value)
+    };
+    if let op @ (Comparison::StartsWith | Comparison::EndsWith) = predicate.comparison
+        && let Some(bytes) = operand_bytes(predicate.operand)
     {
         return request.clauses().any(|clause| {
             let [other] = clause else { return false };
@@ -634,10 +622,7 @@ fn excluded_by_bounds(
             {
                 return false;
             }
-            let QueryOperand::Literal(value) = other.operand else {
-                return false;
-            };
-            super::scalar_bytes(value).is_some_and(|other| {
+            operand_bytes(other.operand).is_some_and(|other| {
                 let (long, short) = if bytes.len() >= other.len() {
                     (bytes, other)
                 } else {
@@ -669,12 +654,7 @@ fn excluded_by_bounds(
                 (Comparison::Ge, 1)
             }
             (Comparison::StartsWith | Comparison::EndsWith | Comparison::Contains, operand) => {
-                let value = match operand {
-                    QueryOperand::Literal(value) => Some(value),
-                    QueryOperand::Field(name) => constrained_value(entity, request, index, name),
-                    QueryOperand::Length(_) => None,
-                };
-                let Some(bytes) = value.and_then(super::scalar_bytes) else {
+                let Some(bytes) = operand_bytes(operand) else {
                     continue;
                 };
                 (
@@ -729,7 +709,7 @@ pub(super) fn has_conflicting_predicates(
         return request.clauses().any(|clause| {
             clause.iter().all(|p| {
                 p.constant_comparison(entity) == Some(false)
-                    || excluded_by_bounds(entity, request, None, p)
+                    || excluded_by_bounds(entity, request, p)
             })
         });
     }
@@ -745,17 +725,17 @@ pub(super) fn has_conflicting_predicates(
     {
         return true;
     }
-    let lookup = |field: &str| constrained_value(entity, request, index, field);
+    let lookup = |field: &str| equality(entity, request, field);
 
     request.clauses().any(|clause| {
         clause.iter().all(|p| {
             fixed_comparison(entity, p, &lookup) == Some(false)
-                || excluded_by_bounds(entity, request, index, p)
+                || excluded_by_bounds(entity, request, p)
         })
     })
 }
 
-fn equality<'a>(
+pub(super) fn equality<'a>(
     entity: &EntitySchema,
     request: &Request<'a>,
     field: &str,
@@ -768,6 +748,11 @@ fn direct_equality<'a>(
     request: &Request<'a>,
     field: &str,
 ) -> Option<IndexValue<'a>> {
+    if let Some((index, values)) = &request.index
+        && let Some(value) = prefix_value(entity.index_by_name(index)?.fields, values, field)
+    {
+        return Some(value);
+    }
     // Member reads return absence before decoding children of an absent record.
     request.fixed_equalities(entity).find_map(|(name, value)| {
         let fixes_field = name == field
@@ -786,7 +771,12 @@ pub(super) fn transferred_equality<'a>(
     request: &Request<'a>,
     field: &str,
 ) -> Option<IndexValue<'a>> {
-    if request.predicates.len() < 2 {
+    if request.predicates.len() < 2
+        && request
+            .index
+            .as_ref()
+            .is_none_or(|(_, values)| values.is_empty())
+    {
         return None;
     }
     request.clauses().find_map(|clause| {

@@ -3248,6 +3248,27 @@ to IDs. Transport encoding and decoding are outside the counter. The runner
 saves the Wasm, build information and output in `target/evidence/ranked-listing`
 under the qualification workspace.
 
+### Ranked listing planner qualification for 0.27.2
+
+On 2026-11-22, two fresh PocketIC 16.1.0 installations ran the ranked-listing fixture above.
+The baseline used the product crates at `v0.27.1` (`9c543d1`). The candidate added the
+local planner changes. Both compiled the same benchmark source in the same directory with
+Rust 1.100.0, the locked qualification workspace, the release profile and the
+`ranked-listing` feature. Run `make m2-ranked-listing` to repeat the candidate workload.
+
+| Workload on 128 seeded items | 0.27.1 handler instructions | Candidate handler instructions | Candidates / owner reads, baseline → candidate |
+| --- | ---: | ---: | --- |
+| Indexed listing, 17 results in one page | 12,321,262 | 12,322,592 | 90 / 90 → 90 / 90 |
+| Same results across 25 bounded pages | 36,124,746 | 36,126,225 | 90 / 90 → 90 / 90 |
+| Project 1, open, price ≤ 100.00, ID equal to project ID | 11,538,860 | 1,131,608 | 90 / 90 → 1 / 1 |
+
+The fixed-owner workload supplies the project and open state as an explicit index prefix.
+Only ID 1 qualifies. The candidate seeks its owner suffix and still evaluates the price.
+SQLite verified the results on both builds. The instruction meter includes database open,
+query execution and result mapping. It excludes Wire framing. Uncompressed benchmark Wasm
+was 359,433 → 358,288 bytes, with a code-section payload of 330,794 → 329,649 bytes.
+These sizes apply to the instrumented benchmark host.
+
 ### Unique index ordering before 0.26.12
 
 On installed Wasm, the fixture selected the first three IDs ordered by a

@@ -349,8 +349,8 @@ fn enum_keys_preserve_identity_order_uniqueness_and_reopen() {
 }
 
 #[test]
-fn inclusive_enum_extremes_fix_the_ordered_index_prefix() {
-    use ic_db::Comparison::{Ge, Le};
+fn enum_bounds_fix_the_ordered_index_prefix() {
+    use ic_db::Comparison::{Ge, Gt, Le, Lt};
     let runtime = host(VectorMemory::default());
     let slot = StableKey::parse("test.db.v1").unwrap();
     let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [13; 16]).unwrap();
@@ -361,6 +361,7 @@ fn inclusive_enum_extremes_fix_the_ordered_index_prefix() {
         State::Draft,
         State::Ready,
         State::Archived,
+        State::Draft,
     ]
     .into_iter()
     .enumerate()
@@ -370,18 +371,26 @@ fn inclusive_enum_extremes_fix_the_ordered_index_prefix() {
         batch.insert(&record).unwrap();
     }
     db.commit(batch).unwrap();
-    for (comparison, state, expected) in [(Le, State::Archived, [4, 1]), (Ge, State::Ready, [3, 0])]
-    {
-        let zone = [true.into()];
+    let zone = [true.into()];
+    for (lower, upper, expected) in [
+        ((Le, State::Archived), None, [4, 1]),
+        ((Ge, State::Ready), None, [3, 0]),
+        ((Gt, State::Archived), Some((Lt, State::Ready)), [5, 2]),
+        ((Ge, State::Draft), Some((Lt, State::Ready)), [5, 2]),
+        ((Gt, State::Archived), Some((Le, State::Draft)), [5, 2]),
+    ] {
         for hinted in [false, true] {
             let query = || {
-                let q = db
+                let mut q = db
                     .query::<Row>()
                     .eq(Row::ZONE, true)
-                    .filter(Row::STATE, comparison, &state)
+                    .filter(Row::STATE, lower.0, &lower.1)
                     .order_desc(Row::ID)
                     .limit(1)
                     .work_limit(1);
+                if let Some((op, state)) = &upper {
+                    q = q.filter(Row::STATE, *op, state);
+                }
                 if hinted {
                     q.using_index("zone,state,id", &zone)
                 } else {
@@ -389,13 +398,27 @@ fn inclusive_enum_extremes_fix_the_ordered_index_prefix() {
                 }
             };
             let first = query().fetch().unwrap();
-            assert_eq!(
-                first.rows.first().map(|r| r.id),
-                Some(expected[0]),
-                "{state:?} hinted={hinted}"
-            );
+            assert_eq!(first.rows[0].id, expected[0]);
             let second = query().after(&first.next.unwrap()).fetch().unwrap();
             assert_eq!(second.rows[0].id, expected[1]);
+        }
+    }
+    for field in [Row::STATE, Row::MAYBE] {
+        for query in [
+            db.query::<Row>().lt(field, &State::Archived),
+            db.query::<Row>().gt(field, &State::Ready),
+            db.query::<Row>()
+                .gt(field, &State::Archived)
+                .lt(field, &State::Draft)
+                .order_desc(Row::ID),
+            db.query::<Row>()
+                .lt(field, &State::Ready)
+                .gt(field, &State::Draft)
+                .order_desc(Row::ID),
+        ] {
+            let page = query.work_limit(1).fetch().unwrap();
+            assert_eq!(page.examined, 0);
+            assert!(page.rows.is_empty() && page.next.is_none());
         }
     }
     let present = db

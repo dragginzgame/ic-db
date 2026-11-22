@@ -31,13 +31,16 @@ macro_rules! listing_entity {
                     .updated_at(Timestamp::from_millis(millis))).unwrap();
             }
 
-            fn page(db: &Database, ceiling: Decimal, work: usize, limit: usize, after: Option<&QueryCursor>) -> Result<Page, Error> {
-                let mut query = db.query::<Self>()
-                    .eq(Self::PROJECT_ID, 1_u64)
-                    .eq(Self::OPEN, true)
-                    .lte(Self::PRICE, ceiling)
-                    .order_by(&[Self::UPDATED_AT, Self::ID])
-                    .descending().limit(limit).work_limit(work);
+            fn page<const FIXED_OWNER: bool>(db: &Database, ceiling: Decimal, work: usize, limit: usize, after: Option<&QueryCursor>) -> Result<Page, Error> {
+                let prefix = [1_u64.into(), true.into()];
+                let query = db.query::<Self>();
+                let mut query = if FIXED_OWNER {
+                    query.using_index("project_id,open", &prefix)
+                        .filter_fields(Self::ID, ic_db::Comparison::Eq, Self::PROJECT_ID)
+                } else {
+                    query.eq(Self::PROJECT_ID, 1_u64).eq(Self::OPEN, true)
+                        .order_by(&[Self::UPDATED_AT, Self::ID]).descending()
+                }.lte(Self::PRICE, ceiling).limit(limit).work_limit(work);
                 if let Some(cursor) = after {
                     query = query.after(cursor);
                 }
@@ -90,10 +93,11 @@ fn ranked_listing(
     measure(|| {
         let db = database();
         let read = match layout {
-            0 => ByProject::page,
-            1 => ByTime::page,
-            2 => ByPrice::page,
-            3 => ByPriceAndTime::page,
+            0 => ByProject::page::<false>,
+            1 => ByTime::page::<false>,
+            2 => ByPrice::page::<false>,
+            3 => ByPriceAndTime::page::<false>,
+            4 => ByProject::page::<true>,
             _ => panic!("unknown listing layout"),
         };
         let ceiling = Decimal::try_new(i128::from(cents), 2).unwrap();

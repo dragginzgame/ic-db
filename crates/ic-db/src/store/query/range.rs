@@ -339,13 +339,25 @@ pub(super) fn empty_input(entity: &EntitySchema, request: &Request<'_>, plan: &P
                     let (key, false) = literal(term)? else {
                         return None;
                     };
-                    Some((predicates.first()?.field, key, term.comparison == inclusive))
+                    Some((predicates.first()?, key))
                 })
         };
-        for (field, start, include_start) in endpoints(Comparison::Ge, Comparison::Gt) {
-            for (other, end, include_end) in endpoints(Comparison::Le, Comparison::Lt) {
-                if field == other
-                    && (start > end || (start == end && !(include_start && include_end)))
+        for (lower, start) in endpoints(Comparison::Ge, Comparison::Gt) {
+            for (upper, end) in endpoints(Comparison::Le, Comparison::Lt) {
+                if lower.field != upper.field {
+                    continue;
+                }
+                let strict_lower = lower.comparison == Comparison::Gt;
+                let strict_upper = upper.comparison == Comparison::Lt;
+                if start > end || (start == end && (strict_lower || strict_upper)) {
+                    return true;
+                }
+                // An open interval between consecutive discrete values is empty.
+                if strict_lower
+                    && strict_upper
+                    && let (super::QueryOperand::Literal(low), super::QueryOperand::Literal(high)) =
+                        (lower.operand, upper.operand)
+                    && super::consecutive_values(low, high)
                 {
                     return true;
                 }
@@ -365,19 +377,32 @@ pub(super) fn bounds(
     }
     let mut first_key = plan.prefix.clone();
     let next = next_field(entity, plan.index, plan.fixed_components);
-    let exact = match next {
-        None => true, // Complete unique index key.
-        Some((_, true)) => false,
-        Some((field, false)) => {
-            // The primary key also terminates a non-unique index after its declared fields.
-            if let Some(id) = super::order::transferred_equality(entity, request, field) {
-                id.append_component(false, &mut first_key);
-                true
-            } else {
-                false
-            }
+    // Extend the seek through consecutive fixed components, including an owner suffix.
+    // Keep the admitted plan prefix for residual bounds and cursor validation.
+    let mut fixed = plan.fixed_components;
+    let mut component = next;
+    while !request.predicates.is_empty()
+        && let Some((field, secondary)) = component
+    {
+        let Some(value) = super::order::equality(entity, request, field) else {
+            break;
+        };
+        let schema = entity.index_field(field).ok_or(Error::InvalidSchema)?;
+        let prefix_len = first_key.len();
+        value.append_component(schema.optional, &mut first_key);
+        if first_key.len() > crate::MAX_INDEX_KEY_BYTES {
+            // An oversized operand remains a row predicate on the last encodable prefix.
+            first_key.truncate(prefix_len);
+            break;
         }
-    };
+        fixed += 1;
+        component = if secondary {
+            next_field(entity, plan.index, fixed)
+        } else {
+            None
+        };
+    }
+    let exact = component.is_none();
     let mut lower = Endpoint {
         key: StoreKey::new(first_key)?,
         inclusive: true,
@@ -389,7 +414,7 @@ pub(super) fn bounds(
         }
     } else {
         Endpoint {
-            key: StoreKey::new(successor(plan.prefix.clone())?)?,
+            key: StoreKey::new(successor(lower.key.to_vec())?)?,
             inclusive: false,
         }
     };

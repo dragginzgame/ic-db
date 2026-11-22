@@ -255,20 +255,55 @@ fn a_fixed_rank_seeks_the_matching_lane_and_rank() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
+    let lane = [1_u8.into()];
     for (left, right) in [(Item::RANK, Item::LANE), (Item::LANE, Item::RANK)] {
-        assert_id_pages(&expected, |after| {
-            let mut q = db
-                .query::<Item>()
-                .eq(Item::RANK, 1_u8)
-                .filter_fields(left, Comparison::Eq, right)
-                .order_desc(Item::ID)
-                .limit(1)
-                .work_limit(1);
-            if let Some(after) = after {
-                q = q.after(after);
-            }
-            q.fetch_as::<Id>().unwrap()
-        });
+        for hinted in [false, true] {
+            assert_id_pages(&expected, |after| {
+                let q = db.query::<Item>();
+                let q = if hinted {
+                    q.using_index("lane,rank", &lane)
+                } else {
+                    q.eq(Item::RANK, 1_u8)
+                };
+                let mut q = q
+                    .filter_fields(left, Comparison::Eq, right)
+                    .order_desc(Item::ID)
+                    .limit(1)
+                    .work_limit(1);
+                if let Some(after) = after {
+                    q = q.after(after);
+                }
+                let page = q.fetch_as::<Id>().unwrap();
+                assert_eq!(page.examined, page.rows.len());
+                page
+            });
+        }
+    }
+    // IDs 9 and 10 share the lane. Only ID 10 has the requested rank.
+    for id in [9_u32, 10, 99] {
+        let expected: u32 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM items WHERE lane=1 AND lane=rank AND id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let query = || {
+            db.query::<Item>()
+                .using_index("lane,rank", &lane)
+                .filter_fields(Item::LANE, Comparison::Eq, Item::RANK)
+                .eq(Item::ID, u64::from(id))
+                .work_limit(1)
+        };
+        let page = query().fetch_as::<Id>().unwrap();
+        assert_eq!(page.examined, expected as usize);
+        assert_eq!(page.rows.len(), expected as usize);
+        assert!(page.next.is_none());
+        let count = query().count_validated().unwrap();
+        assert_eq!(
+            (count.value, count.examined),
+            (u64::from(expected), expected as usize)
+        );
     }
     // Inside an OR the equality cannot restrict the index prefix.
     let mixed = db
@@ -475,6 +510,31 @@ fn ranges_narrow_membership_for_ranked_pages() {
         }
         assert!(after.is_none());
         assert_eq!(seen, expected);
+    }
+    // Adjacent strict endpoints exclude every integer. A sibling OR alternative can still match.
+    for alternative in [false, true] {
+        let expected: u32 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM items WHERE lane > 0 AND (lane < 1 OR (?1 AND lane = 2))",
+                [alternative],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let q = db.query::<Item>().gt(Item::LANE, 0_u8);
+        let result = if alternative {
+            q.filter_any(&[
+                (Item::LANE, Lt, 1_u8.into()),
+                (Item::LANE, Comparison::Eq, 2_u8.into()),
+            ])
+        } else {
+            q.lt(Item::LANE, 1_u8).work_limit(1)
+        }
+        .count()
+        .unwrap();
+        assert_eq!(result.value, u64::from(expected));
+        if !alternative {
+            assert_eq!((result.examined, result.fetched), (0, 0));
+        }
     }
     // The range removes absence as well as the upper Decimal value.
     let low = Decimal::try_new(124, 2).unwrap();
