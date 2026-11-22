@@ -1547,6 +1547,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert_eq!((unique_first.3, unique_first.5), (1, 8));
     let filtered_unique = distinct(None, 1, 8, false, Some(1)).await;
     assert_eq!(filtered_unique.1, [vec!["1"]]);
+    assert!(filtered_unique.2.is_none());
     assert_eq!(filtered_unique.3, 1);
     let ordered = async |request: Request| {
         let reply = pic
@@ -1704,10 +1705,6 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         aggregate("category,max:amount", 2, 7, 32).await.unwrap(),
         group_max
     );
-    let filtered_done = distinct(filtered_unique.2, 4, 8, false, Some(1)).await;
-    assert!(filtered_done.1.is_empty());
-    assert!(filtered_done.2.is_none());
-    assert_eq!(filtered_done.3, 2);
     let empty_unique = distinct(unique_first.2, 2, 8, false, None).await;
     assert!(empty_unique.1.is_empty());
     assert_eq!(empty_unique.3, 2);

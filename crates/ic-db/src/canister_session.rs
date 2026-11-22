@@ -85,7 +85,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
     /// Propagates the owning store session’s lookup and limit errors.
     pub fn get_many<E: Entity<Store: MountedStore<Canister = C>>>(
         &self,
-        keys: &[E::Key],
+        keys: &[impl Copy + Into<crate::Id<E>>],
     ) -> Result<Vec<Option<E>>, Error> {
         self.session::<E::Store>().get_many::<E>(keys)
     }
@@ -121,6 +121,17 @@ impl<C: CompiledCanister> CanisterSession<C> {
     ) -> Result<I::Entity, Error> {
         self.session::<<I::Entity as Entity>::Store>()
             .insert_input(input)
+    }
+
+    /// Insert in the selected unique key's store, preserving its existing owner on replay.
+    /// # Errors
+    /// Propagates the owning session's [conditional insert](DatabaseSession::insert_if_absent) errors.
+    pub fn insert_if_absent<K: UniqueKey<Entity: Entity<Store: MountedStore<Canister = C>>>>(
+        &self,
+        input: impl InsertInput<Entity = K::Entity>,
+    ) -> Result<crate::InsertOutcome<K::Entity>, Error> {
+        self.session::<<K::Entity as Entity>::Store>()
+            .insert_if_absent::<K>(input)
     }
 
     /// Replace one row in its declared store and return the stored value.

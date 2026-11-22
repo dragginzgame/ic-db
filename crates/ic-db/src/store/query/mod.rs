@@ -16,7 +16,8 @@ pub use aggregate::{
 };
 
 use super::{
-    Database, ENTITY_PREFIX_BYTES, INDEX_PREFIX_BYTES, Map, prefix, row_key, validate_index_entry,
+    Database, ENTITY_PREFIX_BYTES, INDEX_PREFIX_BYTES, Map, prefix, read_index_owner,
+    validate_index_entry,
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
@@ -555,6 +556,12 @@ impl<'a> Predicate<'a> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SingleResult {
+    First,
+    Only,
+}
+
 struct Request<'a> {
     groups: aggregate::GroupRequest<'a>,
     predicates: Vec<Predicate<'a>>,
@@ -563,7 +570,7 @@ struct Request<'a> {
     order_descending: u8,
     descending: bool,
     distinct: bool,
-    single_result_probe: bool,
+    single_result_probe: Option<SingleResult>,
     rows: usize,
     work: usize,
     bytes: usize,
@@ -581,7 +588,7 @@ impl Default for Request<'_> {
             order_descending: 0,
             descending: false,
             distinct: false,
-            single_result_probe: false,
+            single_result_probe: None,
             rows: 32,
             work: 128,
             bytes: MAX_OUTPUT,
@@ -594,6 +601,15 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
+    // A single-result probe never returns two rows. Once both are proven,
+    // the second needs no space in the response.
+    fn check_result_count(&self, count: usize) -> Result<(), Error> {
+        if self.single_result_probe == Some(SingleResult::Only) && count > 1 {
+            return Err(Error::MultipleMatches);
+        }
+        Ok(())
+    }
+
     // Every surviving alternative must fix the same field to the same value.
     fn fixed_equalities<'r>(
         &'r self,
@@ -1282,14 +1298,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
         fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
     ) -> Result<Option<R>, Error> {
-        observe!(query, {
-            let page = fetch(self.probe_matches(1)?)?;
-            if page.rows.is_empty() && page.next.is_some() {
-                return Err(Error::Limit);
-            }
-            Ok(page)
-        })
-        .map(|mut page| page.rows.pop())
+        observe!(query, { fetch(self.probe_matches(SingleResult::First)?) })
+            .map(|mut page| page.rows.pop())
     }
 
     /// Return the only match, or `None` when the query is exhausted without one.
@@ -1319,10 +1329,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.cursor.is_some() {
                 return Err(Error::InvalidQuery);
             }
-            let page = fetch(self.probe_matches(2)?)?;
-            if page.rows.len() == 2 {
-                return Err(Error::MultipleMatches);
-            }
+            let page = fetch(self.probe_matches(SingleResult::Only)?)?;
             if page.next.is_some() {
                 return Err(Error::Limit);
             }
@@ -1332,14 +1339,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         .map(|mut page| page.rows.pop())
     }
 
-    fn probe_matches(mut self, rows: usize) -> Result<Self, Error> {
+    fn probe_matches(mut self, probe: SingleResult) -> Result<Self, Error> {
         if !(1..=32).contains(&self.request.rows) {
             return Err(Error::Limit);
         }
 
-        self.request.single_result_probe = true;
+        self.request.single_result_probe = Some(probe);
 
-        Ok(self.limit(rows))
+        Ok(self.limit(match probe {
+            SingleResult::First => 1,
+            SingleResult::Only => 2,
+        }))
     }
 
     /// Project matching top-level fields into an existing `#[record]` type.
@@ -1848,22 +1858,24 @@ impl<'a> Plan<'a> {
                 plan.use_index(entity, path);
                 plan.descending = request.descending ^ descending;
             }
-            order::Path::Sort(fields) => {
+            order::Path::Filtered { sort } => {
                 order::select_filtered_path(entity, request, &mut plan, None)?;
-                for field in &fields {
+                for field in sort.iter().flatten() {
                     if field.member.is_some() {
                         plan.span_fields |= 1 << field.position;
                     } else {
                         plan.selected |= 1 << field.position;
                     }
                 }
-                plan.sort = Some(fields);
+                plan.sort = sort;
             }
         }
         if request.distinct {
             plan.distinct = distinct::admit(entity, request, &plan)?;
-            if let distinct::Strategy::Complete { key_fields } = plan.distinct {
-                plan.selected |= key_fields;
+            match plan.distinct {
+                distinct::Strategy::FirstMatch => plan.sort = None,
+                distinct::Strategy::Complete { key_fields } => plan.selected |= key_fields,
+                _ => {}
             }
         }
         let mut hash = Sha256::new();
@@ -2170,10 +2182,7 @@ fn execute_inner<M: Memory>(
         let (owner, bytes) = if plan.index.is_some() {
             let owner_bytes = entry.value();
             read_bytes += owner_bytes.len();
-            let owner = RowKey::decode(&owner_bytes, primary_type)?;
-            let bytes = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
-
-            (owner, bytes)
+            read_index_owner(map, entity.id, primary_type, &owner_bytes)?
         } else {
             (
                 RowKey::decode(&stored_key[ENTITY_PREFIX_BYTES..], primary_type)?,
@@ -2342,14 +2351,16 @@ fn execute_inner<M: Memory>(
             }
         } else if matches && let Some(collection) = collected.as_mut() {
             collection.push(entity, request, &values, &bytes, &spans, &mut component)?;
-            // This path emits first occurrences in traversal order. A single-result
-            // terminal has its answer after one class (first) or two (non-unique).
-            if request.single_result_probe && collection.rows.len() == request.rows {
+            // First occurrences follow traversal order, so first() can finish here.
+            if request.single_result_probe == Some(SingleResult::First) {
                 break;
             }
         } else if matches && let Some(collection) = sorted.as_mut() {
             collection.push(entity, plan, &values, &bytes, &spans, &mut component)?;
+            // Later candidates can change the top two, but cannot make them one result.
+            request.check_result_count(collection.result_count())?;
         } else if matches && !duplicate {
+            request.check_result_count(page.rows.len() + 1)?;
             let size = plan
                 .projection
                 .map_or(bytes.len(), |mask| projection_size(&spans, mask));
@@ -2367,7 +2378,9 @@ fn execute_inner<M: Memory>(
             } else {
                 page.rows.push(bytes);
             }
-            if plan.distinct == distinct::Strategy::FirstMatch {
+            if request.single_result_probe == Some(SingleResult::First)
+                || plan.distinct.finishes_on_match(plan.fixed_components)
+            {
                 return Ok(page);
             }
             if let Some(boundary) = boundary {
@@ -2383,7 +2396,8 @@ fn execute_inner<M: Memory>(
             if terminal == Some(stored_key) {
                 break;
             }
-            if (aggregate.is_some() && input_bytes.is_none())
+            if request.single_result_probe == Some(SingleResult::First)
+                || (aggregate.is_some() && input_bytes.is_none())
                 || collected.is_some()
                 || sorted.is_some()
             {

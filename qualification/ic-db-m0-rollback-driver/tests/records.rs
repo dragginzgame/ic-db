@@ -4332,8 +4332,8 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
     let first = page(None, 3).await;
     assert_eq!(first, (rows[..3].to_vec(), Some(rows[2].0), 1));
     let last = page(first.1, 3).await;
-    assert_eq!(last, (rows[3..].to_vec(), Some([255; 16]), 1));
-    assert_eq!(page(last.1, 3).await, (vec![], None, 1));
+    assert_eq!(last, (rows[3..].to_vec(), None, 1));
+    assert_eq!(page(Some([255; 16]), 3).await, (vec![], None, 1));
     assert_eq!(lookup([255; 16], 6).await, (Some(rows[5]), vec![rows[5]]));
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(
@@ -4583,10 +4583,7 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
     assert_eq!(signed_page(Some(i128::MAX), 2).await, (vec![], None, 1));
     let first = wide_page(None, 3).await;
     assert_eq!(first, (wide[..3].to_vec(), Some(high), 1));
-    assert_eq!(
-        wide_page(first.1, 2).await,
-        (wide[3..].to_vec(), Some([255; 32]), 1)
-    );
+    assert_eq!(wide_page(first.1, 2).await, (wide[3..].to_vec(), None, 1));
     assert_eq!(wide_page(Some([255; 32]), 2).await, (vec![], None, 1));
     assert_eq!(lookup(4).await, (vec![signed[4]], vec![wide[4]]));
     let before = pic.get_stable_memory(canister).await;

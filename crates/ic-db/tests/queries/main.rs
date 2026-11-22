@@ -121,7 +121,7 @@ struct Missing {}
 
 #[record(fields())]
 struct Empty {}
-fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
+fn host<M: ic_storage::MemoryBacking>(backing: M) -> MemoryRuntime<M> {
     let mut host = MemoryRuntime::new(backing).unwrap();
     let req =
         SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
@@ -396,9 +396,64 @@ fn batch_get_preserves_the_listing_order_and_missing_related_rows() {
             .collect::<Vec<_>>(),
         [Some(5), None, Some(2), Some(5)]
     );
-    assert!(db.get_many::<Entry>(&[]).unwrap().is_empty());
+    assert!(db.get_many::<Entry>(&[] as &[u64]).unwrap().is_empty());
     assert_eq!(db.get_many::<Entry>(&[1; 32]).unwrap().len(), 32);
     assert!(matches!(db.get_many::<Entry>(&[1; 33]), Err(Error::Limit)));
+}
+
+#[test]
+fn batch_get_repeated_hits_and_misses_read_backing_once_per_key() {
+    use ic_storage::{BackingIdentity, Memory, MemoryBacking};
+    use std::{cell::Cell, rc::Rc};
+
+    struct CountReads(VectorMemory, Rc<Cell<usize>>);
+    impl Memory for CountReads {
+        fn size(&self) -> u64 {
+            self.0.size()
+        }
+        fn grow(&self, pages: u64) -> i64 {
+            self.0.grow(pages)
+        }
+        fn write(&self, at: u64, bytes: &[u8]) {
+            self.0.write(at, bytes);
+        }
+        fn read(&self, at: u64, bytes: &mut [u8]) {
+            self.1.set(self.1.get() + 1);
+            self.0.read(at, bytes);
+        }
+    }
+    impl MemoryBacking for CountReads {
+        fn backing_identity(&self) -> BackingIdentity {
+            self.0.backing_identity()
+        }
+    }
+    let reads = Rc::new(Cell::new(0));
+    let runtime = host(CountReads(VectorMemory::default(), reads.clone()));
+    let mut db = ic_db::qualification::Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Other::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&Other { id: 2 }).unwrap();
+    db.commit(batch).unwrap();
+
+    reads.set(0);
+    db.get_many::<Other>(&[2, 9]).unwrap();
+    let two_reads = reads.replace(0);
+    assert!(two_reads > 0);
+    let ids = [2, 9, 2, 9].map(ic_db::Id::<Other>::from_key);
+    let rows = db.get_many::<Other>(&ids).unwrap();
+    assert_eq!(
+        rows.into_iter()
+            .map(|r| r.map(|o| o.id))
+            .collect::<Vec<_>>(),
+        [Some(2), None, Some(2), None]
+    );
+    assert_eq!(reads.get(), two_reads);
 }
 
 #[test]
@@ -4433,6 +4488,32 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
 }
 
 #[test]
+fn selected_single_results_preserve_absence_and_cardinality() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || db.query::<Entry>();
+    let lookup = |id| query().eq(Entry::ID, id).select(|e| e.maybe).try_one();
+    assert_eq!(lookup(3_u64).unwrap(), Some(None));
+    assert_eq!(lookup(99_u64).unwrap(), None);
+    assert_eq!(
+        query()
+            .order_desc(Entry::ID)
+            .select(|e| (e.id, e.amount))
+            .first()
+            .unwrap(),
+        Some((8, 80))
+    );
+    assert!(matches!(
+        query().limit(1).select(|e| e.category).try_one(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        query().work_limit(1).select(|e| e.id).try_one(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
 fn selected_columns_preserve_page_order_types_and_cursor_shape() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
@@ -5143,6 +5224,109 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
         ));
         assert_eq!(*backing.borrow(), before);
     }
+}
+
+#[test]
+fn distinct_record_projection_needs_no_comparator_when_the_owner_is_unique() {
+    #[entity(
+        store = ic_db::testing::FixtureStore,
+        pk(field = "id"),
+        index(fields = ["lane", "slot"], unique, present_only),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "lane", value(item(prim = "Nat8"))),
+            field(name = "slot", value(opt, item(prim = "Nat8"))),
+            field(name = "requested", value(opt, item(prim = "Nat8"))),
+            field(name = "details", value(item(is = "Details")))
+        )
+    )]
+    struct SeatWithDetails {}
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[SeatWithDetails::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let details = Details {
+        labels: vec!["sample".into()],
+    };
+    let mut batch = Batch::new();
+    for (id, slot) in [(1, Some(2)), (2, None), (3, None), (4, Some(5))] {
+        batch
+            .insert(&SeatWithDetails {
+                id,
+                slot,
+                requested: slot,
+                lane: 1,
+                details: details.clone(),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let query = || {
+        db.query::<SeatWithDetails>()
+            .eq(SeatWithDetails::LANE, 1_u8)
+            .distinct()
+    };
+    for lookup in [
+        query().eq(SeatWithDetails::ID, 1_u64),
+        query().eq(SeatWithDetails::SLOT, 2_u8),
+    ] {
+        let page = lookup.work_limit(1).select(|e| e.details).fetch().unwrap();
+        assert_eq!(page.rows, std::slice::from_ref(&details));
+        assert_eq!(page.fetched, 1);
+        assert!(page.next.is_none());
+    }
+    let page = query()
+        .filter_present(SeatWithDetails::SLOT)
+        .select(|e| (e.slot, e.details))
+        .fetch()
+        .unwrap();
+    let matching_slot =
+        || query().filter_fields(SeatWithDetails::REQUESTED, C::Eq, SeatWithDetails::SLOT);
+    let selected = matching_slot()
+        .filter_present(SeatWithDetails::SLOT)
+        .select(|e| (e.requested, e.details))
+        .fetch()
+        .unwrap();
+    assert_eq!(selected.rows, page.rows);
+    // Both absent slots satisfy the column equality and lie outside the unique index.
+    assert!(matches!(
+        matching_slot().select(|e| (e.requested, e.details)).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<SeatWithDetails>()
+            .distinct()
+            .filter_fields(SeatWithDetails::REQUESTED, C::Eq, SeatWithDetails::SLOT)
+            .filter_present(SeatWithDetails::SLOT)
+            .select(|e| (e.requested, e.details))
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(page.rows, [(Some(2), details.clone()), (Some(5), details)]);
+    assert!(
+        query()
+            .eq(SeatWithDetails::SLOT, 3_u8)
+            .select(|e| e.details)
+            .try_one()
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        query().select(|e| e.details).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        query()
+            .eq(SeatWithDetails::SLOT, IndexValue::Absent)
+            .select(|e| e.details)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
 }
 
 #[test]
@@ -6992,6 +7176,119 @@ fn distinct_single_result_probes_stop_on_proof() {
 }
 
 #[test]
+fn try_one_needs_output_space_for_only_one_result() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    // Within one category, IDs stream in order and DISTINCT amounts use a bounded collection.
+    let query = || {
+        db.query::<Entry>()
+            .using_index("category", &[1_u8.into()])
+            .work_limit(2)
+            .test_output_limit(8)
+    };
+    assert!(matches!(
+        query().select(|e| e.id).try_one(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        query().distinct().select(|e| e.amount).try_one(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        query().work_limit(1).select(|e| e.id).try_one(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        query().test_output_limit(7).select(|e| e.id).try_one(),
+        Err(Error::RowTooLarge)
+    ));
+}
+
+#[test]
+fn sorted_single_result_probes_distinguish_order_from_cardinality() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let sorted = || {
+        db.query::<Entry>()
+            .order_desc(Entry::AMOUNT)
+            .order_asc(Entry::ID)
+    };
+    assert!(matches!(
+        sorted().work_limit(2).select(|e| e.amount).first(),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        sorted().work_limit(2).select(|e| e.amount).try_one(),
+        Err(Error::MultipleMatches)
+    ));
+
+    // Every payload is equal, so two owners still supply only one distinct value.
+    let distinct = || {
+        db.query::<Entry>()
+            .order_asc(Entry::PAYLOAD)
+            .order_asc(Entry::ID)
+            .distinct()
+    };
+    assert!(matches!(
+        distinct().work_limit(2).select(|e| e.payload).try_one(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        distinct().select(|e| e.payload).try_one().unwrap(),
+        Some(vec![7; 100])
+    );
+    assert!(matches!(
+        sorted()
+            .distinct()
+            .work_limit(2)
+            .select(|e| e.amount)
+            .try_one(),
+        Err(Error::MultipleMatches)
+    ));
+}
+
+#[test]
+fn ordered_distinct_probe_needs_only_one_witness_for_a_fixed_tuple() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let payload = [7_u8; 100];
+    let query = || {
+        db.query::<Entry>()
+            .eq(Entry::PAYLOAD, &payload)
+            .eq(Entry::CATEGORY, 1_u8)
+            .order_desc(Entry::AMOUNT)
+            .order_asc(Entry::ID)
+            .distinct()
+    };
+    let expected = Some((payload.to_vec(), 1_u8));
+    assert_eq!(
+        query()
+            .work_limit(1)
+            .select(|e| (e.payload, e.category))
+            .first()
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        query()
+            .work_limit(1)
+            .select(|e| (e.payload, e.category))
+            .try_one()
+            .unwrap(),
+        expected
+    );
+    // The residual predicate rules out the first candidate. A miss still needs proof.
+    assert!(matches!(
+        query()
+            .filter_fields(Entry::ID, C::Gt, Entry::AMOUNT)
+            .work_limit(1)
+            .select(|e| (e.payload, e.category))
+            .try_one(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
 fn complete_distinct_optional_text_matches_first_occurrence_oracle() {
     let runtime = host(VectorMemory::default());
     let (db, input) = text_rows(&runtime);
@@ -7084,6 +7381,195 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
 }
 
 #[test]
+fn distinct_column_equal_to_primary_key_pages_in_primary_order() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    let mut batch = Batch::new();
+    for (id, amount) in [(2, 2), (3, 2), (4, 4)] {
+        batch.replace(&Entry { amount, ..row(id) }).unwrap();
+    }
+    db.commit(batch).unwrap();
+    for (left, right) in [(Entry::ID, Entry::AMOUNT), (Entry::AMOUNT, Entry::ID)] {
+        let mut after = None;
+        let mut ids = Vec::new();
+        for _ in 0..=8 {
+            let mut q = db
+                .query::<Entry>()
+                .filter_fields(left, C::Eq, right)
+                .order_desc(Entry::ID)
+                .distinct()
+                .work_limit(1);
+            if let Some(cursor) = &after {
+                q = q.after(cursor);
+            }
+            let page = q.select(|e| e.amount).fetch().unwrap();
+            assert!(page.examined <= 1);
+            ids.extend(page.rows);
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(after.is_none());
+        assert_eq!(ids, [4, 2]);
+    }
+    // ID 3 contributes a second amount of 2 under the alternative.
+    let alternatives = [
+        (Entry::AMOUNT, C::Eq, ic_db::QueryOperand::Field(Entry::ID)),
+        (Entry::ID, C::Eq, ic_db::QueryOperand::Literal(3_u64.into())),
+    ];
+    let page = db
+        .query::<Entry>()
+        .filter_any_operands(&alternatives)
+        .order_desc(Entry::ID)
+        .distinct()
+        .select(|e| e.amount)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows, [4, 2]);
+}
+
+#[test]
+fn distinct_equal_columns_share_an_order_component() {
+    let runtime = host(VectorMemory::default());
+    let (mut db, mut input) = text_rows(&runtime);
+    // The first owner in the "ab" class fails its residual equality.
+    input[3].required = "different".into();
+    let mut batch = Batch::new();
+    batch.replace(&input[3]).unwrap();
+    let duplicate = TextRow {
+        id: 24,
+        ..input[12].clone()
+    };
+    batch.insert(&duplicate).unwrap();
+    input.push(duplicate);
+    db.commit(batch).unwrap();
+    let mut expected: Vec<_> = input
+        .iter()
+        .filter(|r| r.text.as_ref() == Some(&r.required))
+        .map(|r| (r.required.clone(), r.text.clone()))
+        .collect();
+    expected.sort();
+    expected.dedup();
+    let query = || {
+        db.query::<TextRow>()
+            .filter_fields(TextRow::REQUIRED, C::Eq, TextRow::TEXT)
+            .distinct()
+    };
+    let mut cursor = None;
+    let mut seen = Vec::new();
+    for _ in 0..=input.len() {
+        let mut q = query().order_asc(TextRow::TEXT).work_limit(1);
+        if let Some(after) = &cursor {
+            q = q.after(after);
+        }
+        let page = q.select(|r| (r.required, r.text)).fetch().unwrap();
+        seen.extend(page.rows);
+        cursor = page.next;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(cursor.is_none());
+    assert_eq!(seen, expected);
+    expected.reverse();
+    let sorted = query()
+        .order_desc(TextRow::REQUIRED)
+        .select(|r| (r.required, r.text))
+        .fetch()
+        .unwrap();
+    assert_eq!(sorted.rows, expected);
+    // Both equal columns may still precede another varying tuple component.
+    let triple = query()
+        .order_by(&[TextRow::REQUIRED, TextRow::TEXT, TextRow::BUCKET])
+        .select(|r| (r.required, r.text, r.bucket))
+        .fetch()
+        .unwrap();
+    let mut expected_triples: Vec<_> = input
+        .iter()
+        .filter(|r| r.text.as_ref() == Some(&r.required))
+        .map(|r| (r.required.clone(), r.text.clone(), r.bucket))
+        .collect();
+    expected_triples.sort();
+    expected_triples.dedup();
+    assert_eq!(triple.rows, expected_triples);
+    // An OR can admit unequal pairs; ordering one field no longer proves adjacency.
+    let alternatives = [
+        (
+            TextRow::REQUIRED,
+            C::Eq,
+            ic_db::QueryOperand::Field(TextRow::TEXT),
+        ),
+        (
+            TextRow::ID,
+            C::Eq,
+            ic_db::QueryOperand::Literal(3_u64.into()),
+        ),
+    ];
+    assert!(matches!(
+        db.query::<TextRow>()
+            .filter_any_operands(&alternatives)
+            .order_asc(TextRow::TEXT)
+            .distinct()
+            .work_limit(1)
+            .select(|r| (r.required, r.text))
+            .fetch(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
+fn distinct_transfers_a_fixed_index_value_only_through_mandatory_equality() {
+    let runtime = host(VectorMemory::default());
+    let (mut db, _) = text_rows(&runtime);
+    let mut changed = db.get::<TextRow>(3_u64).unwrap().unwrap();
+    changed.required = "other".to_owned();
+    let mut batch = Batch::new();
+    batch.replace(&changed).unwrap();
+    db.commit(batch).unwrap();
+    let prefix = ["ab".into()];
+    let query = || {
+        db.query::<TextRow>()
+            .using_index("text,id", &prefix)
+            .distinct()
+    };
+    for (left, right) in [
+        (TextRow::REQUIRED, TextRow::TEXT),
+        (TextRow::TEXT, TextRow::REQUIRED),
+    ] {
+        let matching = || query().filter_fields(left, C::Eq, right).work_limit(1);
+        let skipped = matching().select(|row| row.required).fetch().unwrap();
+        assert!(skipped.rows.is_empty());
+        let cursor = skipped.next.unwrap();
+        let hit = matching()
+            .after(&cursor)
+            .select(|row| row.required)
+            .fetch()
+            .unwrap();
+        assert_eq!(hit.rows, ["ab"]);
+        assert!(hit.next.is_none());
+    }
+    let alternatives = [
+        (
+            TextRow::REQUIRED,
+            C::Eq,
+            ic_db::QueryOperand::Field(TextRow::TEXT),
+        ),
+        (
+            TextRow::ID,
+            C::Eq,
+            ic_db::QueryOperand::Literal(3_u64.into()),
+        ),
+    ];
+    let all = query()
+        .filter_any_operands(&alternatives)
+        .select(|row| row.required)
+        .fetch()
+        .unwrap();
+    assert_eq!(all.rows, ["other", "ab"]);
+}
+
+#[test]
 fn primary_scan_pages_a_literal_fixed_distinct_projection() {
     let runtime = host(VectorMemory::default());
     let mut db = create(&runtime, 1);
@@ -7117,6 +7603,9 @@ fn primary_scan_pages_a_literal_fixed_distinct_projection() {
                 let page = query.fetch_as::<PayloadOnly>().unwrap();
                 assert!(page.examined <= 1);
                 examined += page.examined;
+                if !page.rows.is_empty() {
+                    assert!(page.next.is_none());
+                }
                 results.extend(page.rows.into_iter().map(|row| row.payload));
                 after = page
                     .next
@@ -7126,11 +7615,24 @@ fn primary_scan_pages_a_literal_fixed_distinct_projection() {
                 }
             }
             assert!(after.is_none());
-            assert_eq!(examined, 8);
+            assert_eq!(examined, if needle == 42 { 3 } else { 8 });
             let expected = if needle == 42 { vec![vec![42]] } else { vec![] };
             assert_eq!(results, expected);
         }
     }
+
+    // A nonempty fixed index prefix likewise includes just one output class.
+    let page = db
+        .query::<Entry>()
+        .using_index("category", &[1_u8.into()])
+        .distinct()
+        .work_limit(1)
+        .select(|entry| entry.category)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows, [1]);
+    assert_eq!(page.examined, 1);
+    assert!(page.next.is_none());
 }
 
 #[test]

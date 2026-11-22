@@ -122,6 +122,10 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
             db.index_prefix::<E>("rank", &[0_u64.into()], 1),
             Err(Error::Corrupt)
         ));
+        assert!(matches!(
+            db.query::<E>().using_index("rank", &[0_u64.into()]).first(),
+            Err(Error::Corrupt)
+        ));
         let mut b = Batch::new();
         b.delete::<E>(ids[0]).unwrap();
         assert!(matches!(db.commit(b), Err(Error::Corrupt)));

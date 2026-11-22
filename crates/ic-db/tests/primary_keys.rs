@@ -136,6 +136,23 @@ fn physical_row(id: Ulid) -> Vec<u8> {
 }
 
 #[test]
+fn typed_ids_keep_key_order_and_set_membership() {
+    use std::collections::{BTreeSet, HashSet};
+
+    let rows = rows();
+    let first = rows[0].id();
+    let last = rows[5].id();
+    let inputs = [last, first, last];
+    assert_eq!(
+        BTreeSet::from(inputs).into_iter().collect::<Vec<_>>(),
+        [first, last]
+    );
+    let seen = HashSet::from(inputs);
+    assert_eq!(seen.len(), 2);
+    assert!(seen.contains(&rows[5].id()));
+}
+
+#[test]
 fn typed_keys_pages_unique_exchange_and_final_references() {
     assert!(matches!(
         Schema::new(&[WrongReference::SCHEMA, KeyRow::SCHEMA, Numbered::SCHEMA]),
@@ -193,9 +210,9 @@ fn typed_keys_pages_unique_exchange_and_final_references() {
     assert_eq!(first.next_after, Some(rows[2].id));
     let next = db.page::<KeyRow>(first.next_after, 3).unwrap();
     assert_eq!(next.rows, rows[3..]);
-    assert_eq!(next.next_after, Some(Ulid::MAX));
+    assert_eq!(next.next_after, None);
     assert!(
-        db.page::<KeyRow>(next.next_after, 3)
+        db.page::<KeyRow>(Some(Ulid::MAX), 3)
             .unwrap()
             .rows
             .is_empty()
@@ -327,8 +344,15 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
         let mut b = Batch::new();
         b.delete::<KeyRow>(Ulid::MAX).unwrap();
         assert!(matches!(db.commit(b), Err(Error::Corrupt)));
+        let session = ic_db::DatabaseSession::new(db);
+        assert!(matches!(
+            session.insert_if_absent::<KeyRowByValue>(
+                KeyRow::insert().id(Ulid::from_u128(4)).value(6)
+            ),
+            Err(Error::Corrupt)
+        ));
         assert_eq!(*backing.borrow(), before);
-        drop(db);
+        drop(session);
     }
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
     raw.insert(index, vec![255; 16]);

@@ -146,6 +146,12 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         revision: Revision(10),
     };
     assert_eq!(db.get_unique(&key).unwrap().unwrap().id, 42);
+    assert!(matches!(
+        db.insert_if_absent::<AuditEventByRevision>(
+            AuditEvent::insert().id(1).revision(Revision(10))
+        ),
+        Ok(ic_db::InsertOutcome::AlreadyPresent)
+    ));
     db.clone().delete::<User>(42).unwrap();
     assert!(db.get::<User>(42).unwrap().is_none());
     let keys = [42, 1, 42];
@@ -156,7 +162,7 @@ fn host_reopens_only_the_selected_canisters_allocations() {
             .all(Option::is_none)
     );
     let revisions: Vec<_> = db
-        .get_many::<AuditEvent>(&keys)
+        .get_many::<AuditEvent>(&keys.map(ic_db::Id::<AuditEvent>::from_key))
         .unwrap()
         .into_iter()
         .map(|event| event.map(|event| event.revision))

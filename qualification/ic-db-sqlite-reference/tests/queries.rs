@@ -864,6 +864,98 @@ fn complete_distinct_keeps_varying_components_of_a_partially_matching_index() {
 }
 
 #[test]
+fn equal_column_distinct_pages_match_sqlite_across_reopen_and_byte_retry() {
+    let (sql, host) = fixture();
+    let mut db = open(&host);
+    let mut batch = Batch::new();
+    // Each equal-key class has matching duplicates separated by a residual miss.
+    for lane in 0..4_u8 {
+        for slot in 0..3_u8 {
+            let id = 20 + 3 * u32::from(lane) + u32::from(slot);
+            let visible = slot != 1;
+            batch
+                .insert(&Item {
+                    id: u64::from(id),
+                    lane,
+                    rank: lane,
+                    visible,
+                    price: None,
+                })
+                .unwrap();
+            sql.execute(
+                "INSERT INTO items VALUES (?, ?, ?, ?, NULL)",
+                params![id, lane, lane, visible],
+            )
+            .unwrap();
+        }
+    }
+    db.commit(batch).unwrap();
+    drop(db);
+    let candidates: usize = sql
+        .query_row("SELECT COUNT(*) FROM items", [], |r| {
+            r.get::<_, u16>(0).map(usize::from)
+        })
+        .unwrap();
+    for descending in [false, true] {
+        let order = if descending { "DESC" } else { "ASC" };
+        let expected = sql
+            .prepare(&format!(
+                "SELECT DISTINCT rank FROM items WHERE lane=rank AND visible ORDER BY rank {order}"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get::<_, u8>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (work, bytes) in [(1, 32), (32, 1)] {
+            let mut cursor = None;
+            let mut output = Vec::new();
+            let mut examined = 0;
+            let mut empty_with_next = false;
+            for _ in 0..=2 * candidates {
+                let db = open(&host);
+                let mut query = db
+                    .query::<Item>()
+                    .using_index("lane,rank", &[])
+                    .filter_fields(Item::LANE, Comparison::Eq, Item::RANK)
+                    .eq(Item::VISIBLE, true)
+                    .distinct()
+                    .work_limit(work)
+                    .test_output_limit(bytes);
+                if descending {
+                    query = query.descending();
+                }
+                if let Some(after) = &cursor {
+                    query = query.after(after);
+                }
+                let page = query.select(|item| item.rank).fetch().unwrap();
+                examined += page.examined;
+                assert!(page.examined <= work && page.output_bytes <= bytes);
+                assert_eq!(page.output_bytes, page.rows.len());
+                empty_with_next |= page.rows.is_empty() && page.next.is_some();
+                output.extend(page.rows);
+                assert!(expected.starts_with(&output));
+                cursor = page
+                    .next
+                    .map(|c| QueryCursor::from_bytes(&c.to_bytes()).unwrap());
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert!(cursor.is_none());
+            assert_eq!(output, expected);
+            if work == 1 {
+                assert!(empty_with_next);
+                assert_eq!(examined, candidates);
+            } else {
+                // Each result after the first was examined once before it could fit.
+                assert_eq!(examined, candidates + expected.len() - 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn ordered_distinct_matches_first_qualifying_occurrences_in_sqlite() {
     let (sql, host) = fixture();
     let db = open(&host);

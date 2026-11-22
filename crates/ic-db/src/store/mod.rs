@@ -6,7 +6,7 @@ mod query;
 
 use crate::{
     __private::RowInfo, Entity, EntitySchema, Error, FieldType, IndexValue, PrimaryKey, Schema,
-    key, primary::RowKey, store_key::StoreKey,
+    UniqueKey, key, primary::RowKey, store_key::StoreKey,
 };
 use ic_storage::{
     Memory, RuntimeMemory,
@@ -47,6 +47,31 @@ fn next_primary<M: Memory>(
     Ok(Some((id, entry.value())))
 }
 
+fn decode_primary<E: Entity>(bytes: &[u8], key: E::Key) -> Result<E, Error> {
+    let row = E::decode(bytes)?;
+    if row.key() != key {
+        return Err(Error::Corrupt);
+    }
+
+    Ok(row)
+}
+
+// The index value is already the encoded primary key. Validate its exact type
+// and framing before using those same bytes to address the owner.
+fn read_index_owner<M: Memory>(
+    map: &Map<M>,
+    entity: u32,
+    key_type: FieldType,
+    encoded: &[u8],
+) -> Result<(RowKey, Vec<u8>), Error> {
+    let owner = RowKey::decode(encoded, key_type)?;
+    let mut key = prefix(2, entity);
+    key.extend_from_slice(encoded);
+    let row = map.get(&StoreKey::new(key)?).ok_or(Error::Corrupt)?;
+
+    Ok((owner, row))
+}
+
 // The typed caller checks the decoded row's index components against this key.
 #[inline(never)]
 fn next_index<M: Memory>(
@@ -62,8 +87,7 @@ fn next_index<M: Memory>(
     if !entry.key().starts_with(prefix) {
         return Ok(None);
     }
-    let id = RowKey::decode(&entry.value(), key_type)?;
-    let bytes = map.get(&row_key(entity, id)).ok_or(Error::Corrupt)?;
+    let (id, bytes) = read_index_owner(map, entity, key_type, &entry.value())?;
 
     Ok(Some((entry.key().clone(), id, bytes)))
 }
@@ -288,11 +312,11 @@ impl Batch {
     }
 }
 
-/// A page with explicit progress; a full page may require an empty final call.
+/// A bounded page of rows in live primary-key order.
 pub struct Page<E: Entity> {
     /// Typed records from this bounded primary-key traversal.
     pub rows: Vec<E>,
-    /// Last processed key, when further traversal may remain.
+    /// Last returned key, present when another key in this entity follows at read time.
     pub next_after: Option<E::Key>,
 }
 
@@ -437,19 +461,74 @@ impl<M: Memory> Database<M> {
         self.get_typed::<E>(entity, key.into().key())
     }
 
-    /// Read up to 32 primary keys, returning one slot per input position.
-    /// Missing keys yield `None`; repeated keys repeat the row at each position.
+    /// Read the owner of a complete generated unique key, or `None` on a miss.
+    /// # Errors
+    /// Propagates schema, key admission and row integrity errors.
+    pub fn get_unique<K: UniqueKey>(&self, key: &K) -> Result<Option<K::Entity>, Error> {
+        let components = key.components();
+        let values = components.as_ref();
+        if !K::Entity::SCHEMA
+            .index_by_name(K::INDEX)
+            .is_some_and(|index| index.is_unique_lookup(values.len()))
+        {
+            return Err(Error::InvalidQuery);
+        }
+
+        self.query::<K::Entity>()
+            .using_index(K::INDEX, values)
+            .work_limit(1)
+            .try_one()
+    }
+
+    /// Read up to 32 raw primary keys or entity-typed IDs, returning one slot per input position.
+    /// Each distinct key is looked up once. Missing keys yield `None`; repeats have independent output slots.
+    /// An empty slice needs an element type, e.g. `&[] as &[u64]` for a Nat64 key.
+    /// ```compile_fail
+    /// use ic_db::{Database, Entity, Id};
+    /// fn wrong<A: Entity, B: Entity<Key = A::Key>>(db: &Database, ids: &[Id<A>]) {
+    ///     let _ = db.get_many::<B>(ids);
+    /// }
+    /// ```
     /// # Errors
     /// Returns `Limit` for oversized input, or the same errors as [`Self::get`].
-    pub fn get_many<E: Entity>(&self, keys: &[E::Key]) -> Result<Vec<Option<E>>, Error> {
+    pub fn get_many<E: Entity>(
+        &self,
+        keys: &[impl Copy + Into<crate::Id<E>>],
+    ) -> Result<Vec<Option<E>>, Error> {
         if keys.len() > 32 {
             return Err(Error::Limit);
         }
         let entity = self.schema.admits(E::SCHEMA)?;
 
-        keys.iter()
-            .map(|&key| self.get_typed::<E>(entity, key))
-            .collect()
+        let keys: Vec<_> = keys.iter().map(|&key| key.into().key()).collect();
+        self.get_many_typed::<E>(entity, &keys)
+    }
+
+    // Share grouping and storage access across branded and raw inputs.
+    #[inline(never)]
+    fn get_many_typed<E: Entity>(
+        &self,
+        entity: &EntitySchema,
+        keys: &[E::Key],
+    ) -> Result<Vec<Option<E>>, Error> {
+        let mut rows: Vec<_> = (0..keys.len()).map(|_| None).collect();
+        let mut handled = 0_u32;
+        for (i, &key) in keys.iter().enumerate() {
+            if handled & (1 << i) != 0 {
+                continue;
+            }
+            let bytes = self.map.get(&row_key(entity.id, key.into_row_key()));
+            for (j, &other) in keys.iter().enumerate().skip(i) {
+                if other == key {
+                    handled |= 1 << j;
+                    if let Some(bytes) = &bytes {
+                        rows[j] = Some(decode_primary::<E>(bytes, key)?);
+                    }
+                }
+            }
+        }
+
+        Ok(rows)
     }
 
     // Keep traversal separate from the static type's admission call. Passing
@@ -458,14 +537,7 @@ impl<M: Memory> Database<M> {
     fn get_typed<E: Entity>(&self, entity: &EntitySchema, key: E::Key) -> Result<Option<E>, Error> {
         self.map
             .get(&row_key(entity.id, key.into_row_key()))
-            .map(|bytes| {
-                let row = E::decode(&bytes)?;
-                if row.key() != key {
-                    return Err(Error::Corrupt);
-                }
-
-                Ok(row)
-            })
+            .map(|bytes| decode_primary::<E>(&bytes, key))
             .transpose()
     }
 
@@ -510,16 +582,17 @@ impl<M: Memory> Database<M> {
                 break;
             };
             let id = E::Key::from_row_key(id)?;
-            let row = E::decode(&bytes)?;
-            if row.key() != id {
-                return Err(Error::Corrupt);
-            }
-            rows.push(row);
+            rows.push(decode_primary::<E>(&bytes, id)?);
             last = Some(id);
         }
 
+        // Look ahead only on a full page. The next row is decoded on its own page.
+        let more = rows.len() == limit
+            && entries
+                .next()
+                .is_some_and(|entry| entry.key().starts_with(&prefix));
         Ok(Page {
-            next_after: if rows.len() == limit { last } else { None },
+            next_after: if more { last } else { None },
             rows,
         })
     }
@@ -586,14 +659,40 @@ impl<M: Memory> Database<M> {
         batch: Batch,
         mut receive: impl FnMut(&[u8]) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        observe!(commit, { self.commit_batch(batch, &mut receive) })
+        observe!(commit, {
+            self.commit_batch(batch, &mut receive, None).map(|_| ())
+        })
     }
 
+    pub(crate) fn insert_if_absent<K: UniqueKey>(
+        &mut self,
+        input: impl crate::InsertInput<Entity = K::Entity>,
+    ) -> Result<crate::InsertOutcome<K::Entity>, Error> {
+        let entity = K::Entity::SCHEMA;
+        let index = entity
+            .index_by_name(K::INDEX)
+            .filter(|i| i.unique)
+            .ok_or(Error::InvalidQuery)?;
+        let mut batch = Batch::new();
+        let row = batch.insert_input(input)?;
+        let prefix = index_prefix(entity.id, index.id);
+        let applied = observe!(commit, {
+            self.commit_batch(batch, &mut |_| Ok(()), Some((entity, &prefix)))
+        })?;
+        Ok(if applied {
+            crate::InsertOutcome::Inserted(row)
+        } else {
+            crate::InsertOutcome::AlreadyPresent
+        })
+    }
+
+    // False means the single conditional insert was validated and skipped.
     fn commit_batch(
         &mut self,
         batch: Batch,
         receive: &mut dyn FnMut(&[u8]) -> Result<(), Error>,
-    ) -> Result<(), Error> {
+        conflict_target: Option<(&EntitySchema, &[u8])>,
+    ) -> Result<bool, Error> {
         let mut targets = BTreeSet::new();
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();
@@ -719,10 +818,26 @@ impl<M: Memory> Database<M> {
             }
         }
         // Check existing owners only after all releases in this batch are known.
+        let mut skip_insert = false;
         for key in unique {
+            if let Some((entity, _)) = conflict_target.filter(|(_, prefix)| key.starts_with(prefix))
+            {
+                if let Some(encoded) = self.map.get(&key) {
+                    let (owner, bytes) =
+                        read_index_owner(&self.map, entity.id, entity.key_type()?, &encoded)?;
+                    validate_index_entry(entity, &entity.inspect_row(&bytes)?, owner, &key)?;
+                    skip_insert = true;
+                }
+                continue;
+            }
             if self.map.contains_key(&key) && !removes.contains(&key) {
                 return Err(Error::UniqueViolation);
             }
+        }
+        if skip_insert {
+            // No candidate row will be published to satisfy its own references.
+            self.validate_references(&required, &deleted, &removes, &BTreeMap::new())?;
+            return Ok(false);
         }
         self.validate_references(&required, &deleted, &removes, &writes)?;
         for (entity, (mut state, changed, delta)) in entities {
@@ -747,7 +862,7 @@ impl<M: Memory> Database<M> {
             self.map.insert(key, value);
         }
 
-        Ok(())
+        Ok(true)
     }
 
     // Reuse the prepared final rows and ordinary index changes. No durable
@@ -800,11 +915,12 @@ impl<M: Memory> Database<M> {
                             }
                             continue;
                         }
-                        let owner = RowKey::decode(&entry.value(), entity.key_type()?)?;
-                        let bytes = self
-                            .map
-                            .get(&row_key(entity.id, owner))
-                            .ok_or(Error::Corrupt)?;
+                        let (owner, bytes) = read_index_owner(
+                            &self.map,
+                            entity.id,
+                            entity.key_type()?,
+                            &entry.value(),
+                        )?;
                         let info = entity.inspect_row(&bytes)?;
                         validate_index_entry(entity, &info, owner, entry.key())?;
 

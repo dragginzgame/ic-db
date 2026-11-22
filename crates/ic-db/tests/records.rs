@@ -923,7 +923,10 @@ fn writes_reopen_and_final_state_constraints_use_real_generated_types() {
     );
     let page = db.page::<Entry>(None, 1).unwrap();
     assert_eq!(page.rows[0].id, 1);
-    assert_eq!(db.page::<Entry>(page.next_after, 3).unwrap().rows[0].id, 2);
+    assert_eq!(page.next_after, Some(1));
+    let last = db.page::<Entry>(page.next_after, 1).unwrap();
+    assert_eq!(last.rows[0].id, 2);
+    assert_eq!(last.next_after, None);
     assert!(db.page::<Entry>(Some(u64::MAX), 3).unwrap().rows.is_empty());
     assert!(matches!(db.page::<Entry>(None, 0), Err(Error::Limit)));
 

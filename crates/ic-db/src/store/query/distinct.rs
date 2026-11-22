@@ -18,6 +18,17 @@ pub(super) enum Strategy {
     Sorted { prefix_len: usize },
 }
 
+impl Strategy {
+    pub(super) fn finishes_on_match(self, fixed_components: usize) -> bool {
+        match self {
+            Self::FirstMatch => true,
+            // The traversal prefix fixes the entire adjacent-class key.
+            Self::Adjacent(components) => components <= fixed_components,
+            _ => false,
+        }
+    }
+}
+
 // A fixed member does not fix its parent. Only complete top-level fields
 // can be omitted from a projected tuple's comparison key.
 pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &Plan<'_>) -> u32 {
@@ -33,7 +44,33 @@ pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &
     {
         fields |= 1 << position;
     }
+    for (source, target) in super::order::equality_transfers(request) {
+        if let Some(position) = entity.field_position(target)
+            && fields & (1 << position) == 0
+            && super::order::transferred_value(entity, request, source, target).is_some()
+        {
+            fields |= 1 << position;
+        }
+    }
     fields
+}
+
+// On matching owners a mandatory x == y makes either column sufficient
+// to distinguish both. A nested member never determines its entire parent.
+fn equal_peers(
+    entity: &EntitySchema,
+    request: &Request<'_>,
+    includes: impl Fn(&str) -> bool,
+) -> u32 {
+    let mut mask = 0;
+    for (source, target) in super::order::equality_transfers(request) {
+        if includes(source)
+            && let Some(other) = entity.field_position(target)
+        {
+            mask |= 1 << other;
+        }
+    }
+    mask
 }
 
 pub(super) fn admit(
@@ -44,26 +81,30 @@ pub(super) fn admit(
     let Some(projected) = plan.projection else {
         return Ok(Strategy::Identity);
     };
-    let position = |name: &str| entity.field_position(name).ok_or(Error::InvalidQuery);
-    let primary = 1 << position(entity.primary_key)?;
+    let primary = 1 << plan.primary;
+    // A selected column equal to the primary key also identifies its owner.
     if projected & primary != 0 {
         return Ok(Strategy::Identity);
     }
-    admit_ordered_fields(entity, projected)?;
+    let distinguished = projected
+        | equal_peers(entity, request, |source| {
+            entity
+                .field_position(source)
+                .is_some_and(|i| projected & (1 << i) != 0)
+        });
+    if distinguished & primary != 0 {
+        return Ok(Strategy::Identity);
+    }
     // Fixed fields and projected fields together can identify one matching owner.
     let index = plan.index;
     let fixed = plan.fixed_components;
     let fields = index.map_or(&[][..], |selected| selected.fields);
     let (prefix_fields, suffix_fields) = fields.split_at(fixed);
     let constants = fixed_fields(entity, request, plan);
-    // On an ordered traversal, one validated match proves the entire projected
-    // result for a fresh single-result probe when no projected field can vary.
+    // With one possible output tuple, changing the order of matching owners
+    // cannot change the projected result. A validated match proves existence.
     let varying = projected & !constants;
-    if request.single_result_probe
-        && request.cursor.is_none()
-        && plan.sort.is_none()
-        && varying == 0
-    {
+    if request.single_result_probe.is_some() && request.cursor.is_none() && varying == 0 {
         return Ok(Strategy::FirstMatch);
     }
     if constants & primary != 0 {
@@ -73,7 +114,7 @@ pub(super) fn admit(
         .index
         .as_ref()
         .map_or(&[][..], |(_, values)| values.as_slice());
-    let known = projected | constants;
+    let known = distinguished | constants;
     if entity.indexes.iter().any(|unique| {
         unique.unique
             && unique.fields.iter().all(|name| {
@@ -92,6 +133,8 @@ pub(super) fn admit(
     }) {
         return Ok(Strategy::Identity);
     }
+    // Only strategies that compare projected tuples need ordered field codecs.
+    admit_ordered_fields(entity, projected)?;
     if let Some(order) = &plan.sort {
         // Constant components cannot distinguish two matching rows. Stop the
         // key once it distinguishes every varying component of the projection.
@@ -99,11 +142,18 @@ pub(super) fn admit(
         let mut prefix_len = 0;
         while remaining != 0 {
             let field = order.get(prefix_len).ok_or(Error::InvalidQuery)?;
-            let bit = 1 << field.position;
-            if field.member.is_some() || remaining & bit == 0 {
+            let parent = entity.fields[field.position].name;
+            let covered = if let Some(member) = field.member {
+                equal_peers(entity, request, |source| {
+                    source.split_once('.') == Some((parent, member.field().name))
+                })
+            } else {
+                (1 << field.position) | equal_peers(entity, request, |source| source == parent)
+            };
+            if varying & covered == 0 {
                 return Err(Error::InvalidQuery);
             }
-            remaining &= !bit;
+            remaining &= !covered;
             prefix_len += 1;
         }
 
@@ -118,17 +168,15 @@ pub(super) fn admit(
     }
     let mut components = fixed;
     for name in suffix_fields {
-        let Some(field) = entity.field_position(name) else {
-            break;
-        };
-        let bit = 1 << field;
-        // Cross a nonprojected constant only to reach a varying projected field.
-        // Keep the physical prefix in the cursor comparison, including that constant.
-        let crosses_constant = constants & bit != 0 && remaining & !constants != 0;
-        if remaining & bit == 0 && !crosses_constant {
+        let covered = entity.field_position(name).map_or(0, |i| 1 << i)
+            | equal_peers(entity, request, |source| source == *name);
+        // A constant or an already distinguished column cannot split matching
+        // tuples. Keep its physical bytes when crossing it to reach a later field.
+        let redundant = covered & (constants | projected) != 0;
+        if remaining & covered == 0 && !(redundant && remaining & !constants != 0) {
             break;
         }
-        remaining &= !bit;
+        remaining &= !covered;
         components += 1;
     }
     // A mandatory equality fixes its projected value for every matching owner,
@@ -210,6 +258,7 @@ impl Collection {
         else {
             return Ok(());
         };
+        request.check_result_count(self.rows.len() + 1)?;
         if self.rows.len() == MAX_DISTINCT_VALUES || self.rows.len() == request.rows {
             return Err(Error::Limit);
         }

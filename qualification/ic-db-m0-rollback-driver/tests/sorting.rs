@@ -693,7 +693,7 @@ async fn unique_decimal_order_matches_sqlite() {
                 .await
                 .unwrap();
         }
-        let read = async |after: Option<Vec<u8>>, work: u32| {
+        let read = async |after: Option<Vec<u8>>, work: u32, order: [&str; 2], present: bool| {
             let request = (
                 "DecimalRow",
                 after,
@@ -701,7 +701,7 @@ async fn unique_decimal_order_matches_sqlite() {
                 None::<u64>,
                 None::<u64>,
                 None::<u64>,
-                vec!["maybe:desc", "id:asc"],
+                order.to_vec(),
                 false,
                 work,
                 128_u32,
@@ -711,7 +711,7 @@ async fn unique_decimal_order_matches_sqlite() {
                     (None::<String>, None::<String>),
                     None::<String>,
                     RowFilters {
-                        present: Some("maybe".into()),
+                        present: present.then(|| "maybe".into()),
                         ..Default::default()
                     },
                 ),
@@ -726,7 +726,8 @@ async fn unique_decimal_order_matches_sqlite() {
             .await
         };
         let before = pic.get_stable_memory(canister).await;
-        let (page, instructions) = read(None, 64).await;
+        let order = ["maybe:desc", "id:asc"];
+        let (page, instructions) = read(None, 64, order, true).await;
         let page = page.unwrap();
         println!(
             "unique-order baseline={baseline} wasm={} code={} examined={} fetched={} instructions={instructions}",
@@ -742,7 +743,7 @@ async fn unique_decimal_order_matches_sqlite() {
         assert_eq!(pic.get_stable_memory(canister).await, before);
         if baseline {
             assert!(page.2.is_none());
-            assert!(read(None, 3).await.0.is_err());
+            assert!(read(None, 3, order, true).await.0.is_err());
             continue;
         }
         assert_eq!((page.3, page.4), (3, 3));
@@ -754,7 +755,7 @@ async fn unique_decimal_order_matches_sqlite() {
             .unwrap();
         let backing = pic.get_stable_memory(canister).await;
         while let Some(after) = cursor {
-            let next = read(Some(after), 3).await.0.unwrap();
+            let next = read(Some(after), 3, order, true).await.0.unwrap();
             assert!(next.3 <= 3 && next.4 <= next.3);
             let rows = ids(&next);
             assert_eq!(rows, expected[seen.len()..seen.len() + rows.len()]);
@@ -763,6 +764,20 @@ async fn unique_decimal_order_matches_sqlite() {
             cursor = next.2;
         }
         assert_eq!(seen, expected);
+
+        // Allowing absent prices makes rows omitted by the sparse index eligible.
+        let nullable = read(None, 64, ["maybe:asc", "id:desc"], false)
+            .await
+            .0
+            .unwrap();
+        let expected_nullable = sql
+            .prepare("SELECT id FROM prices ORDER BY cents ASC, id DESC LIMIT 3")
+            .unwrap()
+            .query_map([], |r| r.get::<_, u32>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(ids(&nullable), expected_nullable);
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
     owned.drop().await;

@@ -65,6 +65,30 @@ impl<E: crate::Entity> PartialEq for Id<E> {
     }
 }
 impl<E: crate::Entity> Eq for Id<E> {}
+impl<E: crate::Entity> std::hash::Hash for Id<E>
+where
+    E::Key: std::hash::Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+impl<E: crate::Entity> PartialOrd for Id<E>
+where
+    E::Key: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl<E: crate::Entity> Ord for Id<E>
+where
+    E::Key: Ord,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 impl<E: crate::Entity> std::fmt::Debug for Id<E>
 where
     E::Key: std::fmt::Debug,

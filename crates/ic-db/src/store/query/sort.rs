@@ -125,6 +125,10 @@ impl Collection {
         Ok(())
     }
 
+    pub(super) fn result_count(&self) -> usize {
+        self.rows.len()
+    }
+
     // Only called after the scanner observes exhaustion. Retained keys are unique.
     pub(super) fn finish(
         self,

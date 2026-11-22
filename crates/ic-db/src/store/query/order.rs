@@ -43,7 +43,7 @@ pub(super) struct SortField {
 pub(super) enum Path<'a> {
     Primary,
     Index(IndexPath<'a>, bool),
-    Sort(Vec<SortField>),
+    Filtered { sort: Option<Vec<SortField>> },
 }
 
 pub(super) fn select<'a>(
@@ -171,6 +171,11 @@ pub(super) fn select<'a>(
     if request.cursor.is_some() || !matches!(output, super::PlanOutput::Rows) {
         return Err(Error::InvalidQuery);
     }
+    // For try_one, any second owner proves multiplicity and the sole owner
+    // is independent of order. DISTINCT may still need to compare owners.
+    if request.single_result_probe == Some(super::SingleResult::Only) && !request.distinct {
+        return Ok(Path::Filtered { sort: None });
+    }
     // Every requested field has been admitted. Equal components contribute
     // neither ordering nor tie-breaking bytes to the complete sort.
     let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
@@ -191,7 +196,9 @@ pub(super) fn select<'a>(
         });
     }
 
-    Ok(Path::Sort(varying))
+    Ok(Path::Filtered {
+        sort: Some(varying),
+    })
 }
 
 /// A full unique key has at most one owner, so using it preserves primary order.
@@ -779,15 +786,37 @@ pub(super) fn transferred_equality<'a>(
     {
         return None;
     }
-    request.clauses().find_map(|clause| {
-        let [predicate] = clause else { return None };
-        if predicate.comparison != Comparison::Eq {
-            return None;
-        }
-        let value = direct_equality(entity, request, predicate.compared_field(field)?)?;
-        // Comparable fields can have different byte limits or decimal scales.
-        let target = entity.index_field(field)?;
-        value.admit(target.value, target.optional).ok()?;
-        Some(value)
-    })
+    equality_transfers(request)
+        .filter(|&(_, target)| target == field)
+        .find_map(|(source, target)| transferred_value(entity, request, source, target))
+}
+
+// Each mandatory equality can carry a directly fixed operand in either direction.
+pub(super) fn equality_transfers<'a>(
+    request: &Request<'a>,
+) -> impl Iterator<Item = (&'a str, &'a str)> {
+    request
+        .clauses()
+        .filter_map(|clause| {
+            let [predicate] = clause else { return None };
+            let QueryOperand::Field(right) = predicate.operand else {
+                return None;
+            };
+            (predicate.comparison == Comparison::Eq)
+                .then_some([(predicate.field, right), (right, predicate.field)])
+        })
+        .flatten()
+}
+
+pub(super) fn transferred_value<'a>(
+    entity: &EntitySchema,
+    request: &Request<'a>,
+    source: &str,
+    target: &str,
+) -> Option<IndexValue<'a>> {
+    let value = direct_equality(entity, request, source)?;
+    // Comparable fields can have different byte limits or decimal scales.
+    let target = entity.index_field(target)?;
+    value.admit(target.value, target.optional).ok()?;
+    Some(value)
 }

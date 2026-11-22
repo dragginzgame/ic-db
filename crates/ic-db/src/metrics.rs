@@ -157,7 +157,7 @@ fn record_query(counts: Option<[usize; 4]>) {
         }
     });
 }
-pub(crate) fn commit(run: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
+pub(crate) fn commit<T>(run: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
     let result = run();
     update(|m| {
         m.commits.add(1);

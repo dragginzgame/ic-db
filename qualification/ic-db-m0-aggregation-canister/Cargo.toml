@@ -30,6 +30,10 @@ ic-db.workspace = true
 toko-tooling.workspace = true
 
 [[example]]
+name = "column_listing"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "float64_sum"
 crate-type = ["cdylib"]
 

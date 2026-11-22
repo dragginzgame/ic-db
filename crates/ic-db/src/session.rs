@@ -62,6 +62,15 @@ pub trait UniqueKey {
     fn components(&self) -> impl AsRef<[IndexValue<'_>]>;
 }
 
+/// Result of inserting one input conditionally on its declared unique index.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InsertOutcome<E> {
+    /// The input was inserted, including any generated ID and managed timestamps.
+    Inserted(E),
+    /// An existing row owns the selected key. No row was changed.
+    AlreadyPresent,
+}
+
 /// A session that can start a fluent query for `E`. Generic read helpers can
 /// accept either a store session or the session for the entity's canister.
 pub trait QuerySession<E: Entity> {
@@ -148,7 +157,10 @@ impl DatabaseSession {
     /// Read up to 32 primary keys in input order, preserving duplicates and missing slots.
     /// # Errors
     /// Returns a borrow conflict or the original [`Database::get_many`] error.
-    pub fn get_many<E: Entity>(&self, keys: &[E::Key]) -> Result<Vec<Option<E>>, Error> {
+    pub fn get_many<E: Entity>(
+        &self,
+        keys: &[impl Copy + Into<crate::Id<E>>],
+    ) -> Result<Vec<Option<E>>, Error> {
         self.read()?.get_many::<E>(keys)
     }
 
@@ -157,20 +169,7 @@ impl DatabaseSession {
     /// # Errors
     /// Propagates session borrow, schema, key admission and row integrity errors.
     pub fn get_unique<K: UniqueKey>(&self, key: &K) -> Result<Option<K::Entity>, Error> {
-        let components = key.components();
-        let values = components.as_ref();
-        if !K::Entity::SCHEMA
-            .index_by_name(K::INDEX)
-            .is_some_and(|index| index.is_unique_lookup(values.len()))
-        {
-            return Err(Error::InvalidQuery);
-        }
-
-        self.read()?
-            .query::<K::Entity>()
-            .using_index(K::INDEX, values)
-            .work_limit(1)
-            .try_one()
+        self.read()?.get_unique(key)
     }
 
     /// Insert one entity as one batch.
@@ -193,6 +192,22 @@ impl DatabaseSession {
         self.commit(batch)?;
 
         Ok(row)
+    }
+
+    /// Insert unless the input's selected unique key already has an owner.
+    /// Select the index by its generated key type. Components come from the input.
+    /// An absent sparse key participates in no conflict.
+    /// # Errors
+    /// Propagates invalid input, primary-key and other unique conflicts, reference,
+    /// storage and borrow errors, including on replay.
+    pub fn insert_if_absent<K: UniqueKey>(
+        &self,
+        input: impl InsertInput<Entity = K::Entity>,
+    ) -> Result<InsertOutcome<K::Entity>, Error> {
+        self.0
+            .try_borrow_mut()
+            .map_err(|_| Error::BorrowConflict)?
+            .insert_if_absent::<K>(input)
     }
 
     /// Replace one existing entity and return its stored value including any assigned update time.

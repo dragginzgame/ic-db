@@ -268,7 +268,7 @@ fn console_inspects_and_queries() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery Entry --select category,distinct-count:category\nquery Entry --select category,distinct-count:amount --group-min 3\nquery Document --select entry_id,distinct-count:note\nquery Entry --select avg:amount\nquery Entry --select category,avg:amount --group-order desc\nquery DecimalRow --select avg:value\nquery DecimalRow --select zone,avg:maybe\nquery DecimalRow\nquery DecimalRow --select sum:value\nquery DecimalRow --select zone,sum:value --group-min 3\nquery DecimalRow --select zone,sum:maybe\nquery Entry --select count\nquery Entry --select sum:amount\nquery Entry --select category,sum:amount --group-order desc\nquery Entry --select category,sum:amount --group-min 100 --limit 1\nquery Document --select entry_id,sum:score\nquery Document --select sum:priority\nquery Document --select sum:score\nquery Entry --select min:amount --limit 1\nquery Entry --select category,min:amount\nquery Entry --select category,max:amount\nquery Entry --select category,min:amount --group-order asc --limit 1\nquery Entry --select category,count --min 40 --group-min 2 --group-order desc\nquery Document --select entry_id,min:note\nquery Document --select entry_id,max:priority\nquery Entry --select max:amount --limit 1\nquery Document --select min:note\nquery Document --select min:priority\nquery Entry --select distinct-count:category --limit 1\nquery Document --select count:note\nquery Entry --select category,count:amount --min 40\nquery Entry --select category,count --min 40\nquery Entry --order-by category --select category --distinct\nquery Entry --category 1 --order-by category --select category --distinct\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
+        .write_all(b"\n\nschema\nstatus\nquery Entry --limit 32\nquery Entry --select category,distinct-count:category\nquery Entry --select category,distinct-count:amount --group-min 3\nquery Document --select entry_id,distinct-count:note\nquery Entry --select avg:amount\nquery Entry --select category,avg:amount --group-order desc\nquery DecimalRow --select avg:value\nquery DecimalRow --select zone,avg:maybe\nquery DecimalRow\nquery DecimalRow --select sum:value\nquery DecimalRow --select zone,sum:value --group-min 3\nquery DecimalRow --select zone,sum:maybe\nquery Entry --select count\nquery Entry --select sum:amount\nquery Entry --select category,sum:amount --group-order desc\nquery Entry --select category,sum:amount --group-min 100 --limit 1\nquery Document --select entry_id,sum:score\nquery Document --select sum:priority\nquery Document --select sum:score\nquery Entry --select min:amount --limit 1\nquery Entry --select category,min:amount\nquery Entry --select category,max:amount\nquery Entry --select category,min:amount --group-order asc --limit 1\nquery Entry --select category,count --min 40 --group-min 2 --group-order desc\nquery Document --select entry_id,min:note\nquery Document --select entry_id,max:priority\nquery Entry --select max:amount --limit 1\nquery Document --select min:note\nquery Document --select min:priority\nquery Entry --select distinct-count:category --limit 1\nquery Document --select count:note\nquery Entry --select category,count:amount --min 40\nquery Entry --select category,count --min 40\nquery Entry --order-by category --select category --distinct\nquery --min 100 --work 3\nquery Entry --min 40 --limit 2 --select id,amount\nquit\n")
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
@@ -339,7 +339,6 @@ fn console_inspects_and_queries() {
     assert!(stdout.contains("0 rows; 3 examined; 3 fetched; 0 encoded bytes."));
     assert!(stdout.contains("6 rows; 6 examined; 6 fetched; 144 encoded bytes."));
     assert!(stdout.contains("2 rows; 6 examined; 6 fetched; 16 encoded bytes."));
-    assert!(stdout.contains("1 row; 3 examined; 3 fetched; 8 encoded bytes."));
     assert!(stdout.contains("1 row; 6 examined; 6 fetched; 8 encoded bytes."));
     assert!(stdout.contains("1 row; 1 examined; 1 fetched; 8 encoded bytes."));
     assert!(stdout.contains("0 rows; 1 examined; 1 fetched; 0 encoded bytes."));
@@ -435,11 +434,15 @@ fn console_inspects_and_queries() {
     assert!(sorted.contains("Next cursor: none"));
     let filtered_distinct = run_console(
         &binary,
-        "query Entry --select category --distinct --min 0 --order-by category\nquery Entry --category 1 --order-by amount:desc --select category --distinct\nquit\n",
+        "query Entry --select category --distinct --min 0 --order-by category\nquery Entry --category 1 --order-by amount:desc --select category --distinct\nquery Entry --category 1 --order-by category --select category --distinct\nquit\n",
     );
     assert_eq!(
         result_table_rows(&filtered_distinct),
-        [vec!["0"], vec!["1"], vec!["1"]]
+        [vec!["0"], vec!["1"], vec!["1"], vec!["1"]]
+    );
+    assert!(
+        filtered_distinct
+            .contains("1 row; 1 examined; 1 fetched; 8 encoded bytes.\nNext cursor: none")
     );
     assert!(contains_row(&stdout, &["0", "120"]));
     assert!(contains_row(&stdout, &["1", "93"]));

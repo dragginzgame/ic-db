@@ -13,7 +13,9 @@ Application helpers can borrow a database directly or independently obtain a
 A session query owns a handle and observes committed data at execution.
 Explicit read-guard builders borrow their guard. A typed unique lookup uses a
 generated named key with present components in declaration order and returns
-an owned entity. Session insert, replace and delete each submit one batch.
+an owned entity. The database owns this lookup. A store session takes one read
+borrow and delegates to it, and a canister session selects the key’s declared
+store. Session insert, replace and delete each submit one batch.
 Changes that depend on each other share an explicit batch. A mounted canister session binds the batch to the store inferred from its entities. As in frozen IcyDB’s typed batch, generated inputs carry entity identity into preparation. The IC DB store type constrains every queued operation at compile time, and the existing store commit validates their combined final state. A batch takes
 exclusive access only for the commit. A conflicting borrow
 returns `BorrowConflict` before mutation. The last handle can return the database
@@ -1436,6 +1438,7 @@ is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
 
+In application collections, `Id<E>` delegates hashing and ordering to the primary key, as in IcyDB `5538760`, `types/identity/id.rs`. These operations require traits on the key alone.
 Fluent predicates accept an owned or borrowed `Id<E>` wherever they accept
 its raw key. This follows frozen IcyDB’s `value/input` conversion at `6d421e3`.
 Direct lookups check the entity brand at compile time. A field predicate
@@ -1660,6 +1663,11 @@ entity. The existing projection mask selects stored spans. Typed decoding assemb
 tuples in caller order and the cursor binds that order. Frozen IcyDB `6d421e3`
 also distinguishes projection order from physical order (`db/executor/covering/mod.rs`).
 Here ordinary reads continue to validate the owner, including for an ID-only page.
+The [installed projection comparison](../../qualification/README.md#typed-column-listing-on-pocketic-0273)
+checked SQLite page boundaries for an indexed phase listing and a sparse variant.
+Typed and named ID output each used 16 bytes per match and fetched the same owners.
+Adding the typed ID and then the typed triple to the entity-plus-named build
+added 1,836 and 2,675 uncompressed Wasm bytes respectively.
 
 Schema inspection, query explanation and integrity checks may have Rust methods
 where needed; SQL command forms are excluded. Ad hoc text
@@ -2139,6 +2147,13 @@ rollback witness while excluding fault controls; normal record/performance build
 retain their independent feature selection. Production endpoints remain Canic-owned.
 
 ## 6. Writes, commit and recovery
+
+A single-row session insert may select one generated unique key type as its conflict target.
+Preparation derives that key from the input and validates any existing index owner.
+Only that conflict may produce `AlreadyPresent`. Other key conflicts and invalid
+references still refuse. A skipped insert publishes no rows, indexes, count or revision.
+Input preparation can consume a generated ULID even on replay.
+
 
 Prefer no database-owned WAL for ordinary writes. Prove the message rollback
 boundary instead of introducing durable batch records, replay, checkpointing or
@@ -3104,15 +3119,24 @@ IcyDB `6d421e3`'s `db/query/expr/filter/mod.rs` spellings and construct the same
 predicate as `filter(field, comparison, value)`. Both forms share cursor identity. The `first` terminal returns an entity, a proven miss, or a work-limit
 refusal when traversal stops before either outcome.
 
+On an unfiltered primary-key `Database::page()`, a full page checks one more
+physical key in the same iterator. Its entity prefix determines whether to
+return the last emitted ID as a continuation. The next value is decoded only
+if the caller resumes. This describes exhaustion at read time on a live traversal.
+
 Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys)`
-for a page of related keys. Database, store session and canister session share
+for a page of related keys. The bulk call accepts a slice of raw keys or
+entity-typed IDs, like frozen IcyDB `6d421e3`’s `db/query/typed.rs` for typed IDs.
+Database, store session and canister session share
 this read path. The canister session selects the declared store once, and the
 store session holds one read borrow for the batch. The batch admits the entity once, reads up to 32
 positions and preserves input order, duplicates and missing slots. This carries
 the positional contract of frozen IcyDB `6d421e3`,
 `db/session/query/exact_key/mod.rs`, into the existing typed read path. The
-32-position bound matches an entity page; repeated positions currently repeat
-the direct lookup. Toko's asset/thumbnail flow at `2f45ba193` illustrates why
+32-position bound matches an entity page. Each distinct key costs one map
+lookup, including misses. A 32-bit mask tracks filled positions, so only one
+stored row's bytes are held alongside the output. Each matching slot decodes
+its own value. Toko's asset/thumbnail flow at `2f45ba193` illustrates why
 the order of the input page matters. A query's `filter_in` instead selects
 matching entities once in query order. When every alternative in one OR clause
 is a literal equality on the next traversal component, the shared scanner
@@ -3129,13 +3153,44 @@ query. Like Toko's terminal, it probes for two even after `limit(1)`; IC DB
 reports `MultipleMatches` on a second row and `Limit` when a partial page
 cannot establish cardinality. A continuation refuses. Use `first()` when
 the caller wants the first match in order. Schema uniqueness controls writes.
+For ordinary `try_one()`, the planner validates every order field and can scan
+the filtered input directly when the requested order would require a sort.
+Ordering cannot affect which single owner matches or whether a second exists.
+During a bounded sort, two retained results prove multiplicity even if later
+rows change their rank. For sorted DISTINCT the sorter counts distinct keys.
+When traversal supplies the requested order, the first validated output completes `first()` without allocating a continuation. Returning the first sorted value still requires proving the order.
 For a record projection, `first_as::<R>()` and `try_one_as::<R>()` apply the
 same cardinality rules to the output of `fetch_as::<R>()`. Byte limits apply
-to the projected records.
+to the projected records. Inline scalar and tuple selections use the same probes
+through `.select(...).first()` and `.select(...).try_one()`. A match with an
+absent selected value returns `Some(None)`, while an exhausted miss returns `None`.
+Once a second result is proven, reporting `MultipleMatches` needs no output
+space for that result. Duplicate projected values in DISTINCT supply no such proof.
+DISTINCT checks projected field comparability only when it must compare tuples.
+A fixed primary key or a complete unique key identifies at most one owner, so
+a selection may include a record-valued column. A sparse unique key provides
+this guarantee only for matching rows proven to belong to that index.
+DISTINCT also uses the index planner’s one-step equality transfer: when a
+mandatory field equality links a selected column to a directly fixed value,
+that column is constant across matching rows. The target must admit the value.
+An equality inside a disjunction does not supply this proof. A mandatory equality
+between two top-level fields also lets a physical index or bounded sort use one
+component to distinguish both projected values. A mandatory equality with a direct record member also lets
+that exact member distinguish the selected top-level column during an index
+scan or bounded sort. Sibling members and the enclosing record supply no such
+proof. The full projection is decoded in caller order after the owner passes the residual predicate. If one side is
+the primary key and the other side is selected, the projected tuple identifies
+its owner and uses ordinary row pagination. For a unique index, each component
+may likewise be selected, directly equal to a selected field, or fixed by the
+query. The same sparse-index membership check still applies.
+For paginated adjacent DISTINCT, if the scan prefix fixes every component of
+the class key, emitting one validated result completes enumeration. Before a
+match, each work-limited page can still advance past nonmatching owners.
 For DISTINCT in first-occurrence order, the first observed class establishes
 the first result and a second class disproves uniqueness. When literal equalities
 or the selected index prefix fix every projected field, the first validated match
-in traversal order also proves uniqueness. With varying fields, returning a sole
+also proves uniqueness, even if ordering the matching owners would otherwise
+require a complete sort. With varying fields, returning a sole
 class still requires exhaustion. A miss always requires proof of exhaustion. Selecting the first result through a complete sort
 also requires exhaustion.
 
@@ -3148,6 +3203,10 @@ must collect explicit keys and fit the normal atomic batch contract.
 For a bounded read of physical index entries in
 index order, `index_prefix` also admits partial prefixes of sparse indexes.
 Ordinary fluent queries must cover every possible matching entity.
+Index reads, restricted deletion and maintenance validation share the owner
+lookup. The index value contains the encoded primary key. The lookup checks
+its type and framing and uses those bytes to fetch the row. Each caller still
+checks that the row belongs to the visited index entry.
 
 **Default-order equality pages (0.23.13).** Entity reads and ordinary projections
 may traverse a non-unique equality prefix when the remaining key produces primary-key

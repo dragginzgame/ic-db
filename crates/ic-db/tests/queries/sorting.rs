@@ -533,6 +533,37 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
         rows.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
         [2, 0, 4, 5, 6, 3, 1]
     );
+    // The payload needs more than 4 KiB as a sort key. A sole-result probe
+    // still admits the order and validates matching owners before deciding.
+    let by_payload = || db.query::<SortRow>().order_asc(SortRow::PAYLOAD);
+    assert!(matches!(
+        by_payload().work_limit(2).try_one(),
+        Err(Error::MultipleMatches)
+    ));
+    assert!(matches!(
+        by_payload().work_limit(1).try_one(),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        by_payload()
+            .eq(SortRow::LABEL, "é")
+            .select(|r| r.id)
+            .try_one()
+            .unwrap(),
+        Some(2)
+    );
+    assert!(
+        by_payload()
+            .eq(SortRow::LABEL, "missing")
+            .try_one()
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(by_payload().first(), Err(Error::Limit)));
+    assert!(matches!(
+        by_payload().order_asc("missing").try_one(),
+        Err(Error::InvalidQuery)
+    ));
     // A legal row can still exceed the independently bounded sort key.
     let mut batch = Batch::new();
     batch

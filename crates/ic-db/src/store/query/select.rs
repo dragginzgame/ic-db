@@ -112,19 +112,42 @@ impl<E: Entity, M: Memory, S: Selection<E>> SelectedQuery<'_, E, M, S> {
     /// # Errors
     /// Repeated columns refuse. Ordinary query, projection and cursor errors apply.
     pub fn fetch(self) -> Result<QueryPage<S::Output>, Error> {
-        observe!(query, {
-            let positions = self.selection.positions();
-            let positions = positions.as_ref();
-            let raw = fetch_rows(
-                &*self.query.db.read()?,
-                E::SCHEMA,
-                self.query.request,
-                Some(super::Projection::Columns(positions)),
-            )?;
-            let mut slots = [0, 1, 2, 3];
-            let order = &mut slots[..positions.len()];
-            order.sort_unstable_by_key(|&index| positions[index]);
-            raw.decode_with(|reader| self.selection.decode(reader, order))
-        })
+        observe!(query, { selected_page(self.query, &self.selection) })
     }
+
+    /// Return the first selected value in query order.
+    /// # Errors
+    /// Returns `Limit` if the work budget ends before a match or proven exhaustion.
+    /// Ordinary selection and query errors apply.
+    pub fn first(self) -> Result<Option<S::Output>, Error> {
+        self.query
+            .first_with(|query| selected_page(query, &self.selection))
+    }
+
+    /// Return the sole selected result, or `None` on a proven miss.
+    /// # Errors
+    /// A second match returns `MultipleMatches`; an inconclusive scan returns
+    /// `Limit`. A continuation is refused. Ordinary selection and query errors apply.
+    pub fn try_one(self) -> Result<Option<S::Output>, Error> {
+        self.query
+            .try_one_with(|query| selected_page(query, &self.selection))
+    }
+}
+
+fn selected_page<E: Entity, M: Memory, S: Selection<E>>(
+    query: Query<'_, E, M>,
+    selection: &S,
+) -> Result<QueryPage<S::Output>, Error> {
+    let positions = selection.positions();
+    let positions = positions.as_ref();
+    let raw = fetch_rows(
+        &*query.db.read()?,
+        E::SCHEMA,
+        query.request,
+        Some(super::Projection::Columns(positions)),
+    )?;
+    let mut slots = [0, 1, 2, 3];
+    let order = &mut slots[..positions.len()];
+    order.sort_unstable_by_key(|&index| positions[index]);
+    raw.decode_with(|reader| selection.decode(reader, order))
 }

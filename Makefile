@@ -416,3 +416,13 @@ m2-nested-path-costs:
 	  cp "$$artifact" "$$out/nested-paths-$$tier.wasm"; \
 	done; \
 	IC_DB_NESTED_PATH_DIR="$$out" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test nested_paths -- --ignored --nocapture
+
+.PHONY: m2-column-listing
+m2-column-listing:
+	@set -eu; out="$(CURDIR)/qualification/target/evidence/m2"; mkdir -p "$$out"; \
+	for shape in entity named scalar tuple records with-scalar all; do \
+	  IC_DB_LISTING_SHAPE=$$shape cargo build --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-aggregation-canister --example column_listing --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "$$out/column-listing-build.jsonl"; \
+	  artifact=$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "column_listing") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "$$out/column-listing-build.jsonl"); \
+	  cp "$$artifact" "$$out/column-listing-$$shape.wasm"; \
+	done; \
+	IC_DB_LISTING_DIR="$$out" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test column_listing -- --ignored --nocapture

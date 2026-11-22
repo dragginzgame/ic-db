@@ -944,6 +944,94 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
 }
 
 #[test]
+fn distinct_bucket_equal_to_indexed_member_matches_sqlite() {
+    const SCORE: &str = ic_db::field_path!(Ranked::RATING, Rating::SCORE);
+    let fixture = Fixture::new("test.ranked.distinct.v1");
+    let mut db = fixture
+        .create(Schema::new(&[Ranked::SCHEMA]).unwrap(), [4; 16])
+        .unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute("CREATE TABLE ranked(score INTEGER, bucket INTEGER)", [])
+        .unwrap();
+    let mut batch = Batch::new();
+    for (id, (score, bucket)) in [(1_u16, 2_u16), (1, 1), (1, 1), (2, 2), (2, 1), (3, 3)]
+        .into_iter()
+        .enumerate()
+    {
+        batch
+            .insert(&Ranked {
+                id: id as u64,
+                bucket,
+                rating: Rating { score, other: 0 },
+            })
+            .unwrap();
+        sql.execute("INSERT INTO ranked VALUES (?,?)", (score, bucket))
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    for descending in [false, true] {
+        let direction = if descending { "DESC" } else { "ASC" };
+        let expected = sql
+            .prepare(&format!(
+                "SELECT DISTINCT bucket FROM ranked WHERE score=bucket ORDER BY bucket {direction}"
+            ))
+            .unwrap()
+            .query_map([], |r| r.get::<_, u16>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut seen = Vec::new();
+        let mut after = None;
+        for _ in 0..=6 {
+            let mut query = db
+                .query::<Ranked>()
+                .filter_fields(SCORE, ic_db::Comparison::Eq, Ranked::BUCKET)
+                .distinct()
+                .work_limit(1);
+            query = if descending {
+                query.order_desc(SCORE).order_desc(Ranked::ID)
+            } else {
+                query.order_asc(SCORE)
+            };
+            if let Some(cursor) = &after {
+                query = query.after(cursor);
+            }
+            let page = query.select(|r| r.bucket).fetch().unwrap();
+            assert!(page.examined <= 1);
+            seen.extend(page.rows);
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(after.is_none());
+        assert_eq!(seen, expected);
+    }
+    // Mixed directions require the complete sorter. Only the exact member
+    // constrained by equality can order the projected bucket.
+    let sorted = || {
+        db.query::<Ranked>()
+            .order_desc(SCORE)
+            .order_asc(Ranked::ID)
+            .distinct()
+    };
+    let page = sorted()
+        .filter_fields(Ranked::BUCKET, ic_db::Comparison::Eq, SCORE)
+        .select(|r| r.bucket)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows, [3, 2, 1]);
+    let other = ic_db::field_path!(Ranked::RATING, Rating::OTHER);
+    assert!(matches!(
+        sorted()
+            .filter_fields(Ranked::BUCKET, ic_db::Comparison::Eq, other)
+            .select(|r| r.bucket)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn nested_index_cursor_resumes_after_deleted_key_across_reopen() {
     const SCORE: &str = ic_db::field_path!(Ranked::RATING, Rating::SCORE);
     let fixture = Fixture::new("test.ranked.live.v1");

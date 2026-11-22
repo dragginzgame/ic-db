@@ -1940,6 +1940,55 @@ to 1,194,068 bytes with nested filtering and ordering included. The pre-upgrade
 15,536,196). These figures describe the fixture as a whole. They do not measure
 nested Decimal traversal cost or per-entity growth.
 
+#### Typed column listing on PocketIC (0.27.3)
+
+Run `make m2-column-listing` after `make m0-setup`. The probe uses product
+revision `23da0ce` and seven optimized builds of the same canister. The four
+single-shape builds isolate the choice of terminal. The three cumulative builds
+also let the caller select among the included shapes at runtime.
+
+Each build installs 24 ULID-keyed rows with a 512-byte Blob, repeated ranks and
+a `(phase, rank, id)` index. A query selects one phase and orders by rank then ID,
+with a two-row page and a four-candidate work allowance. The sparse variant
+also filters on an unindexed Boolean. SQLite supplies the candidate order,
+membership and expected field values. The driver follows actual cursors and
+checks rows, page boundaries, owner fetches, database output bytes and exhaustion.
+The phase listing returns 18 rows over ten calls, including its final empty
+call. The sparse listing returns ten rows over seven calls, including an empty
+first page with a continuation. Each listing examines 18 candidates and fetches
+18 owners across its pages for every output shape.
+
+| Output reachable in single-shape build | Wasm bytes | Code bytes | Phase instructions | Sparse instructions | Phase / sparse output bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Entity | 323,147 | 297,532 | 2,592,268 | 2,381,471 | 9,684 / 5,380 |
+| Named ID record | 321,425 | 295,717 | 2,582,593 | 2,378,260 | 288 / 160 |
+| Typed ID | 321,507 | 295,892 | 2,581,759 | 2,418,911 | 288 / 160 |
+| Typed (ID, score, rank) | 322,384 | 296,684 | 2,660,879 | 2,429,940 | 360 / 200 |
+
+| Reachable outputs in the same canister | Wasm bytes | Incremental bytes |
+| --- | ---: | ---: |
+| Entity | 323,147 | — |
+| Add named ID | 325,243 | +2,096 |
+| Add typed ID | 327,079 | +1,836 |
+| Add typed tuple | 329,754 | +2,675 |
+
+Instruction totals sum each query from fluent construction through typed page
+materialization. Each call reopens the database before starting the meter.
+Cursor serialization, conversion to a common test reply and transport are outside
+the meter. Output bytes are the encoded fields charged by the database. Wasm
+figures include the endpoint and test reply code. Cumulative differences depend
+on which terminals are already linked and include dispatch. These measurements
+support using typed selection for this listing. Attributing a fraction of its
+instruction cost to owner validation would require a separate measurement.
+
+The same target checks cursor reuse across two builds with identical schemas.
+The scalar-only build issues an ID cursor after four candidates and zero matches.
+After upgrading to the build with all four projections, the driver tries that
+cursor with the entity, named ID record and tuple. Each must return an
+`InvalidCursor` error from the engine, which this fixture reports as a trap.
+The original scalar projection must then resume from that cursor and match
+every remaining SQLite page through exhaustion.
+
 #### Direct record member growth and read cost (0.26.5 development)
 
 The pre-index baseline for `make m2-nested-path-costs` used three release builds of one fixed schema
@@ -5682,6 +5731,11 @@ runs through `make m2-queries`. The qualification-only crate seeds an in-memory
 SQLite database and IC DB with the same rows. SQLite is bundled with the test
 crate and introduces no product or CLI dependency.
 
+- Page distinct ranks where lane equals rank and the row is visible. The native
+  test reopens the database and round-trips the cursor between calls. In both
+  directions a one-candidate budget examines all 25 rows exactly once. A
+  one-byte output budget returns the same four ranks in order and examines
+  28 candidates, including three retries for ranks that could not fit.
 - Rank lanes by their count of distinct visible rank/price pairs across 128 rows.
   Include absent prices, require six distinct offers, and break count ties by lane.
   Compare the top three with SQLite in one call and in seven-candidate steps.
@@ -6028,6 +6082,13 @@ returned `Limit` even with the maximum work budget. Measurement Wasm SHA-256
 
 This supports using an ordering index for this query shape. Full rows, expiry,
 the application's tie behavior and arbitrary offsets remain application questions.
+
+On the 0.27.4 working tree, reusing validated index-owner bytes for the row
+lookup reduced the same 23-call listing from 106,018,381 to 106,015,207 IC
+instructions. Both runs returned the same 440 IDs in SQLite order. The first
+page examined 20 candidates in both runs, and all 15 measured writes had
+identical instruction counts. The change consolidates four owner lookup paths
+with negligible instruction savings on this workload.
 
 The native SQLite suite pairs a two-ID page with the full filtered count under
 one `DatabaseSession::read()` guard. A second session handle's write receives

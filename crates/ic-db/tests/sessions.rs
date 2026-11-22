@@ -234,6 +234,13 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
                     session.query::<Friendship>().fetch(),
                     Err(Error::BorrowConflict)
                 ));
+                assert!(matches!(
+                    session.get_unique(&FriendshipByOwnerAndPeer {
+                        owner: 11,
+                        peer: 20
+                    }),
+                    Err(Error::BorrowConflict)
+                ));
             }
 
             Payload::definition()
@@ -324,6 +331,15 @@ fn named_unique_keys_use_declared_order_types_and_sparse_membership() {
         subject,
         issuer: Principal::from_slice(&[id]),
     };
+    let direct = db.read().unwrap();
+    assert_eq!(direct.get_unique(&key(2)).unwrap().unwrap().id, 2);
+    assert!(direct.get_unique(&key(3)).unwrap().is_none());
+    assert!(matches!(
+        direct.get_unique(&RouteByAlias {
+            alias: "exceeds bound".into()
+        }),
+        Err(Error::Limit)
+    ));
     for id in [1_u8, 2] {
         assert_eq!(db.get_unique(&key(id)).unwrap().unwrap().id, u64::from(id));
     }
@@ -350,4 +366,94 @@ fn named_unique_keys_use_declared_order_types_and_sparse_membership() {
         }),
         Err(Error::Limit)
     ));
+    drop(direct);
+    let input = |id: u8| {
+        Route::insert()
+            .id(u64::from(id))
+            .issuer(Principal::from_slice(&[id]))
+            .subject(subject)
+    };
+    assert!(matches!(
+        db.insert_if_absent::<RouteByAlias>(input(3)),
+        Ok(ic_db::InsertOutcome::Inserted(_))
+    ));
+    assert!(matches!(
+        db.insert_if_absent::<RouteByAlias>(input(4).alias(Some("first".into()))),
+        Ok(ic_db::InsertOutcome::AlreadyPresent)
+    ));
+}
+
+///
+/// Discovery
+/// Records one wallet/project association and its independent receipt.
+///
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(fields = ["wallet", "project"], unique),
+    index(field = "receipt", unique),
+    index(field = "parent"),
+    fields(
+        field(name = "id", value(item(prim = "Ulid"))),
+        field(name = "wallet", value(item(prim = "Nat64"))),
+        field(name = "project", value(item(prim = "Nat64"))),
+        field(name = "receipt", value(item(prim = "Nat64"))),
+        field(name = "note", value(item(prim = "Text", max_bytes = 8))),
+        field(name = "parent", value(opt, item(prim = "Ulid")), references(entity = "Discovery"))
+    ),
+    timestamps
+)]
+struct Discovery {}
+
+#[test]
+fn conditional_insert_ignores_only_the_selected_unique_conflict() {
+    use ic_db::InsertOutcome::{AlreadyPresent, Inserted};
+
+    let fixture = Fixture::new("test.discovery.v1");
+    let db = DatabaseSession::new(
+        fixture
+            .create(Schema::new(&[Discovery::SCHEMA]).unwrap(), [1; 16])
+            .unwrap(),
+    );
+    let input = |project, receipt, note: &str| {
+        Discovery::insert()
+            .wallet(1)
+            .project(project)
+            .receipt(receipt)
+            .note(note.to_owned())
+    };
+    let insert = |input| db.insert_if_absent::<DiscoveryByWalletAndProject>(input);
+    let Inserted(original) = insert(input(2, 3, "first")).unwrap() else {
+        panic!("expected a new row")
+    };
+    assert!(matches!(insert(input(4, 5, "other")), Ok(Inserted(_))));
+    let revision = db.read().unwrap().revision::<Discovery>().unwrap();
+    assert_eq!(insert(input(2, 6, "changed")).unwrap(), AlreadyPresent);
+    assert!(matches!(
+        insert(input(2, 5, "conflict")),
+        Err(Error::UniqueViolation)
+    ));
+    assert!(matches!(
+        insert(input(7, 5, "conflict")),
+        Err(Error::UniqueViolation)
+    ));
+    assert!(matches!(
+        insert(input(2, 6, "repeat").id(original.id)),
+        Err(Error::Exists)
+    ));
+    assert!(matches!(
+        insert(input(2, 6, "too long for note")),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        insert(input(2, 6, "repeat").parent(Some(Ulid::MIN))),
+        Err(Error::ReferenceViolation)
+    ));
+    assert_eq!(
+        db.read().unwrap().revision::<Discovery>().unwrap(),
+        revision
+    );
+    assert_eq!(db.read().unwrap().cardinality::<Discovery>().unwrap(), 2);
+    assert_eq!(db.get::<Discovery>(original.id()).unwrap(), Some(original));
 }

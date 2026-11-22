@@ -137,10 +137,13 @@ let route = db.query::<UserRoute>()
 ```
 
 The schema’s unique index enforces one owner per pair at write time.
+When you have the generated key, `db.get_unique(&key)?` returns the same
+optional entity on a standalone database, a read guard or a mounted session.
 Use `try_one()` when a second match is an error and `first()` when the first
 match in order is sufficient. For known primary keys, `db.get::<E>(key)?`
 returns one optional row. To hydrate a page, `db.get_many::<E>(&keys)?`
-returns one optional row per supplied position, up to 32 in one call.
+accepts raw keys or IDs collected with `row.id()` and returns one optional row
+per supplied position, up to 32 in one call.
 
 A complete unique-key lookup examines at most one candidate, including when
 `fetch_as::<R>()` selects only the fields in a result record. For a general
@@ -323,6 +326,9 @@ let rows = db.query::<Entry>().eq(Entry::CATEGORY, 1_u8)
     .select(|e| (e.id, e.amount, e.category)).fetch()?;
 ```
 
+For one result, use `.select(|e| e.id).first()` for the first match or
+`.select(|e| e.id).try_one()` to check that at most one row matches.
+
 The tuple may contain two to four distinct top-level fields in any order.
 Resume with the same fields in the same order. The selector runs once, before the scan.
 
@@ -350,7 +356,10 @@ In this example the category index keeps equal categories together. Add
 qualifying entry. A page can end after an entry fails that filter. Follow
 `next` even on an empty page so a later entry in the same category can qualify.
 Full entities and projections containing the primary
-key are already unique and allow ordinary filters. Duplicate candidates also consume work.
+key are already unique and allow ordinary filters. A lookup fixing the complete
+unique key can select a record-valued field with DISTINCT: at most one row can
+match. Sparse unique indexes require proof that the matching rows are indexed.
+Duplicate candidates also consume work.
 Continuation preserves duplicate suppression; live pages do not provide a frozen
 input for exact aggregates.
 
@@ -867,6 +876,19 @@ batch normally. The returned row is prepared, not yet persistent. Setters supply
 explicit values; `.label(None)` keeps optional absence even if `label` has a
 default. Omitted optional fields without defaults become `None`; missing required
 fields refuse. Fully specified `batch.insert(&row)` remains available.
+For a repeated report, select the declared unique index by its generated key type.
+The components come from the insert input, so the caller supplies them once.
+
+```rust
+let outcome = session.insert_if_absent::<DiscoveryByWalletAndProject>(
+    Discovery::insert().wallet(wallet).project(project).note(note),
+)?;
+```
+
+`InsertOutcome::Inserted(row)` carries the committed row. `AlreadyPresent`
+preserves the existing ID, fields and timestamps. Invalid inputs, missing
+references and conflicts on other keys still return errors.
+
 Defaults never run on replacement, decode or reopen. Changing a declared default
 changes the schema contract; it does not silently backfill stored rows. Inspect
 `DefaultRow` with `db schema`. Nested-record and primary-key literal defaults are not yet

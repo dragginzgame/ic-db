@@ -9,7 +9,8 @@ use crate::{
     store::Database,
     store::{
         EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
-        manifest_key, read_entity_state, row_key, validate_index_entry, validate_reference_target,
+        manifest_key, read_entity_state, read_index_owner, row_key, validate_index_entry,
+        validate_reference_target,
     },
     store_key::StoreKey,
 };
@@ -703,8 +704,8 @@ fn validate_page<M: Memory>(
                     }
                 }
                 Some(3 | 4) => {
-                    let owner = RowKey::decode(&bytes, entity.key_type()?)?;
-                    let row = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
+                    let (owner, row) =
+                        read_index_owner(map, entity.id, entity.key_type()?, &bytes)?;
                     validate_index_entry(entity, &entity.inspect_row(&row)?, owner, key)?;
                 }
                 _ => return Err(Error::Corrupt),
