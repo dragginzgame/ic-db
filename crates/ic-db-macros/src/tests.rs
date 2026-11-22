@@ -1064,3 +1064,28 @@ fn wrapper_declarations_require_one_primitive_or_one_bounded_list() {
         assert!(super::wrapped::expand(args, item.clone(), many).is_err());
     }
 }
+
+#[test]
+fn newtype_validation_rejects_duplicate_incompatible_and_malformed_rules() {
+    for rules in [
+        quote!(validate()),
+        quote!(validate(non_blank, non_blank)),
+        quote!(validate(max_chars = 50, max_chars = 40)),
+        quote!(validate(non_anonymous)),
+        quote!(validate(max_chars = "50")),
+        quote!(validate(max_chars = -1)),
+        quote!(validate(non_blank(1))),
+    ] {
+        assert!(
+            super::wrapped::expand(
+                quote!(item(prim = "Text", max_bytes = 200), #rules),
+                quote!(
+                    struct Name {}
+                ),
+                false
+            )
+            .is_err(),
+            "{rules}"
+        );
+    }
+}

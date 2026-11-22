@@ -2,7 +2,7 @@
 
 use crate::{
     Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
-    Timestamp, TypeSchema, U256, Ulid, codec::Decoder, types::unit_enum_len,
+    Timestamp, TypeSchema, U256, Ulid, codec::Decoder, named_schema::unit_enum_len,
 };
 
 /// One exact ordered scalar operand for index prefixes and fluent comparisons.
@@ -73,12 +73,13 @@ pub enum IndexValue<'a> {
 // Scalar wrappers preserve their schema name during admission and projection.
 // Key encoding and fluent operands use the existing primitive semantics.
 pub(crate) fn operand_type(field: FieldType) -> FieldType {
-    if let FieldType::Named(link) = field
-        && let crate::TypeBody::Wrapped(inner) = (link.definition)().body
-    {
-        return inner;
+    if let FieldType::Named(link) = field {
+        match (link.definition)().body {
+            crate::TypeBody::Wrapped(inner) => return inner,
+            crate::TypeBody::Checked(rule) => return rule.primitive(),
+            _ => {}
+        }
     }
-
     field
 }
 impl<'a> IndexValue<'a> {
@@ -112,6 +113,15 @@ impl<'a> IndexValue<'a> {
             };
         }
 
+        if let Some(rule) = field.newtype_rule() {
+            return match (rule, self) {
+                (crate::NewtypeRule::Text { .. }, Self::Text(value)) => rule.check_text(value),
+                (crate::NewtypeRule::NonAnonymous, Self::Principal(value)) => {
+                    crate::NonAnonymousPrincipal::try_from(value).map(|_| ())
+                }
+                _ => Err(Error::InvalidOperand),
+            };
+        }
         match (self, operand_type(field)) {
             (
                 Self::UnitEnum {
@@ -250,6 +260,14 @@ impl<'a> IndexValue<'a> {
     }
 
     pub(crate) fn read(reader: &mut Decoder<'a>, field: FieldType) -> Result<Self, Error> {
+        if let Some(rule) = field.newtype_rule() {
+            return match rule {
+                crate::NewtypeRule::Text { .. } => Ok(Self::Text(reader.checked_text(rule)?)),
+                crate::NewtypeRule::NonAnonymous => {
+                    Ok(reader.named::<crate::NonAnonymousPrincipal>()?.into())
+                }
+            };
+        }
         Ok(match operand_type(field) {
             FieldType::Named(link) => {
                 let definition = (link.definition)();
@@ -543,6 +561,7 @@ pub(crate) fn consume_component(
 
 // Consume exactly one self-delimiting component at the key integrity boundary.
 pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> {
+    let rule = field.newtype_rule();
     let field = operand_type(field);
     if let FieldType::Named(link) = field {
         let len = unit_enum_len((link.definition)()).ok_or(Error::Corrupt)?;
@@ -563,6 +582,7 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
     }
     if let FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } = field {
         let mut decoded = 0;
+        let mut checked = rule.and_then(crate::NewtypeRule::text_check);
 
         loop {
             let end = bytes
@@ -570,14 +590,27 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
                 .position(|&byte| byte == 0)
                 .ok_or(Error::Corrupt)?;
             if matches!(field, FieldType::Text { .. }) {
-                std::str::from_utf8(&bytes[..end]).map_err(|_| Error::Corrupt)?;
+                let segment = std::str::from_utf8(&bytes[..end]).map_err(|_| Error::Corrupt)?;
+                if let Some(check) = &mut checked {
+                    check.segment(segment).map_err(|_| Error::Corrupt)?;
+                }
             }
             decoded += end;
             let escaped = *bytes.get(end + 1).ok_or(Error::Corrupt)?;
             *bytes = &bytes[end + 2..];
             match escaped {
-                0 if decoded <= max_bytes as usize => return Ok(()),
-                255 => decoded += 1,
+                0 if decoded <= max_bytes as usize => {
+                    if let Some(check) = checked {
+                        check.finish().map_err(|_| Error::Corrupt)?;
+                    }
+                    return Ok(());
+                }
+                255 => {
+                    decoded += 1;
+                    if let Some(check) = &mut checked {
+                        check.segment("\0").map_err(|_| Error::Corrupt)?;
+                    }
+                }
                 _ => return Err(Error::Corrupt),
             }
             if decoded > max_bytes as usize {
@@ -599,6 +632,10 @@ pub(crate) fn consume(bytes: &mut &[u8], field: FieldType) -> Result<(), Error> 
         fixed_width(field).ok_or(Error::Corrupt)?
     };
     let component = bytes.get(..width).ok_or(Error::Corrupt)?;
+    if let Some(crate::NewtypeRule::NonAnonymous) = rule {
+        let principal = Principal::try_from_slice(&component[1..]).map_err(|_| Error::Corrupt)?;
+        crate::NonAnonymousPrincipal::try_from(principal).map_err(|_| Error::Corrupt)?;
+    }
     match field {
         FieldType::Date => {
             let mut encoded: [u8; 4] = component.try_into().map_err(|_| Error::Corrupt)?;

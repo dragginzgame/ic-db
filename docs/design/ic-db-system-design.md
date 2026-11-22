@@ -713,6 +713,76 @@ a wrapper requires an admitted transition even when its row bytes agree.
 Wrappers add no row header or traversal charge of their own. The wrapped list
 still consumes the ordinary collection, depth and node budgets.
 
+Shared named values live in `ic_db::types` within the product crate. The library
+owns reusable declarations; the compiled schema and codec own rule evaluation.
+Adding a library value does not register it in every store. Rust resolves the
+field path and the store includes reachable definitions. Application-specific
+policies belong to the application’s schema crate. This follows frozen IcyDB’s
+`icydb-model/src/base/types` at `6d421e3`, starting with one flat public module.
+Legacy `num::DecimalRange` used a two-field record with
+a cross-field ordering check. That contract requires record validation beyond
+the scalar rules below.
+
+#### Validation on named scalar newtypes
+
+**Current local implementation.** `NonAnonymousPrincipal` wraps `Principal`.
+Fields select it with `item(is = "NonAnonymousPrincipal")`. Application newtypes
+over Principal can declare `validate(non_anonymous)`. The private inner value,
+fallible construction, retained row checks and Wire decoding enforce the same
+rule. The rule participates in the named-type fingerprint. There is one primitive
+Principal codec and ordering.
+
+**Checked text.** A named Text newtype can declare a conjunction of bounded rules. Every rule must pass. The schema author
+chooses the rules and their literal parameters; IC DB owns their documented
+meaning and evaluation. Application-specific decisions about the caller, time,
+other rows or external state belong in ordinary application code or the existing
+relational constraint machinery. Frozen IcyDB already drew this distinction.
+Its model macros instantiated parameterized callbacks and collected diagnostics
+through a visitor. Its durable schema used a closed set of typed operations and
+explicitly excluded application callbacks. IC DB can reuse that division of
+responsibility with its existing compiled schema and manifest.
+[Legacy callback generation](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model-macros/src/imp/validate.rs#L369)
+and [legacy schema authority](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-schema/README.md).
+
+A collection name can require at least one non-whitespace character and at most 50 Unicode scalar values.
+
+```rust
+#[newtype(
+    item(prim = "Text", max_bytes = 200),
+    validate(non_blank, max_chars = 50)
+)]
+pub struct CollectionName {}
+```
+
+This example chooses a 200-byte storage envelope so any sequence of 50 Unicode
+scalars can fit. Confirm the intended byte envelope before porting an existing
+field. Toko's check was `!s.trim().is_empty()`: `"  Game  "` retains its
+spaces. Legacy's text length validator counted `chars()`. Thus 50 copies of
+`é` occupy 100 UTF-8 bytes and pass the proposed limits. Combining marks count individually. Version one pins the Unicode White_Space code points in the evaluator.
+[Toko declaration](https://github.com/dragginzgame/toko/blob/2f45ba1938f20e53ce0b8ddfffec4cccf6eb4df7/backend/src/design/src/app/collection/mod.rs#L40),
+[Toko predicate](https://github.com/dragginzgame/toko/blob/2f45ba1938f20e53ce0b8ddfffec4cccf6eb4df7/backend/src/design/src/validator.rs)
+and [legacy length units](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/base/validator/len/mod.rs#L29).
+
+The compiled text descriptor records the byte bound, the non-blank flag and the optional character bound in fixed order. Reject duplicate or type-incompatible rules
+at declaration time. Fingerprint their semantic versions and parameters in
+canonical order. Reordering a conjunction keeps its identity; changing an
+operand or a rule's meaning requires an admitted transition. Validate the full
+target before publishing a migration. Preserve existing fingerprints for plain
+wrappers. Each new supported rule extends the common evaluator over borrowed
+scalar values. Generated code should supply only type conversion and static
+descriptors. This avoids a separate executor per named type or rule combination.
+
+Qualification should exercise the same value through construction, insert and
+replace preparation, Serde/Wire decode, materialized reads, skipped projection
+fields, map/set keys and applicable index paths. Invalid input fails before
+publication; malformed retained values return `Corrupt` when inspected.
+Metadata-only counts keep their existing integrity contract. For the text witness,
+test multibyte boundaries, unchanged whitespace, reordering rules, tightening a
+limit on populated data and a failed migration that preserves the source. Compare
+Wasm growth for several types sharing the same rules before expanding the set.
+Custom Rust callback registration and automatic normalization remain outside
+this proposal.
+
 Scalar newtypes use the primitive comparator and secondary-key encoding.
 Borrowing a wrapper produces the inner scalar operand for fluent predicates and
 index prefixes. Rust fields and record projections retain the nominal type.
@@ -3153,6 +3223,7 @@ query. Like Toko's terminal, it probes for two even after `limit(1)`; IC DB
 reports `MultipleMatches` on a second row and `Limit` when a partial page
 cannot establish cardinality. A continuation refuses. Use `first()` when
 the caller wants the first match in order. Schema uniqueness controls writes.
+At the work boundary, both single-result terminals can check whether the bounded iterator is exhausted. Another entry costs no owner read and yields `Limit` if the answer still depends on it.
 For ordinary `try_one()`, the planner validates every order field and can scan
 the filtered input directly when the requested order would require a sort.
 Ordering cannot affect which single owner matches or whether a second exists.

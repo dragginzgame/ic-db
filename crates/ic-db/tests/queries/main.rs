@@ -311,6 +311,42 @@ fn single_match_requires_exhaustion() {
 }
 
 #[test]
+fn single_result_probes_can_prove_exhaustion_at_the_work_boundary() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    for descending in [false, true] {
+        let category = |budget| {
+            let query = db
+                .query::<Entry>()
+                .using_index("category", &[0_u8.into()])
+                .work_limit(budget);
+            if descending {
+                query.descending()
+            } else {
+                query
+            }
+        };
+        let missing = |budget| category(budget).gt(Entry::AMOUNT, 80_u64);
+        assert_eq!(missing(4).first().unwrap(), None);
+        assert!(matches!(missing(3).first(), Err(Error::Limit)));
+        let single = |budget| category(budget).eq(Entry::AMOUNT, 40_u64).select(|e| e.id);
+        assert_eq!(single(4).try_one().unwrap(), Some(4));
+        assert!(matches!(single(3).try_one(), Err(Error::Limit)));
+    }
+    let sorted = |budget| {
+        db.query::<Entry>()
+            .order_desc(Entry::AMOUNT)
+            .order_asc(Entry::ID)
+            .work_limit(budget)
+    };
+    assert_eq!(sorted(8).select(|e| e.id).first().unwrap(), Some(8));
+    assert!(matches!(
+        sorted(7).select(|e| e.id).first(),
+        Err(Error::Limit)
+    ));
+}
+
+#[test]
 fn projected_single_matches_share_page_and_cardinality_bounds() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

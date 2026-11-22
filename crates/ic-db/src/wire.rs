@@ -19,6 +19,8 @@ macro_rules! __wire_as {
     };
 }
 
+__wire_as!(crate::__private::CheckedPrincipal, crate::Principal);
+__wire_as!(crate::NonAnonymousPrincipal, crate::Principal);
 __wire_as!(Ulid, [u8; 16]);
 __wire_as!(crate::QueryCursor, Vec<u8>);
 __wire_as!(Date, i32);

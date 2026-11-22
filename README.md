@@ -909,6 +909,27 @@ time only on a real change. Session `replace` returns the stored row, including 
 a clock earlier than stored time refuse. Decode/reopen never assign time. Inspect
 `ManagedRow` with `db schema` for the roles beside their units in **Info**.
 
+The reusable schema type library lives in `ic_db::types`. Import a type from that module or use its full path in `item(is = "...")`. Application-specific types can live in the application’s shared schema crate and use the same field syntax.
+
+Use `field(name = "subject", value(item(is = "NonAnonymousPrincipal")))` for
+a required project owner. Construct it with `NonAnonymousPrincipal::try_from(principal)?`.
+Ordinary `Principal` fields still accept the anonymous identity. The management
+canister principal is valid for both types. Applications still decide who may act
+as the owner. A domain-specific wrapper can use
+`#[newtype(wire, item(prim = "Principal"), validate(non_anonymous))]`.
+
+For text, use `#[newtype(item(prim = "Text", max_bytes = 200), validate(non_blank, max_chars = 50))]`.
+Construct the named type with `try_from(String)`. Either rule can appear on its own.
+`max_chars` counts Unicode scalar values and `max_bytes` bounds UTF-8 storage.
+`non_blank` requires a character outside Unicode White_Space and preserves the input.
+
+Valid principal values use the existing Principal encoding independently in storage and
+on Wire. Retained row reads reject an anonymous subject with `Error::Corrupt`,
+including when a projection skips the subject. Serde rejects it at the endpoint
+boundary. Changing an existing field to the checked type changes the schema
+fingerprint. For a populated store, use an explicit transition and resolve any
+anonymous owners before publishing the target.
+
 Integer primary keys use the same `pk(field = "id")` declaration. Lookups, deletes
 and page cursors use the exact Rust field type; references do not implicitly
 widen or change signedness. `SignedKey` and `WideKey` demonstrate Int128/U256

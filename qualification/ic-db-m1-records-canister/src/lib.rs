@@ -275,6 +275,15 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
         .filter(|definition| selected.is_none() || included_types.contains(definition.name))
         .map(|definition| {
             let (kind, members) = match &definition.body {
+                ic_db::TypeBody::Checked(rule) => (
+                    "Newtype",
+                    vec![(
+                        "value".into(),
+                        type_view(rule.primitive()).0,
+                        false,
+                        format!("{rule:?}"),
+                    )],
+                ),
                 ic_db::TypeBody::Wrapped(value) => {
                     let label = if matches!(value, FieldType::List { .. }) {
                         "List"
@@ -2923,6 +2932,7 @@ fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&
         FieldType::List { item, .. } => include_type_names(*item, names),
         FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
             ic_db::TypeBody::Wrapped(inner) => include_type_names(*inner, names),
+            ic_db::TypeBody::Checked(_) => {}
             ic_db::TypeBody::Record(fields) => {
                 for field in *fields {
                     include_type_names(field.value, names);

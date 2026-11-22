@@ -9,7 +9,7 @@
 use crate::{
     Account, Date, Decimal, Duration, Error, FieldType, Float32, Float64, Principal, Subaccount,
     Timestamp, TypeBody, TypeLink, U256, Ulid, Value, ValueSchema,
-    types::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES, unit_enum_len},
+    named_schema::{MAX_COLLECTION_ITEMS, MAX_DEPTH, MAX_NODES, unit_enum_len},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -74,7 +74,10 @@ impl Encoder {
     }
 
     pub fn named<T: Value>(&mut self, value: &T) -> Result<(), Error> {
-        if matches!(T::definition().body, TypeBody::Wrapped(_)) {
+        if matches!(
+            T::definition().body,
+            TypeBody::Wrapped(_) | TypeBody::Checked(_)
+        ) {
             return value.encode_into(self);
         }
         self.budget.enter().map_err(|_| Error::Limit)?;
@@ -300,7 +303,7 @@ impl<'a> Decoder<'a> {
         definition: &crate::TypeSchema,
         read: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        if matches!(definition.body, TypeBody::Wrapped(_)) {
+        if matches!(definition.body, TypeBody::Wrapped(_) | TypeBody::Checked(_)) {
             return read(self);
         }
         self.budget.enter()?;
@@ -363,6 +366,12 @@ impl<'a> Decoder<'a> {
         self.with_named(definition, |reader| {
             match &definition.body {
                 TypeBody::Wrapped(value) => reader.skip(*value)?,
+                TypeBody::Checked(rule @ crate::NewtypeRule::Text { .. }) => {
+                    reader.checked_text(*rule)?;
+                }
+                TypeBody::Checked(crate::NewtypeRule::NonAnonymous) => {
+                    crate::NonAnonymousPrincipal::decode_from(reader)?;
+                }
                 TypeBody::Set { item, max_items } => {
                     reader.skip_ordered(*item, *max_items, None)?
                 }
@@ -480,6 +489,19 @@ impl<'a> Decoder<'a> {
             Ok(())
         };
 
+        if let Some(rule) = item.newtype_rule() {
+            return match rule {
+                crate::NewtypeRule::Text { .. } => {
+                    self.ordered(count, |r| r.checked_text(rule), read_value, |_, ()| {})
+                }
+                crate::NewtypeRule::NonAnonymous => self.ordered(
+                    count,
+                    crate::NonAnonymousPrincipal::decode_from,
+                    read_value,
+                    |_, ()| {},
+                ),
+            };
+        }
         match crate::key::operand_type(item) {
             FieldType::Nat8 => self.ordered(count, Self::nat8, read_value, |_, ()| {}),
             FieldType::Nat16 => self.ordered(count, Self::nat16, read_value, |_, ()| {}),
@@ -654,6 +676,15 @@ impl<'a> Decoder<'a> {
         // IcyDB's owned scalar decoder admits raw identity bytes, not text or Wire.
         Principal::try_from_slice(self.bounded_bytes(MAX_PRINCIPAL_BYTES)?)
             .map_err(|_| Error::Corrupt)
+    }
+
+    pub(crate) fn checked_text(&mut self, rule: crate::NewtypeRule) -> Result<&'a str, Error> {
+        let crate::NewtypeRule::Text { max_bytes, .. } = rule else {
+            return Err(Error::Corrupt);
+        };
+        let value = self.text_ref(max_bytes as usize)?;
+        rule.check_text(value).map_err(|_| Error::Corrupt)?;
+        Ok(value)
     }
 
     pub fn text(&mut self, max: usize) -> Result<String, Error> {

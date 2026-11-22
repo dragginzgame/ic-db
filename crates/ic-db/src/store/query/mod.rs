@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
-    codec::Decoder, key, primary::RowKey, types::TypeGraph,
+    codec::Decoder, key, named_schema::TypeGraph, primary::RowKey,
 };
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
@@ -1329,12 +1329,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.cursor.is_some() {
                 return Err(Error::InvalidQuery);
             }
-            let page = fetch(self.probe_matches(SingleResult::Only)?)?;
-            if page.next.is_some() {
-                return Err(Error::Limit);
-            }
-
-            Ok(page)
+            fetch(self.probe_matches(SingleResult::Only)?)
         })
         .map(|mut page| page.rows.pop())
     }
@@ -2170,10 +2165,9 @@ fn execute_inner<M: Memory>(
     } else {
         entries.next()
     } {
-        // Retained jobs may have consumed their lifetime candidate allowance.
-        // An empty range can still establish completion; refuse a next candidate
-        // before reading its value or touching the accumulator.
-        if request.work == 0 {
+        // An exhausted iterator proves completion even at the candidate budget.
+        // Refuse another entry before inspecting its key, value or owner.
+        if page.examined == request.work {
             return Err(Error::Limit);
         }
         page.examined += 1;
@@ -2396,8 +2390,12 @@ fn execute_inner<M: Memory>(
             if terminal == Some(stored_key) {
                 break;
             }
-            if request.single_result_probe == Some(SingleResult::First)
-                || (aggregate.is_some() && input_bytes.is_none())
+            if request.single_result_probe.is_some() {
+                // Ask the iterator only whether more input exists. Single-result
+                // terminals cannot return a continuation or a partial sort.
+                continue;
+            }
+            if (aggregate.is_some() && input_bytes.is_none())
                 || collected.is_some()
                 || sorted.is_some()
             {

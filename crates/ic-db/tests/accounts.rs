@@ -386,3 +386,129 @@ fn account_lists_respect_the_row_byte_budget() {
     bad.extend([255; 61]);
     assert!(matches!(LargeAccounts::decode(&bad), Err(Error::Corrupt)));
 }
+
+///
+/// ProjectProfile
+/// Keeps a checked subject and an unrestricted discovery principal.
+///
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(field = "subject", unique),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "discovery", value(item(prim = "Principal"))),
+        field(name = "subject", value(item(is = "ic_db::types::NonAnonymousPrincipal")))
+    )
+)]
+struct ProjectProfile {}
+
+#[test]
+fn project_subject_is_checked_on_construction_and_retained_reads() {
+    let anon = Principal::anonymous();
+    assert!(matches!(
+        NonAnonymousPrincipal::try_from(anon),
+        Err(Error::InvalidOperand)
+    ));
+    let subject = NonAnonymousPrincipal::try_from(Principal::management_canister()).unwrap();
+    let profile = ProjectProfile {
+        id: 1,
+        discovery: anon,
+        subject,
+    };
+    let runtime = host(VectorMemory::default());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let schema = || Schema::new(&[ProjectProfile::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [1; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&profile).unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(
+        db.query::<ProjectProfile>()
+            .eq(ProjectProfile::SUBJECT, subject)
+            .try_one()
+            .unwrap(),
+        Some(profile.clone())
+    );
+    assert!(matches!(
+        db.query::<ProjectProfile>()
+            .eq(ProjectProfile::SUBJECT, anon)
+            .fetch(),
+        Err(Error::InvalidOperand)
+    ));
+    let attempt = |db: &mut Database| -> Result<(), Error> {
+        let mut batch = Batch::new();
+        batch.insert(&ProjectProfile {
+            id: 2,
+            subject: Principal::from_slice(&[9]).try_into()?,
+            ..profile
+        })?;
+        batch.replace(&ProjectProfile {
+            subject: anon.try_into()?,
+            ..profile
+        })?;
+        db.commit(batch)
+    };
+    assert!(matches!(attempt(&mut db), Err(Error::InvalidOperand)));
+    assert_eq!(db.cardinality::<ProjectProfile>().unwrap(), 1);
+    assert_eq!(db.get::<ProjectProfile>(1).unwrap(), Some(profile));
+    drop(db);
+
+    // Independent stored fixture in canonical field order: discovery, id, subject.
+    let mut row = vec![1, 0, 0, 0, 4];
+    row.extend(1_u64.to_le_bytes());
+    row.extend([1, 0, 0, 0, 4]);
+    let mut key = vec![2];
+    key.extend(ProjectProfile::SCHEMA.id.to_be_bytes());
+    key.extend(1_u64.to_be_bytes());
+    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    assert!(raw.insert(key, row).is_some());
+    drop(raw);
+    let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+    assert!(matches!(db.get::<ProjectProfile>(1), Err(Error::Corrupt)));
+    assert!(matches!(
+        db.query::<ProjectProfile>().select(|e| e.id).fetch(),
+        Err(Error::Corrupt)
+    ));
+}
+
+#[test]
+fn adopting_a_checked_subject_requires_schema_admission() {
+    // Keep both logical names and the underlying primitive identical. Only the rule changes.
+    #[newtype(name = "NonAnonymousPrincipal", item(prim = "Principal"))]
+    struct OldSubject {}
+
+    #[entity(
+        name = "ProjectProfile",
+        store = ic_db::testing::FixtureStore,
+        pk(field = "id"),
+        index(field = "subject", unique),
+        fields(
+            field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "discovery", value(item(prim = "Principal"))),
+            field(name = "subject", value(item(is = "OldSubject")))
+        )
+    )]
+    struct OldProfile {}
+
+    let old = || Schema::new(&[OldProfile::SCHEMA]).unwrap();
+    let new = Schema::new(&[ProjectProfile::SCHEMA]).unwrap();
+    assert_ne!(old().fingerprint(), new.fingerprint());
+    let fixture = ic_db::testing::Fixture::new("test.profiles.v1");
+    let row = OldProfile {
+        id: 1,
+        discovery: Principal::anonymous(),
+        subject: OldSubject(Principal::anonymous()),
+    };
+    let mut db = fixture.create(old(), [1; 16]).unwrap();
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    drop(db);
+    assert!(fixture.open(new).is_err());
+    assert_eq!(
+        fixture.open(old()).unwrap().get::<OldProfile>(1).unwrap(),
+        Some(row)
+    );
+}

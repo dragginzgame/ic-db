@@ -34,11 +34,104 @@ pub struct TypeSchema {
     /// The complete named value shape, including any wrapped type and its bounds.
     pub body: TypeBody,
 }
+/// A versioned constraint on the inner primitive of a named newtype.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewtypeRule {
+    /// A Principal other than the anonymous identity.
+    NonAnonymous,
+    /// Bounded UTF-8 text with a conjunction of optional refinements.
+    Text {
+        /// Inner primitive byte limit.
+        max_bytes: u32,
+        /// Require at least one scalar outside Unicode White_Space.
+        non_blank: bool,
+        /// Maximum number of Unicode scalar values.
+        max_chars: Option<u32>,
+    },
+}
+
+impl NewtypeRule {
+    /// The existing primitive used for storage and ordering.
+    #[must_use]
+    pub const fn primitive(self) -> FieldType {
+        match self {
+            Self::NonAnonymous => FieldType::Principal,
+            Self::Text { max_bytes, .. } => FieldType::Text { max_bytes },
+        }
+    }
+    pub(crate) fn check_text(self, text: &str) -> Result<(), Error> {
+        let mut check = self.text_check().ok_or(Error::InvalidOperand)?;
+        check.segment(text)?;
+        check.finish()
+    }
+
+    pub(crate) fn text_check(self) -> Option<TextCheck> {
+        match self {
+            Self::Text {
+                max_bytes,
+                non_blank,
+                max_chars,
+            } => Some(TextCheck {
+                bytes_left: max_bytes as usize,
+                chars_left: max_chars.filter(|n| *n < max_bytes).map(|n| n as usize),
+                needs_non_blank: non_blank,
+            }),
+            Self::NonAnonymous => None,
+        }
+    }
+}
+
+// Ordered index text can arrive in segments separated by escaped NUL bytes.
+pub(crate) struct TextCheck {
+    bytes_left: usize,
+    chars_left: Option<usize>,
+    needs_non_blank: bool,
+}
+
+impl TextCheck {
+    pub(crate) fn segment(&mut self, text: &str) -> Result<(), Error> {
+        self.bytes_left = self
+            .bytes_left
+            .checked_sub(text.len())
+            .ok_or(Error::Limit)?;
+        if let Some(left) = &mut self.chars_left {
+            *left = left
+                .checked_sub(text.chars().count())
+                .ok_or(Error::InvalidOperand)?;
+        }
+        // Unicode White_Space, fixed for version one of non_blank.
+        if self.needs_non_blank {
+            self.needs_non_blank = text.chars().all(|c| matches!(c as u32, 0x09..=0x0d | 0x20 | 0x85 | 0xa0 | 0x1680 | 0x2000..=0x200a | 0x2028..=0x2029 | 0x202f | 0x205f | 0x3000));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Result<(), Error> {
+        if self.needs_non_blank {
+            Err(Error::InvalidOperand)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl FieldType {
+    pub(crate) fn newtype_rule(self) -> Option<NewtypeRule> {
+        if let Self::Named(link) = self
+            && let TypeBody::Checked(rule) = (link.definition)().body
+        {
+            return Some(rule);
+        }
+        None
+    }
+}
 /// A compiled named type; record/enum members use canonical name order.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeBody {
     /// Named wrapper around a primitive or a bounded ordered list.
     Wrapped(FieldType),
+    /// Scalar wrapper whose values must satisfy the declared rule.
+    Checked(NewtypeRule),
     /// Canonical map with scalar/unit-enum keys and arbitrary admitted value shapes.
     Map {
         /// Required primitive, scalar newtype or unit-enum key.
@@ -161,6 +254,7 @@ impl TypeGraph {
         match &definition.body {
             TypeBody::Wrapped(FieldType::Named(_)) => return Err(Error::InvalidSchema),
             TypeBody::Wrapped(value) => self.include(*value)?,
+            TypeBody::Checked(_) => {}
             TypeBody::Map {
                 key,
                 value,
@@ -239,6 +333,7 @@ impl TypeGraph {
                 TypeBody::Set { .. } => (3, 1),
                 TypeBody::Map { .. } => (4, 2),
                 TypeBody::Wrapped(_) => (5, 1),
+                TypeBody::Checked(_) => (6, 1),
             };
             bytes.push(kind);
             name(bytes, definition.name)?;
@@ -246,6 +341,25 @@ impl TypeGraph {
 
             match &definition.body {
                 TypeBody::Wrapped(value) => encode_type(bytes, *value, false, false)?,
+                TypeBody::Checked(rule) => {
+                    encode_type(bytes, rule.primitive(), false, false)?;
+                    match rule {
+                        NewtypeRule::NonAnonymous => bytes.push(1),
+                        NewtypeRule::Text {
+                            non_blank,
+                            max_chars,
+                            ..
+                        } => {
+                            if !non_blank && max_chars.is_none() {
+                                return Err(Error::InvalidSchema);
+                            }
+                            bytes.extend([2, u8::from(*non_blank), u8::from(max_chars.is_some())]);
+                            if let Some(max) = max_chars {
+                                bytes.extend(max.to_le_bytes());
+                            }
+                        }
+                    }
+                }
                 TypeBody::Map {
                     key,
                     value,
@@ -308,7 +422,10 @@ impl TypeGraph {
                         }
                 };
                 let has_value = match &definition.body {
-                    TypeBody::Wrapped(_) | TypeBody::Set { .. } | TypeBody::Map { .. } => true,
+                    TypeBody::Wrapped(_)
+                    | TypeBody::Checked(_)
+                    | TypeBody::Set { .. }
+                    | TypeBody::Map { .. } => true,
                     TypeBody::Record(fields) => fields.iter().all(|f| viable(f.value, f.optional)),
                     TypeBody::Enum(variants) => variants
                         .iter()

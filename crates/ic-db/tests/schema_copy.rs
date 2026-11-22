@@ -1772,3 +1772,80 @@ fn populated_listing_index_replacement_resumes_and_preserves_references() {
     db.commit(batch).unwrap();
     assert!(db.get::<Other>(1).unwrap().is_none());
 }
+
+#[test]
+fn tightened_text_rule_refuses_copy_and_cancellation_restores_names() {
+    #[newtype(
+        name = "Name",
+        item(prim = "Text", max_bytes = 200),
+        validate(non_blank, max_chars = 50)
+    )]
+    struct OldName {}
+    #[newtype(
+        name = "Name",
+        item(prim = "Text", max_bytes = 200),
+        validate(non_blank, max_chars = 40)
+    )]
+    struct NewName {}
+
+    #[entity(
+        name = "Collection", store = ic_db::testing::FixtureStore, pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "name", value(item(is = "OldName"))))
+    )]
+    struct Before {}
+    #[entity(
+        name = "Collection", store = ic_db::testing::FixtureStore, pk(field = "id"),
+        fields(field(name = "id", value(item(prim = "Nat64"))), field(name = "name", value(item(is = "NewName"))))
+    )]
+    struct After {}
+    let old = || Schema::new(&[Before::SCHEMA]).unwrap();
+    let new = || Schema::new(&[After::SCHEMA]).unwrap();
+    let runtime = host(VectorMemory::default());
+    let source_key = key("copy.source.v1");
+    let mut db =
+        Database::create(runtime.open_memory(&source_key).unwrap(), old(), [1; 16]).unwrap();
+    let original = ["short".to_owned(), "é".repeat(50)];
+    let mut batch = Batch::new();
+    for (id, value) in original.iter().enumerate() {
+        batch
+            .insert(&Before {
+                id: id as u64,
+                name: value.clone().try_into().unwrap(),
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let transition = SchemaTransition::new(&old(), &new(), "tighten", 1, &[]).unwrap();
+    let mut copy = db
+        .begin_maintenance(&transition)
+        .unwrap()
+        .begin_copy(
+            runtime.open_memory(&key("copy.target.v1")).unwrap(),
+            old(),
+            new(),
+            [2; 16],
+        )
+        .unwrap();
+    let transform = |row: Before, _: &[u8]| {
+        Ok(After {
+            id: row.id,
+            name: NewName::try_from(String::from(row.name))?,
+        })
+    };
+    assert_eq!(copy.copy_next(1, 4096, transform).unwrap().rows, 1);
+    for _ in 0..2 {
+        assert!(matches!(
+            copy.copy_next(1, 4096, transform),
+            Err(Error::InvalidOperand)
+        ));
+    }
+    assert!(copy.cancel_step(32).unwrap());
+    drop(copy);
+    let db = Database::open(runtime.open_memory(&source_key).unwrap(), old()).unwrap();
+    for (id, value) in original.into_iter().enumerate() {
+        assert_eq!(
+            String::from(db.get::<Before>(id as u64).unwrap().unwrap().name),
+            value
+        );
+    }
+}

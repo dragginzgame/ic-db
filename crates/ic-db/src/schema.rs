@@ -5,8 +5,8 @@ use crate::{
     Error, IndexValue,
     codec::Decoder,
     key,
+    named_schema::{TypeGraph, TypeLink},
     primary::RowKey,
-    types::{TypeGraph, TypeLink},
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -758,16 +758,16 @@ pub(crate) fn encode_type(
         }
         FieldType::Named(link) => name(bytes, link.name)?,
         FieldType::List { item, max_items } => {
-            if max_items > crate::types::MAX_COLLECTION_ITEMS as u32
+            if max_items > crate::named_schema::MAX_COLLECTION_ITEMS as u32
                 || matches!(item, FieldType::List { .. })
             {
                 return Err(Error::InvalidSchema);
             }
             for bound in [
                 max_items,
-                crate::types::MAX_DEPTH as u32,
-                crate::types::MAX_NODES as u32,
-                crate::types::MAX_COLLECTION_ITEMS as u32,
+                crate::named_schema::MAX_DEPTH as u32,
+                crate::named_schema::MAX_NODES as u32,
+                crate::named_schema::MAX_COLLECTION_ITEMS as u32,
             ] {
                 bytes.extend(bound.to_le_bytes());
             }

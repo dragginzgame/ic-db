@@ -75,7 +75,11 @@ macro_rules! observe {
     }};
 }
 
+extern crate self as ic_db;
+
 mod canister_session;
+mod checked_principal;
+mod checked_text;
 mod clock;
 #[doc(hidden)]
 mod codec;
@@ -86,13 +90,14 @@ mod float;
 mod key;
 mod managed;
 mod member;
+mod named_schema;
 mod primary;
 mod schema;
 mod session;
 mod store;
 mod store_key;
 mod time;
-mod types;
+pub mod types;
 mod u256;
 mod ulid;
 #[cfg(feature = "wire")]
@@ -113,6 +118,9 @@ pub use ic_db_macros::{canister, entity, enum_, list, map, newtype, record, set,
 pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
+pub use named_schema::{
+    NewtypeRule, TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema,
+};
 pub use primary::{Id, PrimaryKey};
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use session::{DatabaseSession, InsertOutcome, QuerySession, UniqueKey};
@@ -124,7 +132,7 @@ pub use store::{
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 pub use time::{Duration, TimeParseError, Timestamp};
-pub use types::{TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema};
+pub use types::NonAnonymousPrincipal;
 pub use u256::U256;
 pub use ulid::{
     SeededUlidGenerator, Ulid, UlidEntropyError, UlidGenerationError, UlidGenerator, UlidParseError,
@@ -303,8 +311,8 @@ pub mod design {
     /// ```
     pub mod prelude {
         pub use crate::{
-            Account, Blob, Date, Decimal, Duration, Float32, Float64, Principal, Subaccount,
-            Timestamp, U256, Ulid,
+            Account, Blob, Date, Decimal, Duration, Float32, Float64, NonAnonymousPrincipal,
+            Principal, Subaccount, Timestamp, U256, Ulid,
         };
         pub use crate::{Canister, CompiledCanister, Entity, Schema, Store, Value};
         pub use crate::{canister, entity, enum_, list, map, newtype, record, set, store};
@@ -402,6 +410,8 @@ pub mod __private {
         /// Schema-authored logical name of the target entity.
         const NAME: &'static str;
     }
+    pub use crate::checked_principal::CheckedPrincipal;
+    pub use crate::checked_text::CheckedText;
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
     pub use crate::key::{MemberOperand, MemberPresence, encode_index};
     pub use crate::managed::validate_order as validate_managed_order;

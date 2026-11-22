@@ -85,6 +85,8 @@ pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Declare a distinct Rust and schema type around one primitive, including its bounds.
+/// Serde uses the wrapped value directly by default.
+/// A Principal newtype can use `validate(non_anonymous)` and be constructed via `TryFrom<Principal>`.
 #[proc_macro_attribute]
 pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
     wrapped::expand(args.into(), item.into(), false)
@@ -227,7 +229,7 @@ fn declaration_options(args: Tokens) -> syn::Result<(bool, Vec<Meta>)> {
     Ok((true, options))
 }
 
-fn wire_collection(
+fn wire_as(
     wire: bool,
     attrs: &[syn::Attribute],
     name: &syn::Ident,
@@ -236,13 +238,16 @@ fn wire_collection(
     if !wire {
         return Ok(Tokens::new());
     }
-    if let Some(attr) = attrs
-        .iter()
-        .find(|attr| attr.path().is_ident("serde") || attr.path().is_ident("cfg_attr"))
-    {
+    if let Some(attr) = attrs.iter().find(|attr| {
+        attr.path().is_ident("cfg_attr")
+            || (attr.path().is_ident("serde")
+                && !attr
+                    .parse_args::<syn::Ident>()
+                    .is_ok_and(|ident| ident == "transparent"))
+    }) {
         return Err(syn::Error::new_spanned(
             attr,
-            "wire collections require the standard Serde layout",
+            "Wire projection requires the standard Serde layout",
         ));
     }
     Ok(quote!(::ic_db::__wire_as!(#name, #layout);))

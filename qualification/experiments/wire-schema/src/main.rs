@@ -64,6 +64,7 @@ fn payload<T: Serialize>(value: &T) -> Vec<u8> {
 }
 
 fn main() {
+    checked_text::check_payloads();
     let bytes = core::array::from_fn(|i| i as u8);
     for (tag, action) in [(0, Action::Allow), (1, Action::Suspend)] {
         let request = UserAdminRequest {
@@ -114,6 +115,31 @@ mod tests {
     #[derive(Serialize, Deserialize, Wire)]
     struct PageReply {
         next: Option<ic_db::QueryCursor>,
+    }
+
+    #[test]
+    fn checked_principal_uses_the_principal_payload_and_rejects_anonymous() {
+        #[newtype(wire, item(prim = "Principal"), validate(non_anonymous))]
+        struct ProjectOwner {}
+
+        for principal in [
+            Principal::management_canister(),
+            Principal::from_slice(&[1, 2, 3]),
+        ] {
+            let bytes = payload(&principal);
+            let owner = ProjectOwner::try_from(principal).unwrap();
+            assert_eq!(payload(&owner), bytes);
+            assert_eq!(
+                ic_wire::decode::<ProjectOwner>(&bytes, Encoding::Payload, LIMITS).unwrap(),
+                owner
+            );
+        }
+        let bytes = payload(&Principal::anonymous());
+        assert!(ic_wire::decode::<ProjectOwner>(&bytes, Encoding::Payload, LIMITS).is_err());
+        assert_eq!(
+            ic_wire::decode::<Principal>(&bytes, Encoding::Payload, LIMITS).unwrap(),
+            Principal::anonymous()
+        );
     }
 
     #[test]
@@ -241,6 +267,7 @@ mod tests {
                 .metadata_json()
                 .unwrap()
         }
+        assert_eq!(layout::<Code>(), layout::<u16>());
         assert_eq!(layout::<Date>(), layout::<i32>());
         assert_eq!(layout::<Timestamp>(), layout::<i64>());
         assert_eq!(layout::<Duration>(), layout::<u64>());
@@ -306,5 +333,47 @@ mod tests {
             members[2],
             serde_json::json!({"name":"scores","value":{"k":"list","item":{"k":"tuple","items":[{"k":"u","bits":8},{"k":"u","bits":16}]}}})
         );
+    }
+}
+
+mod checked_text {
+    use super::*;
+
+    #[newtype(
+        wire,
+        item(prim = "Text", max_bytes = 200),
+        validate(non_blank, max_chars = 50)
+    )]
+    struct CollectionName {}
+
+    pub(super) fn check_payloads() {
+        for text in [
+            "  Game  ".to_owned(),
+            "é".repeat(50),
+            "🌱".repeat(50),
+            "\0".to_owned(),
+        ] {
+            let name = CollectionName::try_from(text.clone()).unwrap();
+            let bytes = payload(&text);
+            assert_eq!(payload(&name), bytes);
+            assert_eq!(
+                ic_wire::decode::<CollectionName>(&bytes, Encoding::Payload, LIMITS).unwrap(),
+                name
+            );
+            assert_eq!(String::from(name), text);
+        }
+        for text in [
+            String::new(),
+            "\u{3000}\u{a0}".into(),
+            "é".repeat(51),
+            "e\u{301}".repeat(26),
+            "🌱".repeat(51),
+        ] {
+            assert!(CollectionName::try_from(text.clone()).is_err());
+            assert!(
+                ic_wire::decode::<CollectionName>(&payload(&text), Encoding::Payload, LIMITS)
+                    .is_err()
+            );
+        }
     }
 }

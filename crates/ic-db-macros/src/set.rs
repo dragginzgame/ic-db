@@ -36,8 +36,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let ident = item.ident;
     let visibility = item.vis;
     let attrs = crate::schema_attrs(&item.attrs, false)?;
-    let projection =
-        crate::wire_collection(wire, &item.attrs, &ident, &quote!(::std::vec::Vec<#ty>))?;
+    let projection = crate::wire_as(wire, &item.attrs, &ident, &quote!(::std::vec::Vec<#ty>))?;
 
     Ok(quote! {
         #attrs

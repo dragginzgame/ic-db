@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.27.5]
+
+### ✨ Schema
+
+- Text newtypes accept `validate(non_blank, max_chars = 50)`. Construction, Wire and stored reads enforce the same limits; text keeps its original spacing and Unicode encoding.
+
+- Reusable schema values are available from `ic_db::types`, starting with `NonAnonymousPrincipal`. The `#[newtype]` macro supplies `#[serde(transparent)]` by default.
+
+- Declare an owner as `item(is = "NonAnonymousPrincipal")` and construct it with `NonAnonymousPrincipal::try_from(principal)?`. Stored reads and Wire decoding reject anonymous owners. Adopting the checked type on an existing field requires a schema transition.
+
+### 🔍 Queries
+
+- `.first()` and `.try_one()` can finish when the final candidate uses the last unit of work. An incomplete search still returns `Limit`.
+
 ## [0.27.4] - 2026-11-22
 
 ### ✍️ Writes

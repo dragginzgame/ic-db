@@ -460,7 +460,7 @@ legacy base domain library also bundled reusable definitions such as Seconds,
 Percent, Sha256 and Url. These are a separate convenience-library surface.
 [Legacy model exports](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/lib.rs)
 · [Legacy domain library](https://github.com/dragginzgame/icydb-legacy/tree/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-model/src/base/types)
-· [Current named types](../crates/ic-db/src/types.rs).
+· [Current named types](../crates/ic-db/src/named_schema.rs).
 
 ## Standalone endpoint hooks
 
