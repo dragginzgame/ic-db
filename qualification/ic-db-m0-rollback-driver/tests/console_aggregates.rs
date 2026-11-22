@@ -1001,6 +1001,10 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         ),
         (vec![0, 255, 128], None, None, None, Some(vec![255]), false),
     ]) {
+        let empty_range = lower
+            .as_ref()
+            .zip(upper.as_ref())
+            .is_some_and(|(lo, hi)| lo > hi);
         replace(payload, None).await;
         let selection: Selection = (
             "BinaryObject".into(),
@@ -1020,8 +1024,13 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 .await
                 .unwrap();
         let first = advance(&selection, &handle, 0, 4096).await.unwrap();
-        assert_eq!((first.1.as_str(), first.2), ("Running", 1));
-        assert!(first.5.1.is_empty());
+        if empty_range {
+            assert_eq!((first.1.as_str(), first.2), ("Complete", 0));
+            assert_eq!(first.5.1, vec![vec!["0"]]);
+        } else {
+            assert_eq!((first.1.as_str(), first.2), ("Running", 1));
+            assert!(first.5.1.is_empty());
+        }
         upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
@@ -1057,7 +1066,10 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         );
         assert_eq!(pic.get_stable_memory(canister).await, before);
         let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
-        assert_eq!((complete.1.as_str(), complete.2), ("Complete", 1));
+        assert_eq!(
+            (complete.1.as_str(), complete.2),
+            ("Complete", u64::from(!empty_range))
+        );
         assert_eq!(complete.5.1, vec![vec![if matches { "1" } else { "0" }]]);
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
             .await
