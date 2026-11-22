@@ -102,7 +102,7 @@ fn insert_input_issues_omitted_ulid_keys_and_preserves_explicit_ids() {
     let slot = StableKey::parse("test.db.v1").unwrap();
     let db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [12; 16]).unwrap();
     let session = ic_db::DatabaseSession::new(db);
-    let mut batch = Batch::at(Timestamp::from_millis(123));
+    let mut batch = Batch::at_for_test(Timestamp::from_millis(123));
     let first = batch.insert_input(KeyRow::insert().value(1)).unwrap();
     let second = batch.insert_input(KeyRow::insert().value(2)).unwrap();
     assert_eq!(u128::from_be_bytes(first.id.to_bytes()) >> 80, 123);
@@ -120,7 +120,7 @@ fn insert_input_issues_omitted_ulid_keys_and_preserves_explicit_ids() {
     for row in [first, second, auto, explicit] {
         assert_eq!(session.get::<KeyRow>(row.id).unwrap(), Some(row));
     }
-    let mut invalid = Batch::at(Timestamp::from_millis(-1));
+    let mut invalid = Batch::at_for_test(Timestamp::from_millis(-1));
     assert!(matches!(
         invalid.insert_input(KeyRow::insert().value(5)),
         Err(Error::InvalidOperand)

@@ -58,7 +58,7 @@ pub const fn check_schema_member(path: &str, root: &str, members: Option<&str>) 
 }
 
 pub(crate) const MAX_ENTITIES: u8 = 128;
-pub(crate) const MAX_FIELDS: usize = 16;
+pub(crate) const MAX_FIELDS: usize = 32;
 
 // FNV-1a is only a compact physical handle, never schema authority. Admission
 // rejects collisions; full names and semantics enter the SHA-256 contract.
@@ -138,12 +138,12 @@ pub enum FieldType {
     Account,
     /// Exact UTF-8 text, bounded in bytes without implicit normalization.
     Text {
-        /// Maximum UTF-8 byte length (0..=4096); zero admits only empty text.
+        /// Maximum UTF-8 byte length (0..=32768); zero admits only empty text.
         max_bytes: u32,
     },
     /// Exact binary bytes without UTF-8 interpretation or normalization.
     Blob {
-        /// Maximum payload length (0..=4096); zero admits only an empty value.
+        /// Maximum payload length (0..=32768); zero admits only an empty value.
         max_bytes: u32,
     },
 }
@@ -203,6 +203,8 @@ impl IndexSchema {
 
 /// Compiled entity metadata emitted by the entity macro.
 pub struct EntitySchema {
+    /// Maximum encoded row size, including keys and framing.
+    pub max_row_bytes: usize,
     /// Generated storage handle; schema authors do not assign this number.
     #[doc(hidden)]
     pub id: u32,
@@ -269,7 +271,7 @@ impl EntitySchema {
         self.row_info(&values, bytes, &spans)
     }
 
-    pub(crate) fn key_fields(&self) -> u16 {
+    pub(crate) fn key_fields(&self) -> u32 {
         self.fields
             .iter()
             .enumerate()
@@ -291,11 +293,11 @@ impl EntitySchema {
     pub(crate) fn inspect_fields<'a>(
         &self,
         bytes: &'a [u8],
-        selected: u16,
+        selected: u32,
         keys: &mut [IndexValue<'a>; MAX_FIELDS],
         mut spans: Option<&mut [(u16, u16); MAX_FIELDS]>,
     ) -> Result<(), Error> {
-        let mut reader = Decoder::new(bytes)?;
+        let mut reader = Decoder::for_entity(bytes, self)?;
         let mut times = [None; 2];
         for (position, field) in self.fields.iter().enumerate() {
             let start = reader.position();
@@ -358,7 +360,32 @@ impl EntitySchema {
             .collect::<Result<_, Error>>()?;
         let key = RowKey::from_index(keys[position(self.primary_key)?])?;
 
-        Ok(RowInfo { key, indexes })
+        let mut list_links = Vec::new();
+        for (field, &(start, end)) in self.fields.iter().zip(spans) {
+            if let (Some(reference), FieldType::List { item, max_items }) =
+                (field.reference, field.value)
+            {
+                let mut reader = Decoder::new(&bytes[usize::from(start)..usize::from(end)])?;
+                if !field.optional || reader.boolean()? {
+                    let count = reader.nat32()?;
+                    if count > max_items {
+                        return Err(Error::Corrupt);
+                    }
+                    for _ in 0..count {
+                        list_links.push((
+                            reference.index,
+                            RowKey::from_index(IndexValue::read(&mut reader, *item)?)?,
+                        ));
+                    }
+                }
+                reader.finish()?;
+            }
+        }
+        Ok(RowInfo {
+            key,
+            indexes,
+            list_links,
+        })
     }
 }
 
@@ -407,6 +434,7 @@ impl Schema {
             if entity.id != handle(entity.name)
                 || !ids.insert(entity.id)
                 || entity.fields.is_empty()
+                || !(1..=crate::codec::MAX_ROW_BYTES).contains(&entity.max_row_bytes)
                 || entity.fields.len() > MAX_FIELDS
                 || entity.indexes.len() > 8
                 || !entity.key_type().is_ok_and(RowKey::supports)
@@ -418,7 +446,14 @@ impl Schema {
                 return Err(Error::InvalidSchema);
             }
             name(&mut bytes, entity.name)?;
+            if entity.max_row_bytes != crate::codec::DEFAULT_ROW_BYTES {
+                // A zero field count is reserved; a real entity always has a key.
+                bytes.extend(0_u32.to_le_bytes());
+                bytes.extend((entity.max_row_bytes as u32).to_le_bytes());
+            }
             bytes.extend((entity.fields.len() as u32).to_le_bytes());
+            let mut list_fanout = 0;
+            let mut list_indexes = BTreeSet::new();
             for field in entity.fields {
                 name(&mut bytes, field.name)?;
                 encode_type(
@@ -437,7 +472,11 @@ impl Schema {
                         return Err(Error::InvalidSchema);
                     };
                     let key_type = target.key_type().map_err(|_| Error::InvalidSchema)?;
-                    if field.value != key_type {
+                    let referenced_type = match field.value {
+                        FieldType::List { item, .. } => *item,
+                        scalar => scalar,
+                    };
+                    if referenced_type != key_type {
                         report_reference(
                             entity.name,
                             field,
@@ -446,6 +485,18 @@ impl Schema {
                         );
 
                         return Err(Error::InvalidSchema);
+                    }
+                    if let FieldType::List { max_items, .. } = field.value {
+                        list_fanout += max_items;
+                        if list_fanout > 32
+                            || reference.index != handle(field.name)
+                            || !list_indexes.insert(reference.index)
+                        {
+                            return Err(Error::InvalidSchema);
+                        }
+                        name(&mut bytes, target.name)?;
+                        name(&mut bytes, field.name)?;
+                        continue;
                     }
                     if !RowKey::supports(field.value) {
                         return Err(Error::InvalidSchema);
@@ -624,7 +675,8 @@ impl Schema {
     // their executable's descriptor address.
     pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<&'static EntitySchema, Error> {
         let current = self.entity_by_id(proposed.id).ok_or(Error::UnknownEntity)?;
-        if current.name != proposed.name
+        if current.max_row_bytes != proposed.max_row_bytes
+            || current.name != proposed.name
             || current.fields != proposed.fields
             || current.primary_key != proposed.primary_key
             || current.indexes != proposed.indexes
@@ -698,7 +750,7 @@ pub(crate) fn encode_type(
             bytes.extend(scale.to_le_bytes());
         }
         FieldType::Text { max_bytes } | FieldType::Blob { max_bytes } => {
-            if max_bytes > 4096 {
+            if max_bytes > crate::codec::MAX_ROW_BYTES as u32 {
                 return Err(Error::InvalidSchema);
             }
             bytes.extend(max_bytes.to_le_bytes());

@@ -148,7 +148,7 @@ impl Field {
                 "managed fields require a nonoptional scalar Timestamp without a default or reference",
             ));
         }
-        if reference.is_some() && (many.is_some() || !kind.primary_key()) {
+        if reference.is_some() && !kind.primary_key() {
             return Err(syn::Error::new_spanned(
                 meta,
                 "references currently require an integer, U256, Ulid, Principal, Account or Subaccount",
@@ -585,10 +585,10 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
                 return Err(syn::Error::new_spanned(part, "expected byte limit"));
             };
             let value: u32 = value.base10_parse()?;
-            if value > 4096 {
+            if value > 32768 {
                 return Err(syn::Error::new_spanned(
                     part,
-                    "max_bytes must not exceed 4096",
+                    "max_bytes must not exceed 32768",
                 ));
             }
             once(&mut max, value, &part)?;

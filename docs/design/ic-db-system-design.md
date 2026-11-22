@@ -947,18 +947,21 @@ fixture contract.
 
 The subsequent 0.6 managed-time slice declares nonoptional scalar Timestamp
 fields with `managed = "created_at"` or `"updated_at"`, at most one of each.
-Either role may stand alone; nested/optional managed fields refuse. `Batch::at`
-holds one explicit host-supplied Timestamp and never reads a clock or awaits.
+Either role may stand alone. A batch captures its operation time synchronously on first use.
 Generated insert inputs omit managed setters. Direct fully authored insertion of
 these entities refuses; the typed input returns its prepared assigned times.
 Replacement takes a complete entity with its current stored timestamps: changed
 or stale timestamp values refuse, creation is preserved, and a real change sets
-update time. The caller reads after commit if it needs the final assigned value.
+update time. Single-row session replacement returns the prepared after-image on successful commit.
 Equal timestamps are not an optimistic-concurrency token: distinct changes may
 share an operation time.
-Deletes need no operation time because they assign none.
-For a single managed insert input or replacement, the session captures
-`Timestamp::now()` and supplies it to the existing batch. Mounted canister
+An absent deletion succeeds without changing the revision or cardinality. A surviving
+reference still refuses the entire batch. A bounded list of keys may name a target
+entity. The engine maintains a reverse entry per distinct target, field and owner.
+Lists retain their original order and duplicates in the row. The sum of their
+declared reference capacities is bounded to 32 per entity; maintenance validates
+both directions before publication. Deletes assign no operation time.
+Sessions and multirow callers use the same batch clock. Mounted canister
 sessions delegate to the owning store session. This follows frozen IcyDB
 `6d421e3`'s session write boundary in `db/session/write/mod.rs`.
 
@@ -4725,9 +4728,9 @@ A store admits up to 128 entities. Larger schemas should revisit their store bou
 cover game schemas with many small entities. Creation was the largest measured width cost.
 Each validation pass checks the store's metadata before its first page.
 
-Current bounds: 128 entities/store, 16 fields/entity, 64 UTF-8 bytes/name, eight indexes/
+Current bounds: 128 entities/store, 32 fields/entity, 64 UTF-8 bytes/name, eight indexes/
 entity and four components/index; 32 mutations/batch, 128 KiB total encoded new-row
-payload, 4 KiB/row, 512 bytes/complete index key, and 1–32 rows/page. The flat scalar codec checks the input row
+payload, 4 KiB/row by default (explicit entity limit up to 32 KiB), 512 bytes/complete index key, and 1–32 rows/page. The flat scalar codec checks the input row
 bound and field lengths before allocating owned values; total variable payload
 cannot exceed the row envelope. Nested traversal additionally shares depth,
 structured-value and collection-item bounds. Nat64-only records are smaller than that envelope; these are

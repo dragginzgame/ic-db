@@ -114,7 +114,6 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
         assert!(pic.get_stable_memory(canister).await == before);
     }
     for (id, body, now, mode, expected) in [
-        (3, "new", 300, 4, 1),
         (1, "changed", 150, 2, 2),
         (1, "changed", 300, 3, 2),
         (1, "changed", 199, 1, 3),
@@ -134,5 +133,14 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
         .await
         .unwrap();
     assert_eq!(state(200).await, before);
+    decode(call(3, "automatic", -1, 4, false).await.unwrap()).unwrap();
+    let automatic = state(200)
+        .await
+        .0
+        .into_iter()
+        .find(|row| row.0 == 3)
+        .unwrap();
+    assert!(automatic.2 > 200);
+    assert_eq!(automatic.2, automatic.3);
     owned.drop().await;
 }

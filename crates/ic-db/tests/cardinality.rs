@@ -123,9 +123,8 @@ fn counts_use_final_batch_deltas_and_preserve_noops() {
     assert_eq!(db.cardinality_by_name("Row").unwrap(), 3);
     let before = m.borrow().clone();
     let mut b = Batch::new();
-    b.insert(&Row { id: 5, value: 1 }).unwrap();
     b.delete::<Row>(99).unwrap();
-    assert!(matches!(db.commit(b), Err(Error::Missing)));
+    db.commit(b).unwrap();
     assert_eq!(*m.borrow(), before);
     let mut b = Batch::new();
     b.delete::<Row>(2).unwrap();

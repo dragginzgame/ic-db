@@ -473,7 +473,7 @@ impl<M: Memory> SchemaCopy<M> {
     /// Validate at most 1..=32 physical source or target entries in one call.
     /// Checks complete row framing, exact key coverage in both directions, revision
     /// metadata, expected index membership and every stored index's owner/key.
-    /// Each row has at most eight indexes and sixteen references. Each pass first
+    /// Each row has at most eight declared indexes and 32 list-reference entries. Each pass first
     /// checks all declared revisions (up to the schema entity limit), including empty entities. No writes to
     /// rows/indexes occur; only successful bounded progress is checkpointed.
     /// Return true only after both passes finish. Copying cannot resume afterward.
@@ -702,7 +702,7 @@ fn validate_page<M: Memory>(
                         validate_reference_target(map, schema, target, id)?;
                     }
                 }
-                Some(3) => {
+                Some(3 | 4) => {
                     let owner = RowKey::decode(&bytes, entity.key_type()?)?;
                     let row = map.get(&row_key(entity.id, owner)).ok_or(Error::Corrupt)?;
                     validate_index_entry(entity, &entity.inspect_row(&row)?, owner, key)?;

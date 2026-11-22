@@ -14,7 +14,8 @@ use crate::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const ROW_CODEC_VERSION: u32 = 3;
-pub const MAX_ROW_BYTES: usize = 4096;
+pub const DEFAULT_ROW_BYTES: usize = 4096;
+pub const MAX_ROW_BYTES: usize = 32 * 1024;
 // A durable contract bound, independent of any future supplier API expansion.
 pub(crate) const MAX_PRINCIPAL_BYTES: usize = 29;
 
@@ -38,7 +39,7 @@ pub struct Encoder {
 
 impl Default for Encoder {
     fn default() -> Self {
-        Self::with_byte_limit(MAX_ROW_BYTES)
+        Self::with_byte_limit(DEFAULT_ROW_BYTES)
     }
 }
 
@@ -46,6 +47,12 @@ impl Encoder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Encoder bounded by the admitted entity row budget.
+    #[must_use]
+    pub fn for_entity(entity: &crate::EntitySchema) -> Self {
+        Self::with_byte_limit(entity.max_row_bytes)
     }
 
     // Internal envelopes share the scalar encoding without inheriting row policy.
@@ -265,6 +272,11 @@ impl<'a> Decoder<'a> {
 
     pub fn new(bytes: &'a [u8]) -> Result<Self, Error> {
         Self::with_byte_limit(bytes, MAX_ROW_BYTES)
+    }
+
+    /// Check the full encoded row against its entity budget.
+    pub fn for_entity(bytes: &'a [u8], entity: &crate::EntitySchema) -> Result<Self, Error> {
+        Self::with_byte_limit(bytes, entity.max_row_bytes)
     }
 
     pub(crate) fn with_byte_limit(bytes: &'a [u8], byte_limit: usize) -> Result<Self, Error> {

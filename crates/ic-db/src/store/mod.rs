@@ -91,6 +91,15 @@ fn collect_references(
 ) -> Result<(), Error> {
     for field in entity.fields {
         if let Some(reference) = field.reference {
+            if matches!(field.value, FieldType::List { .. }) {
+                required.extend(
+                    info.list_links
+                        .iter()
+                        .filter(|(index, _)| *index == reference.index)
+                        .map(|(_, key)| (reference.entity, *key)),
+                );
+                continue;
+            }
             let position = entity
                 .indexes
                 .iter()
@@ -176,10 +185,10 @@ impl Batch {
         Self::default()
     }
 
-    /// Begin a batch with one host-captured operation time for all managed fields.
-    /// The database reads no clock; this value remains fixed for the whole batch.
+    /// Supply a deterministic clock value in qualification fixtures.
+    #[cfg(feature = "test-support")]
     #[must_use]
-    pub fn at(time: crate::Timestamp) -> Self {
+    pub fn at_for_test(time: crate::Timestamp) -> Self {
         Self {
             operation_time: Some(time),
             ..Self::default()
@@ -206,7 +215,10 @@ impl Batch {
     /// Refuses missing required values, field/row bounds or batch capacity.
     /// A refused input appends no mutation to the batch.
     pub fn insert_input<I: crate::InsertInput>(&mut self, input: I) -> Result<I::Entity, Error> {
-        let row = input.__into_entity(self.operation_time)?;
+        let time = *self
+            .operation_time
+            .get_or_insert_with(crate::Timestamp::now);
+        let row = input.__into_entity(Some(time))?;
         self.put(&row, Kind::Insert)?;
 
         Ok(row)
@@ -214,21 +226,25 @@ impl Batch {
 
     /// Replace an existing typed record, retaining its primary key.
     /// Managed fields must echo the current stored values; commit sets update time
-    /// only on a real change. Read the row after commit to obtain that assigned time.
+    /// only on a real change. Queuing a replacement does not produce a committed row.
     /// # Errors
-    /// Refuses missing operation time, encoding or batch capacity before mutation.
+    /// Refuses encoding or batch capacity before mutation.
     pub fn replace<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
+        if E::SCHEMA.has_managed() {
+            self.operation_time
+                .get_or_insert_with(crate::Timestamp::now);
+        }
         self.put(row, Kind::Replace)
     }
 
-    /// Delete an existing primary key; no recursive cascades are implied.
+    /// Delete the matching row if present. An absent key has no effect.
     /// # Errors
     /// Refuses batch capacity before persistent mutation.
-    pub fn delete<E: Entity>(&mut self, key: E::Key) -> Result<(), Error> {
+    pub fn delete<E: Entity>(&mut self, key: impl Into<crate::Id<E>>) -> Result<(), Error> {
         self.push(
             Mutation {
                 entity: E::SCHEMA,
-                key: key.into_row_key(),
+                key: key.into().key().into_row_key(),
                 kind: Kind::Delete,
             },
             0,
@@ -241,7 +257,7 @@ impl Batch {
         kind: impl FnOnce(Vec<u8>, RowInfo) -> Kind,
     ) -> Result<(), Error> {
         let bytes = row.encode()?;
-        if bytes.len() > crate::__private::MAX_ROW_BYTES {
+        if bytes.len() > E::SCHEMA.max_row_bytes {
             return Err(Error::Limit);
         }
         // encode() admitted field/row bounds. Keys come from that same typed
@@ -250,13 +266,6 @@ impl Batch {
         let key = info.key;
         let len = bytes.len();
         let kind = kind(bytes, info);
-        if E::SCHEMA.has_managed()
-            && self.operation_time.is_none()
-            && !matches!(kind, Kind::CopyInsert(..))
-        {
-            return Err(Error::MissingOperationTime);
-        }
-
         self.push(
             Mutation {
                 entity: E::SCHEMA,
@@ -421,10 +430,10 @@ impl<M: Memory> Database<M> {
     /// # Errors
     /// Refuses unadmitted types or malformed rows.
     #[inline]
-    pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
+    pub fn get<E: Entity>(&self, key: impl Into<crate::Id<E>>) -> Result<Option<E>, Error> {
         let entity = self.schema.admits(E::SCHEMA)?;
 
-        self.get_typed::<E>(entity, key)
+        self.get_typed::<E>(entity, key.into().key())
     }
 
     /// Read up to 32 primary keys, returning one slot per input position.
@@ -568,10 +577,22 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier failures after the first mutation trap; never catch and continue an IC commit.
     pub fn commit(&mut self, batch: Batch) -> Result<(), Error> {
-        observe!(commit, { self.commit_batch(batch) })
+        self.commit_with_replacement(batch, |_| Ok(()))
     }
 
-    fn commit_batch(&mut self, batch: Batch) -> Result<(), Error> {
+    pub(crate) fn commit_with_replacement(
+        &mut self,
+        batch: Batch,
+        mut receive: impl FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        observe!(commit, { self.commit_batch(batch, &mut receive) })
+    }
+
+    fn commit_batch(
+        &mut self,
+        batch: Batch,
+        receive: &mut dyn FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let mut targets = BTreeSet::new();
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();
@@ -590,7 +611,8 @@ impl<M: Memory> Database<M> {
             let old = self.map.get(&key);
             match (&mutation.kind, &old) {
                 (Kind::Insert(..) | Kind::CopyInsert(..), Some(_)) => return Err(Error::Exists),
-                (Kind::Replace(..) | Kind::Delete, None) => return Err(Error::Missing),
+                (Kind::Replace(..), None) => return Err(Error::Missing),
+                (Kind::Delete, None) => continue,
                 _ => {}
             }
             if mutation.entity.has_managed() {
@@ -617,6 +639,9 @@ impl<M: Memory> Database<M> {
                     }
                     Kind::Delete => {}
                 }
+            }
+            if let Kind::Replace(bytes, _) = &mutation.kind {
+                receive(bytes)?;
             }
             // Admit complete after-image keys even when the row is a no-op.
             // Retain these buffers for publication instead of encoding twice.
@@ -750,9 +775,14 @@ impl<M: Memory> Database<M> {
                     else {
                         continue;
                     };
-                    let mut prefix = index_prefix(entity.id, reference.index);
-                    id.index_value()
-                        .append_component(field.optional, &mut prefix);
+                    let prefix = if matches!(field.value, FieldType::List { .. }) {
+                        list_target_prefix(entity.id, reference.index, id)
+                    } else {
+                        let mut prefix = index_prefix(entity.id, reference.index);
+                        id.index_value()
+                            .append_component(field.optional, &mut prefix);
+                        prefix
+                    };
                     let prefix = StoreKey::new(prefix)?;
                     // Each skipped entry belongs to a distinct changed row in
                     // this range. At most MAX_BATCH skips plus one survivor.
@@ -846,6 +876,14 @@ fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
 
     key
 }
+// One entry per distinct target of a list field, suffixed by its owner key.
+fn list_target_prefix(entity: u32, field: u32, target: RowKey) -> Vec<u8> {
+    let mut key = prefix(4, entity);
+    key.extend(field.to_be_bytes());
+    target.append_to(&mut key);
+    key
+}
+
 // Direct lookups and fluent reads share exact prefix admission and completion bounds.
 fn admit_index_prefix(
     entity: &EntitySchema,
@@ -930,6 +968,14 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey,
         Ok(())
     })?;
 
+    let mut links = BTreeSet::new();
+    for &(field, target) in &info.list_links {
+        if links.insert((field, target)) {
+            let mut key = list_target_prefix(entity.id, field, target);
+            info.key.append_to(&mut key);
+            entries.push((StoreKey::new(key)?, false));
+        }
+    }
     Ok(entries)
 }
 
@@ -943,6 +989,13 @@ fn validate_index_entry(
 ) -> Result<(), Error> {
     if info.key != owner {
         return Err(Error::Corrupt);
+    }
+    if key.first() == Some(&4) {
+        return index_entries(entity, info)?
+            .iter()
+            .any(|(entry, _)| entry.as_ref() == key)
+            .then_some(())
+            .ok_or(Error::Corrupt);
     }
     let (header, payload) = key
         .split_at_checked(INDEX_PREFIX_BYTES)

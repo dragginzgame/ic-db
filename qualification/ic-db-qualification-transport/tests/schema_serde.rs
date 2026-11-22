@@ -24,6 +24,13 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_wire::Error> {
 fn bare_ulid_accepts_the_existing_fixed_array_endpoint_payload() {
     let bytes = std::array::from_fn(|i| (i * 17) as u8);
     let id = Ulid::from_bytes(bytes);
+    #[entity(store = crate::TestStore, pk(field = "id"), fields(field(name = "id", value(item(prim = "Ulid")))))]
+    struct Profile {}
+
+    let branded = ic_db::Id::<Profile>::from_key(id);
+    assert_eq!(encode(&branded), bytes);
+    assert_eq!(decode::<ic_db::Id<Profile>>(&bytes).unwrap(), branded);
+    assert_eq!(serde_json::to_value(branded).unwrap(), id.to_string());
     assert_eq!(encode(&id), bytes);
     assert_eq!(decode::<Ulid>(&encode(&bytes)).unwrap(), id);
     assert_eq!(decode::<[u8; 16]>(&encode(&id)).unwrap(), bytes);

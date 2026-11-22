@@ -37,7 +37,7 @@ impl Model {
             if operation == 0 && present {
                 return Err(1);
             }
-            if operation != 0 && !present {
+            if matches!(operation, 1 | 3) && !present {
                 return Err(2);
             }
 
@@ -779,7 +779,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             &mut model,
             false,
             vec![(0, 0, id, 10000 + id, 0), (1, 2, 9999, 0, 0)],
-            "refused-missing",
+            "insert-and-delete-absent",
         )
         .await;
         if round == 3 || round == 7 {

@@ -739,7 +739,10 @@ subaccount. An absent and explicit-zero subaccount always name the same key;
 the database does not treat that alias as a second row or an update.
 `db schema` shows `AccountKey` / `SubaccountKey` with mutual references.
 An optional reference's `None` has no target; `Some(id)` requires a surviving
-target. Unlinking the last dependant and deleting its target can share one batch.
+target. A bounded list can declare the same `references(entity = "Entry")` on
+its field. The engine maintains one reverse link per distinct target in that list.
+The sum of declared list-reference item limits on one entity may be at most 32.
+Unlinking the last dependant and deleting its target can share one batch.
 Schemas no longer require numeric entity or index IDs. Entity names default to
 the Rust type name; index names default to ordered fields such as `"category,id"`.
 Optional `name` overrides provide stable explicit identities. References use
@@ -756,7 +759,7 @@ Records use `#[record(fields(...))]` and enums use
 Both retain the empty-struct authoring style. Fields use `value(item(is = "Type"))`;
 optional values add `opt`. Recursive values can use `item(indirect, is = "Self")`
 and need a finite base case. Encoding, decoding and stored-row inspection share
-32-level, 256-structured-value and 4 KiB row bounds. Complete encoded secondary-index
+32-level, 256-structured-value and a default 4 KiB row bound. A schema can opt into up to 32 KiB for one entity with `max_row_bytes = 32768`. Complete encoded secondary-index
 keys are limited to 512 bytes, including namespace and any primary-key suffix.
 Oversized keys refuse before mutation; non-indexed values retain their row/field
 bounds. Semantics version 2 refuses older wider-key contracts intact. Lists use
@@ -820,14 +823,6 @@ let first = ids.next_id();
 let second = ids.next_id();
 ```
 
-When a write already has an operation timestamp, use it for both issuance and
-managed fields:
-
-```rust
-let id = ids.next_at(timestamp)?;
-let mut batch = Batch::at(timestamp);
-```
-
 To seed an owned sequence with fresh IC entropy, use `Ulid::generator().await?`.
 Construction makes one bounded management request and can return
 `UlidEntropyError`. Obtain the generator before starting a synchronous write batch.
@@ -867,16 +862,15 @@ supported; no existing authoring attributes were removed.
 Place the bare entity option `timestamps` on the line immediately after the
 `fields(...)` block to declare both
 `created_at` and `updated_at` as managed `Timestamp` fields. Both count toward
-the 16-field limit and can be indexed explicitly. For a single role, a custom
+the 32-field limit and can be indexed explicitly. For a single role, a custom
 field name or a timestamp newtype, declare nonoptional fields with
 `managed = "created_at"` or `managed = "updated_at"`. Each role may appear once,
-independently of the other. Begin writes with `Batch::at(operation_timestamp)`;
-the host supplies one captured time for the whole batch. The insert builder omits
+independently of the other. Begin writes with `Batch::new()` or the mounted session’s `batch()`.
+The batch captures one operation time. The insert builder omits
 managed setters, and direct fully authored inserts refuse for these entities.
 For replacement, read the entity, change authorable fields and call `replace`.
 Commit rejects changed or stale managed values, preserves creation and sets update
-time only on a real change. Read after commit when the assigned update time is
-needed. No-op replacements preserve timestamps and revisions; real changes with
+time only on a real change. Session `replace` returns the stored row, including its update time. No-op replacements preserve timestamps and revisions; real changes with
 a clock earlier than stored time refuse. Decode/reopen never assign time. Inspect
 `ManagedRow` with `db schema` for the roles beside their units in **Info**.
 
@@ -895,7 +889,7 @@ milliseconds for timestamps, nonnegative milliseconds for durations. Use
 Timestamp sub-millisecond conversion floors before 1970; duration sub-millisecond
 conversion explicitly truncates. Value arithmetic saturates at the type boundary;
 text parsing refuses overflow. Inspect `TimeRow` with `db schema`. Managed time
-policies use `Batch::at` as described above; Timestamp/Duration aggregate
+policies use the batch clock described above; Timestamp/Duration aggregate
 arithmetic remains separate work.
 `value(item(prim = "Decimal", scale = 2))` stores exact decimal values at the
 declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
@@ -1206,10 +1200,14 @@ fn register_pair(db: &CanisterSession<Hub>, first: &User, second: &User) -> Resu
 }
 ```
 
+Use `Id<E>` in application signatures when two entities share a primitive key type.
+`row.id()` produces the branded ID. Both `db.get(row.id())` and
+`db.delete(row.id())` infer its entity. Deleting an absent key succeeds without
+advancing the entity revision. A surviving reference still prevents deletion.
+
 For one managed row, use `db.insert_input(input)?` or `db.replace(&row)?`.
 The session captures the operation time. A replacement that changes no fields
-preserves the stored update time. Use `db.batch_at(time)` when supplying an
-explicit time or grouping several managed writes under one timestamp.
+preserves the stored update time. Use `db.batch()` to group managed writes under one timestamp.
 Prepared changes become visible together when the store accepts the commit.
 
 When moving declarations into a shared

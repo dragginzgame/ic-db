@@ -113,7 +113,7 @@ pub use ic_db_macros::{canister, entity, enum_, list, map, newtype, record, set,
 pub use ic_platform_types::{Account, Principal, Subaccount};
 pub use key::IndexValue;
 pub use managed::ManagedTimestamp;
-pub use primary::PrimaryKey;
+pub use primary::{Id, PrimaryKey};
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use session::{DatabaseSession, QuerySession, UniqueKey};
 pub use store::{
@@ -232,7 +232,7 @@ pub enum Error {
     InvalidCursor,
     /// One matching encoded row exceeds the whole requested output-byte allowance.
     RowTooLarge,
-    /// Managed insert/replacement requires an explicitly captured batch time.
+    /// Materializing an entity with managed timestamps requires a write batch.
     MissingOperationTime,
     /// A caller attempted to assign a database-managed field.
     ManagedField,
@@ -354,13 +354,18 @@ pub trait Entity: Sized {
     /// Store selected by the schema author.
     type Store: Store;
     /// Exact supplied primary-key type, selected by the declared field.
-    type Key: PrimaryKey;
+    type Key: PrimaryKey + Into<Id<Self>>;
     /// Rust-resolved declaration path for host schema assembly.
     fn declaration_path() -> &'static str;
     /// This executable's compiled entity contract.
     const SCHEMA: &'static EntitySchema;
     /// Read the application's primary key without encoding or inspecting indexes.
     fn key(&self) -> Self::Key;
+
+    /// Return this row’s entity-typed primary key.
+    fn id(&self) -> Id<Self> {
+        Id::from_key(self.key())
+    }
 
     /// Extract keys from an already typed value for the shared mutation/index paths.
     #[doc(hidden)]
@@ -405,6 +410,7 @@ pub mod __private {
     pub use crate::ulid::insert_ulid;
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
+        pub list_links: Vec<(u32, RowKey)>,
         pub key: RowKey,
         /// None means the row is outside an explicitly present-only unique index.
         pub indexes: Vec<Option<Vec<u8>>>,

@@ -814,8 +814,8 @@ changed policy without touching storage. The schema fixture has 30 entities and
 eight named types; its expected hash includes independently framed default and
 managed-policy bytes. `db schema` displays those policies in **Info**.
 
-The managed-time witness uses `ManagedRow` and `Batch::at` with deterministic
-host-supplied times. It checks one batch time across rows, preserved creation,
+The managed-time witness uses `ManagedRow` and the test-support batch clock with deterministic
+fixture times. It checks one batch time across rows, preserved creation,
 changed update indexes, byte-identical no-ops at earlier/equal/later times,
 ownership/regression/uniqueness refusals, late-trap rollback and unchanged upgrade.
 Native cases also cover independently selected roles, full-batch refusal,

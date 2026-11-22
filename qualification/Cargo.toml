@@ -1,11 +1,10 @@
 [workspace]
-# The installed CLI and its private fixture support share the root workspace version.
-exclude = ["ic-db-cli-fixture"]
 members = [
     "experiments/schema-owner/consumer",
     "experiments/schema-owner/local",
     "experiments/schema-owner/producer",
     "experiments/wire-schema",
+    "ic-db-cli-fixture",
     "ic-db-entity-growth-canister",
     "ic-db-icydb-baseline-canister",
     "ic-db-icydb-baseline-schema",
@@ -46,7 +45,7 @@ serde = "1.0.229"
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 tokio = "1.54.1"
-toko-tooling = "=0.46.0"
+toko-tooling = "=0.46.1"
 wasmparser = { version = "0.263.0", default-features = false, features = ["std", "features", "validate"] }
 
 [workspace.lints.cargo]

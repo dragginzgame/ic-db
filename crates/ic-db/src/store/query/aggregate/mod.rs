@@ -1043,7 +1043,7 @@ pub(super) enum Reducer {
     Keys(u8),
     Numeric(numeric::NumericAggregate),
     Distinct {
-        mask: u16,
+        mask: u32,
         seen: DistinctKeys,
         key_bytes: usize,
     },
@@ -1058,7 +1058,7 @@ pub(super) enum Reducer {
     },
 }
 impl Reducer {
-    fn distinct(mask: u16) -> Self {
+    fn distinct(mask: u32) -> Self {
         Self::Distinct {
             mask,
             seen: DistinctKeys::new(),
@@ -1066,7 +1066,7 @@ impl Reducer {
         }
     }
 
-    fn extremum(entity: &EntitySchema, mask: u16, maximum: bool) -> Result<Self, Error> {
+    fn extremum(entity: &EntitySchema, mask: u32, maximum: bool) -> Result<Self, Error> {
         if mask.count_ones() != 1 {
             return Err(Error::InvalidQuery);
         }
@@ -1255,7 +1255,7 @@ impl Completed {
 pub(super) struct Groups {
     summary_sum: Option<ValueSchema>,
     selection: Selection,
-    mask: u16,
+    mask: u32,
     // Never advanced: each new group receives its own empty reducer state.
     initial: Reducer,
     rows: BTreeMap<Box<[u8]>, (Vec<u8>, Reducer)>,

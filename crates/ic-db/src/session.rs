@@ -1,8 +1,6 @@
 //! Synchronous access to a database attached by the host.
 
-use crate::{
-    Batch, Database, Entity, EntitySchema, Error, IndexValue, InsertInput, Query, Timestamp,
-};
+use crate::{Batch, Database, Entity, Error, IndexValue, InsertInput, Query};
 use std::{
     cell::{Ref, RefCell},
     rc::Rc,
@@ -103,14 +101,6 @@ impl<E: Entity> QuerySession<E> for DatabaseSession {
 #[derive(Clone)]
 pub struct DatabaseSession(Rc<RefCell<Database>>);
 
-fn single_write_batch(entity: &EntitySchema) -> Batch {
-    if entity.has_managed() {
-        Batch::at(Timestamp::now())
-    } else {
-        Batch::new()
-    }
-}
-
 impl DatabaseSession {
     /// Wrap an already-created or reopened database. Its allocation remains
     /// leased until the last handle is dropped.
@@ -151,7 +141,7 @@ impl DatabaseSession {
     ///
     /// # Errors
     /// Returns a borrow conflict or the original [`Database::get`] error.
-    pub fn get<E: Entity>(&self, key: E::Key) -> Result<Option<E>, Error> {
+    pub fn get<E: Entity>(&self, key: impl Into<crate::Id<E>>) -> Result<Option<E>, Error> {
         self.read()?.get::<E>(key)
     }
 
@@ -198,27 +188,37 @@ impl DatabaseSession {
     /// # Errors
     /// Propagates input preparation and commit errors.
     pub fn insert_input<I: InsertInput>(&self, input: I) -> Result<I::Entity, Error> {
-        let mut batch = single_write_batch(I::Entity::SCHEMA);
+        let mut batch = Batch::new();
         let row = batch.insert_input(input)?;
         self.commit(batch)?;
 
         Ok(row)
     }
 
-    /// Replace one existing entity. A changed row receives the current managed update time.
+    /// Replace one existing entity and return its stored value including any assigned update time.
     /// # Errors
     /// Propagates batch preparation and commit errors.
-    pub fn replace<E: Entity>(&self, row: &E) -> Result<(), Error> {
-        let mut batch = single_write_batch(E::SCHEMA);
+    /// # Panics
+    /// Traps on a supplier write failure or if commit violates its single-replacement invariant.
+    pub fn replace<E: Entity>(&self, row: &E) -> Result<E, Error> {
+        let mut batch = Batch::new();
         batch.replace(row)?;
+        let mut stored = None;
+        self.0
+            .try_borrow_mut()
+            .map_err(|_| Error::BorrowConflict)?
+            .commit_with_replacement(batch, |bytes| {
+                stored = Some(E::decode(bytes)?);
+                Ok(())
+            })?;
 
-        self.commit(batch)
+        Ok(stored.expect("a successful single replacement produced its after-image"))
     }
 
     /// Delete one entity by primary key as one batch.
     /// # Errors
     /// Propagates batch preparation and commit errors.
-    pub fn delete<E: Entity>(&self, key: E::Key) -> Result<(), Error> {
+    pub fn delete<E: Entity>(&self, key: impl Into<crate::Id<E>>) -> Result<(), Error> {
         let mut batch = Batch::new();
         batch.delete::<E>(key)?;
 

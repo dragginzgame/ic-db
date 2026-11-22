@@ -14,13 +14,13 @@ pub(super) enum Strategy {
     Identity,
     FirstMatch,
     Adjacent(usize),
-    Complete { key_fields: u16 },
+    Complete { key_fields: u32 },
     Sorted { prefix_len: usize },
 }
 
 // A fixed member does not fix its parent. Only complete top-level fields
 // can be omitted from a projected tuple's comparison key.
-pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &Plan<'_>) -> u16 {
+pub(super) fn fixed_fields(entity: &EntitySchema, request: &Request<'_>, plan: &Plan<'_>) -> u32 {
     let prefix = plan
         .index
         .map_or(&[][..], |index| &index.fields[..plan.fixed_components]);
@@ -175,15 +175,15 @@ pub(super) fn boundary<'a>(
 // Only canonical comparison keys and the first matching projected bytes are kept.
 // No full entities, replay positions or retained job payloads are introduced.
 pub(super) struct Collection {
-    projected: u16,
-    key_fields: u16,
+    projected: u32,
+    key_fields: u32,
     seen: DistinctKeys,
     pub(super) rows: Vec<Vec<u8>>,
     state_bytes: usize,
     pub(super) output_bytes: usize,
 }
 impl Collection {
-    pub(super) fn new(projected: u16, key_fields: u16) -> Self {
+    pub(super) fn new(projected: u32, key_fields: u32) -> Self {
         Self {
             projected,
             key_fields,

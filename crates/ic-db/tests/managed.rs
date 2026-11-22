@@ -101,14 +101,14 @@ fn independent_roles_share_batch_time_and_deletes_need_no_clock() {
         [1; 16],
     )
     .unwrap();
-    let mut batch = Batch::at(time(-1));
+    let mut batch = Batch::at_for_test(time(-1));
     let mut created = batch.insert_input(CreationOnly::insert().id(1)).unwrap();
     let mut updated = batch.insert_input(UpdateOnly::insert().id(1)).unwrap();
     assert_eq!(created.time, updated.time);
     db.commit(batch).unwrap();
     created.value = 1;
     updated.value = 1;
-    let mut batch = Batch::at(time(10));
+    let mut batch = Batch::at_for_test(time(10));
     batch.replace(&created).unwrap();
     batch.replace(&updated).unwrap();
     db.commit(batch).unwrap();
@@ -153,11 +153,11 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
         [1; 16],
     )
     .unwrap();
-    assert!(matches!(
-        Batch::new().insert_input(Entry::insert().id(1)),
-        Err(Error::MissingOperationTime)
-    ));
-    let mut batch = Batch::at(time(100));
+    let mut automatic = Batch::new();
+    let a = automatic.insert_input(Entry::insert().id(1)).unwrap();
+    let b = automatic.insert_input(Entry::insert().id(2)).unwrap();
+    assert_eq!(a.born, b.born);
+    let mut batch = Batch::at_for_test(time(100));
     let first = batch.insert_input(Entry::insert().id(1)).unwrap();
     let second = batch
         .insert_input(Entry::insert().id(2).body("second".into()))
@@ -172,13 +172,13 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
         (time(100), time(100), time(100), time(100))
     );
     assert!(matches!(
-        Batch::at(time(100)).insert(&first),
+        Batch::at_for_test(time(100)).insert(&first),
         Err(Error::ManagedField)
     ));
     db.commit(batch).unwrap();
     let mut updated = first;
     updated.body = "a longer replacement".into();
-    let mut batch = Batch::at(time(200));
+    let mut batch = Batch::at_for_test(time(200));
     batch.replace(&updated).unwrap();
     db.commit(batch).unwrap();
     let current = db.get::<Entry>(1).unwrap().unwrap();
@@ -195,7 +195,7 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
     );
     let before = backing.borrow().clone();
     for now in [0, 200, 300] {
-        let mut batch = Batch::at(time(now));
+        let mut batch = Batch::at_for_test(time(now));
         batch.replace(&current).unwrap();
         db.commit(batch).unwrap();
         assert_eq!(*backing.borrow(), before);
@@ -221,7 +221,7 @@ fn single_row_session_writes_supply_managed_time_and_preserve_replays() {
     )
     .unwrap();
     let db = ic_db::DatabaseSession::new(db);
-    let mut seed = Batch::at(time(100));
+    let mut seed = Batch::at_for_test(time(100));
     let mut old = seed.insert_input(Entry::insert().id(1)).unwrap();
     db.commit(seed).unwrap();
 
@@ -254,7 +254,7 @@ fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchang
         [1; 16],
     )
     .unwrap();
-    let mut batch = Batch::at(time(100));
+    let mut batch = Batch::at_for_test(time(100));
     let row = batch.insert_input(Entry::insert().id(1)).unwrap();
     db.commit(batch).unwrap();
     let before = backing.borrow().clone();
@@ -266,7 +266,7 @@ fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchang
             1 => candidate.changed.0 = time(101),
             _ => {}
         }
-        let mut batch = Batch::at(time(if mode == 2 { 99 } else { 200 }));
+        let mut batch = Batch::at_for_test(time(if mode == 2 { 99 } else { 200 }));
         batch
             .insert_input(
                 Entry::insert()
@@ -287,7 +287,7 @@ fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchang
     // Equal time is permitted for a real change; there is no hidden counter.
     let mut changed = row;
     changed.body = "equal time".into();
-    let mut batch = Batch::at(time(100));
+    let mut batch = Batch::at_for_test(time(100));
     batch.replace(&changed).unwrap();
     db.commit(batch).unwrap();
     assert_eq!(db.get::<Entry>(1).unwrap(), Some(changed));
@@ -303,7 +303,7 @@ fn corrupt_managed_order_refuses_reads_and_noop_replacement_without_repair() {
     };
     let schema = || Schema::new(&[Entry::SCHEMA]).unwrap();
     let mut db = Database::create(memory(), schema(), [1; 16]).unwrap();
-    let mut batch = Batch::at(time(100));
+    let mut batch = Batch::at_for_test(time(100));
     let row = batch.insert_input(Entry::insert().id(1)).unwrap();
     db.commit(batch).unwrap();
     drop(db);
@@ -320,7 +320,7 @@ fn corrupt_managed_order_refuses_reads_and_noop_replacement_without_repair() {
     let before = backing.borrow().clone();
     let mut db = Database::open(memory(), schema()).unwrap();
     assert!(matches!(db.get::<Entry>(1), Err(Error::Corrupt)));
-    let mut batch = Batch::at(time(200));
+    let mut batch = Batch::at_for_test(time(200));
     batch.replace(&row).unwrap();
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);

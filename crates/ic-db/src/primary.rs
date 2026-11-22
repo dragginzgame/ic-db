@@ -3,6 +3,58 @@
 
 use crate::{Account, Error, FieldType, IndexValue, Principal, Subaccount, U256, Ulid, key};
 
+/// An application key branded with the entity that owns it. Constructing one
+/// does not read storage or prove that the row exists.
+/// An ID for one entity cannot address another entity with the same raw key.
+/// ```compile_fail
+/// use ic_db::{Database, Entity, Id};
+/// fn wrong<A: Entity, B: Entity<Key = A::Key>>(db: &Database, id: Id<A>) {
+///     let _ = db.get::<B>(id);
+/// }
+/// ```
+#[repr(transparent)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(
+    transparent,
+    bound(
+        serialize = "E::Key: serde::Serialize",
+        deserialize = "E::Key: serde::Deserialize<'de>"
+    )
+)]
+pub struct Id<E: crate::Entity>(E::Key);
+
+impl<E: crate::Entity> Id<E> {
+    /// Associate a raw key with its entity at an application boundary.
+    pub const fn from_key(key: E::Key) -> Self {
+        Self(key)
+    }
+
+    /// Return the stored primary key.
+    pub const fn key(self) -> E::Key {
+        self.0
+    }
+}
+impl<E: crate::Entity> Copy for Id<E> {}
+impl<E: crate::Entity> Clone for Id<E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<E: crate::Entity> PartialEq for Id<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<E: crate::Entity> Eq for Id<E> {}
+impl<E: crate::Entity> std::fmt::Debug for Id<E>
+where
+    E::Key: std::fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
 }
@@ -24,6 +76,9 @@ macro_rules! primary_keys {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
         pub enum RowKey { $( $variant($ty), )* }
         $(
+            impl<E: crate::Entity<Key = $ty>> From<$ty> for Id<E> {
+                fn from(key: $ty) -> Self { Self::from_key(key) }
+            }
             impl sealed::Sealed for $ty {}
             impl PrimaryKey for $ty {
                 fn into_row_key(self) -> RowKey { RowKey::$variant(self) }

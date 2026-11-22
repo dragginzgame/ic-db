@@ -11,6 +11,7 @@ fn registry_fixture() -> Registry {
 }
 
 static PARENT: EntitySchema = EntitySchema {
+    max_row_bytes: crate::codec::DEFAULT_ROW_BYTES,
     id: crate::schema::handle("Parent"),
     name: "Parent",
     fields: &[FieldSchema {
@@ -25,6 +26,7 @@ static PARENT: EntitySchema = EntitySchema {
     indexes: &[],
 };
 static CHILD: EntitySchema = EntitySchema {
+    max_row_bytes: crate::codec::DEFAULT_ROW_BYTES,
     id: crate::schema::handle("Child"),
     name: "Child",
     fields: &[

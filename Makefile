@@ -233,7 +233,7 @@ m1-records-artifact:
 m1-records: schema-build-check
 	cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m1-records-canister --lib
 	cargo test --locked -p ic-db --test enum_collections
-	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test cardinality --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --lib
+	cargo test --locked -p ic-db -p ic-db-macros --features ic-db/build --test records --test write_contracts --test cardinality --test enum_indexes --test schema_reuse --test key_bounds --test defaults --test managed --test nested --test lists --test sets --test maps --test u256 --test floats --test accounts --test ulids --test ulid_generation --test dates --test times --test time_values --test decimals --test primary_keys --test scalar_keys --lib
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact

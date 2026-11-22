@@ -23,7 +23,7 @@ fn managed_write((id, body, millis, mode, trap): (u64, String, i64, u8, bool)) -
     let mut batch = if mode == 4 {
         Batch::new()
     } else {
-        Batch::at(time)
+        Batch::at_for_test(time)
     };
     let prepare = match mode {
         0 | 4 => batch

@@ -240,8 +240,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                                     .indexes
                                     .iter()
                                     .find(|index| index.id == reference.index)
-                                    .unwrap()
-                                    .name
+                                    .map_or(field.name, |index| index.name)
                                     .into(),
                             )
                         }),

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.27.0]
+
+### ⚠️ Breaking
+
+- Use `db.batch()` or `Batch::new()` for managed writes. Each batch captures one timestamp. Remove explicit `batch_at(time)` and `Batch::at(time)` calls. Single-row session `replace` now returns the stored row, including its assigned update time.
+- Delete succeeds when the primary key is absent. Surviving references still refuse the whole batch. Entity-typed `Id<E>` values work with direct lookups and deletes.
+- Restart projected cursors and aggregate jobs whose query binding includes a field mask after upgrading.
+
+### ✨ Schema
+
+- Entities and records support 32 fields, including managed timestamps. A list of primary keys may declare `references(entity = "Target")`. The engine checks each distinct target and restricts its deletion.
+- The encoded row limit defaults to 4 KiB. Set `max_row_bytes = 32768` on an entity to opt into a larger row. Changing this limit changes that store’s schema fingerprint.
+
+### 🛠️ Tooling
+
+- The private CLI fixture belongs to the qualification workspace at `0.0.0`. Both workspaces use Toko Tooling 0.46.1 so release verification can resolve the CLI’s dependency on that fixture. [IC DB #23](https://github.com/dragginzgame/ic-db/issues/23) · [Toko Tooling #403](https://github.com/dragginzgame/toko-tooling/issues/403)
+
 ## [0.26.12] - 2026-11-22
 
 ### ✨ Writes

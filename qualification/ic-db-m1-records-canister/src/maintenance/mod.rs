@@ -404,13 +404,13 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
         .unwrap();
     if operation == 0 {
         let mut db = Database::create(source_memory, source.clone(), [5; 16])?;
-        let mut batch = Batch::at(Timestamp::from_millis(-10));
+        let mut batch = Batch::at_for_test(Timestamp::from_millis(-10));
         batch.insert_input(ManagedRow::insert().id(1).body("first".into()))?;
         batch.insert_input(ManagedRow::insert().id(2).body("second".into()))?;
         db.commit(batch)?;
         let mut row = db.get::<ManagedRow>(2)?.ok_or(Error::Missing)?;
         row.body = "updated".into();
-        let mut batch = Batch::at(Timestamp::from_millis(20));
+        let mut batch = Batch::at_for_test(Timestamp::from_millis(20));
         batch.replace(&row)?;
         db.commit(batch)?;
         db.begin_maintenance(&transition)?
@@ -423,7 +423,7 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
         let millis = if operation == 6 {
             let mut row = db.get::<ManagedV2>(2)?.ok_or(Error::Missing)?;
             row.body = "after cutover".into();
-            let mut batch = Batch::at(Timestamp::from_millis(30));
+            let mut batch = Batch::at_for_test(Timestamp::from_millis(30));
             batch.replace(&row)?;
             db.commit(batch)?;
 
@@ -780,7 +780,7 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     if matches!(operation, 11 | 12) {
         let mut db = Database::open(target_memory, target)?;
         let count = db.query::<ManagedRow>().count()?.value;
-        let mut batch = Batch::at(Timestamp::from_millis(30));
+        let mut batch = Batch::at_for_test(Timestamp::from_millis(30));
         batch.insert_input(ManagedRow::insert().id(1).body("first".into()))?;
         // Transfer Entry 2's only inbound reference from a copied mapping to a new document.
         // Operation 12 points outside the copied rows to exercise refusal of the whole batch.

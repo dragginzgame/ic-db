@@ -366,7 +366,7 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
             pk(field = "id"),
             fields(field(name = "id", value(opt, item(prim = "Nat64"))))
         ),
-        quote!(pk(field="id"), fields(#field, field(name="title", value(item(prim="Text", max_bytes=4097))))),
+        quote!(pk(field="id"), fields(#field, field(name="title", value(item(prim="Text", max_bytes=32769))))),
         quote!(pk(field="id"), fields(#field, field(name="flag", value(item(prim="Bool", max_bytes=1))))),
         quote!(pk(field="id"), fields(#field, field(name="flag", value(opt, opt, item(prim="Bool"))))),
         quote!(pk(field="id"), index(field="title",unique), fields(#field, field(name="title", value(opt,item(prim="Text",max_bytes=32))))),
@@ -377,7 +377,7 @@ fn invalid_authoring_refuses_before_emitting_a_schema() {
         ),
         quote!(pk(field="id"), fields(#field, field(name="delta",value(item(prim="Int64",max_bytes=8))))),
         quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob"))))),
-        quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=4097))))),
+        quote!(pk(field="id"), fields(#field, field(name="payload",value(item(prim="Blob",max_bytes=32769))))),
     ] {
         assert!(
             expand(

@@ -2,7 +2,7 @@
 
 use crate::{
     Batch, CompiledCanister, CompiledStore, DatabaseSession, Entity, Error, InsertInput, Query,
-    QuerySession, Store, Timestamp, UniqueKey,
+    QuerySession, Store, UniqueKey,
 };
 use std::{marker::PhantomData, rc::Rc};
 
@@ -57,19 +57,9 @@ impl<C: CompiledCanister> CanisterSession<C> {
     /// Prepare dependent changes in one store, inferred from the entities added.
     #[must_use]
     pub fn batch<S: MountedStore<Canister = C>>(&self) -> StoreBatch<'_, S> {
-        self.bind_batch(Batch::new())
-    }
-
-    /// Prepare a batch with one host-captured timestamp for managed fields.
-    #[must_use]
-    pub fn batch_at<S: MountedStore<Canister = C>>(&self, time: Timestamp) -> StoreBatch<'_, S> {
-        self.bind_batch(Batch::at(time))
-    }
-
-    fn bind_batch<S: MountedStore<Canister = C>>(&self, batch: Batch) -> StoreBatch<'_, S> {
         StoreBatch {
             session: self.session::<S>(),
-            batch,
+            batch: Batch::new(),
             store: PhantomData,
         }
     }
@@ -85,7 +75,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
     /// Propagates the owning store's lookup errors.
     pub fn get<E: Entity<Store: MountedStore<Canister = C>>>(
         &self,
-        key: E::Key,
+        key: impl Into<crate::Id<E>>,
     ) -> Result<Option<E>, Error> {
         self.session::<E::Store>().get::<E>(key)
     }
@@ -133,13 +123,13 @@ impl<C: CompiledCanister> CanisterSession<C> {
             .insert_input(input)
     }
 
-    /// Replace one row in its declared store.
+    /// Replace one row in its declared store and return the stored value.
     /// # Errors
     /// Propagates batch preparation and commit errors.
     pub fn replace<E: Entity<Store: MountedStore<Canister = C>>>(
         &self,
         row: &E,
-    ) -> Result<(), Error> {
+    ) -> Result<E, Error> {
         self.session::<E::Store>().replace(row)
     }
 
@@ -148,7 +138,7 @@ impl<C: CompiledCanister> CanisterSession<C> {
     /// Propagates batch preparation and commit errors.
     pub fn delete<E: Entity<Store: MountedStore<Canister = C>>>(
         &self,
-        key: E::Key,
+        key: impl Into<crate::Id<E>>,
     ) -> Result<(), Error> {
         self.session::<E::Store>().delete::<E>(key)
     }
@@ -197,7 +187,10 @@ impl<S: Store> StoreBatch<'_, S> {
     /// Queue a deletion in this store.
     /// # Errors
     /// Propagates [`Batch::delete`] admission errors.
-    pub fn delete<E: Entity<Store = S>>(&mut self, key: E::Key) -> Result<(), Error> {
+    pub fn delete<E: Entity<Store = S>>(
+        &mut self,
+        key: impl Into<crate::Id<E>>,
+    ) -> Result<(), Error> {
         self.batch.delete::<E>(key)
     }
 

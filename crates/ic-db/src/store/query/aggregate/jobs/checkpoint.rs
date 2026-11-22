@@ -262,7 +262,7 @@ fn write_distinct(writer: &mut Encoder, seen: &DistinctKeys) -> Result<(), Error
 fn read_distinct(
     reader: &mut Decoder<'_>,
     entity: &EntitySchema,
-    mask: u16,
+    mask: u32,
 ) -> Result<(DistinctKeys, usize), Error> {
     let count = usize::from(reader.nat8()?);
     if count > MAX_DISTINCT_VALUES {

@@ -1,11 +1,6 @@
 [workspace]
 exclude = ["qualification"]
-members = [
-    "crates/ic-db",
-    "crates/ic-db-cli",
-    "crates/ic-db-macros",
-    "qualification/ic-db-cli-fixture",
-]
+members = ["crates/ic-db", "crates/ic-db-cli", "crates/ic-db-macros"]
 default-members = ["crates/ic-db", "crates/ic-db-macros"]
 resolver = "3"
 
@@ -50,7 +45,7 @@ tokio = "1.54.1"
 
 # Tests and tooling
 ic-db = { path = "crates/ic-db" }
-toko-tooling = "=0.46.0"
+toko-tooling = "=0.46.1"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

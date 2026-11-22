@@ -587,6 +587,7 @@ fn migrated_row_can_link_to_a_new_entity_after_publication() {
         index(field = "thing"),
         fields(
             field(name = "id", value(item(prim = "Nat64"))),
+            field(name = "related", value(many, max_items = 2, item(prim = "Nat64")), references(entity = "Source")),
             field(
                 name = "thing",
                 value(opt, item(prim = "Nat64")),
@@ -596,18 +597,12 @@ fn migrated_row_can_link_to_a_new_entity_after_publication() {
     )]
     struct LinkedOther {}
 
-    for premature_link in [false, true] {
+    for premature_link in [0, 1, 2] {
         let runtime = host(VectorMemory::default());
         let source = Schema::new(&[Other::SCHEMA]).unwrap();
         let target = Schema::new(&[LinkedOther::SCHEMA, Source::SCHEMA]).unwrap();
-        let transition = SchemaTransition::new(
-            &source,
-            &target,
-            "link-thing",
-            1,
-            &[u8::from(premature_link)],
-        )
-        .unwrap();
+        let transition =
+            SchemaTransition::new(&source, &target, "link-thing", 1, &[premature_link]).unwrap();
         let source_memory = || runtime.open_memory(&key("copy.source.v1")).unwrap();
         let mut db = Database::create(source_memory(), source.clone(), [1; 16]).unwrap();
         let mut batch = Batch::new();
@@ -628,13 +623,14 @@ fn migrated_row_can_link_to_a_new_entity_after_publication() {
                 Ok(LinkedOther {
                     id: row.id,
                     thing: (inputs == [1]).then_some(0),
+                    related: if inputs == [2] { vec![0, 0] } else { vec![] },
                 })
             })
             .unwrap()
             .complete
         );
         assert!(!copy.validate_next(32).unwrap()); // source pass
-        if premature_link {
+        if premature_link != 0 {
             assert!(matches!(
                 copy.validate_next(32),
                 Err(Error::ReferenceViolation)
@@ -1144,7 +1140,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
         [1; 16],
     )
     .unwrap();
-    let mut batch = Batch::at(Timestamp::from_millis(-10));
+    let mut batch = Batch::at_for_test(Timestamp::from_millis(-10));
     for id in 1..=2 {
         batch
             .insert_input(TimedSource::insert().id(id).value(3))
@@ -1153,7 +1149,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
     db.commit(batch).unwrap();
     let mut row = db.get::<TimedSource>(2).unwrap().unwrap();
     row.value = 4;
-    let mut batch = Batch::at(Timestamp::from_millis(20));
+    let mut batch = Batch::at_for_test(Timestamp::from_millis(20));
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
     let mut copy = db
@@ -1268,7 +1264,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
         Err(Error::ManagedField)
     ));
     row.value = 99;
-    let mut batch = Batch::at(Timestamp::from_millis(30));
+    let mut batch = Batch::at_for_test(Timestamp::from_millis(30));
     batch.replace(&row).unwrap();
     db.commit(batch).unwrap();
     drop(db);

@@ -177,7 +177,7 @@ fn single_mutations_match_batches_including_refusals_and_index_effects() {
     };
     macro_rules! check {
         ($method:ident $(::<$entity:ty>)? ($arg:expr), $outcome:pat) => {{
-            let actual = direct.$method $(::<$entity>)? ($arg);
+            let actual = direct.$method $(::<$entity>)? ($arg).map(|_| ());
             let mut batch = Batch::new();
             let expected = batch.$method $(::<$entity>)? ($arg).and_then(|()| batched.commit(batch));
             assert!(matches!(actual, $outcome), "{actual:?}");
@@ -201,7 +201,7 @@ fn single_mutations_match_batches_including_refusals_and_index_effects() {
         check!(delete::<Friendship>(1), Err(Error::BorrowConflict));
     }
     check!(delete::<Friendship>(1), Ok(()));
-    check!(delete::<Friendship>(1), Err(Error::Missing));
+    check!(delete::<Friendship>(1), Ok(()));
     check!(replace(&row), Err(Error::Missing));
     check!(delete::<Other>(1), Err(Error::UnknownEntity));
 }

@@ -1255,7 +1255,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 // Reuse named-record metadata/codecs rather than a second value tree or a
 // generic executor per output shape. The full transitive graph matters: named
 // links compare by identity, which alone cannot establish codec compatibility.
-fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u16, Error> {
+fn admit_projection(entity: &EntitySchema, output: &TypeSchema) -> Result<u32, Error> {
     let TypeBody::Record(fields) = &output.body else {
         return Err(Error::InvalidQuery);
     };
@@ -1395,7 +1395,7 @@ fn contains_member(
 
 // Admission sets bits only for fields in this entity. Consuming the lowest
 // bit first preserves the canonical field order of projected records and keys.
-fn projection_positions(mut mask: u16) -> impl Iterator<Item = usize> {
+fn projection_positions(mut mask: u32) -> impl Iterator<Item = usize> {
     std::iter::from_fn(move || {
         if mask == 0 {
             return None;
@@ -1406,7 +1406,7 @@ fn projection_positions(mut mask: u16) -> impl Iterator<Item = usize> {
     })
 }
 
-fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
+fn admit_ordered_fields(entity: &EntitySchema, mask: u32) -> Result<(), Error> {
     for i in projection_positions(mask) {
         if !key::supports(entity.fields[i].value) {
             return Err(Error::InvalidQuery);
@@ -1419,7 +1419,7 @@ fn admit_ordered_fields(entity: &EntitySchema, mask: u16) -> Result<(), Error> {
 // Grouping, distinct counts and collected DISTINCT share exact tuple equality.
 fn comparison_key(
     entity: &EntitySchema,
-    mask: u16,
+    mask: u32,
     values: &[IndexValue<'_>],
     scratch: &mut Vec<u8>,
 ) -> Result<(), Error> {
@@ -1428,7 +1428,7 @@ fn comparison_key(
 
 fn build_comparison_key<'a>(
     entity: &EntitySchema,
-    mask: u16,
+    mask: u32,
     key: &mut Vec<u8>,
     mut value: impl FnMut(usize, &crate::FieldSchema) -> Result<IndexValue<'a>, Error>,
 ) -> Result<(), Error> {
@@ -1457,7 +1457,7 @@ fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error
 }
 
 // Size and copy already validated projection spans using the same field mask.
-fn projection_size(spans: &[(u16, u16)], mask: u16) -> usize {
+fn projection_size(spans: &[(u16, u16)], mask: u32) -> usize {
     projection_positions(mask)
         .map(|i| {
             let (start, end) = spans[i];
@@ -1466,7 +1466,7 @@ fn projection_size(spans: &[(u16, u16)], mask: u16) -> usize {
         .sum()
 }
 
-fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u16, size: usize) -> Vec<u8> {
+fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u32, size: usize) -> Vec<u8> {
     let mut output = Vec::with_capacity(size);
     for i in projection_positions(mask) {
         let (start, end) = spans[i];
@@ -1487,11 +1487,11 @@ struct Plan<'a> {
     prefix: Vec<u8>,
     fixed_components: usize,
     terms: Vec<Term>,
-    selected: u16,
+    selected: u32,
     // Non-orderable fields need only their validated optional tags, never key slots.
-    span_fields: u16,
+    span_fields: u32,
     binding: [u8; 32],
-    projection: Option<u16>,
+    projection: Option<u32>,
     distinct: distinct::Strategy,
     sort: Option<Vec<order::SortField>>,
     descending: bool,
@@ -1814,7 +1814,7 @@ impl<'a> Plan<'a> {
                 if let Some(position) = entity.field_position(name) {
                     hash.update([position as u8]);
                 } else {
-                    // A top-level position is at most 15. Frame each admitted nested path.
+                    // A top-level position is at most 31. Frame each admitted nested path.
                     hash.update([u8::MAX, name.len() as u8]);
                     hash.update(name.as_bytes());
                 }
@@ -1948,7 +1948,9 @@ fn execute<M: Memory>(
 // Retained aggregates use the same traversal, but checkpoint at a work boundary.
 // Reserve a maximum candidate before the next fetch, including index/owner keys.
 const STEP_INPUT_BYTES: usize = 64 * 1024;
-const CANDIDATE_BYTES: usize = crate::codec::MAX_ROW_BYTES + 2 * crate::MAX_INDEX_KEY_BYTES;
+const fn candidate_byte_limit(row_bytes: usize) -> usize {
+    row_bytes + 2 * crate::MAX_INDEX_KEY_BYTES
+}
 
 fn execute_inner<M: Memory>(
     map: &Map<M>,
@@ -1991,6 +1993,7 @@ fn execute_inner<M: Memory>(
     } else {
         None
     };
+    let candidate_bytes = candidate_byte_limit(entity.max_row_bytes);
     let primary_type = entity.fields[plan.primary].value;
     let needs_spans = plan.index.is_some()
         || plan.span_fields != 0
@@ -2029,7 +2032,7 @@ fn execute_inner<M: Memory>(
         };
         if let Some(used) = input_bytes.as_deref_mut() {
             read_bytes += bytes.len();
-            if read_bytes > CANDIDATE_BYTES {
+            if read_bytes > candidate_bytes {
                 return Err(Error::Corrupt);
             }
             *used += read_bytes;
@@ -2222,7 +2225,7 @@ fn execute_inner<M: Memory>(
             || page.examined == request.work
             || input_bytes
                 .as_deref()
-                .is_some_and(|used| *used > STEP_INPUT_BYTES - CANDIDATE_BYTES)
+                .is_some_and(|used| *used > STEP_INPUT_BYTES - candidate_bytes)
         {
             if terminal == Some(stored_key) {
                 break;

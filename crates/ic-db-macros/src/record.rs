@@ -40,7 +40,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         ));
     }
     fields.sort_by(|a, b| a.name.cmp(&b.name));
-    if fields.len() > 16
+    if fields.len() > 32
         || fields.windows(2).any(|w| w[0].name == w[1].name)
         || fields
             .iter()

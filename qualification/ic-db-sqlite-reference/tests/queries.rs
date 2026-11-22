@@ -1312,11 +1312,13 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
     .unwrap();
     check(&db);
 
-    // The missing target refuses the whole batch. SQLite still holds the last commit.
-    let mut refused = Batch::new();
-    refused.delete::<Item>(14).unwrap();
-    refused.delete::<Item>(99).unwrap();
-    assert!(matches!(db.commit(refused), Err(ic_db::Error::Missing)));
+    // Deleting absent IDs is a no-op in both engines.
+    let mut deletes = Batch::new();
+    deletes.delete::<Item>(15).unwrap();
+    deletes.delete::<Item>(99).unwrap();
+    db.commit(deletes).unwrap();
+    sql.execute("DELETE FROM items WHERE id IN (15,99)", [])
+        .unwrap();
     check(&db);
     drop(db);
     check(&open(&host));

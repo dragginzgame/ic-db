@@ -40,7 +40,9 @@ use field::Field;
 /// with named fields for `session.get_unique(&key)`. A sparse unique key takes
 /// the present component types. Equivalent unique indexes share a key type.
 /// Required or optional supported key fields may declare `references(entity = "path::Target")`;
-/// select the sole unfiltered index leading with this field, or use `index = "name"`.
+/// scalar references select the sole eligible leading index, or use `index = "name"`.
+/// List references maintain their own reverse entries and accept a combined bound of 32 items
+/// per entity. Use `max_row_bytes` to set this entity’s encoded row budget (default 4096, maximum 32768).
 /// `None` has no target; every `Some(id)` requires that target in the final batch state.
 /// `entity = "path::Target"` lets Rust resolve an entity type (including imports
 /// and `Self`) to its logical identity. Numeric authoring IDs are unsupported.
@@ -53,7 +55,7 @@ use field::Field;
 /// record defaults are not implemented. Defaults never run on decode/replacement.
 /// Required Timestamp fields and their scalar newtypes may declare `managed = "created_at"` or
 /// `managed = "updated_at"`, once per role. These fields have no insert setters;
-/// use `Batch::at(time)` to supply one operation time for the entire batch.
+/// one batch captures one operation time for all managed fields.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
     expand(args.into(), item.into())
@@ -364,6 +366,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let item = declaration(item, "entity")?;
     let mut logical_name = None;
     let mut primary = None;
+    let mut max_row_bytes = None;
     let mut store = None;
     let mut authored = None;
     let mut timestamps = None;
@@ -376,6 +379,21 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             once(&mut store, owner_path(&meta)?, &meta)?;
         } else if matches!(&meta, Meta::Path(path) if path.is_ident("timestamps")) {
             once(&mut timestamps, (), &meta)?;
+        } else if meta.path().is_ident("max_row_bytes") {
+            let Lit::Int(value) = literal(&meta)? else {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "max_row_bytes requires an integer",
+                ));
+            };
+            let limit = value.base10_parse::<usize>()?;
+            if !(1..=32768).contains(&limit) {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "max_row_bytes must be 1..=32768",
+                ));
+            }
+            once(&mut max_row_bytes, limit, &meta)?;
         } else if meta.path().is_ident("pk") {
             let mut key = None;
             for part in meta_items(&meta)? {
@@ -452,12 +470,12 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let names: BTreeSet<_> = authored.iter().map(|field| &field.name).collect();
     if names.len() != authored.len()
         || authored.is_empty()
-        || authored.len() > 16
+        || authored.len() > 32
         || !names.contains(&primary)
         || authored.iter().any(|field| field.name.len() > 64)
     {
         return Err(fail(
-            "invalid, duplicate or excessive fields/primary key (1..16 fields)",
+            "invalid, duplicate or excessive fields/primary key (1..32 fields)",
         ));
     }
     let field_ids: Vec<syn::Ident> = authored
@@ -488,6 +506,13 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let mut encoded_indexes = Vec::new();
     for field in &mut authored {
         if let Some((_, selected)) = &mut field.reference {
+            if field.many.is_some() {
+                if selected.is_some() {
+                    return Err(fail("list references maintain their own reverse index"));
+                }
+                *selected = Some(field.name.clone());
+                continue;
+            }
             let candidates: Vec<_> = indexes
                 .iter()
                 .filter(|index| !index.present_only && index.fields.first() == Some(&field.name))
@@ -613,7 +638,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let nested_validation = if nested_writes.is_empty() {
         quote!()
     } else {
-        quote! { let mut writer = ::ic_db::__private::Encoder::new(); #(#nested_writes)* }
+        quote! { let mut writer = ::ic_db::__private::Encoder::for_entity(<Self as ::ic_db::Entity>::SCHEMA); #(#nested_writes)* }
     };
     let writes: Vec<_> = ordered
         .iter()
@@ -671,10 +696,22 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
 
         quote!(::ic_db::__private::validate_managed_order([#(#values),*])?;)
     };
+    let max_row_bytes = max_row_bytes.unwrap_or(4096);
     let membership = membership(name);
     let reference_checks = authored.iter().filter_map(|field| field.reference.as_ref()).map(|(target,_)| quote! {
         { fn same_store<T: ::ic_db::Entity<Store = #store>>() {} let _ = same_store::<#target>; }
     });
+    let list_links = authored.iter().filter(|f| f.reference.is_some() && f.many.is_some()).map(|f| {
+        let logical = &f.name;
+        let ident: syn::Ident = syn::parse_str(logical).expect("admitted field");
+        let items = if f.optional { quote!(row.#ident.iter().flatten()) } else { quote!(row.#ident.iter()) };
+        quote!(links.extend(#items.map(|key| (::ic_db::__private::handle(#logical), ::ic_db::PrimaryKey::into_row_key(*key))));)
+    }).collect::<Vec<_>>();
+    let links = if list_links.is_empty() {
+        quote!(::std::vec::Vec::new())
+    } else {
+        quote!({ let mut links = ::std::vec::Vec::new(); #(#list_links)* links })
+    };
     let validate_managed = managed_check(quote!(self));
     let decode_managed = managed_check(quote!(row));
 
@@ -692,7 +729,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             type Key = #key_type;
             fn declaration_path() -> &'static str { #(#reference_checks)* concat!(module_path!(), "::", stringify!(#name)) }
             const SCHEMA: &'static ::ic_db::EntitySchema = &::ic_db::EntitySchema {
-                id: ::ic_db::__private::handle(#logical_name), name: #logical_name, fields: &[#(#descriptions_fields),*], primary_key: #primary,
+                max_row_bytes: #max_row_bytes, id: ::ic_db::__private::handle(#logical_name), name: #logical_name, fields: &[#(#descriptions_fields),*], primary_key: #primary,
                 indexes: &[#(#descriptions),*],
             };
             fn key(&self) -> Self::Key { self.#key_id }
@@ -702,7 +739,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
 
                 ::ic_db::__private::RowInfo {
                     key: ::ic_db::PrimaryKey::into_row_key(<Self as ::ic_db::Entity>::key(row)),
-                    indexes: ::std::vec![#(#encoded_indexes),*]
+                    list_links: #links, indexes: ::std::vec![#(#encoded_indexes),*]
                 }
             }
 
@@ -716,14 +753,14 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
 
             fn encode(&self) -> Result<::std::vec::Vec<u8>, ::ic_db::Error> {
                 #validate_managed
-                let mut writer = ::ic_db::__private::Encoder::new();
+                let mut writer = ::ic_db::__private::Encoder::for_entity(<Self as ::ic_db::Entity>::SCHEMA);
                 #(#writes)*
 
                 Ok(writer.finish())
             }
 
             fn decode(bytes: &[u8]) -> Result<Self, ::ic_db::Error> {
-                let mut reader = ::ic_db::__private::Decoder::new(bytes)?;
+                let mut reader = ::ic_db::__private::Decoder::for_entity(bytes, <Self as ::ic_db::Entity>::SCHEMA)?;
                 let row = Self { #(#reads)* };
                 reader.finish()?;
                 #decode_managed

@@ -258,7 +258,9 @@ impl<'a> Record<&'a [u8]> {
             || record.examined > MAX_CANDIDATES
             || record.count > record.examined
             || record.sequence > record.examined + 2
-            || record.input_bytes > record.examined * super::super::super::CANDIDATE_BYTES as u64
+            || record.input_bytes
+                > record.examined
+                    * super::super::super::candidate_byte_limit(crate::codec::MAX_ROW_BYTES) as u64
             || (matches!(record.phase, JobOutcome::Complete(())) && !record.cursor.is_empty())
             || (matches!(record.phase, JobOutcome::Running)
                 && (record.observed >= record.expires

@@ -29,3 +29,14 @@ __wire_as!(Float32, ic_wire::FiniteF32);
 __wire_as!(Float64, ic_wire::FiniteF64);
 
 __wire_as!(U256, str);
+
+impl<E: crate::Entity> ic_wire::typescript::Wire for crate::Id<E>
+where
+    E::Key: ic_wire::typescript::Wire,
+{
+    fn schema(
+        context: &mut ic_wire::typescript::SchemaContext,
+    ) -> Result<ic_wire::typescript::__private::Value, ic_wire::typescript::GenerationError> {
+        context.describe::<E::Key>()
+    }
+}
