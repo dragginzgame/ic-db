@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.27.3"
+version = "0.27.4"
 dependencies = [
  "ctor",
  "ethnum",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-cli"
-version = "0.27.3"
+version = "0.27.4"
 dependencies = [
  "clap",
  "ic-db-cli-fixture",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.27.3"
+version = "0.27.4"
 dependencies = [
  "proc-macro2",
  "quote",
