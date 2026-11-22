@@ -88,11 +88,12 @@ fn console_counts_use_entity_metadata() {
     .unwrap();
     let output = run_console(
         &binary,
-        "count Entry\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\ncount SetRow\ncount IdentityRow\nquit\n",
+        "count Entry\nquery Entry --min 0 --select count --work 1\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\ncount SetRow\ncount IdentityRow\nquit\n",
     );
     assert_eq!(
         result_table_rows(&output),
         [
+            vec!["6"],
             vec!["6"],
             vec!["1"],
             vec!["3"],
@@ -642,7 +643,7 @@ fn console_inspects_and_queries() {
         "query Document --text title unknown needle",
         "query Entry --select note",
         "query Entry --select category --distinct --limit 1",
-        "query Entry --min 0 --select count --work 6",
+        "query Entry --min 40 --select count --work 1",
         "query Entry --select exists --min 999 --work 6",
         "query Entry --select exists --group-min 0",
         "query Entry --select exists --distinct",
