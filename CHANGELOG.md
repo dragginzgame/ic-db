@@ -5,9 +5,7 @@
 ### ✨ Schema
 
 - Text newtypes accept `validate(non_blank, max_chars = 50)`. Construction, Wire and stored reads enforce the same limits; text keeps its original spacing and Unicode encoding.
-
 - Reusable schema values are available from `ic_db::types`, starting with `NonAnonymousPrincipal`. The `#[newtype]` macro supplies `#[serde(transparent)]` by default.
-
 - Declare an owner as `item(is = "NonAnonymousPrincipal")` and construct it with `NonAnonymousPrincipal::try_from(principal)?`. Stored reads and Wire decoding reject anonymous owners. Adopting the checked type on an existing field requires a schema transition.
 
 ### 🔍 Queries
@@ -23,33 +21,19 @@
 ### 🔍 Queries
 
 - Ordered index and primary-key scans now finish `.first()` directly, without copying the scan position into a continuation that the caller cannot use.
-
 - IDs from `row.id()` can be sorted or used directly as map keys and set members when the primary key supports the operation.
-
 - `get_many::<E>(&ids)` accepts a slice of entity-typed IDs from `row.id()` as well as raw keys. For a bare empty slice, specify the element type.
-
 - Use `db.get_unique(&key)?` with a standalone database or a session read guard. It accepts the same generated keys as the session lookup.
-
 - `Database::page()` omits the continuation when the final row exactly fills a primary-key page, saving an empty follow-up call.
-
 - `get_many()` looks up each distinct primary key once per call, including missing keys. Repeated IDs still return a result at every requested position.
-
 - Ordinary ordered `.try_one()` validates the requested order and skips a fallback sort. A large field can now exceed the sort-key limit and still allow a sole matching row to be returned.
-
 - DISTINCT can page a selected column in the order of an indexed record member when a mandatory equality ties them together. For example, with `bucket == rating.score`, ordering by `rating.score` groups duplicate buckets. The same equality can justify a bounded sort.
-
 - `.try_one()` reports `MultipleMatches` when it proves a second result, even at the work boundary or when only the first result fits in the response. This applies to bounded sorts too. With DISTINCT, the two projected values must differ.
-
 - Use `.select(|e| e.id).first()` for the first matching ID or `.try_one()` to require at most one match. Both also support selected tuples.
-
 - An ordered DISTINCT lookup can finish at its first validated match when every selected field is fixed by the query. This also works when ordering all matching rows would require a sort.
-
 - DISTINCT can return a record-valued column when a primary or unique key proves the result is already distinct. Partial keys still require comparable projected fields.
-
 - A paginated DISTINCT scan finishes as soon as it returns the only class its index prefix or filters allow. Sparse scans still return a continuation while searching for the first match.
-
 - DISTINCT recognizes a selected column fixed through a mandatory equality with another column. With a fixed index prefix, sparse matches can now be paged one candidate at a time.
-
 - When a filter requires two columns to be equal, ordering by either can page their DISTINCT pairs on a matching index. Both selected values are returned. A selected column can also stand in for an equal primary-key or unique-index column. Compound keys require every component, and sparse indexes require proof that every matching row is indexed.
 
 ## [0.27.3] - 2026-11-22
