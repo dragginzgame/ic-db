@@ -237,7 +237,8 @@ m1-records: schema-build-check
 	$(MAKE) m1-records-wasm
 
 m1-records-wasm: m1-records-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys --test sorting -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --locked -p ic-db-cli --test console -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m1/records.wasm" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test records --test enum_collections --test defaults --test managed --test generation --test principal_keys --test account_keys --test sorting -- --nocapture
 
 .PHONY: m1-commit-failures
 .PHONY: m2-queries m2-sort-costs m2-sort-costs-artifact
@@ -253,6 +254,7 @@ m2-sort-costs-artifact:
 
 m2-sort-costs: m2-sort-costs-artifact
 	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting unique_decimal_order_matches_sqlite -- --ignored --nocapture
 
 .PHONY: m2-listing-costs
 m2-listing-costs: m2-sort-costs-artifact m2-sqlite-reference
@@ -320,14 +322,16 @@ m2-cli-artifact:
 	  cp "$$artifact" qualification/target/evidence/m2/console.wasm
 
 m2-cli: m2-cli-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --bin db --test console_text --test console_aggregates -- --nocapture
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" IC_DB_CLI_RETAINED=1 bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records console_inspects_and_queries -- --nocapture
+	cargo test --locked -p ic-db-cli --bin db
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test console_text --test console_aggregates -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" IC_DB_CLI_RETAINED=1 bash scripts/with-pocketic.sh cargo test --locked -p ic-db-cli --test console console_inspects_and_queries -- --nocapture
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test records product_records_and_message_boundary -- --nocapture
 
 .PHONY: m3-cli
 m3-cli: m2-cli-artifact
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --bin db --test console_migration --test console_text --test console_aggregates -- --nocapture
-	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test console_terminal -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --locked -p ic-db-cli --bin db --test migration -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test console_migration --test console_text --test console_aggregates -- --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/console.wasm" cargo test --locked -p ic-db-cli --test console_terminal -- --nocapture
 
 .PHONY: m1-write-envelope
 m1-write-envelope: m1-records-artifact
@@ -360,7 +364,7 @@ db: m2-cli-artifact
 	@set -eu; out=qualification/target/evidence/m1; \
 	  mkdir -p "$$out"; \
 	  fixture=qualification/target/evidence/m2/console.wasm; \
-	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --bin db --release --message-format=json-render-diagnostics > "$$out/db-build.jsonl"; \
+	  cargo build --locked -p ic-db-cli --bin db --release --message-format=json-render-diagnostics > "$$out/db-build.jsonl"; \
 	  binary="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "db") | .executable | select(. != null)] | if length == 1 then .[0] else error("expected one db binary") end' "$$out/db-build.jsonl")"; \
 	  mkdir -p "$(DB_INSTALL_PREFIX)/bin" "$(DB_INSTALL_PREFIX)/share/ic-db/m1"; \
 	  install -m 644 "$$fixture" "$(DB_INSTALL_PREFIX)/share/ic-db/m1/records.wasm"; \
@@ -392,6 +396,7 @@ release-tools:
 	bash vendor/toko-tooling/scripts/dev/install-rust-tools.sh --consumer "$(CURDIR)" --package ic-build --version 0.84.1 --bin ic-build-release-metadata --profile debug --features cli
 
 release-lint:
+	cargo clippy --locked -p ic-db-cli --all-targets -- -D warnings
 	$(MAKE) clippy
 	# Native callers/schema builds and IC-only fixtures have different target APIs.
 	cargo clippy --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver -p ic-db-m1-records-schema -p ic-db-sqlite-reference --all-targets -- -D warnings

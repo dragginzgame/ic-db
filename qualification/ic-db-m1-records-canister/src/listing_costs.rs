@@ -28,19 +28,23 @@ fn measured_listing(
     let db = open(&host);
     let cursor = decode_cursor(after.as_deref()).unwrap();
     let field = match shape {
-        0 | 1 | 4 => Document::SCORE,
+        0 | 1 | 4 | 5 | 6 | 7 => Document::SCORE,
         2 => Document::PREVIOUS_SCORE,
         _ => return Err("unknown listing shape".into()),
     };
-    let mut q = db
-        .query::<Document>()
-        .eq(Document::ENTRY_ID, 1_u64)
+    let documents = db.query::<Document>();
+    let input = match shape {
+        5 | 7 => documents.filter_between(Document::ENTRY_ID, 1_u64, 1_u64),
+        6 => documents.filter_between(Document::ENTRY_ID, 1_u64, 2_u64),
+        _ => documents.eq(Document::ENTRY_ID, 1_u64),
+    };
+    let mut q = input
         .order_by(&[field, Document::ID])
         .descending()
         .limit(20)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
-    if shape != 4 {
+    if !matches!(shape, 4 | 7) {
         q = q.eq(Document::PUBLISHED, true);
     }
     if let Some(max_id) = max_id {

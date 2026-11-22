@@ -547,10 +547,27 @@ impl<'a> Request<'a> {
     ) -> impl Iterator<Item = (&'a str, IndexValue<'a>)> + 'r {
         self.clauses().filter_map(move |clause| {
             let (predicate, rest) = clause.split_first()?;
-            let equality = predicate.fixed_equality(entity)?;
-            rest.iter()
-                .all(|other| other.fixed_equality(entity) == Some(equality))
-                .then_some(equality)
+            if let Some(equality) = predicate.fixed_equality(entity) {
+                return rest
+                    .iter()
+                    .all(|other| other.fixed_equality(entity) == Some(equality))
+                    .then_some(equality);
+            }
+            // Two mandatory inclusive bounds on the same literal fix one value.
+            // Leave both admitted terms intact for evaluation and cursor binding.
+            let ([], Comparison::Ge, QueryOperand::Literal(lower)) =
+                (rest, predicate.comparison, predicate.operand)
+            else {
+                return None;
+            };
+            self.clauses()
+                .any(|clause| {
+                    let [upper] = clause else { return false };
+                    upper.comparison == Comparison::Le
+                        && upper.field == predicate.field
+                        && upper.operand == QueryOperand::Literal(lower)
+                })
+                .then_some((predicate.field, lower))
         })
     }
 
@@ -1685,7 +1702,10 @@ impl<'a> Plan<'a> {
         // contradictory queries. The scanner consumes this one proven choice.
         match order::select(entity, request, output)? {
             order::Path::Primary => {}
-            order::Path::Index(path) => plan.use_index(entity, path),
+            order::Path::Index(path, descending) => {
+                plan.use_index(entity, path);
+                plan.descending = request.descending ^ descending;
+            }
             order::Path::Sort(fields) => {
                 order::select_filtered_path(entity, request, &mut plan, None)?;
                 for field in &fields {

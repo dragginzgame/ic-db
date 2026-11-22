@@ -2850,7 +2850,11 @@ both endpoints, the same cursor/job identity and two ordinary comparison terms.
 Operands must have the field's exact admitted type; absence refuses as a bound
 and never matches as a field value. Reversed bounds match nothing but do not
 bypass admission. This retains frozen IcyDB `6d421e3`'s inclusive `FieldRef::between`
-semantics (`db/query/builder/field/mod.rs`), without its allocated expression tree. Existing range selection and execution remain the owners.
+semantics (`db/query/builder/field/mod.rs`), without its allocated expression tree. For two mandatory literal bounds on the same field, range scans and point probes
+can establish an empty input from the admitted keys before reading candidates.
+This also covers equal endpoints when either comparison is strict, following
+the lower/upper rule in IcyDB’s `db/predicate/simplify/mod.rs` at that revision.
+An alternative inside an OR clause cannot establish a mandatory bound.
 
 `filter_not_between` lowers to one OR clause (`Lt lower`, then `Gt upper`),
 retaining IcyDB's `FieldRef::not_between` semantics and two-term budget without
@@ -2961,6 +2965,20 @@ backing; an explicitly selected predecessor also checks older conjunction cursor
 Primary-key order is the default. `using_index(name, prefix)` adds exact leading
 component constraints and uses the complete physical index order, including the
 primary-key suffix on nonunique indexes. `descending()` reverses that whole order.
+An admitted unique index also supplies a live order when the requested leading
+terms cover its varying components in index order and one direction. With those
+components equal there is at most one matching owner, so trailing requested
+terms and the implicit primary key cannot break ties. The varying unique
+components determine scan direction. Sparse membership must still be proven.
+Frozen IcyDB `6d421e3` checks deterministic index ordering and direction in
+`icydb-core/src/db/query/plan/order_contract/mod.rs`. IC DB makes this proof
+during path selection and uses its existing forward or reverse cursor traversal.
+Two mandatory inclusive literal bounds on the same field and exact value also
+fix an index component. Frozen IcyDB `6d421e3` simplifies conjunctions in
+`icydb-core/src/db/predicate/simplify/mod.rs`. IC DB derives the equality
+from the admitted request for path selection. Both comparisons still count
+toward the term budget and bind the cursor. A bound inside an OR clause does
+not independently establish this equality.
 Sparse indexes require presence proof for every optional indexed field: either
 a present prefix operand or a mandatory filter clause whose every alternative
 requires that field to be present. An incomplete sparse path refuses rather
@@ -4168,6 +4186,14 @@ increments the previous 80-bit suffix for equal/backward timestamps and refuses
 overflow without changing the previous value. Commit `4cedc33e` changed the
 generator to accept the write operation's timestamp; generated fields must use
 that same captured time rather than independent clock reads.
+
+A typed insert that omits a primitive ULID primary key issues it from the
+same predictable stream as `Ulid::generate_prand()`. An explicit key, including
+zero, is stored verbatim. The insert input uses the batch timestamp when supplied
+and otherwise reads the current clock. Resolving the input consumes the ID, so
+a later refusal may leave a gap. Legacy `6d421e3` selected ULID issuance with
+`generated(insert = "Ulid::generate")`; IC DB infers this single omission
+rule from the declared key type. Non-key ULID fields follow ordinary omission rules.
 
 On Wasm, `Ulid::generate_prand()` owns a private heap-local stream
 and reads IC time, principal and version through Platform. Owned seeded generators also accept a captured operation timestamp through

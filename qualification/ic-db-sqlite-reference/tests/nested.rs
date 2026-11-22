@@ -95,6 +95,25 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     db.commit(batch).unwrap();
     drop(db);
     let db = fixture.open(schema()).unwrap();
+    for (lower, upper) in [(125_i32, -15_i32), (-15, -15), (-15, 0)] {
+        let expected: i64 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM products WHERE cents BETWEEN ?1 AND ?2",
+                (lower, upper),
+                |row| row.get(0),
+            )
+            .unwrap();
+        let query = db.query::<Product>().filter_between(
+            AMOUNT,
+            Decimal::try_new(i128::from(lower), 2).unwrap(),
+            Decimal::try_new(i128::from(upper), 2).unwrap(),
+        );
+        let count = query.count_validated().unwrap();
+        assert_eq!(count.value, u64::try_from(expected).unwrap());
+        if lower > upper {
+            assert_eq!((count.examined, count.fetched), (0, 0));
+        }
+    }
     let zero = Decimal::try_new(0, 2).unwrap();
     for (op, sql_op) in [
         (ic_db::Comparison::Eq, "="),

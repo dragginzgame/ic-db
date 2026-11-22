@@ -37,17 +37,13 @@ impl SeededUlidGenerator {
         self.issuer.generate(timestamp, self.seed)
     }
 
-    fn at(&mut self, time_ns: u64) -> Ulid {
-        self.next_at(Timestamp::from_millis((time_ns / 1_000_000) as i64))
-            .expect("ULID suffix exhausted at the current logical timestamp")
-    }
-
     /// Issue synchronously at the current time, advancing only this stream.
     ///
     /// # Panics
     /// Traps on exhaustion after at least 2^79 same-millisecond increments.
     pub fn next_id(&mut self) -> Ulid {
-        self.at(crate::clock::time_ns())
+        self.next_at(Timestamp::now())
+            .expect("ULID suffix exhausted at the current logical timestamp")
     }
 }
 
@@ -70,10 +66,22 @@ fn stream((owner, version): (impl AsRef<[u8]>, u64), number: Option<u64>) -> See
     SeededUlidGenerator::new(std::array::from_fn(|i| digest[i]))
 }
 
-pub(super) fn generate<T: AsRef<[u8]>>(time_ns: u64, identity: impl FnOnce() -> (T, u64)) -> Ulid {
+pub(super) fn generate<T: AsRef<[u8]>>(
+    time: Timestamp,
+    identity: impl FnOnce() -> (T, u64),
+) -> Result<Ulid, UlidGenerationError> {
     DEFAULT_STREAM.with_borrow_mut(|slot| {
         slot.get_or_insert_with(|| stream(identity(), None))
-            .at(time_ns)
+            .next_at(time)
+    })
+}
+
+/// Resolve an omitted primitive ULID primary key during insert preparation.
+#[doc(hidden)]
+pub fn insert_ulid(time: Option<Timestamp>) -> Result<Ulid, crate::Error> {
+    generate(time.unwrap_or_else(Timestamp::now), platform::identity).map_err(|error| match error {
+        UlidGenerationError::InvalidTimestamp => crate::Error::InvalidOperand,
+        UlidGenerationError::Exhausted => crate::Error::Limit,
     })
 }
 
@@ -97,7 +105,8 @@ impl Ulid {
     /// Panics on suffix exhaustion or if the native OS cannot seed the thread.
     #[must_use]
     pub fn generate_prand() -> Self {
-        generate(crate::clock::time_ns(), platform::identity)
+        generate(Timestamp::now(), platform::identity)
+            .expect("ULID suffix exhausted at the current logical timestamp")
     }
 
     /// Start an owned generator with fresh entropy from the IC or native OS. Later issuance is synchronous.

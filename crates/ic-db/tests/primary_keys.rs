@@ -96,6 +96,37 @@ fn rows() -> Vec<KeyRow> {
     .collect()
 }
 
+#[test]
+fn insert_input_issues_omitted_ulid_keys_and_preserves_explicit_ids() {
+    let runtime = host(VectorMemory::default());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let db = Database::create(runtime.open_memory(&slot).unwrap(), schema(), [12; 16]).unwrap();
+    let session = ic_db::DatabaseSession::new(db);
+    let mut batch = Batch::at(Timestamp::from_millis(123));
+    let first = batch.insert_input(KeyRow::insert().value(1)).unwrap();
+    let second = batch.insert_input(KeyRow::insert().value(2)).unwrap();
+    assert_eq!(u128::from_be_bytes(first.id.to_bytes()) >> 80, 123);
+    assert_eq!(
+        u128::from_be_bytes(second.id.to_bytes()),
+        u128::from_be_bytes(first.id.to_bytes()) + 1
+    );
+    session.commit(batch).unwrap();
+    let auto = session.insert_input(KeyRow::insert().value(3)).unwrap();
+    assert!(auto.id > second.id);
+    let explicit = session
+        .insert_input(KeyRow::insert().id(Ulid::MIN).value(4))
+        .unwrap();
+    assert_eq!(explicit.id, Ulid::MIN);
+    for row in [first, second, auto, explicit] {
+        assert_eq!(session.get::<KeyRow>(row.id).unwrap(), Some(row));
+    }
+    let mut invalid = Batch::at(Timestamp::from_millis(-1));
+    assert!(matches!(
+        invalid.insert_input(KeyRow::insert().value(5)),
+        Err(Error::InvalidOperand)
+    ));
+}
+
 fn physical_row(id: Ulid) -> Vec<u8> {
     let mut b = vec![2];
     b.extend(KeyRow::SCHEMA.id.to_be_bytes());

@@ -2736,6 +2736,44 @@ fn inclusive_ranges_preserve_endpoints_absence_index_order_and_continuation() {
 }
 
 #[test]
+fn contradictory_residual_bounds_finish_without_examining_candidates() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let listing = || db.query::<Entry>().using_index("category", &[]);
+    for (lower, start, upper, end) in [
+        (C::Ge, 40_u64, C::Le, 20_u64),
+        (C::Gt, 40, C::Le, 40),
+        (C::Ge, 40, C::Lt, 40),
+        (C::Gt, 40, C::Lt, 40),
+    ] {
+        let query = listing()
+            .filter(Entry::AMOUNT, upper, end)
+            .filter(Entry::AMOUNT, lower, start)
+            .work_limit(1);
+        let count = query.count_validated().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
+    }
+    let probes = db
+        .query::<Entry>()
+        .filter_in(Entry::ID, &[1_u64, 4])
+        .filter_between(Entry::AMOUNT, 40_u64, 20_u64)
+        .work_limit(2)
+        .count_validated()
+        .unwrap();
+    assert_eq!((probes.value, probes.examined, probes.fetched), (0, 0, 0));
+    let alternatives = [
+        (Entry::AMOUNT, C::Lt, 40_u64.into()),
+        (Entry::ID, C::Eq, 4_u64.into()),
+    ];
+    let page = listing()
+        .gte(Entry::AMOUNT, 40_u64)
+        .filter_any(&alternatives)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&page.rows), [4]);
+}
+
+#[test]
 fn inclusive_ranges_admit_both_operands_and_share_the_filter_budget() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
@@ -3440,6 +3478,19 @@ fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
             .fetch(),
         Err(Error::InvalidQuery)
     ));
+    // An alternative upper or lower bound cannot fix the category for this index order.
+    for (required, alternative) in [(C::Ge, C::Le), (C::Le, C::Ge)] {
+        let query = db
+            .query::<Entry>()
+            .filter("category", required, 1_u8)
+            .filter_any(&[
+                ("category", alternative, 1_u8.into()),
+                ("id", C::Gt, 0_u64.into()),
+            ])
+            .using_index("category", &[])
+            .order_by(&["id"]);
+        assert!(matches!(query.fetch(), Err(Error::InvalidQuery)));
+    }
     let groups = db
         .query::<Entry>()
         .filter_any(&alternatives)
@@ -6221,6 +6272,63 @@ fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
     }
     assert!(after.is_none());
     assert_eq!(seen, expected);
+    // With the section fixed, seat numbers uniquely order the matching owners.
+    // The ascending ID suffix cannot break a tie, including on continued pages.
+    for hinted in [false, true] {
+        for reverse in [false, true] {
+            let mut seen = Vec::new();
+            let mut after = None;
+            for _ in 0..20 {
+                let mut query = db
+                    .query::<Seat>()
+                    .eq(Seat::CATEGORY, 1_u8)
+                    .filter_present(Seat::MAYBE)
+                    .order_desc(Seat::MAYBE)
+                    .order_asc(Seat::ID)
+                    .work_limit(2)
+                    .limit(2);
+                if hinted {
+                    query = query.using_index("category,maybe", &[]);
+                }
+                if reverse {
+                    query = query.descending();
+                }
+                if let Some(cursor) = &after {
+                    query = query.after(cursor);
+                }
+                let page = query.fetch().unwrap();
+                seen.extend(page.rows.into_iter().map(|r| r.id));
+                after = page.next;
+                if after.is_none() {
+                    break;
+                }
+            }
+            let mut ordered: Vec<u64> = (3..38).step_by(2).collect();
+            if !reverse {
+                ordered.reverse();
+            }
+            assert!(after.is_none());
+            assert_eq!(seen, ordered);
+        }
+    }
+    // Both varying components precede uniqueness, so mixed directions still
+    // require sorting. The sparse index also needs proof of complete membership.
+    assert!(matches!(
+        present()
+            .using_index("category,maybe", &[])
+            .order_asc(Seat::CATEGORY)
+            .order_desc(Seat::MAYBE)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert!(matches!(
+        db.query::<Seat>()
+            .using_index("category,maybe", &[])
+            .order_desc(Seat::CATEGORY)
+            .order_desc(Seat::MAYBE)
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
     // Fixing the section leaves the seat number unique on either traversal.
     let section = [1_u8.into()];
     for explicit in [false, true] {

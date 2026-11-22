@@ -324,12 +324,43 @@ pub(super) fn preserves_primary_bounds(
     })
 }
 
+// Only mandatory bounds constrain every result, including when a different
+// index supplies the order. Compare the same admitted keys used by traversal.
+pub(super) fn empty_input(entity: &EntitySchema, request: &Request<'_>, plan: &Plan<'_>) -> bool {
+    if plan.terms.len() >= 2 {
+        let endpoints = |inclusive, strict| {
+            plan.clauses()
+                .zip(request.clauses())
+                .filter_map(move |(terms, predicates)| {
+                    let [term] = terms else { return None };
+                    if term.comparison != inclusive && term.comparison != strict {
+                        return None;
+                    }
+                    let (key, false) = literal(term)? else {
+                        return None;
+                    };
+                    Some((predicates.first()?.field, key, term.comparison == inclusive))
+                })
+        };
+        for (field, start, include_start) in endpoints(Comparison::Ge, Comparison::Gt) {
+            for (other, end, include_end) in endpoints(Comparison::Le, Comparison::Lt) {
+                if field == other
+                    && (start > end || (start == end && !(include_start && include_end)))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    super::order::has_conflicting_predicates(entity, request, plan.index)
+}
+
 pub(super) fn bounds(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &Plan<'_>,
 ) -> Result<Option<Bounds>, Error> {
-    if super::order::has_conflicting_predicates(entity, request, plan.index) {
+    if empty_input(entity, request, plan) {
         return Ok(None);
     }
     let mut lower = Endpoint {

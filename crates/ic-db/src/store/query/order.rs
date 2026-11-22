@@ -42,7 +42,7 @@ pub(super) struct SortField {
 
 pub(super) enum Path<'a> {
     Primary,
-    Index(IndexPath<'a>),
+    Index(IndexPath<'a>, bool),
     Sort(Vec<SortField>),
 }
 
@@ -78,7 +78,14 @@ pub(super) fn select<'a>(
         }
     }
     let single_row = equality(entity, request, entity.primary_key).is_some();
-    let fits_order = |index, fixed| single_row || satisfies(entity, request, index, fixed);
+    let primary_direction = request.primary_descending(entity);
+    let direction = |index, fixed| {
+        if single_row {
+            Some(primary_direction)
+        } else {
+            scan_direction(entity, request, index, fixed, primary_direction)
+        }
+    };
     if let Some((name, values)) = &request.index {
         let index = entity.index_by_name(name).ok_or(Error::InvalidQuery)?;
         if values.len() > index.fields.len() {
@@ -87,17 +94,22 @@ pub(super) fn select<'a>(
         let prefix = admit_index_prefix(entity, index, values)?;
         let exact_owner =
             matches!(output, super::PlanOutput::Rows) && index.is_unique_lookup(values.len());
-        if !complete_membership(entity, index, index.fields, values, request)
-            || !(request.order.is_none() || exact_owner || fits_order(Some(index), values.len()))
-        {
+        if !complete_membership(entity, index, index.fields, values, request) {
             return Err(Error::InvalidQuery);
         }
-
-        return Ok(Path::Index(IndexPath {
-            index,
-            prefix,
-            fixed: values.len(),
-        }));
+        let descending = if request.order.is_none() || exact_owner {
+            primary_direction
+        } else {
+            direction(Some(index), values.len()).ok_or(Error::InvalidQuery)?
+        };
+        return Ok(Path::Index(
+            IndexPath {
+                index,
+                prefix,
+                fixed: values.len(),
+            },
+            descending,
+        ));
     }
     // No secondary prefix can narrow a direct primary-key seek. Resumed DISTINCT
     // pages may already be bound to a secondary traversal.
@@ -111,7 +123,7 @@ pub(super) fn select<'a>(
         && !request.predicates.is_empty()
         && let Some(path) = unique_lookup(entity, request)?
     {
-        return Ok(Path::Index(path));
+        return Ok(Path::Index(path, primary_direction));
     }
     // Before 0.23.13 a default-order page could only resume on the primary
     // path. The cursor still has to pass the complete binding and key checks.
@@ -125,28 +137,30 @@ pub(super) fn select<'a>(
     if default_primary {
         return Ok(Path::Primary);
     }
-    let primary_fits = fits_order(None, 0);
-    let mut best: Option<IndexPath<'_>> = None;
+    let primary_fits = direction(None, 0).is_some();
+    let mut best: Option<(IndexPath<'_>, bool)> = None;
     for index in entity.indexes {
         let values = leading_equalities(entity, request, index);
         if (primary_fits && values.is_empty())
             || !complete_membership(entity, index, index.fields, &values, request)
-            || !fits_order(Some(index), values.len())
         {
             continue;
         }
+        let Some(descending) = direction(Some(index), values.len()) else {
+            continue;
+        };
         if best
             .as_ref()
-            .is_none_or(|old| rank(index, values.len()) < rank(old.index, old.fixed))
+            .is_none_or(|(old, _)| rank(index, values.len()) < rank(old.index, old.fixed))
             && let Some(path) = automatic_prefix(entity, index, &values)?
         {
-            best = Some(path);
+            best = Some((path, descending));
         }
     }
     // A restrictive prefix avoids unrelated candidates. Otherwise prefer direct
     // primary traversal to fetching rows through an equally broad index scan.
-    if let Some(path) = best {
-        return Ok(Path::Index(path));
+    if let Some((path, descending)) = best {
+        return Ok(Path::Index(path, descending));
     }
     if primary_fits {
         return Ok(Path::Primary);
@@ -457,12 +471,13 @@ pub(super) fn complete_membership(
         })
 }
 
-fn satisfies(
+fn scan_direction(
     entity: &EntitySchema,
     request: &Request<'_>,
     index: Option<&IndexSchema>,
     prefix_len: usize,
-) -> bool {
+    primary_direction: bool,
+) -> Option<bool> {
     // An empty requested field list leaves just the primary-key tie-breaker.
     let order = request.order.as_deref().unwrap_or_default();
     let fields = index.map_or(&[][..], |i| i.fields);
@@ -471,18 +486,34 @@ fn satisfies(
     };
     // A fixed primary key admits at most one record, so every admitted order fits.
     if fields[..prefix_len].contains(&entity.primary_key) {
-        return true;
+        return Some(primary_direction);
+    }
+    // Once the requested order distinguishes a complete unique tuple, no
+    // later term can break a tie. Only varying key components set the direction.
+    if index.is_some_and(|i| i.unique) && !order.is_empty() {
+        let mut wanted = order.iter().enumerate().filter(|(_, name)| !fixed(name));
+        let mut direction = None;
+        let matches = fields.iter().filter(|name| !fixed(name)).all(|name| {
+            let Some((slot, requested)) = wanted.next() else {
+                return false;
+            };
+            let descending = request.order_descending & (1 << slot) != 0;
+            requested == name && *direction.get_or_insert(descending) == descending
+        });
+        if matches {
+            return Some(direction.unwrap_or(primary_direction));
+        }
     }
     // Current physical keys share one direction. Constant fields do not affect
     // ordering, but every varying field must agree with the primary tie-breaker.
     // The ordinary all-ascending order already has uniform directions. For
     // explicit directions, only a disagreement needs a fixed-field proof.
     if request.order_descending != 0 {
-        let descending = request.primary_descending(entity);
+        let descending = primary_direction;
         if order.iter().enumerate().any(|(i, name)| {
             (request.order_descending & (1 << i) != 0) != descending && !fixed(name)
         }) {
-            return false;
+            return None;
         }
     }
     // The primary key uniquely determines all later components. Compare both
@@ -500,7 +531,7 @@ fn satisfies(
         .filter(|name| !fixed(name))
         .chain(std::iter::once(entity.primary_key));
 
-    wanted.eq(supplied)
+    wanted.eq(supplied).then_some(primary_direction)
 }
 
 // The caller supplies either known query values or just the selected key prefix.

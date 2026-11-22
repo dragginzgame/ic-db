@@ -140,7 +140,7 @@ impl Literal {
     }
 }
 
-pub(super) fn emit(item: &ItemStruct, fields: &[Field]) -> syn::Result<TokenStream> {
+pub(super) fn emit(item: &ItemStruct, fields: &[Field], primary: &str) -> syn::Result<TokenStream> {
     let entity = &item.ident;
     let visibility = &item.vis;
     let input = format_ident!("{}Insert", entity);
@@ -178,6 +178,9 @@ pub(super) fn emit(item: &ItemStruct, fields: &[Field]) -> syn::Result<TokenStre
                 } else {
                     value
                 }
+            }
+            None if name == primary && matches!(field.kind, Kind::Ulid) => {
+                quote!(::ic_db::__private::insert_ulid(_time)?)
             }
             None if field.optional => quote!(None),
             None => quote!(return Err(::ic_db::Error::MissingField(#name))),

@@ -200,7 +200,8 @@ impl Batch {
     /// Resolve a typed insert input, append it to this batch and return its full row.
     /// This is preparation, not a commit; the returned row is not yet persistent.
     /// Explicit `None` remains absence, while omitted fields select their declared
-    /// literal default or optional absence. No defaults run during replacement.
+    /// literal default or optional absence. An omitted ULID primary key is issued
+    /// from the local stream at the operation time. No defaults run during replacement.
     /// # Errors
     /// Refuses missing required values, field/row bounds or batch capacity.
     /// A refused input appends no mutation to the batch.

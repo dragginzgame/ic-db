@@ -175,7 +175,7 @@ fn point_members<'a>(
         }
         // Probes bypass range construction. Apply its contradiction check before
         // reading owners for predicates the individual keys could not settle.
-        if super::order::has_conflicting_predicates(entity, request, plan.index) {
+        if super::range::empty_input(entity, request, plan) {
             members.clear();
         }
     }

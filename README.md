@@ -794,12 +794,19 @@ effective subaccount. Optional fields and collections use the same rules.
 Inspect `AccountRow` with `db schema`; the Info column shows byte widths.
 `prim = "Ulid"` uses `ic_db::Ulid`, with exact 16-byte storage and ordered keys.
 Construct supplied values with `Ulid::from_bytes`, `Ulid::from_u128`, or parse
-canonical uppercase 26-character text. `db schema` shows `UlidRow`. Automatic
-schema-field generation remains separate work. The `ulid` dependency's default RNG feature is disabled.
+canonical uppercase 26-character text. `db schema` shows `UlidRow`. The `ulid` dependency's default RNG feature is disabled.
 Declare `pk(field = "id")` with `id` of `prim = "Ulid"` to use ULID primary keys.
 `get`, `delete` and `page` then accept ULIDs, including typed continuation keys.
-Inspect `KeyRow` and its mixed-key references with `db schema`.
-Issue an ID synchronously in a canister update or native application:
+Omit the key on the typed insert to generate it synchronously and get the committed row:
+
+```rust
+let row = session.insert_input(KeyRow::insert().value(42))?;
+let id = row.id;
+```
+
+Supply `.id(existing_id)` to keep a caller-owned identity. Inspect `KeyRow`
+and its mixed-key references with `db schema`.
+To issue an ID separately in a canister update or native application, call:
 
 ```rust
 let id = Ulid::generate_prand();
@@ -854,7 +861,7 @@ default. Omitted optional fields without defaults become `None`; missing require
 fields refuse. Fully specified `batch.insert(&row)` remains available.
 Defaults never run on replacement, decode or reopen. Changing a declared default
 changes the schema contract; it does not silently backfill stored rows. Inspect
-`DefaultRow` with `db schema`. Nested-record and primary-key defaults are not yet
+`DefaultRow` with `db schema`. Nested-record and primary-key literal defaults are not yet
 supported; no existing authoring attributes were removed.
 
 Place the bare entity option `timestamps` on the line immediately after the
@@ -1308,6 +1315,8 @@ Each field accepts `:asc` or `:desc`; omitted directions and the implicit primar
 tie-breaker are ascending. The fluent equivalent is
 `.order_asc(Entry::CATEGORY).order_desc(Entry::AMOUNT)`.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
+The private [CLI crate](crates/ic-db-cli/Cargo.toml) owns the installed `db` command.
+Its local canister and [shared fixture support](qualification/ic-db-cli-fixture/Cargo.toml) live under `qualification/`.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six

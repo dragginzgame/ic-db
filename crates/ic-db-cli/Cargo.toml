@@ -1,0 +1,31 @@
+[package]
+name = "ic-db-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish = false
+
+[package.metadata.cargo-machete]
+ignored = ["toko-tooling"]
+
+[[bin]]
+name = "db"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+ic-db-cli-fixture = { workspace = true, features = ["host"] }
+ic-host-text.workspace = true
+ic-testkit.workspace = true
+ic-wire.workspace = true
+rustyline.workspace = true
+serde_json.workspace = true
+shlex.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+toko-tooling.workspace = true
+
+[lints]
+workspace = true

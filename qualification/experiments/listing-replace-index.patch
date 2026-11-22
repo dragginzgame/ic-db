@@ -1,6 +1,15 @@
 --- a/qualification/ic-db-m0-rollback-driver/tests/listing_costs.rs
 +++ b/qualification/ic-db-m0-rollback-driver/tests/listing_costs.rs
-@@ -191,22 +191,12 @@
+@@ -145,7 +145,7 @@
+             "listing-range shape={shape} upper={upper} cursor={} examined={examined} fetched={fetched} instructions={instructions}",
+             next.is_some()
+         );
+-        assert_eq!(next.is_some(), shape != 6);
++        assert_eq!(next.is_some(), shape == 5);
+         if shape == 5 {
+             assert_eq!((examined, fetched), (20, 20));
+         }
+@@ -261,22 +261,12 @@
          let indexed = measured(0, &None, 256, 160, Some(u64::from(max_id)))
              .await
              .unwrap();
@@ -26,7 +35,7 @@
          assert_eq!(indexed.0, &ids[..ids.len().min(20)]);
          assert_eq!(indexed.1.is_some(), ids.len() > 20);
          assert_eq!(indexed.2, indexed.3);
-@@ -235,9 +225,15 @@
+@@ -305,9 +295,15 @@
          first.4,
          first.1.is_some()
      );

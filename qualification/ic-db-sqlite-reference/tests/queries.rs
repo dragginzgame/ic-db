@@ -155,16 +155,20 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        for hinted in [false, true] {
+        for (hinted, singleton_range) in [(false, false), (true, false), (false, true)] {
             let page = |after: Option<&QueryCursor>, bytes| {
                 let prefix = [0_u8.into()];
                 let mut q = db
                     .query::<Item>()
-                    .filter("lane", Comparison::Eq, 0_u8)
                     .order_by(&["rank", "id"])
                     .filter("visible", Comparison::Eq, true)
                     .test_output_limit(bytes)
                     .work_limit(2);
+                q = if singleton_range {
+                    q.filter_between(Item::LANE, 0_u8, 0_u8)
+                } else {
+                    q.eq(Item::LANE, 0_u8)
+                };
                 if hinted {
                     q = q.using_index("lane,rank", &prefix);
                 }

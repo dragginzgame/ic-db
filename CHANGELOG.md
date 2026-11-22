@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.26.12] - Unreleased
+
+### ✨ Writes
+
+- Typed inserts generate an omitted primitive ULID primary key synchronously.
+  Supply the key explicitly to preserve an existing identity. The session returns
+  the inserted row, including its key.
+
+### 🔍 Queries
+
+- Ordered queries can page through a unique index when its varying fields lead
+  the requested order in one direction. For example, with a section fixed on
+  a unique `(section, seat)` index, descending seat and ascending ID can use
+  a reverse scan. Each matching seat already identifies one row.
+
+- Equal inclusive bounds can fix a compound index component. For an index on
+  `(lane, rank)`, `filter_between(lane, 0, 0)` can page by rank within lane
+  zero. Separate mandatory `>= 0` and `<= 0` filters give the same proof.
+
+- A listing with contradictory mandatory bounds on one field can finish empty
+  without examining candidates, even when another index supplies its order.
+
+### 🖥️ CLI
+
+- The main workspace’s private `ic-db-cli` crate owns the `db` executable and its command tests.
+  Install it with `make db` and run `db entities` to list the fixture schema.
+
+### 🎯 Qualification
+
+- On installed Wasm, a three-row page ordered by unique Decimal descending
+  and ID ascending examined three rows, down from 28 on 0.26.11. The cursor
+  resumed after upgrade and the full listing matched SQLite.
+  [Instructions and Wasm size](qualification/README.md#unique-index-ordering-before-02612)
+
+- With equal entry-ID bounds, the first 20 score-ordered documents took
+  82.3% fewer instructions on the listing fixture. Requiring publication
+  made the same page 94.8% more expensive. Both listings could resume in
+  five-candidate steps. [Matched listing costs](qualification/README.md#equal-inclusive-bounds-on-ordered-listings)
+
+- Adding a publication-aware index alongside the score index reduced the
+  published listing from 80 owner reads to 20 and kept both listings pageable.
+  A publication toggle cost 39.5% more on this fixture.
+  [Index and write-cost comparison](qualification/README.md#index-choice-for-equal-bound-listings)
+
 ## [0.26.11] - 2026-11-21
 
 ### Queries

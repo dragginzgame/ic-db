@@ -17,7 +17,7 @@ use native as platform;
 use std::{fmt, str::FromStr};
 
 pub use generator::{UlidGenerationError, UlidGenerator};
-pub use pseudo::SeededUlidGenerator;
+pub use pseudo::{SeededUlidGenerator, insert_ulid};
 
 /// Failure to obtain fresh entropy for a ULID.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

@@ -402,6 +402,7 @@ pub mod __private {
     pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
     pub use crate::schema::{check_schema_member, handle};
+    pub use crate::ulid::insert_ulid;
     /// Primary/index keys extracted at the small typed codec boundary.
     pub struct RowInfo {
         pub key: RowKey,

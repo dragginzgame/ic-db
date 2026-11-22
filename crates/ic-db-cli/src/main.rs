@@ -6,8 +6,8 @@ mod terminal;
 mod tests;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_db_qualification_transport::RowFilters;
+use ic_db_cli_fixture::RowFilters;
+use ic_db_cli_fixture::host::{LIMITS, instance};
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
@@ -813,7 +813,7 @@ async fn session(
                         if action == 2 {
                             println!("{}", bordered_table(&["Copied rows"], &rows));
                             if call == 1 {
-                                ic_db_m0_rollback_driver::upgrade_stopped(
+                                ic_db_cli_fixture::host::upgrade_stopped(
                                     pic,
                                     canister,
                                     wasm.clone(),
@@ -854,7 +854,7 @@ async fn session(
                 work,
                 page_size,
             } => {
-                let selection: ic_db_qualification_transport::RetainedSelection = (
+                let selection: ic_db_cli_fixture::RetainedSelection = (
                     entity,
                     select,
                     (minimum, category, entry_id),

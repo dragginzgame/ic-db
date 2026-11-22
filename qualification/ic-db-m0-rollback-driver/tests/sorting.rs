@@ -1,6 +1,7 @@
 //! Complete unindexed sorting through the same console/fluent boundary in Wasm.
 
 mod artifact;
+mod wire_call;
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
@@ -643,6 +644,125 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         assert_eq!(page.1, vec![vec![String::from("32")]]);
         assert!(page.2.is_none());
         assert_eq!((page.3, page.4), (511, 511));
+        assert_eq!(pic.get_stable_memory(canister).await, backing);
+    }
+    owned.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the query-measurements Wasm; run make m2-sort-costs"]
+async fn unique_decimal_order_matches_sqlite() {
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let sql = rusqlite::Connection::open_in_memory().unwrap();
+    sql.execute_batch("CREATE TABLE prices(id INTEGER PRIMARY KEY, cents INTEGER UNIQUE)")
+        .unwrap();
+    let mut seed = Vec::new();
+    for id in 1..=32_u32 {
+        let cents = (id % 8 != 0).then_some(i64::from((id * 13) % 37) - 18);
+        sql.execute(
+            "INSERT INTO prices VALUES (?1, ?2)",
+            rusqlite::params![id, cents],
+        )
+        .unwrap();
+        let literal = cents.map(|c| format!("{}0.{:02}", if c < 0 { "-" } else { "" }, c.abs()));
+        seed.push((u64::from(id), literal, "0"));
+    }
+    let expected: Vec<u32> = sql
+        .prepare("SELECT id FROM prices WHERE cents IS NOT NULL ORDER BY cents DESC, id ASC")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    let current = std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap();
+    let control = std::env::var_os("IC_DB_UNIQUE_ORDER_CONTROL_WASM");
+    for (baseline, path) in control
+        .into_iter()
+        .map(|p| (true, p))
+        .chain([(false, current)])
+    {
+        let (wasm, facts) = artifact::read(std::fs::File::open(path).unwrap()).unwrap();
+        let canister = pic.create_canister().await;
+        pic.add_cycles(canister, 3_000_000_000_000).await;
+        pic.install_canister(canister, wasm.clone(), vec![], None)
+            .await;
+        for chunk in seed.chunks(8) {
+            wire_call::call::<Result<(), u8>>(pic, canister, "decimal_batch", 67, &(chunk, false))
+                .await
+                .unwrap();
+        }
+        let read = async |after: Option<Vec<u8>>, work: u32| {
+            let request = (
+                "DecimalRow",
+                after,
+                3_u32,
+                None::<u64>,
+                None::<u64>,
+                None::<u64>,
+                vec!["maybe:desc", "id:asc"],
+                false,
+                work,
+                128_u32,
+                "id",
+                (
+                    false,
+                    (None::<String>, None::<String>),
+                    None::<String>,
+                    RowFilters {
+                        present: Some("maybe".into()),
+                        ..Default::default()
+                    },
+                ),
+            );
+            wire_call::call::<(Result<Page, String>, u64)>(
+                pic,
+                canister,
+                "measured_query",
+                147,
+                &request,
+            )
+            .await
+        };
+        let before = pic.get_stable_memory(canister).await;
+        let (page, instructions) = read(None, 64).await;
+        let page = page.unwrap();
+        println!(
+            "unique-order baseline={baseline} wasm={} code={} examined={} fetched={} instructions={instructions}",
+            facts.identity.bytes, facts.code_section_bytes, page.3, page.4
+        );
+        let ids = |page: &Page| {
+            page.1
+                .iter()
+                .map(|row| row[0].parse::<u32>().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&page), expected[..3]);
+        assert_eq!(pic.get_stable_memory(canister).await, before);
+        if baseline {
+            assert!(page.2.is_none());
+            assert!(read(None, 3).await.0.is_err());
+            continue;
+        }
+        assert_eq!((page.3, page.4), (3, 3));
+        let mut seen = ids(&page);
+        let mut cursor = page.2;
+        assert!(cursor.is_some());
+        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
+            .await
+            .unwrap();
+        let backing = pic.get_stable_memory(canister).await;
+        while let Some(after) = cursor {
+            let next = read(Some(after), 3).await.0.unwrap();
+            assert!(next.3 <= 3 && next.4 <= next.3);
+            let rows = ids(&next);
+            assert_eq!(rows, expected[seen.len()..seen.len() + rows.len()]);
+            assert!(!rows.is_empty() || next.2.is_none());
+            seen.extend(rows);
+            cursor = next.2;
+        }
+        assert_eq!(seen, expected);
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
     owned.drop().await;

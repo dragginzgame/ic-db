@@ -166,7 +166,7 @@ Inspect this fixture with `db schema EnumCollectionsRow`.
 `db count Entry`, `db count Document` and `db count DecimalRow` read the existing
 typed maintained counts (6, 1 and 3 after CLI seeding). Filtering remains
 `db query Entry --select count --category 1` (3). The count command refuses
-filters/limits and missing or unsupported entity names. The focused `records`
+filters/limits and missing or unsupported entity names. The focused CLI and rollback driver
 tests selected by `console_counts_` check CLI rendering/admission and direct
 endpoint calls before/after upgrade, including the unseeded empty DecimalRow
 entity and byte-for-byte unchanged backing. No product count implementation or
@@ -174,6 +174,8 @@ durable representation is added. After building the fixture:
 
 ```sh
 make m2-cli-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
+bash scripts/with-pocketic.sh cargo test --locked -p ic-db-cli --test console console_counts_
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
 bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test records console_counts_
@@ -3246,6 +3248,89 @@ to IDs. Transport encoding and decoding are outside the counter. The runner
 saves the Wasm, build information and output in `target/evidence/ranked-listing`
 under the qualification workspace.
 
+### Unique index ordering before 0.26.12
+
+On installed Wasm, the fixture selected the first three IDs ordered by a
+present unique Decimal descending, then ID ascending. The 32 rows contained
+28 distinct signed Decimal values and four absent values. SQLite ordered
+integer cents independently. Both engines returned the same first three IDs.
+
+| Release-profile records host | Examined / fetched | First-page handler instructions | Uncompressed Wasm bytes | Code section bytes |
+| --- | ---: | ---: | ---: | ---: |
+| v0.26.11 | 28 / 28 | 3,014,476 | 1,214,866 | 1,153,672 |
+| 0.26.12 candidate | 3 / 3 | 580,939 | 1,215,335 | 1,154,141 |
+
+The first request used the same work allowance of 64 and the same measured
+console handler on both builds. The previous release sorted all qualifying
+rows to select its top three. Its separate three-candidate request refused.
+The candidate resumed its first-page cursor after a same-version upgrade and
+returned all 28 IDs in SQLite order with a three-candidate allowance per
+continuation. The test checked stable backing around reads on each side of
+the upgrade. The 80.7% instruction reduction applies to the first page of
+this fixture. The measured host grew by 469 bytes.
+
+Run `make m2-sort-costs`. Set `IC_DB_UNIQUE_ORDER_CONTROL_WASM` to the
+v0.26.11 records host built with `query-measurements` to repeat the control.
+Both reported artifacts used the same source directory, lockfile and release
+profile. The local artifacts and matched log are under
+`qualification/target/evidence/unique-order-02612`.
+
+### Equal inclusive bounds on ordered listings
+
+On a 130-document PocketIC fixture, both builds requested the first 20 IDs in
+descending score and ID order with a 512-candidate allowance. Both contained
+the 0.26.12 unique-order change. Only the rule for equal inclusive bounds
+differed. The same handler measured database open through projected page
+construction. SQLite independently checked the IDs and tie order.
+
+| Entry ID range and filter | Candidates before → after | Handler instructions before → after | Change |
+| --- | ---: | ---: | ---: |
+| 1 through 1, all documents | 129 → 20 | 18,244,319 → 3,237,936 | −82.3% |
+| 1 through 1, published only | 41 → 80 | 5,927,694 → 11,545,441 | +94.8% |
+| 1 through 2, published only | 41 → 41 | 5,932,981 → 5,948,478 | +0.26% |
+
+Equal bounds let the candidate stream the score order of the `(entry_id, score)`
+index. It returned a cursor in both single-entry cases. The driver resumed
+with a five-candidate allowance until it reproduced the entire SQLite listing.
+The control sorted its qualifying input and returned a complete top 20.
+For the published-only listing, its publication index needed fewer owner reads
+than the ordered path, which checked visibility on each visited row. With two
+entry IDs, neither build could stream a global score order from that index.
+
+The matched release-profile qualification host went from 1,215,402 to 1,215,322
+uncompressed Wasm bytes. Run `make m2-listing-costs` to repeat the candidate
+workloads. The matched artifacts and logs are under
+`qualification/target/evidence/equal-range-02612`.
+
+### Index choice for equal-bound listings
+
+The same 0.26.12 engine ran the 130-document fixture with three index layouts.
+The query fixed entry ID to one with equal inclusive bounds and requested the
+first 20 IDs by descending score and ID. Index selection was automatic. The
+SQLite oracle checked the first page and every continuation, including score
+ties. Reads used the same 512-candidate initial budget and five-candidate
+continuations. Each layout kept the fixture's other indexes.
+
+| Score indexes declared | Published only: examined / instructions | All publication states: examined / instructions | Median toggle instructions | Seeded stable pages |
+| --- | ---: | ---: | ---: | ---: |
+| Entry, score | 80 / 11,545,441 | 20 / 3,237,936 | 1,703,291 | 5 |
+| Both | 20 / 3,352,029 | 20 / 3,661,813 | 2,376,382 | 6 |
+| Entry, published, score | 20 / 3,303,029 | 129 / 18,813,430 | 2,230,685 | 5 |
+
+Every examined index entry fetched its owner. Both indexes together provided
+live pages for both listings. With only the longer index, the all-states
+query had to sort because publication state separates the score sequences.
+It returned a terminal top 20. The control query spanning entry IDs one and
+two returned the same terminal top 20 across all three layouts.
+
+The write figures cover database open and the caller's read-modify-write for
+a publication toggle, taking the median of three rounds. Stable pages are
+64 KiB each. Reproduce the two alternative schemas with the existing
+[additive](experiments/listing-compound-index.patch) and
+[replacement](experiments/listing-replace-index.patch) experiments in a disposable
+checkout. Run `make m2-listing-costs` for each layout. The matched logs and
+artifacts are under `qualification/target/evidence/compound-range-02612`.
+
 ### Filter costs before 0.26.11
 
 The v0.26.10 engine and 0.26.11 candidate ran the same release-profile
@@ -4988,8 +5073,8 @@ unchanged.
 make m1-records-artifact
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" \
   bash scripts/with-pocketic.sh cargo test \
-    --manifest-path qualification/Cargo.toml --locked \
-    -p ic-db-m0-rollback-driver --test records \
+    --locked \
+    -p ic-db-cli --test console \
     console_schema_json_is_complete_selected_and_pipeable -- --exact
 ```
 
@@ -5020,8 +5105,8 @@ waits 90 seconds without server requests, then exercises queries and normal quit
 
 ```sh
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
-  cargo test --locked --manifest-path qualification/Cargo.toml \
-    -p ic-db-m0-rollback-driver --test console_terminal \
+  cargo test --locked \
+    -p ic-db-cli --test console_terminal \
     terminal_survives_pocketic_default_idle_timeout -- --ignored --exact
 ```
 

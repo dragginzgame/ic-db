@@ -641,7 +641,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             "supplied primary keys cannot declare an insert default",
         ));
     }
-    let insert_input = insert::emit(&item, &authored)?;
+    let insert_input = insert::emit(&item, &authored, &primary)?;
     let mut managed_fields = [None, None];
     for (field, id) in authored.iter().zip(&field_ids) {
         if let Some(policy) = field.managed {

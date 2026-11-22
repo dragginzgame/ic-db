@@ -125,6 +125,45 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
             )
             .await
         };
+    // Identical projections and output limits. The upper bound determines
+    // whether the leading index component is fixed or two entry IDs can interleave.
+    for (shape, upper) in [(5_u8, 1_u32), (6, 2), (7, 1)] {
+        let mut statement = sql.prepare(
+            "SELECT id FROM docs WHERE entry_id BETWEEN 1 AND ?1 AND (?2=0 OR published=1) ORDER BY score DESC,id DESC",
+        ).unwrap();
+        let ordered = statement
+            .query_map(rusqlite::params![upper, shape != 7], |r| {
+                r.get::<_, u32>(0).map(u64::from)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let (ids, mut next, examined, fetched, instructions) =
+            measured(shape, &None, 512, 160, None).await.unwrap();
+        assert_eq!(ids, ordered[..20]);
+        println!(
+            "listing-range shape={shape} upper={upper} cursor={} examined={examined} fetched={fetched} instructions={instructions}",
+            next.is_some()
+        );
+        assert_eq!(next.is_some(), shape != 6);
+        if next.is_some() {
+            let mut offset = ids.len();
+            for _ in 0..130 {
+                let (ids, cursor, examined, _, _) =
+                    measured(shape, &next, 5, 160, None).await.unwrap();
+                assert!(examined <= 5);
+                assert_eq!(ids, ordered[offset..offset + ids.len()]);
+                offset += ids.len();
+                assert_ne!(cursor, next);
+                next = cursor;
+                if next.is_none() {
+                    break;
+                }
+            }
+            assert!(next.is_none());
+            assert_eq!(offset, ordered.len());
+        }
+    }
     for (shape, work, bytes) in [("full", 128, 160), ("sparse", 5, 160), ("byte", 32, 16)] {
         let (mut auto, mut hint) = (None, None);
         let mut offset = 0;

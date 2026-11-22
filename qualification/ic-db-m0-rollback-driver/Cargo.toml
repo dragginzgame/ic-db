@@ -13,22 +13,18 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
-clap.workspace = true
-ic-db-qualification-transport.workspace = true
-ic-host-text.workspace = true
-ic-testkit.workspace = true
-ic-wire.workspace = true
-rustyline.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-shlex.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+ic-db-cli-fixture = { workspace = true, features = ["host"] }
 
 [dev-dependencies]
 canic.workspace = true
+ic-db-qualification-transport.workspace = true
 ic-host-artifacts.workspace = true
+ic-testkit.workspace = true
+ic-wire.workspace = true
 rusqlite.workspace = true
+serde = { workspace = true, features = ["derive"] }
 sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 toko-tooling.workspace = true
 wasmparser.workspace = true
 

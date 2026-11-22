@@ -70,6 +70,7 @@ pub trait InsertInput: Sized {
     /// The fully materialized entity admitted through the ordinary write path.
     type Entity: crate::Entity;
     /// Resolve omitted fields without reading or mutating persistent state.
+    /// An omitted primitive ULID primary key consumes an ID from the local generator.
     /// # Errors
     /// Refuses a missing required field or managed time without a batch context.
     /// Field/row bounds are checked by batch insertion.

@@ -3,13 +3,18 @@ fn ic_stream_reads_identity_once_and_separates_principals_and_versions() {
     // A fresh native thread represents a fresh generator heap.
     let stream = |principal: u8, version: u64| {
         std::thread::spawn(move || {
-            let first = super::pseudo::generate(0, || {
+            let first = super::pseudo::generate(crate::Timestamp::EPOCH, || {
                 (crate::Principal::from_slice(&[principal]), version)
-            });
-            let next = |time| {
+            })
+            .unwrap();
+            let next = |time: u64| {
                 u128::from_be_bytes(
-                    super::pseudo::generate(time, || -> ([u8; 1], u64) { panic!("reseeded") })
-                        .to_bytes(),
+                    super::pseudo::generate(
+                        crate::Timestamp::from_millis((time / 1_000_000) as i64),
+                        || -> ([u8; 1], u64) { panic!("reseeded") },
+                    )
+                    .unwrap()
+                    .to_bytes(),
                 )
             };
             let suffix = u128::from_be_bytes(first.to_bytes());
@@ -37,7 +42,7 @@ fn ic_stream_reads_identity_once_and_separates_principals_and_versions() {
 #[test]
 fn owned_streams_advance_independently_of_one_shot_issuance() {
     let identity = || (crate::Principal::from_slice(&[4]), 17);
-    let first = super::pseudo::generate(0, identity);
+    let first = super::pseudo::generate(crate::Timestamp::EPOCH, identity).unwrap();
     let mut a = super::pseudo::owned(identity());
     let mut b = super::pseudo::owned(identity());
     let number = |id: super::Ulid| u128::from_be_bytes(id.to_bytes());
@@ -49,7 +54,7 @@ fn owned_streams_advance_independently_of_one_shot_issuance() {
     assert_eq!(number(a.next_at(epoch).unwrap()), number(a0) + 1);
     assert_eq!(number(b.next_at(epoch).unwrap()), number(b0) + 1);
     assert_eq!(
-        number(super::pseudo::generate(0, identity)),
+        number(super::pseudo::generate(crate::Timestamp::EPOCH, identity).unwrap()),
         number(first) + 1
     );
 }
