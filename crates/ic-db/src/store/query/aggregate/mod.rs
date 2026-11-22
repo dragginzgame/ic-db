@@ -917,7 +917,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             &self.request,
             db.schema.fingerprint(),
             db.incarnation,
-            output,
+            output.map(super::Projection::Record),
             super::PlanOutput::Aggregate {
                 grouped: group_output,
             },

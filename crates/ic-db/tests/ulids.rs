@@ -189,6 +189,14 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         batch.insert(r).unwrap();
     }
     db.commit(batch).unwrap();
+    let page = db
+        .query::<UlidRow>()
+        .eq(UlidRow::ZONE, true)
+        .order_asc(UlidRow::VALUE)
+        .select(|row| row.value)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows, values());
     let read = |db: &Database| {
         db.index_prefix::<UlidRow>("zone,value,id", &[true.into()], 32)
             .unwrap()

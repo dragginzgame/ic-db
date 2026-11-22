@@ -16,9 +16,10 @@ pub use maintenance::{
     CopyStatus, CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition,
 };
 pub use query::{
-    Aggregate, AggregateJobs, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
+    Aggregate, AggregateJobs, Column, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
     GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome, JobStep,
-    Query, QueryCursor, QueryOperand, QueryPage, SortDirection, SummaryMeasure,
+    Query, QueryCursor, QueryOperand, QueryPage, SelectColumns, SelectedQuery, Selection,
+    SortDirection, SummaryMeasure,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

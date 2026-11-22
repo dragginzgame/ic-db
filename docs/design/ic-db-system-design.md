@@ -1475,8 +1475,8 @@ extends the compatible repeated-prefix case in frozen IcyDB `6d421e3`
 Unindexed member predicates use the ordinary residual row work budget. Ordering resolves the same path and reads the
 validated scalar for the bounded complete sorter. A missing parent and missing
 member share one absent sort key. Ordinary direction and primary tie-breaker
-rules apply. A physical member index admits one required indexable scalar in a
-required record, with nonunique membership. Typed writes copy scalar operands or borrow Text and Blob at the generated
+rules apply. A physical member index admits one indexable scalar in a
+required or optional record, with nonunique membership. If either the parent or the member is optional, the index uses one optional key tag. A missing parent and a missing member produce the same absent component, followed by the owner ID. Assigning, changing or clearing the parent maintains the entry in the row batch. Typed writes copy scalar operands or borrow Text and Blob at the generated
 field access. Subaccount retains its by-value operand identity. Text and Blob
 reuse the flat index codec's zero escaping, terminator and complete-key cap.
 Frozen IcyDB `6d421e3` uses the same byte ordering in
@@ -1654,6 +1654,12 @@ Keep database predicates, ordering, grouping and distinct in the fluent operatio
 Arbitrary predicate, sort-key, reducer or update callbacks are not part of this
 initial contract. Callers construct updated values before submitting a batch;
 the database validates them normally. No closures or captures are persisted.
+
+Inline selection admits one column or two to four distinct columns from the queried
+entity. The existing projection mask selects stored spans. Typed decoding assembles
+tuples in caller order and the cursor binds that order. Frozen IcyDB `6d421e3`
+also distinguishes projection order from physical order (`db/executor/covering/mod.rs`).
+Here ordinary reads continue to validate the owner, including for an ID-only page.
 
 Schema inspection, query explanation and integrity checks may have Rust methods
 where needed; SQL command forms are excluded. Ad hoc text

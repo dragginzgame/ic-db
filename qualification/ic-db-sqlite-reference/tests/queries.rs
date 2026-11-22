@@ -749,7 +749,7 @@ fn live_page_and_filtered_total_share_one_read_boundary() {
         if let Some(cursor) = after {
             listing = listing.after(cursor);
         }
-        let page = listing.fetch_as::<Id>().unwrap();
+        let page = listing.select(|item| item.id).fetch().unwrap();
         assert!(matches!(
             matching().work_limit(4).count(),
             Err(Error::Limit)
@@ -758,7 +758,7 @@ fn live_page_and_filtered_total_share_one_read_boundary() {
         (
             page.rows
                 .into_iter()
-                .map(|r| (r.id, total))
+                .map(|id| (id, total))
                 .collect::<Vec<_>>(),
             page.next,
         )

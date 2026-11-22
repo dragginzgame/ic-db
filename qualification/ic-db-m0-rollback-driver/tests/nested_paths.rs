@@ -13,6 +13,7 @@ async fn reachable_paths() {
         ("32", 32),
         ("indexed", 32),
         ("member", 32),
+        ("optional", 32),
     ] {
         let (wasm, facts) = artifact::read(
             std::fs::File::open(dir.join(format!("nested-paths-{label}.wasm"))).unwrap(),
@@ -29,6 +30,37 @@ async fn reachable_paths() {
         let write =
             async |mode: u8| -> u64 { wire_call::call(&owned, canister, "write", 2, &mode).await };
         println!("{label} insert {}", write(0).await);
+        if label == "optional" {
+            // Every call reopens the same store. Replacement sets, changes and clears indexed members.
+            for phase in 0..3_u8 {
+                if phase != 0 {
+                    println!(
+                        "{label} write mode={phase} instructions={}",
+                        write(phase).await
+                    );
+                }
+                for mode in [4_u8, 5] {
+                    let (ids, instructions): (Vec<u64>, u64) =
+                        wire_call::call(&owned, canister, "measure", 1, &(7_u8, mode)).await;
+                    let expected: Vec<u64> = (0..24)
+                        .filter(|id| {
+                            let flat = id + u64::from(phase);
+                            phase != 2
+                                && if mode == 5 {
+                                    flat % 3 == 0
+                                } else {
+                                    flat % 3 != 0 && flat >= 22
+                                }
+                        })
+                        .collect();
+                    assert_eq!(ids, expected);
+                    println!(
+                        "{label} phase={phase} mode={mode} ids={ids:?} instructions={instructions}"
+                    );
+                }
+            }
+            continue;
+        }
         for selector in (0..tier).chain([32]) {
             for mode in 0..5_u8 {
                 let (ids, instructions): (Vec<u64>, u64) =

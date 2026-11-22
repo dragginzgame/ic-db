@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.27.3]
+
+### 🔍 Queries
+
+- Select a single field with `.select(|e| e.id).fetch()` or a tuple with `.select(|e| (e.id, e.amount, e.category)).fetch()`. Both return bounded pages with cursors and infer the selected Rust types.
+
+### ✨ Schema
+
+- A nonunique index can cover a scalar inside a record, even when the record, the scalar or both are optional, for example `index(field = "price.amount")`. A missing price and a price with no amount sort together before present amounts. Assigning or clearing a price updates the index in the same batch as the row.
+
 ## [0.27.2] - 2026-11-22
 
 ### 🔍 Queries

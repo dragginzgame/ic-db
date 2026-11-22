@@ -117,10 +117,10 @@ pub use primary::{Id, PrimaryKey};
 pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
 pub use session::{DatabaseSession, QuerySession, UniqueKey};
 pub use store::{
-    Aggregate, Batch, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor, GroupOrder,
-    GroupPage, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome,
-    JobStep, Page, QueryCursor, QueryOperand, QueryPage, SchemaTransition, SortDirection,
-    SummaryMeasure,
+    Aggregate, Batch, Column, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor,
+    GroupOrder, GroupPage, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle,
+    JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage, SchemaTransition,
+    SelectColumns, SelectedQuery, Selection, SortDirection, SummaryMeasure,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 pub use time::{Duration, TimeParseError, Timestamp};
@@ -403,7 +403,7 @@ pub mod __private {
         const NAME: &'static str;
     }
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
-    pub use crate::key::{MemberOperand, encode_index};
+    pub use crate::key::{MemberOperand, MemberPresence, encode_index};
     pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
     pub use crate::schema::{check_schema_member, handle};

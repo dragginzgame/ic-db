@@ -18,6 +18,7 @@ crate-type = ["cdylib"]
 [features]
 flat-index-control = []
 member-index-control = []
+optional-member-index-control = ["member-index-control"]
 
 [dependencies]
 ic-db-qualification-transport.workspace = true

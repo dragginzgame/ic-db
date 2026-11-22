@@ -229,9 +229,7 @@ impl EntitySchema {
     }
 
     pub(crate) fn field_is_required(&self, path: &str) -> bool {
-        crate::member::resolve_field(self, path).is_ok_and(|(parent, member)| {
-            !self.fields[parent].optional && member.is_none_or(|m| !m.field().optional)
-        })
+        self.index_field(path).is_some_and(|field| !field.optional)
     }
 
     pub(crate) fn record_member(&self, path: &str) -> Option<(usize, crate::member::RecordMember)> {
@@ -242,9 +240,15 @@ impl EntitySchema {
         Some((position, member))
     }
 
-    pub(crate) fn index_field(&self, name: &str) -> Option<&FieldSchema> {
-        self.field_by_name(name)
-            .or_else(|| self.record_member(name).map(|(_, member)| member.field()))
+    pub(crate) fn index_field(&self, name: &str) -> Option<crate::ValueSchema> {
+        let (parent, member) = crate::member::resolve_field(self, name).ok()?;
+        let field = &self.fields[parent];
+        let leaf = member.map_or(field, |m| m.field());
+
+        Some(crate::ValueSchema {
+            value: leaf.value,
+            optional: field.optional || leaf.optional,
+        })
     }
 
     pub(crate) fn index_by_name(&self, name: &str) -> Option<&IndexSchema> {
@@ -342,9 +346,10 @@ impl EntitySchema {
                     } else {
                         let (parent, member) = self.record_member(name).ok_or(Error::Corrupt)?;
                         let (start, end) = spans[parent];
+                        let optional = self.fields[parent].optional;
                         (
-                            member.read(&bytes[usize::from(start)..usize::from(end)], false)?,
-                            false,
+                            member.read(&bytes[usize::from(start)..usize::from(end)], optional)?,
+                            optional || member.field().optional,
                         )
                     };
                     if slot.0 == IndexValue::Absent && !slot.1 {
@@ -554,11 +559,7 @@ impl Schema {
                             entity.record_member(field).ok_or(Error::InvalidSchema)?;
                         let parent = &entity.fields[parent];
                         let leaf = member.field();
-                        if index.unique
-                            || index.fields.len() != 1
-                            || parent.optional
-                            || leaf.optional
-                        {
+                        if index.unique || index.fields.len() != 1 {
                             return Err(Error::InvalidSchema);
                         }
                         // Outside the 1..=64 length domain of a flat field. Each path part

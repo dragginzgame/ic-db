@@ -5,7 +5,9 @@ mod distinct;
 mod order;
 mod probe;
 mod range;
+mod select;
 mod sort;
+pub use select::{Column, SelectColumns, SelectedQuery, Selection};
 
 pub use aggregate::{
     Aggregate, GroupCount, GroupOrder, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue,
@@ -382,7 +384,10 @@ impl QueryPage<Vec<u8>> {
     }
 
     #[inline(never)]
-    fn decode_projection<R: Value>(self) -> Result<QueryPage<R>, Error> {
+    fn decode_with<R>(
+        self,
+        decode: impl Fn(&mut Decoder<'_>) -> Result<R, Error>,
+    ) -> Result<QueryPage<R>, Error> {
         Ok(QueryPage {
             rows: self
                 .rows
@@ -390,7 +395,7 @@ impl QueryPage<Vec<u8>> {
                 .map(|bytes| {
                     let mut reader = Decoder::new(bytes)?;
                     // Output records replace the entity root, not an extra nested value.
-                    let row = R::decode_from(&mut reader)?;
+                    let row = decode(&mut reader)?;
                     reader.finish()?;
 
                     Ok(row)
@@ -1355,10 +1360,34 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             &*self.db.read()?,
             E::SCHEMA,
             self.request,
-            Some(R::definition()),
+            Some(Projection::Record(R::definition())),
         )?;
 
-        raw.decode_projection()
+        raw.decode_with(R::decode_from)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Projection<'a> {
+    Record(&'a TypeSchema),
+    Columns(&'a [u8]),
+}
+
+impl Projection<'_> {
+    fn mask(self, entity: &EntitySchema) -> Result<u32, Error> {
+        match self {
+            Self::Record(record) => admit_projection(entity, record),
+            Self::Columns(columns) => {
+                let mut mask = 0;
+                for &column in columns {
+                    if usize::from(column) >= entity.fields.len() || mask & (1 << column) != 0 {
+                        return Err(Error::InvalidQuery);
+                    }
+                    mask |= 1 << column;
+                }
+                Ok(mask)
+            }
+        }
     }
 }
 
@@ -1628,7 +1657,7 @@ impl<'a> Plan<'a> {
         request: &Request<'_>,
         schema: [u8; 32],
         incarnation: [u8; 16],
-        projection: Option<&TypeSchema>,
+        projection: Option<Projection<'_>>,
         output: PlanOutput,
     ) -> Result<Self, Error> {
         if request.over_limit
@@ -1673,9 +1702,7 @@ impl<'a> Plan<'a> {
             selected: 1 << primary,
             span_fields: 0,
             binding: [0; 32],
-            projection: projection
-                .map(|output| admit_projection(entity, output))
-                .transpose()?,
+            projection: projection.map(|output| output.mask(entity)).transpose()?,
             distinct: distinct::Strategy::Identity,
             sort: None,
             descending: request.descending ^ request.primary_descending(entity),
@@ -1700,7 +1727,7 @@ impl<'a> Plan<'a> {
                         value,
                     )?;
                     let mut literal = Vec::new();
-                    value.append_component(false, &mut literal);
+                    value.append_component(field.optional || leaf.optional, &mut literal);
                     plan.span_fields |= 1 << position;
                     TermOperand::Nested {
                         member,
@@ -1857,6 +1884,10 @@ impl<'a> Plan<'a> {
                 } => {
                     hash.update((u32::MAX - 2).to_le_bytes());
                     hash.update([member.position() as u8, u8::from(*absent)]);
+                    // The binding already records absence separately from the scalar payload.
+                    let literal = &literal[usize::from(
+                        entity.fields[term.position].optional || member.field().optional,
+                    )..];
                     hash.update((literal.len() as u32).to_le_bytes());
                     hash.update(literal);
                 }
@@ -1944,6 +1975,10 @@ impl<'a> Plan<'a> {
         if let Some(mask) = plan.projection {
             hash.update(b"projection\0");
             hash.update(mask.to_le_bytes());
+            if let Some(Projection::Columns(columns)) = projection {
+                hash.update(b"columns\0");
+                hash.update(columns);
+            }
         }
         if request.distinct {
             hash.update(b"distinct\0");
@@ -2027,7 +2062,7 @@ fn fetch_rows<M: Memory>(
     db: &Database<M>,
     entity: &EntitySchema,
     request: Request<'_>,
-    projection: Option<&TypeSchema>,
+    projection: Option<Projection<'_>>,
 ) -> Result<QueryPage<Vec<u8>>, Error> {
     db.schema.admits(entity)?;
     let plan = Plan::admit(
@@ -2195,7 +2230,10 @@ fn execute_inner<M: Memory>(
                     if *absent {
                         return Ok(term.comparison.accepts_absent(value == IndexValue::Absent));
                     }
-                    (Some(literal.as_slice()), false)
+                    (
+                        Some(literal.as_slice()),
+                        entity.fields[term.position].optional || member.field().optional,
+                    )
                 }
                 TermOperand::Literal { absent: true, .. } => {
                     let absent = if plan.span_fields & (1 << term.position) != 0 {

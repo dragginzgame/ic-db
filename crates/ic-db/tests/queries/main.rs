@@ -4433,6 +4433,66 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
 }
 
 #[test]
+fn selected_columns_preserve_page_order_types_and_cursor_shape() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || {
+        db.query::<Entry>()
+            .eq(Entry::CATEGORY, 1_u8)
+            .order_desc(Entry::ID)
+    };
+    let ids = query()
+        .limit(2)
+        .test_output_limit(16)
+        .select(|e| e.id)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids.rows, [7_u64, 5]);
+    assert_eq!(ids.output_bytes, 16);
+    let cursor = ids.next.unwrap();
+    assert_eq!(
+        query()
+            .after(&cursor)
+            .select(|e| e.id)
+            .fetch()
+            .unwrap()
+            .rows,
+        [3, 1]
+    );
+
+    let first = query()
+        .limit(2)
+        .select(|e| (e.payload, e.maybe, e.id))
+        .fetch()
+        .unwrap();
+    assert_eq!(
+        first.rows,
+        [(vec![7; 100], Some(7), 7), (vec![7; 100], Some(5), 5)]
+    );
+    let cursor = first.next.unwrap();
+    assert_eq!(
+        query()
+            .after(&cursor)
+            .select(|e| (e.payload, e.maybe, e.id))
+            .fetch()
+            .unwrap()
+            .rows[0],
+        (vec![7; 100], None, 3)
+    );
+    assert!(matches!(
+        query()
+            .after(&cursor)
+            .select(|e| (e.id, e.payload, e.maybe))
+            .fetch(),
+        Err(Error::InvalidCursor)
+    ));
+    assert!(matches!(
+        query().select(|e| (e.id, e.id)).fetch(),
+        Err(Error::InvalidQuery)
+    ));
+}
+
+#[test]
 fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());

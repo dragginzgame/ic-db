@@ -329,6 +329,29 @@ pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Op
     Some(bytes)
 }
 
+// The entity macro can name a record field across crates, but its declaration
+// belongs to the record. Borrow an optional field directly, or autoref once
+// for a required field. Both paths retain the scalar's own operand type.
+#[doc(hidden)]
+pub trait MemberPresence<'a> {
+    type Scalar: 'a;
+    fn __ic_db_member_presence(self) -> (Option<&'a Self::Scalar>, bool);
+}
+
+impl<'a, T> MemberPresence<'a> for &'a Option<T> {
+    type Scalar = T;
+    fn __ic_db_member_presence(self) -> (Option<&'a T>, bool) {
+        (self.as_ref(), true)
+    }
+}
+
+impl<'a, T> MemberPresence<'a> for &&'a T {
+    type Scalar = T;
+    fn __ic_db_member_presence(self) -> (Option<&'a T>, bool) {
+        (Some(*self), false)
+    }
+}
+
 // Method dispatch at the generated field access copies scalar operands and
 // auto-borrows String/Vec. A Subaccount by value keeps its own key encoding.
 #[doc(hidden)]
@@ -499,7 +522,7 @@ pub(crate) fn supports(field: FieldType) -> bool {
 // Stored entries and cursor positions share the same optional-component framing.
 pub(crate) fn consume_component(
     bytes: &mut &[u8],
-    field: &crate::FieldSchema,
+    field: crate::ValueSchema,
     present_only: bool,
     invalid_presence: Error,
 ) -> Result<(), Error> {

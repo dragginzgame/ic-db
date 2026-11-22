@@ -33,8 +33,8 @@ use field::Field;
 /// `present_only`, omitting a row when any optional key component is absent. Unsupported shapes
 /// refuse explicitly; this is not a retirement of the broader planned type surface.
 /// Entity names default to the type name; `name = "StableName"` overrides it.
-/// A nonunique single-component index can name a required indexable scalar
-/// in a required record, e.g. `index(field = "labels.text")`.
+/// A nonunique single-component index can name a required or optional indexable scalar
+/// in a required or optional record, e.g. `index(field = "labels.text")`.
 /// Index names default to comma-separated ordered fields; `name` overrides them.
 /// A unique index on `User(issuer, subject)` generates `UserByIssuerAndSubject`
 /// with named fields for `session.get_unique(&key)`. A sparse unique key takes
@@ -552,19 +552,30 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         if let [path] = index.fields.as_slice()
             && let Some((parent, member)) = path.split_once('.')
         {
-            if index.unique
-                || index.present_only
-                || !authored.iter().any(|f| f.name == parent && !f.optional)
-            {
+            let parent_field = authored
+                .iter()
+                .find(|field| field.name == parent)
+                .ok_or_else(|| fail("unknown record-member index parent"))?;
+            if index.unique || index.present_only {
                 return Err(fail(
-                    "a record-member index requires a single required indexable scalar member on a required record and cannot be unique",
+                    "a record-member index requires one scalar member and cannot be unique or present-only",
                 ));
             }
+            let optional = parent_field.optional;
             let parent: syn::Ident = syn::parse_str(parent)?;
             let member: syn::Ident = syn::parse_str(member)?;
+            let component = quote! {{
+                let (member, optional) = (&parent.#member).__ic_db_member_presence();
+                (member.map(|value| (*value).__ic_db_member_operand()).into(), #optional || optional)
+            }};
+            let component = if optional {
+                quote! { row.#parent.as_ref().map_or((::ic_db::IndexValue::Absent, true), |parent| #component) }
+            } else {
+                quote! {{ let parent = &row.#parent; #component }}
+            };
             encoded_indexes.push(quote! {{
-                use ::ic_db::__private::MemberOperand as _;
-                ::ic_db::__private::encode_index(&[(row.#parent.#member.__ic_db_member_operand(), false)], false)
+                use ::ic_db::__private::{MemberOperand as _, MemberPresence as _};
+                ::ic_db::__private::encode_index(&[#component], false)
             }});
             continue;
         }
@@ -629,6 +640,10 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         .iter()
         .map(|field| syn::parse_str(&field.name))
         .collect::<syn::Result<_>>()?;
+    let columns = quote::format_ident!("__IcDb{}Columns", name);
+    let column_types = ordered.iter().map(|field| field.rust_type());
+    let column_positions = (0..ordered.len()).map(|position| position as u8);
+    let column_reads = ordered.iter().map(|field| field.read_result());
     let nested_writes: Vec<_> = ordered
         .iter()
         .zip(&ordered_ids)
@@ -721,6 +736,19 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         #attrs
         #[derive(Clone, Debug, PartialEq, Eq)]
         #visibility struct #name { #(#[doc = "Authored stored field."] pub #field_ids: #authored_types,)* }
+
+        const _: () = {
+            #[doc(hidden)]
+            #visibility struct #columns {
+                #(pub #ordered_ids: ::ic_db::Column<#name, #column_types>,)*
+            }
+            impl ::ic_db::SelectColumns for #name {
+                type Columns = #columns;
+                const COLUMNS: #columns = #columns {
+                    #(#ordered_ids: ::ic_db::Column::new(#column_positions, |reader| #column_reads),)*
+                };
+            }
+        };
 
         impl #name { #(#field_constants)* }
 

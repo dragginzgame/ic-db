@@ -112,7 +112,7 @@ let page = db.query::<Product>().gt(AMOUNT, minimum).order_asc(AMOUNT).limit(10)
 An absent price or amount matches `filter_absent(AMOUNT)`. This first version
 supports literal comparisons and bounded sorting one record deep. Both kinds of absence
 sort together before present amounts in ascending order. The primary key breaks ties.
-A nonunique index may select a required scalar member of a required record.
+A nonunique single-field index may select a scalar member of a record, for example `index(field = "price.amount")`. Both the record and its member may be optional. Offers missing either the price or the amount sort together before present amounts in ascending order, with the primary key breaking ties.
 Primitive-backed `#[newtype]` members use the underlying scalar order. Unit
 enums use canonical variant-name order and require an operand of the declared
 enum type. Text uses UTF-8 byte order and Blob
@@ -313,7 +313,20 @@ let page = db.query::<Entry>()
     .fetch_as::<Summary>()?;
 ```
 
-This returns `QueryPage<Summary>` without decoding a full `Entry`. Byte limits
+For a scalar or an unnamed tuple, select the fields directly. These queries return
+a page of IDs and a page of three-tuples respectively. Each page carries its cursor.
+
+```rust
+let ids = db.query::<Entry>().eq(Entry::CATEGORY, 1_u8)
+    .order_asc(Entry::ID).select(|e| e.id).fetch()?;
+let rows = db.query::<Entry>().eq(Entry::CATEGORY, 1_u8)
+    .select(|e| (e.id, e.amount, e.category)).fetch()?;
+```
+
+The tuple may contain two to four distinct top-level fields in any order.
+Resume with the same fields in the same order. The selector runs once, before the scan.
+
+The named-record example returns `QueryPage<Summary>` without decoding a full `Entry`. Byte limits
 count the projected record, while the complete source row is still validated.
 Output records need no stored schema registration. Projection cursors require the
 same selected fields; aliases, coercions and nested field paths are not implemented.

@@ -1988,7 +1988,7 @@ commit on an opened database. Separate calls reopen the store and verify the
 changed and deleted results through both the flat and nested fields. These
 costs qualify ordinary index maintenance. The separate probe below changes the source of the physical key.
 
-**Declared member index.** The current five-build `make m2-nested-path-costs`
+**Declared member index.** The five-build measurement from `make m2-nested-path-costs`
 adds a real index on `one.h`. The schema, endpoint set, 32 reachable paths
 and 24 rows match the flat-index control. Each equality lookup returns the
 same ID; the last member's threshold accounts for its distinct stored values.
@@ -2006,6 +2006,26 @@ Against the pre-index baseline above, shared implementation growth was 1,169
 Wasm bytes on the 32-path build without an index. Going from one path to 32
 still added 494 total bytes and 30 code bytes. The flat index's own exact lookup
 used 206,926 instructions in that equality-only run.
+
+**Optional parent (0.27.3 development).** A sixth build of the same PocketIC fixture
+indexes `one.h` under an optional parent. Eight of 24 parents are absent. The
+replacement batch sets eight parents, clears eight and changes the remaining eight.
+Every measured read reopens the store before starting its instruction meter.
+The ascending indexed range returns IDs 22 and 23 before replacement, then 21 and 22.
+The absence query returns the eight expected IDs after each write and none after deletion.
+
+| Measurement | Required parent | Optional parent |
+| --- | ---: | ---: |
+| Uncompressed Wasm bytes | 333,224 | 334,251 |
+| Code-section bytes | 305,840 | 306,850 |
+| Indexed range returning two rows, instructions | 342,175 | 344,064 |
+| Replace 24 rows, instructions | 15,237,758 | 15,147,585 |
+
+These are complete fixture builds. The optional build constructs a different mix of
+rows and executes different write transitions. The Wasm fixture uses a required Nat16 member. The native SQLite comparison separately
+pages an optional Decimal amount under both required and optional price records.
+It checks missing records and missing amounts against SQL NULL, including presence
+filters, ties, validated counts and one-candidate pages after replacement and reopen.
 
 **Range bounds.** Matched PocketIC member-index builds used the same 24 rows,
 schema and caller. Only the shared range code differed. The endpoint measures

@@ -51,14 +51,23 @@ impl Endpoint {
 // A physical component names the complete scalar. Siblings share the parent slot.
 fn matches_field(entity: &EntitySchema, term: &Term, path: &str) -> bool {
     let parent = entity.fields[term.position].name;
-    match &term.operand {
-        TermOperand::Nested { member, .. }
-        | TermOperand::Length {
-            member: Some(member),
-            ..
-        } => path.split_once('.') == Some((parent, member.field().name)),
-        _ => path == parent,
+    match left_member(term) {
+        Some(member) => path.split_once('.') == Some((parent, member.field().name)),
+        None => path == parent,
     }
+}
+
+fn left_member(term: &Term) -> Option<crate::member::RecordMember> {
+    match &term.operand {
+        TermOperand::Nested { member, .. } => Some(*member),
+        TermOperand::Field { left_member, .. } => *left_member,
+        TermOperand::Length { member, .. } => *member,
+        _ => None,
+    }
+}
+
+fn optional_component(entity: &EntitySchema, term: &Term) -> bool {
+    entity.fields[term.position].optional || left_member(term).is_some_and(|m| m.field().optional)
 }
 
 fn literal(term: &Term) -> Option<(&[u8], bool)> {
@@ -82,7 +91,7 @@ fn bound_operand<'a>(
     prefix_len: usize,
 ) -> Result<Option<(Comparison, &'a [u8])>, Error> {
     // All present values share the 01 tag on an optional secondary component.
-    if secondary && term.tests_presence && entity.fields[term.position].optional {
+    if secondary && term.tests_presence && optional_component(entity, term) {
         return Ok((prefix_len < crate::MAX_INDEX_KEY_BYTES).then_some((Comparison::Ge, &[1])));
     }
     if let TermOperand::Length { member, threshold } = &term.operand {
@@ -92,7 +101,9 @@ fn bound_operand<'a>(
             .empty_length_value(*threshold, field.value)
             .is_some()
         {
-            let key = crate::key::empty_bytes_component(field.optional);
+            let key = crate::key::empty_bytes_component(
+                entity.fields[term.position].optional || field.optional,
+            );
             return Ok((prefix_len + key.len() <= crate::MAX_INDEX_KEY_BYTES)
                 .then_some((Comparison::Eq, key)));
         }
@@ -450,7 +461,7 @@ pub(super) fn bounds(
             // Less-than predicates require presence too. Their upper bound alone
             // would include the optional absent component (00) before present (01).
             if secondary
-                && entity.fields[term.position].optional
+                && optional_component(entity, term)
                 && matches!(comparison, Comparison::Lt | Comparison::Le)
             {
                 lower.tighten(component_key(&[1], false)?, true, Ordering::Greater);

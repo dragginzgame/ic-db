@@ -31,7 +31,7 @@ struct Members {}
 
 // Both builds use the same generated row codec. Only the physical index varies.
 macro_rules! sample {
-    ($($index:tt)*) => {
+    ([$($optional:tt)*] $($index:tt)*) => {
         #[entity(
             store = Rows,
             pk(field = "id"),
@@ -39,7 +39,7 @@ macro_rules! sample {
             fields(
                 field(name = "id", value(item(prim = "Nat64"))),
                 field(name = "flat", value(item(prim = "Nat16"))),
-                field(name = "one", value(item(is = "Members"))),
+                field(name = "one", value($($optional)* item(is = "Members"))),
                 field(name = "two", value(item(is = "Members"))),
                 field(name = "three", value(item(is = "Members"))),
                 field(name = "four", value(item(is = "Members")))
@@ -50,11 +50,22 @@ macro_rules! sample {
 }
 
 #[cfg(feature = "flat-index-control")]
-sample!(index(fields = ["flat"]),);
-#[cfg(all(feature = "member-index-control", not(feature = "flat-index-control")))]
-sample!(index(name = "by_value", fields = ["one.h"]),);
+sample!([] index(fields = ["flat"]),);
+#[cfg(all(
+    feature = "member-index-control",
+    not(any(
+        feature = "flat-index-control",
+        feature = "optional-member-index-control"
+    ))
+))]
+sample!([] index(name = "by_value", fields = ["one.h"]),);
+#[cfg(all(
+    feature = "optional-member-index-control",
+    not(feature = "flat-index-control")
+))]
+sample!([opt,] index(name = "by_value", fields = ["one.h"]),);
 #[cfg(not(any(feature = "flat-index-control", feature = "member-index-control")))]
-sample!();
+sample!([]);
 
 fn members(a: u16) -> Members {
     Members {
@@ -112,14 +123,20 @@ fn write(mode: u8) -> u64 {
     let mut batch = Batch::new();
     for id in 0..24_u16 {
         if mode == 2 {
-            batch.delete::<Sample>(id.into()).unwrap();
+            batch.delete::<Sample>(u64::from(id)).unwrap();
             continue;
         }
         let flat = id + u16::from(mode);
+        let one = members(flat);
+        #[cfg(all(
+            feature = "optional-member-index-control",
+            not(feature = "flat-index-control")
+        ))]
+        let one = (!flat.is_multiple_of(3)).then_some(one);
         let row = Sample {
             id: id.into(),
             flat,
-            one: members(flat),
+            one,
             two: members(flat + 8),
             three: members(flat + 16),
             four: members(flat + 24),
@@ -169,7 +186,9 @@ fn measure((selector, mode): (u8, u8)) -> (Vec<u64>, u64) {
     let threshold = 16 + u16::from(selector % 32);
     let start = instruction_counter();
     let mut query = db.query::<Sample>().limit(8);
-    if mode == 4 {
+    if mode == 5 {
+        query = query.filter_absent(field).order_asc(field);
+    } else if mode == 4 {
         query = query.gte(field, threshold + 6).order_asc(field);
     } else if mode == 3 {
         query = query.eq(field, threshold);

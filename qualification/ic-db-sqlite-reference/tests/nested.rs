@@ -1659,3 +1659,142 @@ fn sparse_index_requires_schema_or_predicates_to_prove_presence() {
         Err(Error::InvalidQuery)
     ));
 }
+
+#[record(fields(field(name = "amount", value(opt, item(prim = "Decimal", scale = 2)))))]
+struct QuotedPrice {}
+
+#[entity(
+    store = ic_db::testing::FixtureStore,
+    pk(field = "id"),
+    index(fields = ["price.amount"]),
+    index(fields = ["base.amount"]),
+    fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "base", value(item(is = "QuotedPrice"))),
+        field(name = "price", value(opt, item(is = "QuotedPrice")))
+    )
+)]
+struct Offer {}
+
+#[test]
+fn optional_price_index_tracks_replacements_across_reopen() {
+    let paths = [
+        ic_db::field_path!(Offer::PRICE, QuotedPrice::AMOUNT),
+        ic_db::field_path!(Offer::BASE, QuotedPrice::AMOUNT),
+    ];
+    let fixture = Fixture::new("test.offers.v1");
+    let schema = || Schema::new(&[Offer::SCHEMA]).unwrap();
+    let mut db = fixture.create(schema(), [3; 16]).unwrap();
+    let sql = Connection::open_in_memory().unwrap();
+    sql.execute(
+        "CREATE TABLE offers(id INTEGER PRIMARY KEY, cents INTEGER)",
+        [],
+    )
+    .unwrap();
+    let decimal = |cents: i32| Decimal::try_new(i128::from(cents), 2).unwrap();
+    for (insert, prices) in [
+        (true, [None, Some(0), Some(125), Some(125), None]),
+        (false, [Some(125), Some(-50), None, Some(125), None]),
+    ] {
+        let mut batch = Batch::new();
+        for (id, cents) in prices.into_iter().enumerate() {
+            let base = QuotedPrice {
+                amount: cents.map(decimal),
+            };
+            let offer = Offer {
+                id: id as u64,
+                price: (cents.is_some() || id == 4).then(|| base.clone()),
+                base,
+            };
+            if insert {
+                batch.insert(&offer)
+            } else {
+                batch.replace(&offer)
+            }
+            .unwrap();
+            sql.execute(
+                "INSERT OR REPLACE INTO offers VALUES (?1,?2)",
+                rusqlite::params![id as u32, cents],
+            )
+            .unwrap();
+        }
+        db.commit(batch).unwrap();
+        drop(db);
+        db = fixture.open(schema()).unwrap();
+        for path in paths {
+            for cents in [None, Some(0), Some(125)] {
+                let expected: u32 = sql
+                    .query_row(
+                        "SELECT count(*) FROM offers WHERE cents IS ?1",
+                        [cents],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                let count = db
+                    .query::<Offer>()
+                    .using_index(path, &[cents.map(decimal).into()])
+                    .count_validated()
+                    .unwrap();
+                assert_eq!(count.value, u64::from(expected));
+            }
+            for (condition, op, operand) in [
+                ("1", None, ic_db::IndexValue::Absent),
+                (
+                    "cents IS NULL",
+                    Some(ic_db::Comparison::Eq),
+                    ic_db::IndexValue::Absent,
+                ),
+                (
+                    "cents IS NOT NULL",
+                    Some(ic_db::Comparison::Ne),
+                    ic_db::IndexValue::Absent,
+                ),
+                (
+                    "cents < 125",
+                    Some(ic_db::Comparison::Lt),
+                    decimal(125).into(),
+                ),
+                ("cents >= 0", Some(ic_db::Comparison::Ge), decimal(0).into()),
+            ] {
+                let expected: Vec<u64> = sql
+                    .prepare(&format!(
+                        "SELECT id FROM offers WHERE {condition} ORDER BY cents,id"
+                    ))
+                    .unwrap()
+                    .query_map([], |row| row.get::<_, u32>(0).map(u64::from))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                let query = || {
+                    let q = db.query::<Offer>();
+                    if let Some(op) = op {
+                        q.filter(path, op, operand)
+                    } else {
+                        q
+                    }
+                };
+                let mut seen = Vec::new();
+                let mut cursor = None;
+                for _ in 0..=expected.len() {
+                    let mut q = query().order_asc(path).limit(1).work_limit(1);
+                    if let Some(after) = &cursor {
+                        q = q.after(after);
+                    }
+                    let page = q.fetch().unwrap();
+                    seen.extend(page.rows.into_iter().map(|offer| offer.id));
+                    cursor = page.next;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                assert!(cursor.is_none());
+                assert_eq!(seen, expected);
+                assert_eq!(
+                    query().count_validated().unwrap().value,
+                    expected.len() as u64
+                );
+                assert_eq!(query().count().unwrap().value, expected.len() as u64);
+            }
+        }
+    }
+}
