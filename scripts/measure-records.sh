@@ -35,7 +35,7 @@ case "$workload" in
         export IC_DB_QUERY_MATRIX_DIR="$evidence"
         ;;
     exists)
-        evidence="$PWD/qualification/target/evidence/exists-comparison"
+        evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/exists-comparison}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
         export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_EXISTS_COMPARISON=1
@@ -47,7 +47,7 @@ case "$workload" in
         export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_COUNT_PATHS=1
         ;;
     aggregate-paths)
-        evidence="$PWD/qualification/target/evidence/aggregate-paths"
+        evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/aggregate-paths}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
         export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_AGGREGATE_PATHS=1
@@ -70,7 +70,7 @@ case "$workload" in
         test_name=entity_growth
         ;;
     queries)
-        evidence="$PWD/qualification/target/evidence/query-growth"
+        evidence="${IC_DB_QUERY_GROWTH_DIR:-$PWD/qualification/target/evidence/query-growth}"
         engines=(direct two-indexes direct-entities one shapes maps entities)
         test_name=query_growth
         ;;

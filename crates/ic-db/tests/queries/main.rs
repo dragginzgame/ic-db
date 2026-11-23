@@ -3855,14 +3855,16 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
         .exists()
         .unwrap();
     assert_eq!((late.value, late.examined, late.fetched), (true, 1, 1));
-    assert!(matches!(
+    let scanned = |work, minimum| {
         db.query::<Entry>()
-            .filter("amount", C::Gt, 80_u64)
+            .gt(Entry::AMOUNT, minimum)
             .using_index("category", &[])
-            .work_limit(8)
-            .exists(),
-        Err(Error::Limit)
-    ));
+            .work_limit(work)
+            .exists()
+    };
+    assert!(matches!(scanned(7, 80_u64), Err(Error::Limit)));
+    let miss = scanned(8, 80_u64).unwrap();
+    assert_eq!((miss.value, miss.examined, miss.fetched), (false, 8, 8));
     let range = db
         .query::<Entry>()
         .filter("amount", C::Gt, 40_u64)
@@ -6076,18 +6078,14 @@ fn sparse_compound_membership_requires_every_optional_component() {
         (covered.value, covered.examined, covered.fetched),
         (1, 1, 0)
     );
-    // Only one stored key has this prefix, but the unfixed ID leaves room for more.
+    // The prefix has just one stored entry despite the unfixed ID.
     let prefix = [1_u64.into(), "a".into()];
     let partial = || {
         db.query::<SparsePair>()
             .using_index("left,right,id", &prefix)
     };
-    assert!(matches!(
-        partial().work_limit(1).count_index_entries(),
-        Err(Error::Limit)
-    ));
     assert_eq!(
-        partial().work_limit(2).count_index_entries().unwrap().value,
+        partial().work_limit(1).count_index_entries().unwrap().value,
         1
     );
     for (id, expected) in [(3_u64, 1), (5, 0)] {
@@ -11244,12 +11242,15 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
             (count.value, count.examined, count.fetched),
             (expected as u64, expected, 0)
         );
-        let exact = range().work_limit(expected).count();
-        if upper == C::Le {
-            assert_eq!(exact.unwrap().value, expected as u64);
-        } else {
-            assert!(matches!(exact, Err(Error::Limit)));
-        }
+        let exact = range().work_limit(expected).count().unwrap();
+        assert_eq!(
+            (exact.value, exact.examined, exact.fetched),
+            (expected as u64, expected, 0)
+        );
+        assert!(matches!(
+            range().work_limit(expected - 1).count(),
+            Err(Error::Limit)
+        ));
         assert_eq!(range().count_validated().unwrap().fetched, expected);
     }
     let empty = db
@@ -11270,15 +11271,17 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
         .exists()
         .unwrap();
     assert_eq!((none.value, none.examined), (false, 3));
-    // An inclusive bound beyond the highest stored key has not been visited.
-    assert!(matches!(
+    // The iterator also proves exhaustion when the upper bound itself is absent.
+    assert_eq!(
         db.query::<Entry>()
             .filter("id", C::Ge, 6_u64)
             .filter("id", C::Le, 9_u64)
             .work_limit(3)
-            .count(),
-        Err(Error::Limit)
-    ));
+            .count()
+            .unwrap()
+            .value,
+        3
+    );
     let point = db
         .query::<Entry>()
         .filter("id", C::Eq, 1_u64)
@@ -11316,7 +11319,7 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
             .using_index("category,amount,id", &[0_u8.into()])
     };
     let count = query()
-        .work_limit(5)
+        .work_limit(4)
         .limit(1)
         .count_index_entries()
         .unwrap();
@@ -11330,7 +11333,7 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         (4, 4, 0, 8)
     );
     assert!(matches!(
-        query().work_limit(4).count_index_entries(),
+        query().work_limit(3).count_index_entries(),
         Err(Error::Limit)
     ));
     assert!(matches!(

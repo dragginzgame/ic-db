@@ -6,8 +6,8 @@ mod terminal;
 mod tests;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use ic_db_cli_fixture::RowFilters;
-use ic_db_cli_fixture::host::{LIMITS, instance};
+use ic_db_cli::RowFilters;
+use ic_db_cli::host::{LIMITS, instance};
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
@@ -634,6 +634,9 @@ fn main() -> Result<(), String> {
         // explicit endpoint; the async driver never discovers/spawns a server.
         let runner =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/with-pocketic.sh");
+        if !runner.is_file() {
+            return Err("set IC_TESTKIT_POCKET_IC_URL to a prepared PocketIC server or install from the matching checkout with make db".into());
+        }
         let mut launcher = std::process::Command::new("bash");
         launcher.arg(runner);
         if cli.command.is_none() {
@@ -813,7 +816,7 @@ async fn session(
                         if action == 2 {
                             println!("{}", bordered_table(&["Copied rows"], &rows));
                             if call == 1 {
-                                ic_db_cli_fixture::host::upgrade_stopped(
+                                ic_db_cli::host::upgrade_stopped(
                                     pic,
                                     canister,
                                     wasm.clone(),
@@ -854,7 +857,7 @@ async fn session(
                 work,
                 page_size,
             } => {
-                let selection: ic_db_cli_fixture::RetainedSelection = (
+                let selection: ic_db_cli::RetainedSelection = (
                     entity,
                     select,
                     (minimum, category, entry_id),

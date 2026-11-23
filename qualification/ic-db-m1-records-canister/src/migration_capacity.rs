@@ -3,7 +3,7 @@
 use crate::{
     faults,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
-    maintenance::{COPY_SOURCE, COPY_TARGET},
+    maintenance::{COPY_NEXT, COPY_SOURCE, COPY_TARGET},
     runtime,
 };
 use ic_db::design::prelude::*;
@@ -29,11 +29,11 @@ use std::ops::Bound;
     on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity(
-    ((operation, first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<(u8, u16, u8, u32, bool, u64)>,
+    (((second, operation), first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<((bool, u8), u16, u8, u32, bool, u64)>,
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
     let start = counter();
     faults::arm(stop_after, deny_growth, false);
-    let result = control(operation, first, limit, bytes).map_err(|error| match error {
+    let result = control(second, operation, first, limit, bytes).map_err(|error| match error {
         Failure::Database(Error::Limit) => 1,
         Failure::Database(Error::RowTooLarge) => 2,
         Failure::Database(Error::Exists) => 3,
@@ -58,11 +58,11 @@ fn migration_capacity(
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn migration_capacity_raw(after: Option<Vec<u8>>) -> RawPage {
+fn migration_capacity_raw((second, after): (bool, Option<Vec<u8>>)) -> RawPage {
     assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
     let host = runtime();
     let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        host.open_memory(&StableKey::parse(if second { COPY_NEXT } else { COPY_TARGET }).unwrap())
             .unwrap(),
     );
     let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
@@ -107,16 +107,43 @@ impl From<Error> for Failure {
     }
 }
 
-fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, bool), Failure> {
-    let source = Schema::new(&[Source::SCHEMA])?;
-    let target = Schema::new(&[EnvelopeRow::SCHEMA])?;
-    let transition = SchemaTransition::new(&source, &target, "build-eight-indexes", 1, &[])?;
+fn control(
+    second: bool,
+    operation: u8,
+    first: u16,
+    limit: u8,
+    bytes: u32,
+) -> Result<(u64, bool), Failure> {
+    let indexed = Schema::new(&[EnvelopeRow::SCHEMA])?;
+    let (source, target, source_key, target_key, source_id, target_id, name) = if second {
+        assert!(operation >= 2);
+        (
+            indexed,
+            Schema::new(&[EnvelopeRow::SCHEMA, records_schema::Entry::SCHEMA])?,
+            COPY_TARGET,
+            COPY_NEXT,
+            11,
+            12,
+            "add-empty-entry",
+        )
+    } else {
+        (
+            Schema::new(&[Source::SCHEMA])?,
+            indexed,
+            COPY_SOURCE,
+            COPY_TARGET,
+            10,
+            11,
+            "build-eight-indexes",
+        )
+    };
+    let transition = SchemaTransition::new(&source, &target, name, 1, &[])?;
     let host = runtime();
     let source_memory = host
-        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
+        .open_memory(&StableKey::parse(source_key).unwrap())
         .map_err(|_| Failure::Runtime)?;
     if operation == 0 {
-        Database::create(source_memory, source, [10; 16])?;
+        Database::create(source_memory, source, [source_id; 16])?;
 
         return Ok((0, false));
     }
@@ -145,19 +172,20 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
         return Ok((0, false));
     }
     if operation == 7 {
-        let mut retired = RetiredSource::resume(source_memory, &transition, [10; 16], [11; 16])?;
+        let mut retired =
+            RetiredSource::resume(source_memory, &transition, [source_id; 16], [target_id; 16])?;
 
         return Ok((0, retired.cleanup_step(usize::from(limit))?));
     }
     let target_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
+        .open_memory(&StableKey::parse(target_key).unwrap())
         .map_err(|_| Failure::Runtime)?;
     if operation == 3 {
         Maintenance::resume(source_memory, &transition)?.begin_copy(
             target_memory,
             source,
             target,
-            [11; 16],
+            [target_id; 16],
         )?;
 
         return Ok((0, false));
@@ -165,6 +193,11 @@ fn control(operation: u8, first: u16, limit: u8, bytes: u32) -> Result<(u64, boo
     let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
 
     match operation {
+        4 if second => {
+            let step = copy.copy_unchanged::<EnvelopeRow>(usize::from(limit), bytes as usize)?;
+
+            Ok((step.rows as u64, step.complete))
+        }
         4 => {
             let step = copy.copy_next::<Source, EnvelopeRow>(
                 usize::from(limit),

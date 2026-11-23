@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.27.6]
+
+### 🛠️ CLI
+
+- Releases now include the `ic-db-cli` crate. It installs the `db` binary. `make db` also installs the local fixture Wasm.
+
+### 🔍 Queries
+
+- `.exists()` returns false when every candidate fails its filters and the final candidate uses the last unit of work. If more input remains, it returns `Limit`.
+- A primary-key or index range counted entirely from keys now succeeds when its entry count exactly equals `work_limit`. A larger range still returns `Limit`.
+
+### 🎯 Qualification
+
+- A migration copying 4 KiB rows across a canister upgrade now has a [recovery check](qualification/README.md#byte-limited-migration-recovery-0276-worktree) for a byte-limited checkpoint, a refused retry and an interrupted write. The same fixture measures stable memory through a second migration and verifies every row and index entry after each cleanup.
+- The bounded fluent-query milestone now has a [closeout matrix](docs/design/ic-db-system-design.md#m2-bounded-query-closeout) covering projection, ordering, DISTINCT, grouping and retained jobs, with measured sort limits and per-entity Wasm growth.
+
+### 🛠️ Tooling
+
+- The product and qualification workspaces now use Toko Tooling 0.46.3 and its compact changelog layout.
+
 ## [0.27.5] - 2026-11-22
 
 ### ✨ Schema
@@ -51,13 +71,9 @@
 ### 🔍 Queries
 
 - Conflicting prefix or suffix filters on Text and Blob can finish with zero candidates examined when another filter fixes the comparison field. For example, if `code = "ab"`, a name cannot start with both `code` and `"é"`.
-
 - Counts can use maintained cardinality when an integer or unit-enum filter covers every value of a required field. For example, `.gte(Item::LANE, 0_u8).count()` examines zero candidates for a required Nat8 lane. A strict bound beyond either endpoint finishes empty, including on optional fields.
-
 - Two bounds can fix a compound-index component to one unit-enum variant. With variants `Archived`, `Draft`, and `Ready`, a query for `state > Archived` and `state < Ready` can page in index order within `Draft`.
-
 - Strict bounds between consecutive integers or unit-enum variants finish empty without examining candidates, even when the listing uses another field for ordering.
-
 - An explicit index prefix can supply the value for a field equality. On a `(lane, rank)` index restricted to lane 1, `rank = lane` seeks directly to `(1, 1)` and pages by ID in either direction. Adding an exact ID seeks the complete key.
 
 ### 🛠️ Tooling
@@ -69,29 +85,17 @@
 ### 🔍 Queries
 
 - Use typed IDs directly in fluent predicates, for example `.eq(Route::USER_ID, user.id())` or `.filter_in(User::ID, &ids)`. They compare exactly like the underlying keys.
-
 - An inclusive upper bound on the minimum or lower bound on the maximum fixes an integer or unit enum to one value. For example, `.lte(Item::LANE, 0_u8)` can page by rank on a `(lane, rank)` index. Enum extrema follow canonical variant names.
-
 - A pair of integer bounds can also fix a compound-index prefix. For example, `.gt(Item::LANE, 0_u8).lt(Item::LANE, 2_u8)` pages by rank within lane 1.
-
 - A membership filter and exclusions can fix the same prefix. With a `(lane, rank)` index, `.filter_in(Item::LANE, &[0_u8, 1, 2]).ne(Item::LANE, 0_u8).ne(Item::LANE, 2_u8)` can page by rank in lane 1.
-
 - Two `filter_in` calls on the same field can also supply a compound-index prefix. Lists `[0, 1, 2]` and `[1, 3]` fix lane 1. Disjoint literal lists finish empty without examining rows.
-
 - Range filters can narrow a membership list to an index prefix. With `.filter_in(Item::LANE, &[0_u8, 1, 2]).lt(Item::LANE, 1_u8)`, a `(lane, rank)` index can page by rank in lane 0.
-
 - A listing restricted to lane 0 can use a present-only price index for `price is present OR lane = 2`. If the lane-2 alternative can match, the planner still requires a path that includes unpriced rows.
-
 - Sparse-index admission also checks field-to-field alternatives. With lane fixed to 0 and rank to 2, `price is present OR lane > rank` can page through the present-only price index.
-
 - Filtering an optional record as absent also fixes its direct scalar members to absence. With `price` absent, `prefix != price.currency` can use a present-only prefix index in either operand order.
-
 - A present-only index can also serve an equality between two optional fields when the filters prove the other field is present. If two absent values can still match, automatic selection keeps those rows.
-
 - With `rank = 1` and `lane = rank`, the planner can seek the `(1, 1)` prefix of a `(lane, rank)` index. Both field-comparison operand orders use the same proof.
-
 - When a field equality fixes the primary key, row queries seek that ID directly and still check the other field on the stored row. A missing ID completes with zero candidates examined.
-
 - Membership counts and existence checks skip IDs ruled out by a mandatory field equality before probing storage. A fixed category index can also seek the matching owner ID directly.
 
 ## [0.27.0] - 2026-11-22
@@ -125,11 +129,9 @@
   the requested order in one direction. For example, with a section fixed on
   a unique `(section, seat)` index, descending seat and ascending ID can use
   a reverse scan. Each matching seat already identifies one row.
-
 - Equal inclusive bounds can fix a compound index component. For an index on
   `(lane, rank)`, `filter_between(lane, 0, 0)` can page by rank within lane
   zero. Separate mandatory `>= 0` and `<= 0` filters give the same proof.
-
 - A listing with contradictory mandatory bounds on one field can finish empty
   without examining candidates, even when another index supplies its order.
 
@@ -144,12 +146,10 @@
   and ID ascending examined three rows, down from 28 on 0.26.11. The cursor
   resumed after upgrade and the full listing matched SQLite.
   [Instructions and Wasm size](qualification/README.md#unique-index-ordering-before-02612)
-
 - With equal entry-ID bounds, the first 20 score-ordered documents took
   82.3% fewer instructions on the listing fixture. Requiring publication
   made the same page 94.8% more expensive. Both listings could resume in
   five-candidate steps. [Matched listing costs](qualification/README.md#equal-inclusive-bounds-on-ordered-listings)
-
 - Adding a publication-aware index alongside the score index reduced the
   published listing from 80 owner reads to 20 and kept both listings pageable.
   A publication toggle cost 39.5% more on this fixture.
@@ -164,11 +164,9 @@
   costs one probe, including a missing ID or one belonging to another category.
   On an explicitly selected index, equivalent Account IDs with an omitted or
   all-zero subaccount also fit a single-probe count.
-
 - For a list of IDs, `exists()`, `count()` and `count_validated()` can now
   return an empty result without probing keys when other required filters
   contradict each other, such as a payload length both below and at least three.
-
 - A zero-byte length filter on Text or Blob can seek the present empty value
   through an index. This covers length equal to zero, at most zero, or less
   than one. Automatic and explicitly selected indexes both restrict the range
@@ -236,7 +234,6 @@
   The planner changes added 941 bytes to the query host. Across 2,340 IC DB
   executions, the largest measured instruction increase was 0.0412%.
   [Results](qualification/README.md#planner-checkpoint-after-0269)
-
 - `make m2-ranked-listing` checks a filtered project listing against SQLite on
   installed Wasm. It covers automatic index selection, sparse continuation
   pages, timestamp ties and the work boundary for a globally ordered top two.
@@ -344,17 +341,13 @@
 
 - `filter_length` accepts a direct Text or Blob member of a record. It counts
   UTF-8 or raw bytes and keeps absent values distinct from present empty values.
-
 - `filter(path, Comparison::StartsWith, prefix)` now accepts direct Text and Blob
   members of a record. A matching member index can serve an ordered prefix scan
   or count matching entries without fetching their owner rows.
-
 - `filter_present` and `filter_absent` on a top-level optional scalar use its
   validated presence directly, avoiding a comparison-key allocation for present values.
-
 - Query scans decide once whether field offsets are needed and reuse the offset
   buffer across rows. Each row still passes full codec validation.
-
 - Bounded sorts keep their best rows in order during the scan. Sorted DISTINCT
   uses the same binary search to recognize an already retained tuple. Once the
   window fills, a single comparison can discard a candidate at or below the cutoff.
@@ -377,42 +370,31 @@
 
 - Grouped summaries ordered by count compare the completed counts directly,
   saving one allocation per group. Tied counts still use ascending group-key order.
-
 - Scalar aggregates that use decoded values can skip recording each field's
   byte offsets during a primary scan. The scanner still validates the full row.
-
 - Synchronous grouped DISTINCT counts omit fields fixed by the query or group
   from each group's comparison keys. The full group key still appears in the result.
-
 - Synchronous scalar `count_distinct` now uses the same fixed-field proof as
   projected DISTINCT. A fully fixed tuple counts once if any row matches.
-
 - Bounded complete DISTINCT now compares only projected fields that can vary.
   Fields fixed by equality or an index prefix still appear in the output and
   count toward its byte limit.
-
 - Bounded sorts omit order fields fixed by mandatory literal equality from
   each row’s sort key. A large fixed Text or Blob can precede the varying sort
   fields without consuming the 4 KiB comparison-key budget.
-
 - A bounded DISTINCT sort can order by a nested scalar before the projected
   fields when a mandatory literal equality fixes that exact member.
-
 - `filter_present` and `filter_absent` on a direct scalar member now skip
   construction of a comparison key after reading the validated member.
-
 - Flat and nested enum index queries now validate the operand's variant list
   once and compare its full definition with the indexed field.
-
 - A nonunique index can select one required scalar in a required record, including bounded Text, Blob,
   primitive-backed newtypes and unit enums,
   e.g. `index(name = "by_reading", fields = ["first.right"])`. Fluent equality can seek it automatically.
   Range comparisons on that path can bound an ordered scan or an index-only count. Changing either part of the path requires a schema
   transition even when the index keeps its name.
-
 - Use the same nested scalar path with `order_asc`, `order_desc` or mixed-direction
   ordering. The bounded sorter returns a terminal result after scanning the complete input.
-
 - Scalar literal filters can select a direct member of a named record.
   Use `.gt(ic_db::field_path!(Product::PRICE, Price::AMOUNT), amount)`.
   An absent parent or member makes the selected value absent. Record fields
@@ -422,7 +404,6 @@
 
 - Checked nested OR filters against SQLite when sibling fields match different
   rows or both match the same row. Exact counts enforce the candidate budget.
-
 - `make m2-nested-path-costs` compares Wasm size at 1, 8 and 32 reachable
   record paths and measures flat and nested filtering and sorting in PocketIC.
   A matched scalar index control also reports lookup and batch write costs.
@@ -488,7 +469,6 @@
   group keys. Chain `filter_summary(measure, comparison, value)` to filter
   completed measures before ranking and limiting. Use `filter_summary_any`
   for alternatives, such as a minimum count or a minimum total.
-
 - Grouped aggregates now discard each result that fails its group filter as soon
   as it is finalized. Every group still undergoes overflow and resource checks.
 - Rows joining an existing group reuse the scan buffer for key lookup. Each
@@ -518,7 +498,6 @@ db query DecimalRow --select zone,summary:maybe --group-max count:0
 - Updated the product and qualification workspaces and the shared tooling snapshot to Toko Tooling 0.46.0.
 - Compared synchronous and retained Decimal summaries against SQLite for all
   six combinations of measure and sort direction.
-
 - Verified that an interrupted Float64 grouped summary resumes after a canister
   upgrade and that a completed page cursor survives a second upgrade.
 
@@ -619,7 +598,6 @@ db aggregate Entry --select distinct:amount --group-order first --order-by categ
 
 - Confirmed on PocketIC that the 0.25.0 candidate resumes a running default-order
   DISTINCT job and a completed page cursor created by the released 0.24.4 engine.
-
 - The SQLite comparison now checks that synchronous and resumable DISTINCT return
   the same first qualifying prices in both directions of a compound index.
 - PocketIC now measures one completed DISTINCT page at 8, 32, 128 and 255
@@ -674,7 +652,6 @@ db aggregate Entry --select distinct:amount --work 2 --page-size 2
 
 - Retained-job retries and completed-page reads skip the checkpoint write when
   both the saved sequence and the host observation time stay the same.
-
 - Indexed DISTINCT can now page through classes where only some rows match.
   A page can examine a nonmatch and resume inside the same class.
 
@@ -686,7 +663,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   projected record. The latter checks for a second match even after `limit(1)`.
   With DISTINCT in traversal order, these methods can finish as soon as the
   first value or a second distinct value establishes the answer.
-
 - When an equality fixes a scalar value, the planner can resolve range
   comparisons on that value before reading rows. A contradictory range visits
   zero candidates. A covered count can read just the matching index entries.
@@ -701,7 +677,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 - Native fixtures enumerate 64 unindexed DISTINCT values using sorted pages
   over 128 rows and two retained key ranges over 521 rows. They check the
   returned values and the cost in examined candidates.
-
 - The mixed-lifecycle fixture now type-checks its Canic database endpoints on
   native builds and checks pre-decode inspection authorization on PocketIC.
 
@@ -711,22 +686,17 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 
 - Each store now admits up to 128 entity types. Migration checkpoints use the existing
   one-byte entity position throughout that range.
-
 - `CanisterSession<Hub>` routes fluent queries, key lookups and single-row writes
   to the entity’s declared store. Hosts attach the canister’s compiled roster once.
   Rust rejects entities declared for a different canister. A generic helper can
   accept `&impl QuerySession<E>` to read through either kind of session.
-
 - `CanisterSession::batch()` groups dependent writes in the store inferred from
   their entity types. Rust rejects a batch that mixes stores. `batch_at(time)`
   supplies one timestamp for managed fields.
-
 - Store and canister sessions accept `db.insert_input(Entity::insert()...)` for
   a single row with schema defaults. The call returns the row after commit succeeds.
-
 - Store and canister sessions now expose `get_many::<E>(&keys)` for up to
   32 primary keys. Each input position receives its row or `None`.
-
 - Schema declaration errors now identify the referencing field and show which declared
   indexes can serve it, or which leading field a new index needs.
 
@@ -734,7 +704,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 
 - Added `make m1-store-width` to measure creating and reopening a single game
   store, reading a late entity and enforcing its reference on PocketIC.
-
 - Qualified restricted deletion with a full 32-mutation batch. One surviving child
   refuses the batch intact. After repointing that child, the same delete succeeds
   and the adjacent parent’s 257 children remain reachable after reopen.
@@ -742,7 +711,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   self-referencing schema, separates setup, open, batch construction and commit,
   and checks that both refusals preserve stable memory. The qualification matrix
   includes a one-off comparison with frozen IcyDB.
-
 - Remote inspection moves to `canic db inspect`. The fixture-specific `db witness-list`
   command is retired. Inspect the local database with these commands.
 
@@ -755,7 +723,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   frozen IcyDB query comparison. Standalone legacy startup and write benchmarks
   are retired. Use `make m2-query-matrix` for query comparisons and
   `make m1-write-envelope` for IC DB write qualification.
-
 - Schema qualification inherits the caller’s Cargo network mode. The public CI
   test resolves the schema fixtures independently of the private legacy benchmark.
 - Verified the single-store shard reopens populated data through the same typed
@@ -779,7 +746,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 - Schema owners now call `ic_db::include_schema!();` at the crate root.
   This replaces the handwritten generated-file include. Use `build_schema!`
   in the owner’s build script in place of the retired `ic_db::build::generate`.
-
 - Shared schemas now declare `#[canister]`, `#[store(canister = Hub, key = "...")]`
   and `#[entity(store = Accounts, ...)]`. Add an explicit store to every entity.
   Replace the shared crate's flat `compiled()` with `Accounts::compiled()` or
@@ -787,7 +753,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   key and entity contract preserves existing backing.
   [#15 — Typed canister and store ownership](https://github.com/dragginzgame/ic-db/issues/15) ·
   [#16 — Export each canister’s owned stores](https://github.com/dragginzgame/ic-db/issues/16)
-
 - Schema declarations use `ic_db::design::prelude::*`. The schema build check
   enforces this convention across the product and qualification sources.
 
@@ -800,7 +765,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 
 - Document schema fixture types and generated insert and unique-key types.
   Qualification endpoints now identify their frame guards and byte limits.
-
 - Removed the public `ic_db::build::write_schema(source, target)` function.
   A shared schema crate can call `ic_db::build_schema!(model)` in its own
   package-root build script and export one `compiled()` for the whole subtree.
@@ -808,16 +772,12 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   schema build ownership with `make schema-build-check`. Local
   `build_schema!()` is preserved. Scripts beside their declarations can use
   `build_schema!(self::schema)` for the previous colocated layout.
-
 - Schema builds identify the referencing field and missing target, or show both
   fields and their types when a reference disagrees with the target primary key.
-
 - All schema declaration macros now report the same 1–64 UTF-8 byte rule for
   an invalid logical name, identifying the declaration that failed.
-
 - Resuming a retained aggregate now constructs its progress report directly from
   the saved checkpoint. Group page cursors reuse the job handle decoder for length validation.
-
 - Adopt Toko Tooling 0.45.22 in the product and qualification workspaces.
 - Centralize entity, field and named index lookup in the compiled schema. Stored index entries,
   pagination cursors and DISTINCT now share optional-component decoding.
@@ -829,16 +789,13 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   explicit publication, or cancellation from the saved checkpoint.
 - Migration validation checks a managed row’s saved timestamps with one peer-row
   lookup. For rows without managed timestamps it only checks peer-key existence.
-
 - Counts, writes and migration validation now reject entity metadata that reports
   rows at revision zero. The first insertion always advances the revision.
-
 - An explicit schema migration can add an empty entity. Include it in the
   compiled target schema and copy the existing entities as usual. The new
   entity becomes writable at cutover. Cancelling before cutover reopens the
   source schema with its existing rows and indexes. After publication, the new
   entity can reference migrated rows through ordinary checked batches.
-
 - A DISTINCT projection containing a complete unique index key can page in
   primary-key order using ordinary row and work limits. Sparse unique keys
   qualify when all matching rows participate in the index. A required equality
@@ -860,7 +817,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   pinned producer’s Wire 0.25 contract and the external PocketIC launcher stays
   at 0.110.0. The release editor stays at IC Build 0.84.1 because 0.87.6 does
   not ship the required `ic-build-release-metadata` binary.
-
 - A fixed Text or Blob value can satisfy or disprove a length filter before
   reading rows. A covered count uses its index entries directly. Conflicting
   byte lengths finish with zero candidate visits.
@@ -871,18 +827,15 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 ## [0.23.19] - 2026-11-19
 
 - Adopt Toko Tooling 0.45.21 in both workspaces and apply its shared Clippy policy.
-
 - Schema scalars, including `Ulid` and `U256`, and macro-authored entities,
   records, enums, lists, sets, maps and newtypes support Serde by default.
   Canic endpoints can take a bare `Ulid`. Its Wire payload matches the
   existing fixed 16-byte array, and its JSON form is canonical ULID text.
-
 - `filter_in` on the primary key followed by `.count()` can probe each
   distinct requested ID directly. Additional literal ID filters narrow the set
   before any probes, including intersecting multiple membership lists. A miss
   costs one probe. When the probes
   exceed the work budget, the existing bounded range scan still applies.
-
 - Membership on the last component of a selected unique index can use the same
   probes. For a compound unique index on `(tenant, code)`, an equality on
   `tenant` and `filter_in` on `code` can select that path automatically.
@@ -891,7 +844,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   On a sparse unique index, `filter_in` may include `None` alongside present
   values. If another filter requires presence, only the distinct present values
   cost probes.
-
 - `.count()` can use a compound `present_only` index when its membership
   proves the presence filters, including on trailing fields. The usual scan
   budget applies, and `.count_validated()` still checks owner rows.
@@ -905,17 +857,14 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
   for example `session.get_unique(&UserByIssuerAndSubject { issuer, subject })?`.
   Use `session.insert(&row)`, `session.replace(&row)` or
   `session.delete::<User>(id)` for one-operation batches.
-
 - `filter_present` on the next indexed field can seek directly to present values,
   including empty text. A count covered by that range fetches zero owner rows.
-
 - A fluent query with a fixed field value finishes with zero candidate visits
   when `filter_in` excludes that value or `filter_not_in` forbids it. This
   applies to equality filters and explicit index prefixes. When the selected
   prefix proves a membership filter true, `.count()` can count matching
   index entries without fetching their owner rows. A primary-key lookup also
   skips the row read when the ID proves every remaining filter.
-
 - Adopt Toko Tooling 0.45.19 in both workspaces. The records qualification
   fixture now uses Platform Runtime’s trap directly on native and Wasm.
 
@@ -924,7 +873,6 @@ db query Entry --order-by category --min 40 --select category --distinct --work 
 - Hosts can hand nested helpers a clone of `DatabaseSession` over one attachment.
   Typed lookups return owned rows, fluent queries use a read guard, and batch commits
   report a borrow conflict before mutation if that guard is still live. [#10](https://github.com/dragginzgame/ic-db/issues/10)
-
 - A query that requires two different values for the same field now finishes with
   zero candidate visits. This also applies when an equality filter contradicts an
   explicit index prefix. Invalid filters still return an admission error.
@@ -980,7 +928,6 @@ db aggregate Entry --select category,count --work 2 --page-size 1
   Native tests exercise the database operations directly. [#7](https://github.com/dragginzgame/ic-db/issues/7)
 - Retained console aggregates use one IC timestamp per start or resume. A native
   test checks expiry at exactly 60,000 milliseconds. [#8](https://github.com/dragginzgame/ic-db/issues/8)
-
 - A raw stable-memory check now verifies the initial checkpoint bytes for
   counts, sums, minima, DISTINCT counts and grouped counts. Query tests also
   cover the last allowed visit for complete and partial compound unique keys.
@@ -993,7 +940,6 @@ db aggregate Entry --select category,count --work 2 --page-size 1
 - Fix rust-analyzer marking active schema entities as inactive on non-UEFI
   hosts. Editor analysis skips the host linker constructor and resolves the
   generated fields and field constants.
-
 - Text and Blob filters can borrow application fields directly, for example
   `.eq(Document::TITLE, &title)` for a `String` or
   `.eq(BinaryObject::PAYLOAD, b"abc")` for a byte literal.
@@ -1063,7 +1009,6 @@ db aggregate Entry --select category,count --work 2 --page-size 1
 - Query output uses the engine’s 128 KiB limit automatically. Remove
   `.byte_limit(...)` from application queries and `--bytes` from local CLI
   commands. Row limits, work bounds and continuations retain their meanings.
-
 - `Database::get_by_unique` returns one optional entity for a complete unique
   index key. A hit verifies the owner row. No page or caller-selected limits
   are needed.
@@ -1114,7 +1059,6 @@ db query Entry --category 1 --order-by amount:desc --select category --distinct
   work budgets of 1, 8 and 32 candidates. This application listing defaults to
   eight and can resume a cursor issued with a one-candidate budget.
   [Workload and measurements](qualification/README.md#skewed-application-workload-02310)
-
 - Added a complete two-row listing comparison against frozen IcyDB. After upgrade
   and startup, IC DB used 14.57M handler instructions and IcyDB used 30.18M
   to return the same ten tuples across six calls. A second run changes category
@@ -1172,16 +1116,13 @@ db query Document --bool published false --text title starts-with First --select
   direction when all three IDs exist. Counts can also finish exactly at their
   work limit. For a single ID that fails another filter, `.exists()` returns
   false after checking that row.
-
 - Ordered queries can now use another path when a valid field value would
   exceed the 512-byte index key limit. Filtering and page work limits still
   apply. An explicitly requested oversized index prefix returns `Limit`.
-
 - An ordered entity or projection query with an exact primary-key filter can
   reach its row with a work budget of one, even with additional indexed filters.
   Other predicates still decide whether that row is returned. A live cursor
   issued for a previously selected secondary path requires a fresh query.
-
 - `.exists()` automatically seeks a secondary index when its leading fields
   cover all equality filters. A hit reads and validates one owner row. A miss
   reads zero rows. Try the missing reference in the local fixture.
@@ -1206,7 +1147,6 @@ db query Document --bool published false --text title starts-with First --select
 - Indexed existence used 37–60% fewer handler instructions than frozen IcyDB’s
   maintained-count lookup across 36 matched PocketIC cases.
   [Existence comparison](qualification/README.md#indexed-existence-0237)
-
 - Updated Canic to 0.223.1 and removed the Wire 0.24 compatibility dependency.
   All maintained qualification callers use IC Wire 0.25.0.
 - Measured an indexed page, an identical replacement and a retained-count
@@ -1247,7 +1187,6 @@ db query Document --bool published false --text title starts-with First --select
 - Qualified automatic and hinted ordered listings against SQLite and PocketIC,
   including tied keys, empty pages and retries at the output-byte limit.
   [Listing comparison](qualification/README.md#filtered-ordered-listing-with-automatic-index-selection-0235)
-
 - Qualification fixtures and their CLI use IC Wire 0.25.0. The pinned Canic
   inspection client uses Wire 0.24.6 for Canic’s public protocol types.
   The native SQLite reference uses rusqlite 0.43.0. Both workspace locks select IC Storage 0.78.2.
@@ -1261,7 +1200,6 @@ db query Document --bool published false --text title starts-with First --select
 - `.filter_fields("allowed_roles", Comparison::Contains, "requested_role")`
   checks a row’s requested role against its own list or set. Duplicate members
   select the row once. An absent role or collection yields no match.
-
 - In the local fixture, `--text FIELD OP VALUE` passes a text literal to
   fluent filtering. Both query pages and retained aggregates accept it.
 
@@ -1316,7 +1254,6 @@ db query Document --bool published false --text title starts-with First --select
 - `.filter("labels", Comparison::Contains, "art")` matches a list or set
   that has an element equal to `"art"`. Repeated list elements return the row
   once. Text and Blob fields retain their substring behavior.
-
 - Use `ic_db::build_schema!(src::schema);` in a standard package-root `build.rs`.
   An existing build script can generate a named helper and call it from its own
   `main`. [Canister setup](README.md#build-a-canister-local-schema)
@@ -1329,7 +1266,6 @@ db query Document --bool published false --text title starts-with First --select
   generate its local schema. The macro uses ordinary Rust module discovery and
   writes the validated assembly to Cargo’s output directory.
   [Canister setup](README.md#build-a-canister-local-schema)
-
 - Filter by length in fluent Rust. `.filter_length("labels", Comparison::Gt, 0)`
   selects a present list with at least one item. Text counts UTF-8 bytes, Blob
   counts raw bytes, and lists, sets and maps count items. Use `QueryOperand::Length`
@@ -1408,11 +1344,9 @@ db query Document --bool published false --text title starts-with First --select
 - Entity fields can use a Timestamp `#[newtype]` for `managed = "created_at"`
   or `managed = "updated_at"`. The insert builder supplies the typed value
   from the batch clock.
-
 - Fluent sums and averages accept integer- and Decimal-backed newtype inputs,
   including grouped and resumable queries. Result records declare the usual
   primitive width or Decimal scale.
-
 - Use a primitive-backed `#[newtype]` as a `#[set]` element or `#[map]` key.
   The macro derives `Ord` and `PartialOrd` from the primitive. Remove any
   manual implementations or duplicate derives when upgrading.
@@ -1420,7 +1354,6 @@ db query Document --bool published false --text title starts-with First --select
 ### 🔧 Changed
 
 - Release delivery now includes the `ic-db` and `ic-db-macros` packages on crates.io.
-
 - Adopt Toko Tooling 0.45.1 in both workspaces. CI setup failures retain the
   original command status and up to 100 lines or 32 KiB per sanitized excerpt.
 
@@ -1912,7 +1845,6 @@ Each command uses a fresh temporary fixture, not a deployed database.
   0.84.1 → 0.87.3 to the next dependency-maintenance batch. The external Testkit
   bootstrap remains 0.106.0; review 0.107.2 at that same boundary. No Testkit
   library remains in the driver. Frozen IcyDB supplier selections stay unchanged.
-
 - Remove the retired Testkit lifecycle library and its old native Platform graph.
   The harness uses PocketIC directly and explicitly releases instances; the
   prepared command launcher owns the server. `make m0-setup` prepares that external
@@ -1922,27 +1854,23 @@ Each command uses a fresh temporary fixture, not a deployed database.
   Lint native callers/schema builds on the host and all fixture libraries on
   Wasm, where Platform's IC system calls are available; retain feature-specific
   Wasm checks and the full release behavior gate.
-
 - Refresh Platform Types to 0.21.2 and Runtime/macros/guard to 0.23.13 across
   product and qualification selections. Existing identity/endpoint APIs and
   durable codecs are unchanged; the new raw memory/cycle functions are not used
   by IC DB. Check identity keys and installed endpoint/callback rollback.
   Older supplier-owned selections remain explicitly documented in the
   [refresh receipt](qualification/README.md#platform-patch-refresh-019).
-
 - Exercise all 16 retained aggregate slots together across four query shapes,
   two source entities and three upgrades. Check selective invalidation, stable
   completed results, capacity refusal, stale-handle protection after slot reuse
   and bounded expiry cleanup. Reuse existing host controls; no engine, scheduler
   or stored-format change. [Receipt](qualification/README.md#shared-retained-job-capacity-019).
-
 - Adopt Toko Tooling 0.44.9 through its published installer in both workspace
   selections. Its executable payload is unchanged; the baseline clarifies named
   supplier adoption scope and frozen comparison exceptions.
 - Check the count command through the installed CLI and direct Wasm calls,
   including empty entities, unsupported names, filter refusal and unchanged
   backing across upgrade. No new count implementation or stored metadata.
-
 - Adopt Platform Types 0.21.1 and Runtime/macros/guard 0.23.12. Qualification
   hosts declare guards, codecs, bounds and trapping policy explicitly; upgrades
   stop the local canister before replacing its executable and restart it afterward.
@@ -1951,7 +1879,6 @@ Each command uses a fresh temporary fixture, not a deployed database.
   Storage and frozen IcyDB retain their older raw-import dependency; Canic's
   separate integration is not upgraded by this change.
   [Receipt](qualification/README.md#platform-adoption-019).
-
 - Qualify and move the typed database adapter into Canic. Its focused `db-test`
   checks actual-caller authorization, bounded pages/cursors, atomic refusal,
   five upgrades, maintenance/cancellation and reply-encoding rollback. Retire
@@ -2080,34 +2007,28 @@ db query DecimalRow --order-by maybe:desc --select maybe --distinct
 - Authorize public source releases to `dragginzgame/ic-db` and require public
   visibility in release preflight and push checks. All crates remain unpublished;
   source releases do not publish packages or deploy canisters.
-
 - Add `GroupOrder::KeyDescending` and CLI `--group-order key-desc` for synchronous
   and retained grouped results. Reverse completed canonical keys before output
   selection, sharing the existing bounded buffer. Existing order bindings stay
   unchanged; native and Wasm checks cover resume refusal and upgrade pagination.
   Exhaustive Rust matches on `GroupOrder` must add the new variant.
-
 - Let unindexed ordered queries scan beyond 32 matches while retaining only the
   best requested rows. Keep the 512-candidate work cap, 128 KiB retained-buffer
   cap and complete-input requirement.
-
 - Expose DecimalRow's `value` and optional `maybe` projections in the console,
   including sorting and DISTINCT through the existing fluent engine. Qualify
   exact decimal extremes, equivalent scales, absence and bounded refusal across upgrade.
-
 - Compose bounded sorting with DISTINCT. Admit identity results or an order
   covering exactly the projected fields. Deduplicate during scanning using the
   existing sort keys, then sort and apply output limits. Non-identity projections
   retain at most 32 distinct tuples, so repeated input can exceed 32 rows within
   the work budget. A 33rd distinct tuple refuses even with `LIMIT 1`; no second
   key set, cursor or durable state is added.
-
 - Add fluent `order_by_each` with per-field `SortDirection` and CLI `:asc`/`:desc`
   suffixes. Keep the implicit primary tie-breaker ascending; `.descending()` or
   `--desc` reverses the whole order. Prove one physical traversal direction after
   removing fixed fields, or reuse the bounded complete sorter. Preserve ordinary
   cursor identities and bind new directions explicitly; no stored-format changes.
-
 - Support `order_by` without a matching ordered path by scanning the
   complete input result with 4096-byte keys and 128 KiB retained
   key/output buffers. Apply result limits after sorting; work or resource exhaustion
@@ -2130,14 +2051,12 @@ db query DecimalRow --order-by maybe:desc --select maybe --distinct
   upgrade. Record legacy public-lane sort refusal and differing pagination limits
   separately, without counting refused work as a speed comparison. Update the
   [comparison matrix](qualification/README.md#comparison-with-frozen-icydb).
-
 - Refresh the matched scalar comparison against frozen, SQL-disabled IcyDB.
   Current IC DB uses 233,238 versus 3,087,364 raw Wasm bytes in this direct-record
   fixture, 57.0% fewer hit-lookup instructions and 63.0% fewer complete replacement
   cycles including legacy settling. All row/index and upgrade checks pass.
   Record IC DB's +8,690 raw bytes and roughly 0.1% lookup/replacement instruction
   increase since the prior run; this is not a whole-product size comparison.
-
 - Add `make m2-sort-costs` using the existing independent sorting oracle and a
   measurement-only host wrapper. Qualify 511-row sorting, DISTINCT, sparse/empty
   matches, resource refusals and upgrades with unchanged backing. Mixed-order
@@ -2145,13 +2064,11 @@ db query DecimalRow --order-by maybe:desc --select maybe --distinct
   this has no matched IcyDB result. The
   [comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
   separates recorded legacy comparisons, current capability and remaining gaps.
-
 - Avoid redundant equality checks during order admission. The matched fluent
   benchmark recovers 913–1,073 instructions on affected ordered reads for 21
   additional shared Wasm/code bytes. Recent query capabilities add about 2.2 KB
   overall while per-entity growth remains about 4.30 KB; see the
   [measured costs and remaining tradeoffs](qualification/README.md#expanded-sorting-costs-and-direction-admission-018).
-
 - Share projection decoding by output record type. The matched eight-entity
   projection build loses 3,688 raw / 3,686 code bytes; projected growth falls
   from 5.14 KB to 4.61 KB per entity. Eight-entity projected calls improve;
@@ -2919,7 +2836,6 @@ make m1-entity-growth
   retry rather than skip a matching row. Shared borrowed field inspection avoids
   constructing rejected entities. `make m2-queries` selects the native/Wasm probe.
   The local CLI now uses these same admitted operations.
-
 - Connect `db query [Entry|Document]` to fluent reads, with field ordering,
   descending traversal, typed projections and independent row/work/byte bounds.
   Replace numeric `--after ID` with an opaque hexadecimal `--after CURSOR`;
@@ -2927,49 +2843,40 @@ make m1-entity-growth
   and continuation data; guidance stays in `--help`. Remove the old host-side
   post-page filter. `make m2-cli` checks the installed-layout console and migrated
   query caller. This remains a temporary local fixture, not a remote adapter.
-
 - Add `order_by(&[...])` with an implicit primary-key tie-breaker and automatic
   ordered-path selection. Equality prefixes narrow compatible indexes; incomplete
   ordering and unsafe sparse paths refuse. Selection is deterministic and bounded
   by schema metadata, with no sorting, plan cache or statistics. Native full-sort
   oracles and the `make m2-queries` Wasm probe cover continuation and upgrade.
-
 - Add typed selective projection through `fetch_as::<Record>()`, reusing ordinary
   `#[record]` declarations and their codecs. Exact field/type admission includes
   transitive named definitions. Byte limits count projected output; cursors bind
   its shape, and unselected corruption still refuses. No macro syntax, durable
   schema or dependency changes. `make m2-queries` also checks projection and its
   upgrade/byte-retry boundaries; CLI `--select` exposes the fixed fixture shapes.
-
 - Refresh qualification's Wire transport lock to 0.22.3. Product codecs and
   dependencies remain independent of Wire.
-
 - Keep CLI output focused on results: move schema explanations to
   `db schema --help` and remove the startup command tutorial.
-
 - Support unit enums as set elements and map keys, with canonical ordering shared
   by indexes and codecs. Retain count/node bounds and reject corrupt duplicates,
   reversed order and invalid variants before materialization or mutation.
   `EnumCollectionsRow` demonstrates the declarations; payload enums remain excluded.
-
 - Add `db schema ENTITY` for one declared entity, with its fields, indexes,
   references and reachable nested types. Recursive definitions appear once;
   unknown names refuse clearly. The same command works inside the console.
   `db schema` retains the whole-schema view; this remains the local fixture.
-
 - Support unit-enum secondary indexes, including compound, optional and sparse
   unique keys. Canonical variant-name order agrees with row encoding; query
   operands must match the whole declared enum. Payload enums remain unsupported
   as keys. Native byte/corruption checks and Wasm rollback/upgrade qualification
   cover the existing index path; no new durable catalog or executor.
-
 - Keep opening focused on the manifest. Revision reads and write preparation
   validate only the needed entities; no-ops validate without advancing, while
   malformed/overflowed counters refuse the complete affected batch. Generated
   schemas reuse immutable metadata and the local M1 host retains storage-runtime
   custody. No revision/admission cache or format change. Warm 32-entity opening
   falls from about 755k to 113k instructions after removing unrelated checks.
-
 - Add `make m1-entity-growth` to measure 1/8/32 equivalent entities with a fixed
   endpoint count. Check typed row/index isolation, replacement, deletion and
   upgrade; separate host bootstrap, lease, schema construction and database-open
@@ -2977,7 +2884,6 @@ make m1-entity-growth
   recovery. With operation-specific revision validation, current fresh/retained
   hosts measure about 960k/113k opening instructions at 32 entities. Retaining
   host setup adds about 1.4 KB Wasm; no durable metadata or executor is added.
-
 - Enforce IcyDB's 512-byte complete index-key budget in the existing write/read
   paths, including framing and owner suffixes. Check new keys before no-op
   shortcuts, reserve query-prefix completion space, and bound supplier key reads
@@ -2985,17 +2891,14 @@ make m1-entity-growth
   row/component bytes and schema attributes are unchanged. Keep 4 KiB rows with
   unindexed padding in the maximum-batch fixture; independently audit 512-byte
   keys and 513-byte refusal. No extra map, executor, WAL or dependency.
-
 - Add `make m1-envelope-comparison` for matched 32-row, eight-index writes
   against frozen IcyDB, including its journal settling. Retain the original
   large-key refusal separately: IcyDB's 512-byte key bound excludes that shape.
   The common workload uses four 48-byte Text values; product code is unchanged.
-
 - Add `make m1-write-envelope` for real Wasm qualification of 32 × 4 KiB rows
   and eight compound indexes per row. Independently check every stored row/index
   byte, preparation refusals, no-ops, rollback, upgrade and deletion. Keep the
   probe and bounded raw inspection in qualification; product execution is unchanged.
-
 - Support supplied Account/Subaccount primary keys, typed lookup/delete/page
   cursors and exact references. Absent and explicit-zero subaccounts identify
   the same Account across primary uniqueness, batch targets and references.
@@ -3028,7 +2931,6 @@ db query --limit 2
   retain length-first ordering; invalid stored lengths/owners refuse intact.
   Reuse the shared index codec and remove the fixed-width reference assumption;
   no new executor, durable metadata or authored attribute is needed.
-
 - Add `managed = "created_at"` / `"updated_at"` for Timestamp fields and
   `Batch::at(time)`. Inserts share one captured time; replacements preserve
   creation and update time only for real changes. No-op timestamps/revisions
@@ -3038,7 +2940,6 @@ db query --limit 2
   Native and Wasm regressions retain IcyDB's no-op and corrupt-order guarantees.
   Shared overhead adds 3.9 KB of Wasm and less than 0.1% to measured scalar
   query/write instructions; managed-write costs remain a separate workload.
-
 - Adopt Toko Tooling 0.43.2 through its published snapshot installer. Refresh
   qualification to Testkit 0.106.0, Host Artifacts/FS/Process 0.79.0 and Host Text
   0.76.0, plus the newly selected Platform Runtime/macros/guard 0.22.5 patch.
@@ -3049,7 +2950,6 @@ db query --limit 2
   stay unchanged.
   The matched scalar benchmark preserves IC DB's query/write execution costs;
   the design records the small artifact changes from the Runtime patch separately.
-
 - Add typed `Entity::insert()` inputs and `Batch::insert_input`. Omitted fields
   use declared integer, Bool or bounded Text defaults; explicit values, including
   `None`, remain unchanged. Missing required fields refuse. Use
@@ -3060,13 +2960,11 @@ db query --limit 2
   their fingerprints. Native and installed Wasm checks cover default collisions,
   exact integer limits, refusal/trap rollback and upgrade preservation. Richer
   defaults and primary-key defaults remain separate work.
-
 - Add `UlidGenerator` with an explicit operation timestamp and host-provided
   randomness. Preserve monotonic ordering at equal/backward times and refuse
   invalid timestamps or suffix exhaustion without changing state. Hosts own
   issuance checkpoints; ordinary refusals may leave gaps, while IC traps roll
   back the current execution. No clock, RNG dependency or stored-format change.
-
 - Give the shared fixture transport an ordinary private qualification crate,
   replacing source-path sharing. Keep the same bounded Platform hooks; product
   crates acquire no transport dependency. Benchmark source capture now records
@@ -3096,30 +2994,25 @@ db query --limit 2
   `make m0-endpoints` checks malformed requests and reply-failure rollback across
   message/callback boundaries. No product schema, stored bytes or query change.
   [#1 — Migrate qualification canisters off retiring Wire Endpoint](https://github.com/dragginzgame/ic-db/issues/1).
-
 - Extend typed primary keys and exact references to signed/unsigned 8–128-bit
   integers and U256. Preserve numeric order, full-width owners and typed cursors.
   Primary and secondary keys share ordered encoding; no implicit widening,
   signedness conversion, new dependency or persistent metadata.
-
 - Admit supplied ULID primary keys with typed lookup, delete and page cursors.
   References use the target’s exact Nat64/Ulid key type, including final-state
   cycles and restricted deletion across both types. Preserve Nat64 bytes and
   schema identities. Reuse the existing ULID codec and shared commit path; no
   new authoring attributes, ID generator, clock, RNG or durable metadata.
-
 - Add `prim = "Decimal", scale = N` (0–28) for exact decimal fields, optional
   values, collections and secondary indexes. Adapt IcyDB’s owned coefficient/scale
   codec and numeric ordering. Equivalent values share equality, hashing and keys;
   excess precision or coefficient overflow refuses without rounding. Persisted
   scales must match the schema. No dependency or aggregate arithmetic is added.
-
 - Add signed Unix-millisecond `Timestamp` and unsigned-millisecond `Duration`
   values, optional fields, collections and exact secondary indexes. Adapt
   IcyDB's owned eight-byte codecs, pre-epoch flooring, text parsing and saturating
   value arithmetic, including full-width duration operations. No clock, timer,
   managed-field state or dependency is added. Aggregate arithmetic remains separate.
-
 - Add bounded Gregorian `Date` values, optional fields, collections and secondary
   indexes. Adapt IcyDB's epoch-day codec and calendar algorithm; reject invalid
   dates and out-of-range stored/index bytes. No calendar dependency, clock read
@@ -3152,17 +3045,14 @@ db query --limit 2
   boundaries, malformed widths/text, unique exchanges, rollback and reopen.
   Document IcyDB's separate timestamp/entropy/monotonicity lessons for generated
   IDs; primary keys remain Nat64 in this increment.
-
 - Adopt published Platform Runtime/macros/guard 0.22.4 and set the product's
   Types minimum to 0.20.4. Platform itself remains transitively selected at
   0.33.2: announced 0.33.3 was unavailable from crates.io at this update.
   Keep the coordinated runtime singleton and database-owned identity codecs.
-
 - Adopt IC Testkit 0.105.0 for qualification and the local `db` host. Keep fresh
   test instances; no retired pooling API is needed. Its host helpers now share
   Artifacts/FS/Process 0.78.0, removing the duplicate Artifacts version and obsolete
   process dependencies. PocketIC remains 16.1.0; product codecs are unchanged.
-
 - Add `prim = "Account"` and `prim = "Subaccount"`, using the re-exported
   Platform Types values with database-owned codecs. Account identity treats an
   absent subaccount and an explicit zero subaccount identically. Support optional
@@ -3171,11 +3061,9 @@ db query --limit 2
   lengths, duplicate keys, uniqueness swaps, bounds, rollback and reopen. No new
   dependency, account wrapper or durable metadata is introduced. Primary keys
   and references remain Nat64.
-
 - Move schema table bounds into a separate **Info** column for entity fields,
   records, enum payloads, lists, sets and maps. Type names no longer contain
   parenthesized limits. Run `make db`, then `db schema`, to refresh the console.
-
 - Add finite `Float32`/`Float64` fields, collection elements/keys and exact
   secondary-index operands. Adapt IcyDB’s finite wrappers and owned IEEE-byte
   codec: constructors normalize signed zero, while non-finite inputs refuse.
@@ -3225,7 +3113,6 @@ db status
   Artifacts/FS/Process 0.77.3; moving those helpers awaits publication of the
   announced Testkit 0.105.0. Product codecs, schema identities and Wasm
   dependencies are unchanged.
-
 - Add `prim = "U256"` using the feature-free `ethnum` integer type re-exported
   as `ic_db::U256`. Adapt IcyDB’s owned 32-byte big-endian payload and boundary
   cases, without its wrapper, numeric conversion engine or Wire serialization.
@@ -3234,7 +3121,6 @@ db status
   fingerprints, malformed data, row limits, uniqueness swaps, no-op revisions,
   rollback and unchanged upgrade. Existing contracts without U256 are unchanged;
   aggregate arithmetic and non-Nat64 primary keys remain separate work.
-
 - Add named maps with scalar keys and ordinary optional/list/named values through
   `#[map(key(...), value(...), max_items = N)]`. Retain IcyDB's `BTreeMap` wrapper
   and immutable-key rule. Shared ordered traversal rejects stored duplicate or
@@ -3245,7 +3131,6 @@ db status
   refused writes, no-op revisions, late traps and upgrade/reopen. No new crate,
   dependency, durable state or value engine. Existing contracts without maps
   remain unchanged; non-scalar keys and member indexes/references remain work.
-
 - Add named scalar sets using IcyDB's `#[set(item(...))]` wrapper shape with
   explicit `max_items`. Preserve logical ordering, construction-order independence
   and absence versus empty. Decode refuses duplicate or descending stored elements
@@ -3256,11 +3141,9 @@ db status
   Existing contracts without sets remain unchanged. No new crate, dependency,
   durable catalog or generic value representation. Non-scalar elements, member
   indexes and normalization policies remain implementation work.
-
 - Adopt Toko Tooling 0.43.1 in both workspaces and refresh the authenticated vendor
   snapshot. Frozen release tooling now retains phase timings across failures and
   resumes; database dependencies and behavior are unchanged by this refresh.
-
 - Add ordered lists to entity/record fields and enum payloads using
   `value(many, max_items = N, item(...))`. Retain IcyDB's `many` spelling with an
   explicit count bound; preserve order, duplicates and absence versus empty.
@@ -3273,7 +3156,6 @@ db status
   binds these limits; contracts without lists remain unchanged. No new dependency,
   durable state or generic value tree. List indexes/references and optional
   list elements remain future work; no existing attribute is removed.
-
 - Support named records and unit/payload enums through the familiar attribute-owned
   `record`, `enum_`, `variant(value(...))` and `item(is = "...")` spelling.
   `item(indirect, is = "...")` gives explicit Box indirection. Recursive graphs
@@ -3288,7 +3170,6 @@ db status
   Native/Wasm checks cover exact bytes, transitive schema changes, reorderings,
   malformed payloads, boundary limits, no-op writes, late traps and upgrade/reopen.
   Nested indexes/references remain implementation work.
-
 - Remove mandatory numeric entity/index IDs from scalar authoring. Entity names
   default to the Rust type name; index names default to ordered comma-separated
   fields. Optional `name` overrides preserve explicit identity. References select
@@ -3299,7 +3180,6 @@ db status
   assignment table. Old numbered manifests refuse unchanged. Native/Wasm checks
   cover name collisions, reference resolution, old-contract refusal, persistence
   and rollback. `db schema` shows names instead of schema ID numbers.
-
 - Implement the first two-stage schema pipeline using IcyDB's constructor/path
   approach. `references(entity = "path::Target", ...)` resolves through Rust,
   including imports and `Self`. Native-only
@@ -3338,7 +3218,6 @@ db status
   Convert numeric arguments with their declared type, such as `7_u64.into()`;
   previously accepted integer slices no longer compile directly. Existing
   Nat64 persisted contracts are unchanged.
-
 - Add required Bool and bounded Text secondary indexes. Adapt IcyDB's
   zero-byte escaping and component terminators; preserve byte-exact UTF-8 order,
   distinct normalization forms, empty strings and embedded NULs. Text operands
@@ -3352,7 +3231,6 @@ db status
   (+607); complete read/modify/replace 834,511 instructions (+977).
   All measured scalar operations remain below the frozen-IcyDB comparison
   ceilings; this does not measure text-heavy queries.
-
 - Extend secondary indexes to required Nat/Int8/16/32/64/128 and Principal fields.
   Adapt IcyDB's numeric ordering and length-first Principal rules into one shared
   component encoder. Typed lookup operands must match their declared fields;
@@ -3365,7 +3243,6 @@ db status
   listing uses 779,948 instructions and complete read/modify/replace uses 833,534,
   increases of about 0.8% and 0.25% over the preceding Principal increment.
   Both remain below the frozen-IcyDB workload ceilings; broader parity is unproven.
-
 - Add required/optional `Principal` fields using the canonical Platform Types
   identity. Adapt IcyDB's raw-byte admission and rejection cases to IC DB's owned
   u32-length framing. Distinguish absent, management-canister, anonymous and
@@ -3378,7 +3255,6 @@ db status
   reused without introducing Wire persistence, an IcyDB wrapper or a value engine.
   The existing scalar host grows by 410 Wasm bytes; measured scalar operations
   rise by 6–10 instructions and remain below the frozen-IcyDB comparison ceilings.
-
 - Add `make m1-records-comparison`: one independent scalar workload and tuple
   oracle for IC DB and frozen SQL-disabled IcyDB, with matched schema/index,
   supplier graph, transport and build profile. Record Wasm/code-section bytes,

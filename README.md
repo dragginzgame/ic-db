@@ -390,8 +390,9 @@ let result = db.query::<Entry>()
 ```
 
 `result.value` is true after the first validated match, or false after observing
-the end of the input. Work exhaustion without a match returns `Limit`, including
-an exact-boundary scan whose end has not yet been observed. The result occupies
+the end of the input. If the last candidate uses the last unit of work and
+fails the filter, the result is false. If another candidate remains, the same
+scan returns `Limit`. The result occupies
 one byte; `limit` does not truncate input. Like scalar counts, this terminal
 refuses cursors, DISTINCT, input ordering and group modifiers. It validates every
 examined row, but stops before inspecting rows beyond the first match.
@@ -407,7 +408,7 @@ let count = db.query::<Entry>()
     .value;
 ```
 
-An unfiltered count reads maintained entity metadata. An indexed count can use fixed leading fields and a range on the next field, including a range on the first field. When the index enforces every filter, the engine counts entries within the work budget.
+An unfiltered count reads maintained entity metadata. An indexed count can use fixed leading fields and a range on the next field, including a range on the first field. When the index enforces every filter, the engine counts entries within the work budget. A four-entry range succeeds with `work_limit(4)` and returns `Limit` with `work_limit(3)`.
 A range defined entirely by primary-key equality or inequalities (`<`, `<=`,
 `>`, `>=`) counts physical row keys within the same budget. Other filters use
 row execution. Metadata and key-only counts trust stored
@@ -1369,8 +1370,10 @@ Each field accepts `:asc` or `:desc`; omitted directions and the implicit primar
 tie-breaker are ascending. The fluent equivalent is
 `.order_asc(Entry::CATEGORY).order_desc(Entry::AMOUNT)`.
 Installation defaults to `~/.local/bin/db`; keep `~/.local/bin` on `PATH`.
-The private [CLI crate](crates/ic-db-cli/Cargo.toml) owns the installed `db` command.
-Its local canister and [shared fixture support](qualification/ic-db-cli-fixture/Cargo.toml) live under `qualification/`.
+The [CLI crate](crates/ic-db-cli/Cargo.toml) ships the `db` binary and owns the shared fixture types.
+Cargo installs the binary alone. Database commands also require the matching fixture Wasm at
+`<install-prefix>/share/ic-db/m1/records.wasm` and a prepared PocketIC server.
+Set `IC_TESTKIT_POCKET_IC_URL` to use an existing server. For the complete local setup use `make m0-setup` and `make db` from the matching checkout.
 Override the prefix with `make db DB_INSTALL_PREFIX=/your/prefix`.
 
 The current console reads an explicitly labelled, temporary M1 database with six
@@ -1495,18 +1498,17 @@ and the annotated version tag to the public repository. `make release-resume
 VERSION=X.Y.Z` recovers a specific interrupted source delivery.
 
 From the verified release checkout, run `make publish` to upload
-`ic-db-macros` and `ic-db` together. Cargo orders the macro dependency first.
+`ic-db-macros`, `ic-db` and `ic-db-cli`. Cargo orders the macro dependency first.
 For a normal patch release, run both steps together:
 
 ```sh
 make release-patch && make publish
 ```
 
-A release is complete once both exact versions are visible on crates.io.
+A release is complete once all three crates at the release version are visible on crates.io.
 For a rehearsal use `make publish-check`. If an upload stops partway, inspect
 the retained publication evidence and registry versions before publishing a
-missing crate with `make publish PACKAGE=ic-db` or `PACKAGE=ic-db-macros`.
-The fixture CLI remains a local install. Creating the GitHub prerelease is a
+missing crate with `make publish PACKAGE=<crate-name>`. Creating the GitHub prerelease is a
 separate delivery step after tag verification.
 
 The release metadata editor is the explicitly prepared IC Build 0.84.1 tool.

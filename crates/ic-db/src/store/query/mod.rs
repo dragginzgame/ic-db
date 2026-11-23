@@ -1227,8 +1227,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Return at most 1..=32 matching rows in this page.
     /// Complete-collection DISTINCT refuses if the full result exceeds this cap.
-    /// Complete sorting applies this cap after examining the entire input; it
-    /// never relaxes the separate 32-matching-row retention bound.
+    /// Complete sorting examines the entire admitted input and retains at most
+    /// the requested number of winners, even when many more rows match.
     /// For grouped aggregates, cap the complete selected result instead; use
     /// `group_page` to set a retained grouped response's page size separately.
     #[must_use]
@@ -2390,9 +2390,11 @@ fn execute_inner<M: Memory>(
             if terminal == Some(stored_key) {
                 break;
             }
-            if request.single_result_probe.is_some() {
-                // Ask the iterator only whether more input exists. Single-result
-                // terminals cannot return a continuation or a partial sort.
+            if request.single_result_probe.is_some()
+                || matches!(aggregate, Some(aggregate::Accumulator::Exists(_)))
+            {
+                // Exhaustion proves a miss or completes the single result. The
+                // next iteration refuses excess work before inspecting the entry.
                 continue;
             }
             if (aggregate.is_some() && input_bytes.is_none())

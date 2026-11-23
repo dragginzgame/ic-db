@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license-file.workspace = true
-publish = false
+repository.workspace = true
+description = "Local fixture console for IC DB"
+publish.workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["toko-tooling"]
@@ -12,17 +14,31 @@ ignored = ["toko-tooling"]
 [[bin]]
 name = "db"
 path = "src/main.rs"
+required-features = ["console"]
+
+[features]
+default = ["console"]
+console = [
+    "host",
+    "dep:clap",
+    "dep:ic-host-text",
+    "dep:rustyline",
+    "dep:serde_json",
+    "dep:shlex",
+    "tokio/rt-multi-thread",
+]
+host = ["dep:ic-testkit", "dep:ic-wire", "dep:tokio"]
 
 [dependencies]
-clap.workspace = true
-ic-db-cli-fixture = { workspace = true, features = ["host"] }
-ic-host-text.workspace = true
-ic-testkit.workspace = true
-ic-wire.workspace = true
-rustyline.workspace = true
-serde_json.workspace = true
-shlex.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+clap = { workspace = true, optional = true }
+ic-host-text = { workspace = true, optional = true }
+ic-testkit = { workspace = true, optional = true }
+ic-wire = { workspace = true, optional = true }
+rustyline = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+shlex = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"], optional = true }
 
 [dev-dependencies]
 toko-tooling.workspace = true

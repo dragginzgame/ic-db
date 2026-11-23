@@ -442,9 +442,9 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
         for (minimum, category, work, expected, examined) in [
             (None, None, 1, "true", 1),
             (Some(50), None, 5, "true", 5),
-            (Some(999), None, 7, "false", 6),
+            (Some(999), None, 6, "false", 6),
             (Some(40), Some(0), 2, "true", 2),
-            (Some(99), Some(0), 4, "false", 3),
+            (Some(99), Some(0), 3, "false", 3),
             (Some(40), Some(7), 1, "false", 0),
         ] {
             let result = call(minimum, category, work, "exists").await.unwrap();
@@ -453,7 +453,7 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
             assert!(result.2.is_none());
             assert_eq!((result.3, result.4, result.5), (examined, examined, 1));
         }
-        assert!(call(Some(999), None, 6, "exists").await.is_err());
+        assert!(call(Some(999), None, 5, "exists").await.is_err());
         assert!(call(Some(40), Some(0), 1, "exists").await.is_err());
         for (terminal, expected) in [
             ("count", "2"),

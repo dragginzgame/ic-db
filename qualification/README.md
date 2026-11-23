@@ -263,8 +263,10 @@ The frozen IcyDB source/revision and sibling Canic integration are unchanged.
 
 ## Comparison with frozen IcyDB
 
+The [0.27.6 worktree comparison](#query-matrix-for-the-0276-worktree) covers the current broad query host, automatic counts and indexed existence against frozen IcyDB.
+
 The [November 18 three-engine performance matrix](#three-engine-performance-matrix-0234)
-adds a current PocketIC rerun and matched native timings for SQLite.
+records the earlier PocketIC run and matched native timings for SQLite.
 The [indexed existence comparison](#indexed-existence-0237) covers the subsequent
 fluent equality-prefix change.
 
@@ -390,9 +392,9 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | 4,191 raw bytes per added entity from 1 to 8 and 4,496 from 8 to 32 in the 0.26.7 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#wasm-size-snapshot-0267-worktree) |
+| Added reachable entity size | 4,168 raw bytes per added entity from 1 to 8 and 4,504 from 8 to 32 in the 0.27.6 worktree eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#bounded-m2-closeout-on-pocketic-0276-worktree) |
 | ID membership and indexed empty Text | Six matched handler costs on 0.26.10 and the 0.26.11 candidate | Release-to-release comparison | Early existence costs 17.1% more, late existence costs 33.8% less. [Filter costs](#filter-costs-before-02611) |
-| Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,676 of 1,908 successful pairs. The median paired ratio was 0.384. | Owner-validated prefix counts reached 31.39× legacy. This workload uses three Nat64 fields. [Planner checkpoint](#planner-checkpoint-after-0269) |
+| Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,666 of 1,908 successful pairs. The median paired ratio was 0.391. | Owner-validated prefix counts reached 31.72× legacy. This workload uses three Nat64 fields. [Current measurements](#query-matrix-for-the-0276-worktree) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sparse ID listing | 128 rows, two categories, default-order IC DB and explicit-index control | Automatic IC DB used 51.7–55.1% fewer handler instructions than legacy after upgrade and readiness | Two-row pages on fixed input with last-ID boundaries. [0.23.13 comparison](#automatic-equality-listings-02313) |
@@ -3461,6 +3463,50 @@ with a median of +0.011%. All 2,340 frozen IcyDB instruction counts
 repeated exactly. The paired CSVs are in `query-matrix-02611-control` and
 `query-matrix-02611-matched` under the same evidence directory.
 
+### Bounded M2 closeout on PocketIC (0.27.6 worktree)
+
+The closeout used the local query worktree after v0.27.5, Rust 1.100.0 and the locked release-profile canisters. The [design matrix](../docs/design/ic-db-system-design.md#m2-bounded-query-closeout) owns the supported compositions and refusals.
+
+- **Selective groups.** `make m2-aggregate-paths` checked 3,072 results against independently computed groups across two engines, two distributions, three populations and two upgrade phases. All 1,536 pairs agreed. The table below gives grouped-count handler instructions (including open) on 511 skewed rows after upgrade with minimum amount zero. The default and explicit index arms used the same filtered input. The default arm can select an index in the current engine, so it cannot serve as a forced primary-scan control.
+- **Contention and recovery.** With 96 rows and 12 candidates per advance, the exact sum completed in nine advances under unrelated, refused, trapped or same-value writes. A committed source change after step one invalidated all three explicit attempts. A fresh job after writes stopped returned 46,610. Of four deterministic source-write offsets, 0/4 jobs finished before the write at 12 candidates per step and 2/4 at 48. These are schedule outcomes, not estimates of production completion rates. The job and envelope probes also checked completed-page replay, cross-upgrade recovery, capacity refusal and bounded cleanup of 16 near-limit frames.
+- **Complete sorting.** `make m2-sort-costs` verified mixed directions, ties, DISTINCT, work and byte refusal on installed Wasm and matched unique Decimal ordering against SQLite. One pre-upgrade mixed-direction top-32 projection examined 511 rows, returned 512 output bytes and used 9,178,371 instructions. The separate 511-work sorted DISTINCT case refused without returning a prefix.
+
+| Category matches | Default IC DB | Explicit IC DB index | Frozen IcyDB |
+| ---: | ---: | ---: | ---: |
+| 0 | 862,481 | 867,368 | 2,120,179 |
+| 32 | 4,830,602 | 4,834,049 | 5,153,376 |
+| 415 | 50,296,356 | 50,286,236 | 32,123,807 |
+
+**Reachable fluent code.** `make m2-query-growth` installed and exercised seven host variants. With one entity, moving from one fluent shape to eight added 1,251 uncompressed Wasm bytes (344,239 to 345,490). Adding eight application mapping sites to the eight-shape host added 1,703 bytes. Keeping eight shapes per entity, the 8-entity host measured 374,667 bytes and the 32-entity host 482,773 bytes. That is 4,168 bytes per added entity from 1 to 8 and 4,504 from 8 to 32. The 32-entity figure comes from a size-only build with `retained-host,fluent-shapes,entities-32`. The roughly 2 KB objective and 4 KB comparison ceiling remain open for adoption.
+
+For this run, the aggregate-path and growth drivers kept their raw evidence under `qualification/target/evidence/aggregate-paths-0276-closeout/` and `query-growth-0276-closeout/` respectively. Set `IC_DB_QUERY_MATRIX_DIR` and `IC_DB_QUERY_GROWTH_DIR` to select separate output directories on a rerun.
+
+### Query matrix for the 0.27.6 worktree
+
+Measured November 22 on the local query changes after v0.27.5 (base `7028d03`) against frozen IcyDB 0.310.2 (`6d421e3`, SQL disabled). The broad matrix checked 4,680 outcomes against the fixture oracle and verified stable backing after reads. IC DB used fewer handler instructions in 1,666 of 1,908 successful pairs and more in 242. The upper median paired ratio was 0.391. Legacy refused 432 bounded sorts that IC DB answered. The speed comparison excludes those refusals.
+
+The table gives upper median IC DB / IcyDB instruction ratios over balanced and skewed data, settled before and after upgrade. Values below 1 favor IC DB. Instructions include database opening and execution and exclude transport encoding. The [full family matrix](measurements/0.27.6-query-comparison.csv) includes the pair counts, absolute medians and ratio ranges for every family and population across all three runs.
+
+| Query | 32 rows | 128 rows | 511 rows |
+| --- | ---: | ---: | ---: |
+| Primary-key hit | 0.442 | 0.458 | 0.540 |
+| Index prefix, first ten | 0.369 | 0.365 | 0.392 |
+| Fluent listing, ascending | 0.291 | 0.346 | 0.370 |
+| Fluent listing, compound order | 0.503 | 0.435 | 0.490 |
+| Grouped count | 0.328 | 0.527 | 0.937 |
+| Grouped sum | 0.352 | 0.515 | 0.635 |
+| Whole-entity count | 0.404 | 0.413 | 0.442 |
+| Populated prefix, owner-validated count | 0.954 | 2.727 | 11.065 |
+| Default prefix count, including misses (separate count host) | 0.451 | 0.567 | 1.155 |
+| Indexed existence hit (separate existence host) | 0.476 | 0.492 | 0.629 |
+| Indexed existence miss (same host) | 0.412 | 0.421 | 0.552 |
+
+Default `.count()` scans covered index entries while legacy maintains prefix counts on writes. With 511 skewed rows after upgrade, 415 matches took 3,821,886 instructions on IC DB and 1,553,991 on legacy. For 32 matches the costs were 1,047,015 and 1,561,362. With no matches they were 838,923 and 1,559,694. IC DB won all 36 indexed existence pairs. Those use category hits and misses with a 512-candidate allowance. The exact-work-limit changes have separate correctness tests.
+
+The complete broad query hosts measured 402,688 Wasm bytes (374,301 code) for IC DB and 3,295,334 (3,183,403 code) for legacy. Against the [0.26.11 candidate](#filter-costs-before-02611), the current IC DB host grew by 13,002 bytes and used 1.83% more instructions at the median across its 2,340 reads. All 1,908 successful legacy instruction counts repeated exactly. These runs compare whole builds and do not isolate the cost of individual patches.
+
+Reproduce with `make m2-query-matrix`, `make m2-count-paths` and `bash scripts/measure-records.sh exists`. Local evidence is in `qualification/target/evidence/{query-matrix,count-paths,exists}-0276-worktree/`. Each directory contains the per-call CSV, artifact hashes, source diff, lockfile and build receipts. The [fixture definition](#broad-query-matrix-019) describes query parameters, limits and timing boundaries.
+
 ### Planner checkpoint after 0.26.9
 
 On 2026-11-21 the unreleased planner and tagged IC DB v0.26.9 each ran the
@@ -4911,6 +4957,21 @@ allocator or execution-budget machinery. Claims apply to this selected shape and
 supplier version, not all combinations of references, types, heap sizes and tree
 histories. Normal measurement/console builds do not enable this feature.
 
+#### Byte-limited migration recovery (0.27.6 worktree)
+
+On Storage 0.78.7, an 8,191-byte source allowance committed one 4,096-byte row and checkpointed before the next row. At that checkpoint a 4,095-byte allowance returned `RowTooLarge` with zero supplier writes or growth requests. With 4,096 bytes available, an injected trap after the first backing write restored the complete pre-call memory. After a canister upgrade, the same 4,096-byte allowance copied one row. The two successful single-row calls used 3,499,183 and 4,773,006 instructions respectively, including host admission.
+
+The remaining 126 rows completed in chunks of 32, 32, 32 and 30 after retries with growth allowed. A second migration copied the indexed rows unchanged to a third named allocation and added an empty entity. After each publication and retired-source cleanup, the independent byte oracle matched all 128 rows and 1,024 index entries.
+
+| Whole-canister stable allocation | A → B, build eight indexes | B → C, preserve indexes |
+| --- | ---: | ---: |
+| Source frozen | 851,968 bytes | 2,097,152 bytes |
+| Copy complete | 2,097,152 bytes | 3,342,336 bytes |
+| Target published | 2,097,152 bytes | 3,342,336 bytes |
+| Retired source cleaned | 2,097,152 bytes | 3,342,336 bytes |
+
+Initializing C brought allocation to 2,162,688 bytes. In total each migration grew physical storage by 19 pages of 65,536 bytes. Cleaning A before starting B → C did not prevent that growth. These measurements include supplier overhead and leave allocation-local free space and peak heap unmeasured.
+
 With Storage 0.74.1, the 0.17 probe denied one initialization growth request and
 one growth request in each of four 32-row copy chunks. Each failure preserved
 backing; the same operation then succeeded with growth enabled. Copy retries
@@ -5925,8 +5986,8 @@ For 415 matches the index-entry path saves 92.2% of the validated count's
 instructions, with 2.44 times the instructions of legacy’s maintained count.
 The former visits one index entry per match; the latter pays counter maintenance
 on writes. Both IC DB paths use a 512-candidate cap here. The native
-`index_entry_counts_are_bounded_and_independent_of_owner_rows` regression also
-checks exact-boundary refusal and a dangling entry. The different benchmark
+`index_entry_counts_are_bounded_and_independent_of_owner_rows` regression at 0.23.4 also
+checked exact-boundary refusal and a dangling entry. The different benchmark
 Wasm and timing boundary account for slightly different absolute readings
 from the broad matrix. IC DB Wasm SHA-256
 `7a2e25d1f090aa59b8e5261c0b33d4b13c0fa86a79cbb2e27985d68e1de6dadc`;

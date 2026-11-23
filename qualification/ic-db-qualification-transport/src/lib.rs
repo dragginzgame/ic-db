@@ -61,4 +61,4 @@ pub fn empty(bytes: &[u8]) -> Result<(), &'static str> {
     }
 }
 
-pub use ic_db_cli_fixture::{RetainedSelection, RowFilters};
+pub use ic_db_cli::{RetainedSelection, RowFilters};

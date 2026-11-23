@@ -42,7 +42,7 @@ Persistent records, bounded fluent queries/resumable aggregates and identified
 whole-database maintenance have product implementations and scoped native/Wasm
 evidence. Broader capability coverage, operational limits and Canic integration
 remain open; this is not a production-readiness or IcyDB-parity declaration.
-Requested releases deliver public source to `dragginzgame/ic-db` and both product crates to crates.io;
+Requested releases deliver public source to `dragginzgame/ic-db` and the runtime, macros and CLI to crates.io;
 live deployment and replacement of IcyDB are not. Written 2026-11-13.
 
 Read sections 4–6 for contracts and supported mechanisms, and
@@ -1468,15 +1468,20 @@ these witnesses do not establish capacity for arbitrary repeated upgrades.
 **Migration capacity witness (0.17).** A qualification-only `maintenance-faults`
 variant copies 128 source rows into the existing eight-index envelope schema.
 Rows are 4096 bytes and physical index keys 512 bytes. Copy calls admit at most
-32 rows/128 KiB of source bytes; oversized row-count and undersized output budgets
-must refuse normally without mutation. The existing backing-fault wrapper rejects
+32 rows and 128 KiB of encoded source rows. The caller can change either limit between
+steps. When the remaining bytes cannot hold the next row, the checkpoint must
+preserve that row for the next call. If the first pending row exceeds the entire
+byte allowance, the step returns `RowTooLarge` with the existing checkpoint intact. The existing backing-fault wrapper rejects
 real supplier `grow` requests during copying. Whole-backing comparison covers
 rows, indexes, allocator metadata and checkpoints; the same chunk must complete
 after upgrade with growth allowed. Both runtime allocation and database errors
 remain observable normal refusals where returned, rather than forced host traps.
 
-The existing independent write-envelope byte oracle checks every copied row and
-index. Validation and cleanup must finish within explicit call bounds, with IC
+The capacity fixture then freezes the indexed target and copies it to a fresh
+third allocation, adding an empty entity. The independent write-envelope byte
+oracle checks every row and index after each retired source is cleaned. The
+[allocation measurements](../../qualification/README.md#byte-limited-migration-recovery-0276-worktree)
+record physical storage across both migrations. Validation and cleanup must finish within explicit call bounds, with IC
 instruction counts recorded for each phase. This preserves frozen IcyDB's
 indivisible-row/index-work obligation from
 `migration_page_limits_qualify_every_indivisible_rewrite_resource` (`6d421e3`),
@@ -2495,7 +2500,7 @@ trapping safely on the same oversized operation is not successful continuation.
 
 ## 9. Delivery and deletion gates
 
-This is the current status summary, reviewed 2026-11-17. Passing a selected
+The M2 and M3 rows were reviewed on 2026-11-22. Other rows retain the 2026-11-17 review. Passing a selected
 workload establishes that contract and envelope, not every combination in the
 retained capability scope. Later detail explains the implementation and evidence.
 
@@ -2503,10 +2508,26 @@ retained capability scope. Later detail explains the implementation and evidence
 | --- | --- | --- |
 | M0 — Scope and feasibility | Entry review accepted; mechanism probes established the chosen write, schema, query and recovery contracts | Historical probes remain scoped evidence, not product qualification |
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, broader member indexes, nested references, composite primary keys and additional authoring policies |
-| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | Larger sorting, richer operation combinations and representative contention/query-growth costs |
-| M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and a selected capacity probe | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
+| M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | [Bounded query closeout](#m2-bounded-query-closeout). Larger or cross-message sorting needs a consumer requirement. M4 tracks production workload acceptance and per-entity Wasm cost. |
+| M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and [byte-limited copy recovery](../../qualification/README.md#byte-limited-migration-recovery-0276-worktree) on maximum-size rows | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
 | M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
 | M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
+
+#### M2 bounded query closeout
+
+| Query combination | Supported result | Boundary callers can rely on |
+| --- | --- | --- |
+| Filter + ordered path + entity or projection | Live pages of entities, named records, one typed column or a tuple of 2–4 columns. A unique tie-breaker orders equal keys. | Sparse pages can be empty and still carry a continuation. Updating an ordering key or filter membership between calls can repeat or omit a row. |
+| Projection + DISTINCT | A unique projection or contiguous equal keys can stream. Otherwise, one call can collect a complete bounded set. | Scattered duplicates require state. The synchronous collector admits up to 32 distinct tuples within its work, result and byte limits. Retained DISTINCT can page up to 255 completed tuples if the job fits its 16 KiB frame. |
+| Ordering without a matching index, including sorted DISTINCT | Inspect the complete admitted input and retain the best 1–32 results. For non-unique projected tuples, sorted DISTINCT requires that the order lead with the varying projected fields after equality proofs. | No fallback sort cursor. An unsupported DISTINCT order refuses. Insufficient work or retained space refuses the whole result. An explicit index must supply the requested order. |
+| Filter + scalar or grouped aggregate | Counts, extrema, sums, averages and supported summaries use qualifying input. Group predicates, aggregate ordering and output limits apply to completed groups. | A row limit cannot truncate aggregate input. Row-page cursors cannot serve as aggregate checkpoints. Grouped reductions admit up to 32 groups before group filtering. State and output must also fit the selected operation’s byte bounds. |
+| Retained exact aggregate + writes + completed pages | Steps resume against the captured entity revision. Group filtering and ordering precede completed-output pagination. | A committed source change invalidates a running job. Retrying is explicit. Unrelated writes allow progress. An already completed result remains independently pageable within its lifecycle. |
+
+**Sort decision.** Keep the bounded complete sorter. The largest qualified open-ended workload sorts 511 candidates with a 512-candidate budget, up to four requested sort fields, a 4 KiB comparison key and 128 KiB of retained key/output buffers. Use an order-producing index for larger live listings. Reopen cross-message sorting when an actual query needs an order that an index cannot supply and the consumer can specify input consistency, page semantics and space. Frozen IcyDB’s `6d421e3` executor also separates order admission from bounded selection. Its larger-window machinery has no demonstrated need at a 32-result limit.
+
+**Disposition.** Close feature work for this bounded M2 contract. The composition review and selected SQLite and installed Wasm probes identified no outstanding correctness blocker for these combinations. A wider type/operation combination needs its own admission rule and witness. For M4 adoption, two measured costs remain: 4,504 Wasm bytes per added entity from 8 to 32 in the eight-shape fixture, and 50.30M instructions for a grouped count selecting 415 of 511 rows (32.12M on legacy). Controlled write schedules establish job invalidation and completion behavior; acceptance under real application traffic remains workload-specific. [Closeout measurements](../../qualification/README.md#bounded-m2-closeout-on-pocketic-0276-worktree)
+
+#### Application qualification
 
 The [skewed application workload](../../qualification/README.md#skewed-application-workload-02310)
 checks a 128-item listing and exact count on the same Canic mount. Moving an
@@ -3174,8 +3195,7 @@ witness covers absence refusal, byte limits and both page directions across upgr
 Newly eligible paths participate in the existing deterministic selection. If a
 physical path changes, old cursor/job bindings refuse and callers must restart;
 unchanged selected paths retain their identities and cleanup remains available.
-Larger sorting and general DISTINCT remain work; this is not
-a general cost-based planner.
+The [M2 closeout](#m2-bounded-query-closeout) records the supported sorting and DISTINCT combinations.
 
 **Automatic unique lookup (0.23.12).** For fresh entity reads and ordinary field projections, mandatory literal equalities on every component of a unique index admit
 an exact index range in either filter order. At most one owner qualifies, so
@@ -3371,7 +3391,7 @@ the whole result. Return `next: None`; no cursor or explicit-index
 fallback is admitted. Retained first-occurrence DISTINCT requires a physical
 input order and cannot use this sort. Indexed live pages
 and their bindings are unchanged. The existing work cap admits at most 511
-candidates plus observation of exhaustion; larger or resumable sorting remains work.
+candidates plus observation of exhaustion on an open-ended scan. Larger or resumable sorting is outside the accepted M2 envelope.
 
 Bounded selection keeps up to 32 retained rows in requested order. Once full,
 the last key supplies the cutoff: only a strictly better candidate needs a
@@ -3617,9 +3637,9 @@ contradiction check as range scans. An impossible required clause costs no probe
 A missing key spends one probe and fetches no owner. An index hit requires owner
 validation even when the key alone satisfies the filters. If the list exceeds
 the probe budget, the range scan can still find a match on the final allowed
-candidate. False requires observed input
-exhaustion; work exhaustion without a match returns `Limit`, including an exact
-boundary whose end has not been observed. Processing the inclusive terminal key of the physical range
+candidate. After the last allowed nonmatch, the range iterator can establish
+exhaustion and return false. If another entry remains, existence returns `Limit`
+before inspecting that entry or fetching its owner. Processing the inclusive terminal key of the physical range
 establishes exhaustion within the same candidate budget, including when that
 row fails a residual filter. Ascending traversal checks its upper bound and
 descending traversal checks its lower bound. A matching row deferred by the
@@ -3647,7 +3667,7 @@ The first counting terminals are synchronous `count()` and
 `Aggregate<Vec<GroupCount<Record>>>` with execution/encoded-output costs. Counts
 include every matching row; an absent group key is a group, not a discarded
 operand. Empty scalar counts yield zero and empty grouped counts yield no groups.
-`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. If the final allowed visit reaches the inclusive terminal key, the count completes. If exhaustion is still unknown, the operation returns `Limit`. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
+`using_index(name, prefix).count_index_entries()` counts physical keys in the selected secondary index range. It accepts the index’s typed leading operands and refuses additional row predicates. It fetches zero owner rows, so a dangling entry contributes to the result. The range iterator proves completion even when its length exactly matches the work limit. One further entry returns `Limit` before its key or value is inspected. The same rule applies to primary-key intervals and covered index ranges selected by `count()`. The operation adds no stored metadata or write work. The [prefix-count comparison](../../qualification/README.md#prefix-count-paths-0234) measures this contract alongside owner validation and legacy maintained counts.
 
 For membership counts over complete physical keys, a fixed index prefix can
 settle alternatives in a mandatory OR clause. A true alternative admits the
@@ -5683,8 +5703,7 @@ application handlers. The [mixed-history fixture](../../qualification/README.md#
 exercises authorization, queries, writes and upgrade recovery on PocketIC.
 
 The accepted broad query/type scope remains intact. Nested references/indexes,
-composite primary keys, larger sorting and broader maintenance envelopes
-remain named gaps in section 9, not capability cuts justified by this sequencing.
+composite primary keys and broader maintenance envelopes remain tracked in section 9. The M2 closeout records the decision on larger sorting.
 Keep the current synchronous write and explicit-maintenance contracts while
 qualifying real application combinations; do not reopen prefix-counter tuning
 merely because the integration work has a different owner.

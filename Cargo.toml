@@ -35,7 +35,6 @@ ulid = { version = "3.0.0", default-features = false }
 
 # Local console
 clap = { version = "4.6.7", features = ["derive"] }
-ic-db-cli-fixture = { path = "qualification/ic-db-cli-fixture" }
 ic-host-text = "0.77.4"
 ic-testkit = { version = "0.110.3", default-features = false }
 rustyline = { version = "19.0.0", default-features = false }
@@ -45,7 +44,7 @@ tokio = "1.54.1"
 
 # Tests and tooling
 ic-db = { path = "crates/ic-db" }
-toko-tooling = "=0.46.2"
+toko-tooling = "=0.46.3"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

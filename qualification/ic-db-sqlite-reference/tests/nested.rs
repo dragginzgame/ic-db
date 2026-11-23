@@ -857,7 +857,7 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
             query().work_limit(expected as usize - 1).count(),
             Err(Error::Limit)
         ));
-        let counted = query().work_limit(expected as usize + 1).count().unwrap();
+        let counted = query().work_limit(expected as usize).count().unwrap();
         assert_eq!(
             (counted.value, counted.examined, counted.fetched),
             (u64::from(expected), expected as usize, 0)

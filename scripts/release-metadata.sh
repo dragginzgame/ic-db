@@ -21,13 +21,10 @@ render_release_metadata() {
     "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
         manifest Cargo.toml "$RELEASE_PREVIOUS" "$RELEASE_VERSION" \
         "$evidence/workspace-input.json" > "$candidate/Cargo.toml" || return
-    local -a names
     for lock in Cargo.lock qualification/Cargo.lock; do
-        names=(ic-db ic-db-macros)
-        if [[ "$lock" == Cargo.lock ]]; then names+=(ic-db-cli); fi
         "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
             lock "$original/$lock" "$RELEASE_PREVIOUS" "$RELEASE_VERSION" \
-            "${names[@]}" > "$candidate/$lock" || return
+            ic-db ic-db-macros ic-db-cli > "$candidate/$lock" || return
     done
     awk -v version="$RELEASE_VERSION" -v previous="$RELEASE_PREVIOUS" -v date="$RELEASE_DATE" \
         -f "$shared/finalize-release-changelog.awk" "$original/CHANGELOG.md" > "$candidate/CHANGELOG.md"
@@ -41,7 +38,7 @@ check_qualification_lock() (
     git show "$RELEASE_SOURCE:qualification/Cargo.lock" > "$evidence/original.lock"
     "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
         lock "$evidence/original.lock" "$RELEASE_PREVIOUS" "$RELEASE_VERSION" \
-        ic-db ic-db-macros > "$evidence/expected.lock"
+        ic-db ic-db-macros ic-db-cli > "$evidence/expected.lock"
     if [[ -n "${RELEASE_COMMIT:-}" ]]; then
         git show "$RELEASE_COMMIT:qualification/Cargo.lock" > "$evidence/actual.lock"
     else

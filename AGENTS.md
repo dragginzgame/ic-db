@@ -19,8 +19,8 @@ This overlay owns local authority, product boundaries and qualification choices.
   Makefile’s `CARGO_PUBLISH_PACKAGES` as the package list so future changes to
   the release group apply automatically. Run `make publish` from the verified
   tag and confirm each selected crate is visible at the release version.
-  A source-only delivery requires an explicit source-only request. The CLI and
-  qualification packages stay private. Live-canister deployment, IcyDB feature
+  A source-only delivery requires an explicit source-only request. The release includes the CLI.
+  Qualification packages stay private. Live-canister deployment, IcyDB feature
   retirement and runtime migration require separate authorization.
 - Read the opening status and affected sections of the
   [system design](docs/design/ic-db-system-design.md), not its entire historical

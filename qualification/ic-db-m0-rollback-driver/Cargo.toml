@@ -13,7 +13,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
-ic-db-cli-fixture = { workspace = true, features = ["host"] }
+ic-db-cli = { workspace = true, features = ["host"] }
 
 [dev-dependencies]
 canic.workspace = true

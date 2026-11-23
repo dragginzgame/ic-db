@@ -491,8 +491,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// `limit` does not truncate input. The boolean result occupies one byte.
     /// # Errors
     /// Refuses cursors, DISTINCT, explicit ordering and group modifiers, as for
-    /// `count`. Exhausting `work_limit` without a match returns `Limit`, never
-    /// false; an exact-boundary no-match scan can conservatively refuse.
+    /// `count`. If no examined row matches and another candidate remains
+    /// beyond `work_limit`, returns `Limit`.
     /// Ordinary admission and examined-row integrity errors still apply.
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
@@ -621,8 +621,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Like other scalar counts, the row limit does not truncate the input.
     /// # Errors
     /// Requires an explicit index. Row predicates, ordering, cursors, grouping
-    /// and DISTINCT refuse. Visiting the inclusive terminal key proves completion,
-    /// even on the last allowed visit. Exhausting the work budget earlier returns
+    /// and DISTINCT refuse. A range with more entries than the work limit returns
     /// `Limit`; fewer than eight output bytes returns `RowTooLarge`.
     /// # Panics
     /// Malformed supplier storage can trap during traversal.
@@ -644,14 +643,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let bounds = super::range::bounds(E::SCHEMA, &self.request, plan)?;
         let mut examined = 0;
         if let Some(range) = bounds {
-            let terminal = super::range::terminal_key(&range, false);
             let db = self.db.read()?;
             let entries = db.map.range((range.0.as_ref(), range.1.as_ref()));
-            for entry in entries.take(self.request.work) {
-                examined += 1;
-                if examined == self.request.work && terminal.is_none_or(|end| end != entry.key()) {
+            for _ in entries {
+                if examined == self.request.work {
                     return Err(Error::Limit);
                 }
+                examined += 1;
             }
         }
 
