@@ -363,7 +363,7 @@ fn console_inspects_and_queries() {
     };
     let existence = run_console(
         &binary,
-        "query Entry --select exists --work 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 7\nquery Document --select exists --entry-id 999 --work 1\nquit\n",
+        "query Entry --select exists --work 1\nquery Entry --select exists --min 50 --work 5\nquery Entry --select exists --min 999 --work 6\nquery Document --select exists --entry-id 999 --work 1\nquit\n",
     );
     let blobs = run_console(
         &binary,
@@ -647,7 +647,7 @@ fn console_inspects_and_queries() {
         "query Entry --select note",
         "query Entry --select category --distinct --limit 1",
         "query Entry --min 40 --select count --work 1",
-        "query Entry --select exists --min 999 --work 6",
+        "query Entry --select exists --min 999 --work 5",
         "query Entry --select exists --group-min 0",
         "query Entry --select exists --distinct",
         "query Entry --select category,sum:amount --work 6",
