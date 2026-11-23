@@ -1286,6 +1286,11 @@ fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
     )
     .unwrap();
     let now = Timestamp::from_millis(0);
+    let candidates = sql
+        .query_row("SELECT COUNT(*) FROM items", [], |row| {
+            row.get::<_, u16>(0).map(usize::from)
+        })
+        .unwrap();
     let values = |g: ic_db::GroupSummary<Lane, Price, Price>| {
         let cents = |r: Option<Price>| {
             r.and_then(|r| r.price)
@@ -1359,7 +1364,11 @@ fn ranked_group_summaries_match_sqlite_in_one_call_and_across_pages() {
                     }
                 };
                 let query = || build(SummaryMeasure::Average);
-                let sync = query().group_summary::<Lane, Price, Price>().unwrap();
+                let sync = query()
+                    .work_limit(candidates)
+                    .group_summary::<Lane, Price, Price>()
+                    .unwrap();
+                assert_eq!(sync.examined, candidates);
                 assert_eq!(
                     sync.value.into_iter().map(values).collect::<Vec<_>>(),
                     expected

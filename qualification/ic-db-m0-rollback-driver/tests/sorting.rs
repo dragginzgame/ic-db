@@ -138,7 +138,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             if descending {
                 expected.reverse();
             }
-            let page = query("value", order, true, 9, 102).await.unwrap();
+            let page = query("value", order, true, 8, 102).await.unwrap();
             assert_eq!(
                 page.1,
                 expected.iter().map(|v| vec![*v]).collect::<Vec<_>>()
@@ -147,7 +147,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             assert!(page.2.is_none());
             // Byte admission follows deduplication, but input work still covers all rows.
             assert!(query("value", order, true, 9, 101).await.is_err());
-            assert!(query("value", order, true, 8, 102).await.is_err());
+            assert!(query("value", order, true, 7, 102).await.is_err());
             let page = query("value", order, false, 9, 136).await.unwrap();
             let expected = if descending {
                 vec![values[7], "1", "1", "1", "0.01", "0", "-0.01", values[6]]
@@ -326,11 +326,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
     .unwrap();
     assert_eq!(page.1, [vec!["6", "60"], vec!["4", "40"], vec!["2", "20"]]);
     assert!(page.2.is_none());
-    for order in [
-        "category:asc,amount:desc",
-        "amount:sideways",
-        "amount:desc:asc",
-    ] {
+    for order in ["amount:sideways", "amount:desc:asc"] {
         assert!(
             query(order, false, None, 1, 6, 16, None, false)
                 .await
@@ -341,7 +337,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         .await
         .unwrap();
     assert_eq!(page.1, [vec!["2", "20"], vec!["3", "31"]]);
-    for (work, bytes) in [(1, 32), (6, 32), (128, 31), (128, 15)] {
+    for (work, bytes) in [(1, 32), (5, 32), (128, 31), (128, 15)] {
         assert!(
             query("amount", true, None, 2, work, bytes, None, false)
                 .await
@@ -408,7 +404,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
     assert!(distinct.2.is_none());
     assert_eq!((distinct.3, distinct.4, distinct.5), (6, 6, 8));
     assert!(
-        query("category:desc", false, None, 1, 6, 8, None, true)
+        query("category:desc", false, None, 1, 5, 8, None, true)
             .await
             .is_err()
     );
@@ -500,12 +496,12 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             Ok(())
         );
     };
-    for id in 7_u64..=511 {
+    for id in 7_u64..=512 {
         write(id, id % 2, id * 10, 1).await;
     }
     for upgraded in [false, true] {
         if measured {
-            eprintln!("sort-cost phase=511-rows upgraded={upgraded}");
+            eprintln!("sort-cost phase=512-rows upgraded={upgraded}");
         }
         if upgraded {
             ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
@@ -515,12 +511,12 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         let backing = pic.get_stable_memory(canister).await;
         // Primary-key order interleaves the two categories, so DISTINCT must
         // collect both first occurrences and finish scanning the input.
-        for (order, expected) in [("id", ["0", "1"]), ("id:desc", ["1", "0"])] {
-            let page = query(order, false, Some(20), 2, 512, 16, None, true)
+        for (order, expected) in [("id", ["1", "0"]), ("id:desc", ["0", "1"])] {
+            let page = query(order, false, Some(11), 2, 512, 16, None, true)
                 .await
                 .unwrap();
             assert_eq!(page.1, [vec![expected[0]], vec![expected[1]]]);
-            assert_eq!((page.3, page.4, page.5), (511, 511, 16));
+            assert_eq!((page.3, page.4, page.5), (512, 512, 16));
             assert!(page.2.is_none());
         }
         // Duplicate rows consume scan work but only two retained tuple slots.
@@ -536,7 +532,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                     vec![vec!["1"], vec!["0"]]
                 }
             );
-            assert_eq!((page.3, page.4, page.5), (511, 511, 16));
+            assert_eq!((page.3, page.4, page.5), (512, 512, 16));
             assert!(page.2.is_none());
         }
         let first = query("category:desc", false, None, 1, 512, 8, None, true)
@@ -550,7 +546,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         );
         for limit in [1, 32] {
             for descending in [false, true] {
-                let mut expected: Vec<_> = (1_u64..=511)
+                let mut expected: Vec<_> = (1_u64..=512)
                     .map(|id| (id, if id <= 6 { id * 10 + id % 2 } else { id * 10 }))
                     .collect();
                 expected.sort_by_key(|&(id, amount)| (id % 2, std::cmp::Reverse(amount), id));
@@ -577,7 +573,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                         .map(|(id, amount)| vec![id.to_string(), amount.to_string()])
                         .collect::<Vec<_>>()
                 );
-                assert_eq!((page.3, page.4, page.5), (511, 511, limit * 16));
+                assert_eq!((page.3, page.4, page.5), (512, 512, limit * 16));
                 assert!(page.2.is_none());
             }
         }
@@ -594,23 +590,23 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
         let page = query("amount", true, Some(20), 1, 512, 16, None, false)
             .await
             .unwrap();
-        assert_eq!(page.1, [vec!["511", "5110"]]);
-        assert_eq!(page.3, 511);
+        assert_eq!(page.1, [vec!["512", "5120"]]);
+        assert_eq!(page.3, 512);
         assert!(page.2.is_none());
         // A sparse or empty match still proves complete input before returning.
-        for minimum in [5110, 6000] {
+        for minimum in [5120, 6000] {
             let page = query("amount", true, Some(minimum), 1, 512, 16, None, false)
                 .await
                 .unwrap();
             assert_eq!(
                 page.1,
-                if minimum == 5110 {
-                    vec![vec!["511", "5110"]]
+                if minimum == 5120 {
+                    vec![vec!["512", "5120"]]
                 } else {
                     vec![]
                 }
             );
-            assert_eq!((page.3, page.4), (511, 511));
+            assert_eq!((page.3, page.4), (512, 512));
             assert!(page.2.is_none());
         }
         assert_eq!(pic.get_stable_memory(canister).await, backing);
@@ -643,7 +639,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             .unwrap();
         assert_eq!(page.1, vec![vec![String::from("32")]]);
         assert!(page.2.is_none());
-        assert_eq!((page.3, page.4), (511, 511));
+        assert_eq!((page.3, page.4), (512, 512));
         assert_eq!(pic.get_stable_memory(canister).await, backing);
     }
     owned.drop().await;

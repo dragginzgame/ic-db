@@ -102,3 +102,34 @@ fn rule_order_has_one_identity_and_a_changed_limit_requires_transition() {
         Some(row)
     );
 }
+
+#[test]
+fn describe_keeps_the_checked_text_rule_and_unique_index() {
+    let schema = Schema::new(&[Collection::SCHEMA]).unwrap();
+    let description = schema.describe(Some("Collection")).unwrap();
+    assert_eq!(description.fingerprint, schema.fingerprint());
+    let json = serde_json::to_value(description).unwrap();
+    let entity = &json["entities"][0];
+    assert_eq!(entity["primary_key"], "id");
+    assert_eq!(
+        entity["fields"][1]["value"]["Named"]["name"],
+        "CollectionName"
+    );
+    assert_eq!(entity["indexes"][0]["unique"], true);
+    assert_eq!(entity["indexes"][0]["fields"], serde_json::json!(["name"]));
+    let checked = &json["types"][0]["body"]["Checked"];
+    assert_eq!(
+        checked["primitive"],
+        serde_json::json!({"Text":{"max_bytes":200}})
+    );
+    assert_eq!(
+        checked["rule"]["Text"],
+        serde_json::json!({
+            "max_bytes": 200, "non_blank": true, "max_chars": 50
+        })
+    );
+    assert!(matches!(
+        schema.describe(Some("Missing")),
+        Err(Error::UnknownEntity)
+    ));
+}

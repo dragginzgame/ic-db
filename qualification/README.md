@@ -3481,6 +3481,20 @@ The closeout used the local query worktree after v0.27.5, Rust 1.100.0 and the l
 
 For this run, the aggregate-path and growth drivers kept their raw evidence under `qualification/target/evidence/aggregate-paths-0276-closeout/` and `query-growth-0276-closeout/` respectively. Set `IC_DB_QUERY_MATRIX_DIR` and `IC_DB_QUERY_GROWTH_DIR` to select separate output directories on a rerun.
 
+### Indexed owner lookup in the 0.27.7 worktree
+
+The secondary-index scan validates the encoded owner ID, builds its lookup key in one allocation and checks the row's identity when validating the index entry. Primary scans still compare the decoded row ID against the physical key. Storage keys and row encoding are unchanged.
+
+Two PocketIC runs of `make m2-aggregate-paths` compared the same 1,536 IC DB queries before and after this change, each with an independently computed result and a frozen IcyDB counterpart. Settled grouped-count handler instructions after upgrade on 511 skewed rows, with the amount threshold set to zero:
+
+| Matching rows | IC DB before | IC DB after | Frozen IcyDB |
+| ---: | ---: | ---: | ---: |
+| 0 | 862,481 | 861,871 | 2,120,179 |
+| 32 | 4,830,602 | 4,820,312 | 5,153,376 |
+| 415 | 50,296,356 | 50,124,158 | 32,123,807 |
+
+The dense case saved 0.34%. All 1,536 IC DB cases used fewer instructions, with a median reduction of 0.046%. The benchmark host went from 402,648 to 402,637 uncompressed Wasm bytes. Insert handler totals fell in each of the six measured population intervals. For skewed inserts 129–511 the total went from 572,812,329 to 572,728,386 instructions. Raw results are in `qualification/target/evidence/aggregate-paths-0277-{before,final}/`.
+
 ### Query matrix for the 0.27.6 worktree
 
 Measured November 22 on the local query changes after v0.27.5 (base `7028d03`) against frozen IcyDB 0.310.2 (`6d421e3`, SQL disabled). The broad matrix checked 4,680 outcomes against the fixture oracle and verified stable backing after reads. IC DB used fewer handler instructions in 1,666 of 1,908 successful pairs and more in 242. The upper median paired ratio was 0.391. Legacy refused 432 bounded sorts that IC DB answered. The speed comparison excludes those refusals.
@@ -5301,11 +5315,12 @@ projection (the latter is Entry-only). Full entities are the default result.
 For example, `db query Entry --order-by amount --desc --limit 2 --select id,amount`
 scans all six entries and returns IDs 6 and 5 with no continuation. Complete sorting
 retains the best requested 1–32 matches and refuses work/state/output exhaustion
-and `--after`. The Wasm sorting witness scans 511 candidates, selects the best
+and `--after`. The Wasm sorting witness scans 512 candidates, selects the best
 one or 32 with mixed directions, and repeats across upgrade. Native full-sort
 oracles also exercise primary ties, identity DISTINCT and capacity recovery as
-losing rows are replaced. An exact 511-candidate work budget refuses; 512 permits
-the exhaustion check. Non-identity sorted DISTINCT retains the best requested distinct tuples.
+losing rows are replaced. On the 0.27.7 worktree, all 512 candidates fit a work budget of 512. A budget of
+511 refuses. The mixed-direction top-32 projection used 9,201,250 IC instructions
+before upgrade and 9,195,876 after upgrade. Non-identity sorted DISTINCT retains the best requested distinct tuples.
 `make m2-queries` includes its Wasm console-boundary check for
 global selection, limits, unchanged backing and indexed cursors across upgrade;
 no fixture endpoint or client sorting engine is added.

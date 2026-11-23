@@ -77,7 +77,7 @@ pub const fn handle(name: &str) -> u32 {
 }
 
 /// Stored value semantics supported by this increment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum FieldType {
     /// An ordered bounded list of scalars or named values.
     List {
@@ -149,7 +149,7 @@ pub enum FieldType {
 }
 
 /// One named stored field; type, bounds, optionality and write policy define identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct FieldSchema {
     /// Database-owned insertion/update time policy, never applied during decode.
     pub managed: Option<crate::ManagedTimestamp>,
@@ -167,7 +167,7 @@ pub struct FieldSchema {
 
 /// A required or optional typed reference using an ordinary reverse-lookup index.
 /// An absent optional value has no target; zero remains an ordinary target key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ReferenceSchema {
     /// Full logical target identity; its required key type must match this field.
     pub entity_name: &'static str,
@@ -179,7 +179,7 @@ pub struct ReferenceSchema {
 }
 
 /// A compiled index over supported exact scalar components.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct IndexSchema {
     /// Generated storage handle; use the name when selecting an index.
     #[doc(hidden)]
@@ -202,6 +202,7 @@ impl IndexSchema {
 }
 
 /// Compiled entity metadata emitted by the entity macro.
+#[derive(serde::Serialize)]
 pub struct EntitySchema {
     /// Maximum encoded row size, including keys and framing.
     pub max_row_bytes: usize,
@@ -403,6 +404,17 @@ pub struct Schema {
     entities: Vec<&'static EntitySchema>,
     pub(crate) fingerprint: [u8; 32],
     types: TypeGraph,
+}
+
+/// Serializable inspection of one compiled store or a single entity in it.
+#[derive(serde::Serialize)]
+pub struct SchemaDescription<'a> {
+    /// Fingerprint of the entire compiled store, including for an entity selection.
+    pub fingerprint: [u8; 32],
+    /// Selected entities in logical-name order.
+    pub entities: &'a [&'static EntitySchema],
+    /// Reachable named definitions in logical-name order. Links serialize by name.
+    pub types: Vec<&'static crate::TypeSchema>,
 }
 
 impl Schema {
@@ -653,6 +665,40 @@ impl Schema {
     #[must_use]
     pub fn entities(&self) -> &[&'static EntitySchema] {
         &self.entities
+    }
+
+    /// Describe the compiled schema without opening storage. A selected entity
+    /// includes its reachable named values. References identify other entities
+    /// without expanding them. Schema admission bounds the entities and definitions.
+    /// # Errors
+    /// Returns `UnknownEntity` for an unknown name or a schema error if a type
+    /// resolver fails to reproduce its admitted declaration.
+    pub fn describe(&self, selected: Option<&str>) -> Result<SchemaDescription<'_>, Error> {
+        let (entities, types) = if let Some(name) = selected {
+            let position = self
+                .entities
+                .binary_search_by_key(&name, |entity| entity.name)
+                .map_err(|_| Error::UnknownEntity)?;
+            let entity = self.entities[position];
+            let mut reachable = TypeGraph::default();
+            for field in entity.fields {
+                reachable.include(field.value)?;
+            }
+            if !self.types.contains(&reachable) {
+                return Err(Error::InvalidSchema);
+            }
+            (
+                &self.entities[position..=position],
+                reachable.definitions().collect(),
+            )
+        } else {
+            (self.entities(), self.types().collect())
+        };
+        Ok(SchemaDescription {
+            fingerprint: self.fingerprint(),
+            entities,
+            types,
+        })
     }
 
     pub(crate) fn entity_by_id(&self, id: u32) -> Option<&'static EntitySchema> {

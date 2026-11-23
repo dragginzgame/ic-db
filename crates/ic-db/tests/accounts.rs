@@ -405,6 +405,22 @@ fn account_lists_respect_the_row_byte_budget() {
 struct ProjectProfile {}
 
 #[test]
+fn describe_distinguishes_a_checked_principal_from_an_unrestricted_field() {
+    let schema = Schema::new(&[ProjectProfile::SCHEMA]).unwrap();
+    let view = serde_json::to_value(schema.describe(None).unwrap()).unwrap();
+    assert_eq!(view["types"][0]["name"], "NonAnonymousPrincipal");
+    assert_eq!(
+        view["types"][0]["body"]["Checked"],
+        serde_json::json!({
+            "primitive": "Principal", "rule": "NonAnonymous"
+        })
+    );
+    let fields = &view["entities"][0]["fields"];
+    assert_eq!(fields[0]["value"], "Principal");
+    assert_eq!(fields[2]["value"]["Named"]["name"], "NonAnonymousPrincipal");
+}
+
+#[test]
 fn project_subject_is_checked_on_construction_and_retained_reads() {
     let anon = Principal::anonymous();
     assert!(matches!(
@@ -495,6 +511,11 @@ fn adopting_a_checked_subject_requires_schema_admission() {
     let old = || Schema::new(&[OldProfile::SCHEMA]).unwrap();
     let new = Schema::new(&[ProjectProfile::SCHEMA]).unwrap();
     assert_ne!(old().fingerprint(), new.fingerprint());
+    let unchecked = serde_json::to_value(old().describe(None).unwrap()).unwrap();
+    assert_eq!(
+        unchecked["types"][0]["body"],
+        serde_json::json!({"Wrapped": "Principal"})
+    );
     let fixture = ic_db::testing::Fixture::new("test.profiles.v1");
     let row = OldProfile {
         id: 1,

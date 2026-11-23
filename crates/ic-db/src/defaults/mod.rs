@@ -7,7 +7,7 @@ use crate::{Error, FieldType, codec::Encoder};
 
 /// A compiled literal used only when an insert input omits its field.
 /// These are schema constants, not a dynamic query or mutation value model.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub enum LiteralDefault {
     /// Exact unsigned integer literal; must fit the declared unsigned width.
     Nat(u128),

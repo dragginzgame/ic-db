@@ -1701,7 +1701,7 @@ impl<'a> Plan<'a> {
         let mut plan = Self {
             primary,
             index: None,
-            prefix: prefix(2, entity.id),
+            prefix: prefix(2, entity.id, &[]),
             fixed_components: 0,
             terms: Vec::new(),
             selected: 1 << primary,
@@ -2198,9 +2198,6 @@ fn execute_inner<M: Memory>(
             &mut values,
             needs_spans.then_some(&mut spans),
         )?;
-        if RowKey::from_index(values[plan.primary])? != owner {
-            return Err(Error::Corrupt);
-        }
         if plan.index.is_some() {
             validate_index_entry(
                 entity,
@@ -2208,6 +2205,8 @@ fn execute_inner<M: Memory>(
                 owner,
                 stored_key,
             )?;
+        } else if RowKey::from_index(values[plan.primary])? != owner {
+            return Err(Error::Corrupt);
         }
         let read = |position: usize, member: Option<crate::member::RecordMember>| {
             if let Some(member) = member {
@@ -2391,19 +2390,13 @@ fn execute_inner<M: Memory>(
                 break;
             }
             if request.single_result_probe.is_some()
-                || matches!(aggregate, Some(aggregate::Accumulator::Exists(_)))
-            {
-                // Exhaustion proves a miss or completes the single result. The
-                // next iteration refuses excess work before inspecting the entry.
-                continue;
-            }
-            if (aggregate.is_some() && input_bytes.is_none())
+                || (aggregate.is_some() && input_bytes.is_none())
                 || collected.is_some()
                 || sorted.is_some()
             {
-                // Completion has not been observed. Never expose partial reductions;
-                // an exact-boundary scan may conservatively require more budget.
-                return Err(Error::Limit);
+                // A complete result can use the final work unit. The next iteration
+                // either observes exhaustion or refuses the extra candidate.
+                continue;
             }
             let resume = if boundary.is_some_and(|key| previous.as_deref() != Some(key)) {
                 Resume::AfterUnemittedClass

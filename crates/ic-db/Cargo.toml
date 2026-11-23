@@ -40,6 +40,7 @@ ulid.workspace = true
 
 [dev-dependencies]
 ic-db = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
 toko-tooling.workspace = true
 
 [lints]

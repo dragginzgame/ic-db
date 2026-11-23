@@ -212,7 +212,7 @@ fn complete_sort_matches_full_oracle_before_limit_and_projection() {
         Err(Error::Limit)
     ));
     // Even when the best result is already seen, work exhaustion cannot return a prefix.
-    for work in [1, 8] {
+    for work in [1, 7] {
         assert!(matches!(
             db.query::<Entry>()
                 .order_by(&["amount", "category"])
@@ -263,7 +263,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let mut db = create(&runtime, 1);
-    let input: Vec<_> = (1..=511)
+    let input: Vec<_> = (1..=512)
         .map(|id| Entry {
             amount: (id * 37) % 101,
             ..row(id)
@@ -309,7 +309,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
                         .map(|r| r.id)
                         .collect::<Vec<_>>()
                 );
-                assert_eq!((page.examined, page.fetched), (511, 511));
+                assert_eq!((page.examined, page.fetched), (512, 512));
                 assert!(page.next.is_none());
             }
         }
@@ -324,7 +324,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     ));
     assert_eq!(*backing.borrow(), before);
     let mut batch = Batch::new();
-    batch.insert(&row(512)).unwrap();
+    batch.insert(&row(513)).unwrap();
     db.commit(batch).unwrap();
     assert!(matches!(
         db.query::<Entry>()
@@ -663,7 +663,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
             page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
             expected.iter().take(3).map(|r| r.id).collect::<Vec<_>>()
         );
-        assert!(matches!(query().work_limit(8).fetch(), Err(Error::Limit)));
+        assert!(matches!(query().work_limit(7).fetch(), Err(Error::Limit)));
         assert!(matches!(
             query().using_index("category,amount,id", &[]).fetch(),
             Err(Error::InvalidQuery)
@@ -838,7 +838,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
             .distinct()
     };
     assert!(matches!(
-        query().work_limit(8).fetch_as::<CategoryAmount>(),
+        query().work_limit(7).fetch_as::<CategoryAmount>(),
         Err(Error::Limit)
     ));
     assert!(matches!(
@@ -1055,7 +1055,7 @@ fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
             .order_by_each(&[("amount", Desc), ("category", Asc)])
             .distinct()
             .limit(1)
-            .work_limit(128)
+            .work_limit(127)
             .fetch_as::<CategoryAmount>(),
         Err(Error::Limit)
     ));

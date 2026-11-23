@@ -186,18 +186,19 @@ fn inspect((): ()) -> Status {
 fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) {
     let host = runtime();
     let db = open(&host);
-    let mut included_types = std::collections::BTreeSet::new();
-    let entities = db
-        .schema()
-        .entities()
+    let description = match db.schema().describe(selected.as_deref()) {
+        Ok(description) => description,
+        Err(ic_db::Error::UnknownEntity) => return (status(&db), vec![], vec![]),
+        Err(error) => panic!("invalid fixture schema: {error:?}"),
+    };
+    let entities = description
+        .entities
         .iter()
-        .filter(|entity| selected.as_deref().is_none_or(|name| name == entity.name))
         .map(|entity| {
             let fields = entity
                 .fields
                 .iter()
                 .map(|field| {
-                    include_type_names(field.value, &mut included_types);
                     let (kind, mut info) = type_view(field.value);
                     if let Some(default) = field.default {
                         let value = match default {
@@ -269,10 +270,9 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
             )
         })
         .collect();
-    let types = db
-        .schema()
-        .types()
-        .filter(|definition| selected.is_none() || included_types.contains(definition.name))
+    let types = description
+        .types
+        .into_iter()
         .map(|definition| {
             let (kind, members) = match &definition.body {
                 ic_db::TypeBody::Checked(rule) => (
@@ -2924,36 +2924,6 @@ type FieldView = (String, String, bool, String, Option<(String, String)>);
 type IndexView = (String, Vec<String>, bool, bool);
 type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
 type TypeView = (String, String, Vec<(String, String, bool, String)>);
-
-// Presentation selection over an already admitted graph. Names terminate recursive
-// definitions; this neither validates nor reconstructs the database schema.
-fn include_type_names(value: FieldType, names: &mut std::collections::BTreeSet<&'static str>) {
-    match value {
-        FieldType::List { item, .. } => include_type_names(*item, names),
-        FieldType::Named(link) if names.insert(link.name) => match &(link.definition)().body {
-            ic_db::TypeBody::Wrapped(inner) => include_type_names(*inner, names),
-            ic_db::TypeBody::Checked(_) => {}
-            ic_db::TypeBody::Record(fields) => {
-                for field in *fields {
-                    include_type_names(field.value, names);
-                }
-            }
-            ic_db::TypeBody::Enum(variants) => {
-                for variant in *variants {
-                    if let Some(payload) = variant.payload {
-                        include_type_names(payload.value, names);
-                    }
-                }
-            }
-            ic_db::TypeBody::Map { key, value, .. } => {
-                include_type_names(*key, names);
-                include_type_names(value.value, names);
-            }
-            ic_db::TypeBody::Set { item, .. } => include_type_names(*item, names),
-        },
-        _ => {}
-    }
-}
 
 type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
 

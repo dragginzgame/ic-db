@@ -65,8 +65,7 @@ fn read_index_owner<M: Memory>(
     encoded: &[u8],
 ) -> Result<(RowKey, Vec<u8>), Error> {
     let owner = RowKey::decode(encoded, key_type)?;
-    let mut key = prefix(2, entity);
-    key.extend_from_slice(encoded);
+    let key = prefix(2, entity, encoded);
     let row = map.get(&StoreKey::new(key)?).ok_or(Error::Corrupt)?;
 
     Ok((owner, row))
@@ -563,7 +562,7 @@ impl<M: Memory> Database<M> {
         if !(1..=32).contains(&limit) {
             return Err(Error::Limit);
         }
-        let prefix = prefix(2, entity.id);
+        let prefix = prefix(2, entity.id, &[]);
         let start = after.map_or_else(
             || StoreKey::new(prefix.clone()).expect("row namespace fits"),
             |key| row_key(entity.id, key.into_row_key()),
@@ -938,15 +937,17 @@ impl<M: Memory> Database<M> {
 const ENTITY_PREFIX_BYTES: usize = 1 + size_of::<u32>();
 const INDEX_PREFIX_BYTES: usize = ENTITY_PREFIX_BYTES + size_of::<u32>();
 
-fn prefix(tag: u8, entity: u32) -> Vec<u8> {
-    let mut key = vec![tag];
-    key.extend(entity.to_be_bytes());
+fn prefix(tag: u8, entity: u32, suffix: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(ENTITY_PREFIX_BYTES + suffix.len());
+    key.push(tag);
+    key.extend_from_slice(&entity.to_be_bytes());
+    key.extend_from_slice(suffix);
 
     key
 }
 
 fn entity_state_key(entity: u32) -> StoreKey {
-    StoreKey::new(prefix(1, entity)).expect("entity state key fits")
+    StoreKey::new(prefix(1, entity, &[])).expect("entity state key fits")
 }
 
 fn read_revision<M: Memory>(map: &Map<M>, entity: u32) -> Result<u64, Error> {
@@ -981,22 +982,18 @@ fn read_entity_state<M: Memory>(map: &Map<M>, entity: u32) -> Result<EntityState
 }
 
 fn row_key(entity: u32, id: RowKey) -> StoreKey {
-    let mut key = prefix(2, entity);
+    let mut key = prefix(2, entity, &[]);
     id.append_to(&mut key);
 
     StoreKey::new(key).expect("bounded primary key fits")
 }
 
 fn index_prefix(entity: u32, index: u32) -> Vec<u8> {
-    let mut key = prefix(3, entity);
-    key.extend(index.to_be_bytes());
-
-    key
+    prefix(3, entity, &index.to_be_bytes())
 }
 // One entry per distinct target of a list field, suffixed by its owner key.
 fn list_target_prefix(entity: u32, field: u32, target: RowKey) -> Vec<u8> {
-    let mut key = prefix(4, entity);
-    key.extend(field.to_be_bytes());
+    let mut key = prefix(4, entity, &field.to_be_bytes());
     target.append_to(&mut key);
     key
 }

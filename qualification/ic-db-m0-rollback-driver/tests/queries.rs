@@ -1239,15 +1239,15 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     assert!(skipped.1.is_empty());
     assert_eq!(skipped.3, 1);
     let skipped_cursor = skipped.2.unwrap();
-    let collected = complete_distinct(2, 7, 16, false).await.unwrap();
+    let collected = complete_distinct(2, 6, 16, false).await.unwrap();
     assert_eq!(collected.1, [vec!["1"], vec!["0"]]);
     assert_eq!((collected.3, collected.4, collected.5), (6, 6, 16));
     assert!(collected.2.is_none());
     assert_eq!(
-        complete_distinct(2, 7, 16, true).await.unwrap().1,
+        complete_distinct(2, 6, 16, true).await.unwrap().1,
         [vec!["0"], vec!["1"]]
     );
-    for (limit, work, bytes) in [(1, 7, 16), (2, 6, 16), (2, 7, 15)] {
+    for (limit, work, bytes) in [(1, 7, 16), (2, 5, 16), (2, 7, 15)] {
         assert_eq!(
             complete_distinct(limit, work, bytes, false)
                 .await
@@ -1338,22 +1338,22 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         ))
         .await
     };
-    let sum = aggregate("sum:amount", 1, 7, 16).await.unwrap();
+    let sum = aggregate("sum:amount", 1, 6, 16).await.unwrap();
     assert_eq!(sum.1, [vec!["213"]]);
     assert_eq!((sum.3, sum.4, sum.5), (6, 6, 16));
     assert!(sum.2.is_none());
-    assert!(aggregate("sum:amount", 1, 6, 16).await.is_err());
-    assert!(aggregate("sum:amount", 1, 7, 15).await.is_err());
+    assert!(aggregate("sum:amount", 1, 5, 16).await.is_err());
+    assert!(aggregate("sum:amount", 1, 6, 15).await.is_err());
     let count = aggregate("count", 1, 1, 8).await.unwrap();
     assert_eq!(count.1, [vec!["6"]]);
     assert_eq!((count.3, count.4, count.5), (0, 0, 8));
-    let grouped = aggregate("category,count", 1, 7, 16).await.unwrap();
+    let grouped = aggregate("category,count", 1, 6, 16).await.unwrap();
     assert_eq!(grouped.1, [vec!["0", "3"]]);
     assert_eq!((grouped.3, grouped.5), (6, 16));
     assert!(grouped.2.is_none());
     assert!(aggregate("count", 1, 1, 7).await.is_err());
-    assert!(aggregate("category,count", 2, 7, 31).await.is_err());
-    let distinct_count = aggregate("distinct-count:category", 1, 7, 8).await.unwrap();
+    assert!(aggregate("category,count", 2, 6, 31).await.is_err());
+    let distinct_count = aggregate("distinct-count:category", 1, 6, 8).await.unwrap();
     assert_eq!(distinct_count.1, [vec!["2"]]);
     assert_eq!(
         (distinct_count.3, distinct_count.4, distinct_count.5),
@@ -1361,17 +1361,17 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     );
     assert!(distinct_count.2.is_none());
     assert_eq!(
-        aggregate("category,distinct-count:amount", 1, 7, 16)
+        aggregate("category,distinct-count:amount", 1, 6, 16)
             .await
             .unwrap(),
         grouped
     );
-    let distinct_groups = aggregate("category,distinct-count:category", 2, 7, 32)
+    let distinct_groups = aggregate("category,distinct-count:category", 2, 6, 32)
         .await
         .unwrap();
     assert_eq!(distinct_groups.1, [vec!["0", "1"], vec!["1", "1"]]);
     assert!(
-        aggregate("category,distinct-count:amount", 2, 6, 32)
+        aggregate("category,distinct-count:amount", 2, 5, 32)
             .await
             .is_err()
     );
@@ -1392,15 +1392,15 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     .await
     .unwrap();
     assert_eq!(absent_note_group.1, [vec!["1", "1"]]);
-    let field_count = aggregate("count:amount", 1, 7, 8).await.unwrap();
+    let field_count = aggregate("count:amount", 1, 6, 8).await.unwrap();
     assert_eq!(field_count.1, count.1);
     assert_eq!((field_count.3, field_count.4, field_count.5), (6, 6, 8));
     assert_eq!(
-        aggregate("category,count:amount", 1, 7, 16).await.unwrap(),
+        aggregate("category,count:amount", 1, 6, 16).await.unwrap(),
         grouped
     );
-    assert!(aggregate("distinct-count:category", 1, 6, 8).await.is_err());
-    assert!(aggregate("count:missing", 1, 7, 8).await.is_err());
+    assert!(aggregate("distinct-count:category", 1, 5, 8).await.is_err());
+    assert!(aggregate("count:missing", 1, 6, 8).await.is_err());
     let notes = console((
         "Document",
         None,
@@ -1419,15 +1419,15 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     .unwrap();
     assert_eq!(notes.1, [vec!["0"]]);
     assert_eq!((notes.3, notes.4, notes.5), (1, 1, 8));
-    let minimum = aggregate("min:amount", 1, 7, 8).await.unwrap();
-    let maximum = aggregate("max:amount", 1, 7, 8).await.unwrap();
+    let minimum = aggregate("min:amount", 1, 6, 8).await.unwrap();
+    let maximum = aggregate("max:amount", 1, 6, 8).await.unwrap();
     assert_eq!(minimum.1, [vec!["11"]]);
     assert_eq!(maximum.1, [vec!["60"]]);
     assert_eq!((maximum.3, maximum.4, maximum.5), (6, 6, 8));
     assert!(maximum.2.is_none());
-    assert!(aggregate("max:amount", 1, 6, 8).await.is_err());
-    assert!(aggregate("min:amount", 1, 7, 7).await.is_err());
-    let grouped_sum = aggregate("category,sum:amount", 2, 7, 48).await.unwrap();
+    assert!(aggregate("max:amount", 1, 5, 8).await.is_err());
+    assert!(aggregate("min:amount", 1, 6, 7).await.is_err());
+    let grouped_sum = aggregate("category,sum:amount", 2, 6, 48).await.unwrap();
     assert_eq!(grouped_sum.1, [vec!["0", "120"], vec!["1", "93"]]);
     assert_eq!((grouped_sum.3, grouped_sum.5), (6, 48));
     let sum_request = (
@@ -1475,20 +1475,20 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             "{operand}"
         );
     }
-    assert!(aggregate("category,sum:amount", 2, 6, 48).await.is_err());
-    assert!(aggregate("category,sum:amount", 2, 7, 47).await.is_err());
-    let group_min = aggregate("category,min:amount", 2, 7, 32).await.unwrap();
-    let group_max = aggregate("category,max:amount", 2, 7, 32).await.unwrap();
+    assert!(aggregate("category,sum:amount", 2, 5, 48).await.is_err());
+    assert!(aggregate("category,sum:amount", 2, 6, 47).await.is_err());
+    let group_min = aggregate("category,min:amount", 2, 6, 32).await.unwrap();
+    let group_max = aggregate("category,max:amount", 2, 6, 32).await.unwrap();
     assert_eq!(group_min.1, [vec!["0", "20"], vec!["1", "11"]]);
     assert_eq!(group_max.1, [vec!["0", "60"], vec!["1", "51"]]);
     assert_eq!((group_max.3, group_max.4, group_max.5), (6, 6, 32));
     assert!(group_max.2.is_none());
     assert_eq!(
-        aggregate("category,max:amount", 1, 7, 16).await.unwrap().1,
+        aggregate("category,max:amount", 1, 6, 16).await.unwrap().1,
         [vec!["0", "60"]]
     );
-    assert!(aggregate("category,min:amount", 1, 6, 16).await.is_err());
-    assert!(aggregate("category,max:amount", 2, 7, 31).await.is_err());
+    assert!(aggregate("category,min:amount", 1, 5, 16).await.is_err());
+    assert!(aggregate("category,max:amount", 2, 6, 31).await.is_err());
     for (select, expected, bytes) in [
         ("entry_id,min:note", "—", 8),
         ("entry_id,max:priority", "0", 17),
@@ -1668,17 +1668,17 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     let resumed = residual_distinct(Some(skipped_cursor)).await;
     assert_eq!(resumed.1, [vec!["0"]]);
     assert_eq!(resumed.3, 1);
-    assert_eq!(complete_distinct(2, 7, 16, false).await.unwrap(), collected);
+    assert_eq!(complete_distinct(2, 6, 16, false).await.unwrap(), collected);
     assert_eq!(
-        aggregate("category,count", 1, 7, 16).await.unwrap(),
+        aggregate("category,count", 1, 6, 16).await.unwrap(),
         grouped
     );
     assert_eq!(
-        aggregate("distinct-count:category", 1, 7, 8).await.unwrap(),
+        aggregate("distinct-count:category", 1, 6, 8).await.unwrap(),
         distinct_count
     );
     assert_eq!(
-        aggregate("category,distinct-count:category", 2, 7, 32)
+        aggregate("category,distinct-count:category", 2, 6, 32)
             .await
             .unwrap(),
         distinct_groups
@@ -1690,7 +1690,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         selected_groups
     );
     assert_eq!(
-        aggregate("category,sum:amount", 2, 7, 48).await.unwrap(),
+        aggregate("category,sum:amount", 2, 6, 48).await.unwrap(),
         grouped_sum
     );
     assert_eq!(
@@ -1699,10 +1699,10 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             .unwrap(),
         selected_sum
     );
-    assert_eq!(aggregate("sum:amount", 1, 7, 16).await.unwrap(), sum);
-    assert_eq!(aggregate("max:amount", 1, 7, 8).await.unwrap(), maximum);
+    assert_eq!(aggregate("sum:amount", 1, 6, 16).await.unwrap(), sum);
+    assert_eq!(aggregate("max:amount", 1, 6, 8).await.unwrap(), maximum);
     assert_eq!(
-        aggregate("category,max:amount", 2, 7, 32).await.unwrap(),
+        aggregate("category,max:amount", 2, 6, 32).await.unwrap(),
         group_max
     );
     let empty_unique = distinct(unique_first.2, 2, 8, false, None).await;
@@ -1879,13 +1879,13 @@ async fn sparse_fluent_pages_retry_and_reopen() {
         .unwrap();
     }
     let before = pic.get_stable_memory(canister).await;
-    let widened = aggregate("sum:amount", 1, 7, 16).await.unwrap();
+    let widened = aggregate("sum:amount", 1, 6, 16).await.unwrap();
     assert_eq!(
         widened.1,
         [vec![(u128::from(u64::MAX) * 2 + 182).to_string()]]
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    let widened_groups = aggregate("category,sum:amount", 2, 7, 48).await.unwrap();
+    let widened_groups = aggregate("category,sum:amount", 2, 6, 48).await.unwrap();
     assert_eq!(
         widened_groups.1,
         [

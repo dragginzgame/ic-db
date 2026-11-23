@@ -12,11 +12,12 @@ pub(crate) const MAX_NODES: usize = 256;
 pub(crate) const MAX_COLLECTION_ITEMS: usize = 256;
 
 /// Compiler-resolved link. Names carry identity; the function breaks constant cycles.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct TypeLink {
     /// Logical name under the stored contract.
     pub name: &'static str,
     /// Resolve the compiled definition, never stored or dynamically loaded code.
+    #[serde(skip)]
     pub definition: fn() -> &'static TypeSchema,
 }
 impl PartialEq for TypeLink {
@@ -27,7 +28,7 @@ impl PartialEq for TypeLink {
 impl Eq for TypeLink {}
 
 /// Named schema; its links are shallow so recursive graphs never expand on comparison.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct TypeSchema {
     /// Logical type identity.
     pub name: &'static str,
@@ -35,7 +36,7 @@ pub struct TypeSchema {
     pub body: TypeBody,
 }
 /// A versioned constraint on the inner primitive of a named newtype.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum NewtypeRule {
     /// A Principal other than the anonymous identity.
     NonAnonymous,
@@ -126,12 +127,12 @@ impl FieldType {
     }
 }
 /// A compiled named type; record/enum members use canonical name order.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub enum TypeBody {
     /// Named wrapper around a primitive or a bounded ordered list.
     Wrapped(FieldType),
     /// Scalar wrapper whose values must satisfy the declared rule.
-    Checked(NewtypeRule),
+    Checked(#[serde(serialize_with = "serialize_checked")] NewtypeRule),
     /// Canonical map with scalar/unit-enum keys and arbitrary admitted value shapes.
     Map {
         /// Required primitive, scalar newtype or unit-enum key.
@@ -153,8 +154,20 @@ pub enum TypeBody {
     /// Named alternatives, each with at most one typed payload.
     Enum(&'static [VariantSchema]),
 }
+// A reader can inspect the storage primitive without knowing how to enforce the rule.
+fn serialize_checked<S: serde::Serializer>(
+    rule: &NewtypeRule,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    let mut checked = serializer.serialize_struct("Checked", 2)?;
+    checked.serialize_field("primitive", &rule.primitive())?;
+    checked.serialize_field("rule", rule)?;
+    checked.end()
+}
+
 /// One unit or payload variant.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct VariantSchema {
     /// Logical variant identity.
     pub name: &'static str,
@@ -180,7 +193,7 @@ pub(crate) fn unit_enum_len(definition: &TypeSchema) -> Option<usize> {
     .then_some(variants.len())
 }
 /// Payload shape, shared with the field type/optionality rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ValueSchema {
     /// Exact scalar, bounded list or compiler-resolved named type.
     pub value: FieldType,

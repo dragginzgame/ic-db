@@ -375,7 +375,9 @@ async fn matched_query_matrix() {
             );
             let mut source = Vec::new();
             for population in [32_u64, 128, 511] {
-                for id in source.len() as u64 + 1..=population {
+                let mut insert_instructions = 0;
+                let first = source.len() as u64 + 1;
+                for id in first..=population {
                     let category = if profile == "skewed" && id % 16 < 13 {
                         0
                     } else {
@@ -386,12 +388,17 @@ async fn matched_query_matrix() {
                         .update_call(canister, canister, "insert", encode(2, &row))
                         .await
                         .unwrap();
-                    assert!(decode::<(bool, u64)>(2, &reply).0);
+                    let (accepted, instructions) = decode::<(bool, u64)>(2, &reply);
+                    assert!(accepted);
+                    insert_instructions += instructions;
                     if legacy {
                         startup().await;
                     }
                     source.push(row);
                 }
+                eprintln!(
+                    "{engine} {profile} inserts={first}..={population} handler_instructions={insert_instructions}"
+                );
                 let cases = if exists {
                     [0_u64, 3, 99]
                         .into_iter()

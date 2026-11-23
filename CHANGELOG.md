@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.27.7]
+
+### ✨ Schema
+
+- `Schema::describe(Some("Document"))` exports an entity and its reachable types through Serde, including checked newtype rules and recursive links. Pass `None` for the whole store. [Inspection API](README.md#inspect-a-compiled-store-schema)
+
+### 🔍 Queries
+
+- Synchronous aggregates now finish when their final candidate uses the last unit of work. If another candidate remains, the query returns `Limit` without exposing a partial sum, count or group.
+- Bounded sorting and collected DISTINCT also accept an exact fit, up to 512 examined candidates. A complete sort still refuses larger input with `limit(1)`.
+- Indexed queries now assemble the owner lookup key in one allocation and check the row identity once. [PocketIC comparison](qualification/README.md#indexed-owner-lookup-in-the-0277-worktree)
+
 ## [0.27.6] - 2026-11-23
 
 ### 🛠️ CLI

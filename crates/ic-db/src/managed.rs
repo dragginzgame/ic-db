@@ -3,7 +3,7 @@
 use crate::{EntitySchema, Error, Timestamp, codec::Decoder};
 
 /// Database-owned timestamp assignment during bounded write preparation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum ManagedTimestamp {
     /// Set on insertion and preserve on replacement.
     CreatedAt,

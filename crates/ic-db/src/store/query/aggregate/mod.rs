@@ -540,8 +540,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// the work budget. A hit requires an owner read only when its filters need row values. Use
     /// [`Self::count_validated`] to check each visited row and selected index owner.
     /// `limit` does not limit input; the scalar output occupies eight bytes.
-    /// Completion must be established within `work_limit`; an exact-boundary
-    /// scan can conservatively refuse. Use `start_count`/`resume_count` for retained work.
+    /// A scan completes when its last candidate uses the final unit of work. Use `start_count`/`resume_count` for retained work.
     /// # Errors
     /// Refuses cursors, DISTINCT, explicit ordering and the ordinary query failures.
     /// Work exhaustion returns `Limit`, never a partial count. Too few output bytes

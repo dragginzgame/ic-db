@@ -6,7 +6,9 @@ Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-
 hard cut and the 0.18 migration, sorting and comparison increments. Version
 0.20 separates 16 KiB job frames from 4 KiB rows and improves console inspection
 and local operation; it does not establish remote application support.
-Canic owns remote application inspection and its endpoint qualification.
+IC DB owns detailed inspection of its compiled schema. The local console uses the same
+entity and named-type selection. Canic and the embedding application own remote
+transport, authorization and endpoint qualification.
 The changelog and Git tags record releases.
 Application helpers can borrow a database directly or independently obtain a
 `DatabaseSession` clone from their host. One attachment owns the storage lease.
@@ -2523,7 +2525,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | Filter + scalar or grouped aggregate | Counts, extrema, sums, averages and supported summaries use qualifying input. Group predicates, aggregate ordering and output limits apply to completed groups. | A row limit cannot truncate aggregate input. Row-page cursors cannot serve as aggregate checkpoints. Grouped reductions admit up to 32 groups before group filtering. State and output must also fit the selected operation’s byte bounds. |
 | Retained exact aggregate + writes + completed pages | Steps resume against the captured entity revision. Group filtering and ordering precede completed-output pagination. | A committed source change invalidates a running job. Retrying is explicit. Unrelated writes allow progress. An already completed result remains independently pageable within its lifecycle. |
 
-**Sort decision.** Keep the bounded complete sorter. The largest qualified open-ended workload sorts 511 candidates with a 512-candidate budget, up to four requested sort fields, a 4 KiB comparison key and 128 KiB of retained key/output buffers. Use an order-producing index for larger live listings. Reopen cross-message sorting when an actual query needs an order that an index cannot supply and the consumer can specify input consistency, page semantics and space. Frozen IcyDB’s `6d421e3` executor also separates order admission from bounded selection. Its larger-window machinery has no demonstrated need at a 32-result limit.
+**Sort decision.** Keep the bounded complete sorter. The largest qualified open-ended workload sorts 512 candidates with a 512-candidate budget, up to four requested sort fields, a 4 KiB comparison key and 128 KiB of retained key/output buffers. Use an order-producing index for larger live listings. Reopen cross-message sorting when an actual query needs an order that an index cannot supply and the consumer can specify input consistency, page semantics and space. Frozen IcyDB’s `6d421e3` executor also separates order admission from bounded selection. Its larger-window machinery has no demonstrated need at a 32-result limit.
 
 **Disposition.** Close feature work for this bounded M2 contract. The composition review and selected SQLite and installed Wasm probes identified no outstanding correctness blocker for these combinations. A wider type/operation combination needs its own admission rule and witness. For M4 adoption, two measured costs remain: 4,504 Wasm bytes per added entity from 8 to 32 in the eight-shape fixture, and 50.30M instructions for a grouped count selecting 415 of 511 rows (32.12M on legacy). Controlled write schedules establish job invalidation and completion behavior; acceptance under real application traffic remains workload-specific. [Closeout measurements](../../qualification/README.md#bounded-m2-closeout-on-pocketic-0276-worktree)
 
@@ -2593,6 +2595,12 @@ transport is not an application protocol or backward-compatible service.
 IcyDB `6d421e3`'s `sql_query_result_from_statement_keeps_blob_projection_typed_until_rendering`
 regression supplies the binary-versus-display distinction; its SQL packaging and
 dynamic result hierarchy are not copied.
+
+The [schema inspection API](../../README.md#inspect-a-compiled-store-schema) borrows
+compiled entity descriptors and emits each reachable named definition once. Like frozen
+IcyDB's `db/schema/describe` at `6d421e3`, IC DB reports admitted metadata. Here
+the executable supplies the descriptors, including checked types. Maintained counts
+come from a separate admitted database read.
 
 The 0.20 console adds selected-entity/JSON schema inspection, separate
 reference target/index columns, per-call measured charges, history and quoted
@@ -3390,8 +3398,8 @@ byte admission; discarded rows do not consume response bytes. Any refusal drops
 the whole result. Return `next: None`; no cursor or explicit-index
 fallback is admitted. Retained first-occurrence DISTINCT requires a physical
 input order and cannot use this sort. Indexed live pages
-and their bindings are unchanged. The existing work cap admits at most 511
-candidates plus observation of exhaustion on an open-ended scan. Larger or resumable sorting is outside the accepted M2 envelope.
+and their bindings are unchanged. The existing work cap admits 512 candidates on an open-ended scan. Iterator
+exhaustion completes both sorting and collected DISTINCT at the exact work bound. Larger or resumable sorting is outside the accepted M2 envelope.
 
 Bounded selection keeps up to 32 retained rows in requested order. Once full,
 the last key supplies the cutoff: only a strictly better candidate needs a
@@ -3406,7 +3414,7 @@ Only a retained row owns a key copy, charged at its exact encoded length.
 All matching candidates still obey the comparison-key bound, even when discarded.
 The retained buffer cap applies throughout selection, so oversized intermediate
 winners may refuse even if later winners would be smaller. Native full-sort
-oracles and Wasm upgrade checks cover 511 candidates, mixed directions, ties,
+oracles and Wasm upgrade checks cover 512 candidates, mixed directions, ties,
 projection, exact work/output refusal and unchanged backing. This adapts frozen
 IcyDB `6d421e3`'s bounded-selection invariant and regression oracle from
 `db/executor/order`; its heap-index optimization serves larger windows and is
@@ -3718,9 +3726,11 @@ Synchronous output has no continuation; retained grouped terminals provide
 completed-output pagination under the job contract above. Input cursors, DISTINCT, explicit
 `order_by` and `descending` refuse rather than acquiring ambiguous aggregate
 meaning. Explicit index prefixes and ordinary row filters retain their meaning.
-Each operation uses the existing scan work bound; completion must be observed
-before it is reached. An exact-boundary scan therefore conservatively refuses
-with `Limit`, as does input beyond that bound, without a partial answer. The
+When the last candidate uses the final unit of work, iterator exhaustion completes the
+synchronous aggregate. Another candidate returns `Limit` before its row or index
+owner is read. Frozen IcyDB also finalizes grouped folds on input exhaustion
+(`executor/aggregate/runtime/grouped_fold/bundle/mod.rs`, `6d421e3`). IC DB
+uses the shared scan iterator for that decision. The
 existing scanner still validates every examined source row/index, including
 nonmatches, and count-only execution never materializes full typed entities.
 

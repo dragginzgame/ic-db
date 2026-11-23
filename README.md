@@ -272,8 +272,8 @@ let page = db.query::<Entry>()
 the final tie-breaker. All fields share the selected direction. Equality filters
 can fix index components; the engine prefers a path that proves the complete
 order. Without one, it scans the complete input, retains the best requested
-1–32 rows, then sorts them. Work exhaustion returns `Limit` even for `limit(1)`;
-the maximum work allowance permits 511 candidates plus observing exhaustion.
+1–32 rows, then sorts them. The maximum work allowance admits 512 candidates. If another candidate remains,
+the query returns `Limit` even for `limit(1)`.
 Sort keys are capped at 4096 bytes and retained key/output
 buffers at 128 KiB. This fallback returns no continuation and refuses `after`;
 an explicit `using_index` still has to supply the requested order.
@@ -443,9 +443,8 @@ all groups share the existing 128-KiB state allowance. Output filtering cannot
 hide cardinality or state exhaustion. Scalar distinct counts retain no projected
 records, and both forms use the same tuple codec and distinct reducer.
 
-These operations finish synchronously or refuse. Completion must be observed
-before the work cap, so a scan examining exactly the allowed number can still
-return `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
+These operations finish synchronously or refuse. A scan can consume its exact
+work budget and finish. If another candidate remains, it returns `Error::Limit`. Group state has separate caps of 32 groups, 4096 bytes per
 comparison key and 128 KiB retained key/output bytes. Output byte exhaustion also
 refuses instead of returning partial counts. Cursors, DISTINCT and explicit input order
 are not aggregate compositions. Retained grouped operations and completed-output
@@ -1308,6 +1307,27 @@ Use `compiled()` to obtain the executable schema. Both compilations resolve
 nested declarations through ordinary Rust modules. The explicit local path form is
 `build_schema!(src::schema)`. A build script located beside its declarations
 can select them with `build_schema!(self::schema)`.
+
+## Inspect a compiled store schema
+
+`Schema::describe(None)` returns all entities and named definitions in logical-name order.
+To inspect one entity and its reachable types, pass its exact name. The store fingerprint
+is the same for both selections. A missing entity returns `Error::UnknownEntity`.
+
+```rust,ignore
+let description = db.schema().describe(Some("Document"))?;
+serde_json::to_writer(writer, &description)?;
+let count = db.cardinality_by_name("Document")?;
+```
+
+The description can also be built directly from a compiled schema before opening a database.
+Serde exports field bounds, defaults, managed timestamps, primary keys, references and index
+components. Wrapped types retain their inner type. Checked types expose their primitive and
+validation rule. Recursive links carry a logical name, with each reachable definition listed
+once. Schema admission bounds the graph to 128 entities and 32 named definitions per store.
+Select one entity when an endpoint has a smaller response budget. The embedding application
+owns response limits, authorization and transport. Counts read maintained metadata through
+an admitted database handle.
 
 ## Database console
 

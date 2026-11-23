@@ -31,6 +31,30 @@ struct Thumbnail {}
 struct Gallery {}
 
 #[test]
+fn describe_reports_reference_targets_independently_of_live_counts() {
+    let schema = Schema::new(&[Gallery::SCHEMA, Thumbnail::SCHEMA]).unwrap();
+    let describe = || serde_json::to_value(schema.describe(Some("Gallery")).unwrap()).unwrap();
+    let before = describe();
+    let images = &before["entities"][0]["fields"][1];
+    assert_eq!(images["reference"]["entity_name"], "Thumbnail");
+    assert_eq!(images["optional"], true);
+    assert_eq!(images["value"]["List"]["max_items"], 4);
+    let fixture = Fixture::new("media.data.v1");
+    let mut db = fixture.create(schema.clone(), [1; 16]).unwrap();
+    assert_eq!(db.cardinality_by_name("Gallery").unwrap(), 0);
+    let mut batch = Batch::new();
+    batch
+        .insert(&Gallery {
+            id: 1,
+            images: None,
+        })
+        .unwrap();
+    db.commit(batch).unwrap();
+    assert_eq!(db.cardinality_by_name("Gallery").unwrap(), 1);
+    assert_eq!(describe(), before);
+}
+
+#[test]
 fn list_references_follow_final_batch_state_and_large_rows_reopen() {
     let fixture = Fixture::new("media.data.v1");
     let schema = Schema::new(&[Gallery::SCHEMA, Thumbnail::SCHEMA]).unwrap();

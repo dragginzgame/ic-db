@@ -122,7 +122,9 @@ pub use named_schema::{
     NewtypeRule, TypeBody, TypeLink, TypeSchema, Value, ValueSchema, VariantSchema,
 };
 pub use primary::{Id, PrimaryKey};
-pub use schema::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema};
+pub use schema::{
+    EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema, Schema, SchemaDescription,
+};
 pub use session::{DatabaseSession, InsertOutcome, QuerySession, UniqueKey};
 pub use store::{
     Aggregate, Batch, Column, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor,

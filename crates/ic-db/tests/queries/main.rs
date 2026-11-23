@@ -6985,7 +6985,7 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
             .distinct()
             .limit(2)
             .test_output_limit(2)
-            .work_limit(9);
+            .work_limit(8);
         if descending {
             query = query.descending();
         }
@@ -6997,7 +6997,7 @@ fn complete_distinct_never_returns_a_prefix_or_changes_storage() {
         assert_eq!((page.examined, page.fetched, page.output_bytes), (8, 8, 2));
         assert!(page.next.is_none());
     }
-    for work in [1, 2, 8] {
+    for work in [1, 2, 7] {
         assert!(matches!(
             db.query::<Entry>()
                 .distinct()
@@ -8160,12 +8160,12 @@ fn present_counts_and_distinct_tuple_counts_have_different_absence_semantics() {
         Err(Error::RowTooLarge)
     ));
     assert!(matches!(
-        db.query::<Entry>().work_limit(8).count_field("maybe"),
+        db.query::<Entry>().work_limit(7).count_field("maybe"),
         Err(Error::Limit)
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .work_limit(8)
+            .work_limit(7)
             .count_distinct::<OptionalOnly>(),
         Err(Error::Limit)
     ));
@@ -8309,7 +8309,9 @@ fn field_counts_use_presence_for_empty_and_non_scalar_values() {
 fn counts_refuse_incomplete_or_ambiguous_results() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 17);
-    for work in [1, 7, 8] {
+    let exact = db.query::<Entry>().work_limit(8).count_validated().unwrap();
+    assert_eq!((exact.value, exact.examined, exact.fetched), (8, 8, 8));
+    for work in [1, 7] {
         assert!(matches!(
             db.query::<Entry>().work_limit(work).count_validated(),
             Err(Error::Limit)
@@ -8720,7 +8722,7 @@ fn extrema_scan_complete_input_and_refuse_ambiguous_shapes() {
             .is_none()
     );
     assert!(matches!(
-        db.query::<Entry>().work_limit(8).max::<AmountOnly>(),
+        db.query::<Entry>().work_limit(7).max::<AmountOnly>(),
         Err(Error::Limit)
     ));
     assert!(matches!(
@@ -9031,7 +9033,7 @@ fn grouped_extrema_keep_absent_keys_and_all_absent_groups() {
     );
     assert!(matches!(
         db.query::<GroupedOptional>()
-            .work_limit(6)
+            .work_limit(5)
             .group_min::<OptionalCategory, OptionalOnly>(),
         Err(Error::Limit)
     ));
@@ -9262,7 +9264,7 @@ fn completed_group_selection_precedes_output_limits_not_input_bounds() {
     assert!(matches!(
         db.query::<Entry>()
             .filter_groups(C::Gt, 8_u64)
-            .work_limit(8)
+            .work_limit(7)
             .group_count::<CategoryOnly>(),
         Err(Error::Limit)
     ));
@@ -9637,7 +9639,7 @@ fn sums_widen_only_explicitly_and_keep_work_output_and_shape_bounds() {
             .is_none()
     );
     assert!(matches!(
-        db.query::<Entry>().work_limit(8).sum::<WideAmount>(),
+        db.query::<Entry>().work_limit(7).sum::<WideAmount>(),
         Err(Error::Limit)
     ));
     assert!(matches!(
@@ -10013,7 +10015,7 @@ fn grouped_sums_finish_before_filter_sort_and_limit() {
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .work_limit(8)
+            .work_limit(7)
             .filter_groups(C::Gt, 999_u128)
             .group_sum::<CategoryOnly, WideAmount>(),
         Err(Error::Limit)

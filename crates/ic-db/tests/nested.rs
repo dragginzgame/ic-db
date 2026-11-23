@@ -220,6 +220,22 @@ fn payloads_have_exact_bytes_and_no_hidden_materialization_rules() {
 }
 
 #[test]
+fn selected_description_emits_a_recursive_definition_once() {
+    let schema = Schema::new(&[Asset::SCHEMA, NodeRow::SCHEMA]).unwrap();
+    let selected = schema.describe(Some("NodeRow")).unwrap();
+    assert_eq!((selected.entities.len(), selected.types.len()), (1, 1));
+    let view = serde_json::to_value(selected).unwrap();
+    let node = &view["types"][0];
+    assert_eq!(node["name"], "Node");
+    let next = &node["body"]["Record"][0];
+    assert_eq!(next["optional"], true);
+    assert_eq!(
+        next["value"],
+        serde_json::json!({"Named": {"name": "Node"}})
+    );
+}
+
+#[test]
 fn recursive_graphs_require_a_base_and_values_share_depth_and_node_bounds() {
     assert!(Schema::new(&[Asset::SCHEMA, NodeRow::SCHEMA]).is_ok());
     assert!(matches!(
