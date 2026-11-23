@@ -29,7 +29,7 @@ use std::ops::Bound;
     on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity(
-    (((second, operation), first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<((bool, u8), u16, u8, u32, bool, u64)>,
+    (((second, operation), first, limit, bytes, deny_growth, stop_after), counter): crate::transport::Measured<CapacityRequest>,
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
     let start = counter();
     faults::arm(stop_after, deny_growth, false);
@@ -226,4 +226,5 @@ fn control(
     }
 }
 
+type CapacityRequest = ((bool, u8), u16, u8, u32, bool, u64);
 type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
