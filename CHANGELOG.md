@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.27.8] - Unreleased
+## [0.27.8] - 2026-11-23
 
 ### ✨ Schema
 
