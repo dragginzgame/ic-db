@@ -232,7 +232,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d61d61ea3be059c4a93c0c68dd52d01cfbe155c934c7f7d51832f708b5322e13"
 dependencies = [
  "ic-platform-runtime 0.23.25",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "serde",
 ]
 
@@ -880,7 +880,7 @@ dependencies = [
  "ic-platform-runtime 0.23.25",
  "ic-platform-types 0.21.4",
  "ic-storage 0.78.8",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "memchr",
  "serde",
  "sha2 0.11.1",
@@ -892,7 +892,7 @@ name = "ic-db-cli"
 version = "0.28.1"
 dependencies = [
  "ic-testkit",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "serde",
  "tokio",
 ]
@@ -966,7 +966,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.25",
  "ic-storage 0.78.8",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "toko-tooling",
 ]
 
@@ -979,7 +979,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-host-artifacts",
  "ic-testkit",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "rusqlite",
  "serde",
  "sha2 0.11.1",
@@ -998,7 +998,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.25",
  "ic-storage 0.78.8",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "toko-tooling",
 ]
 
@@ -1026,7 +1026,7 @@ dependencies = [
  "ic-db",
  "ic-db-cli",
  "ic-platform-runtime 0.23.25",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "serde",
  "serde_json",
  "toko-tooling",
@@ -1078,7 +1078,7 @@ name = "ic-db-wire-schema-probe"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-wire 0.28.0",
+ "ic-wire 0.28.1",
  "serde",
  "serde_json",
  "toko-tooling",
@@ -1266,9 +1266,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "024b6e9cdada5e25ac61615bb6c5502549678bff7091af4eff6a9d2e7fddd46b"
+checksum = "d42ae034b16ebba268e16fcd15d59c4f4acf6b53aae2ba4b4cd5297e9e0ec22a"
 dependencies = [
  "bytemuck",
  "ic-platform-types 0.21.4",
@@ -1281,9 +1281,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire-derive"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cb8522ad8da5121f02f0624b80bb476c6a571d005b62962271c12febbabf1e5"
+checksum = "618f7176d3e77f80c159eac5de3752703276020b075d6ea968a203c57e73ac46"
 dependencies = [
  "proc-macro2",
  "quote",

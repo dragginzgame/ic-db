@@ -312,6 +312,7 @@ async fn matched_query_matrix() {
     );
     let count_paths = std::env::var_os("IC_DB_COUNT_PATHS").is_some();
     let exists = std::env::var_os("IC_DB_EXISTS_COMPARISON").is_some();
+    let aggregate_paths = std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some();
     let mut samples = Vec::new();
     for (engine, variable, legacy) in [
         ("ic-db", "IC_DB_RECORDS_BENCHMARK_WASM", false),
@@ -438,7 +439,7 @@ async fn matched_query_matrix() {
                 } else if count_paths {
                     prefix_counts(&source, legacy)
                 } else {
-                    cases(&source, std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some())
+                    cases(&source, aggregate_paths)
                 };
                 for phase in ["settled", "after-upgrade-settled"] {
                     if phase == "after-upgrade-settled" {
@@ -505,6 +506,65 @@ async fn matched_query_matrix() {
                     eprintln!(
                         "{engine} {profile} rows={population} {phase}: {} exact-result cases passed",
                         cases.len()
+                    );
+                }
+            }
+            // Sample writes after all read comparisons, on the settled 511-row fixture.
+            if aggregate_paths && profile == "skewed" {
+                assert_eq!(source[0], (1, 0, 370));
+                for (change, row) in [
+                    ("cross-minimum", (1, 0, 990)),
+                    ("move-category", (1, 3, 990)),
+                    ("no-op", (1, 3, 990)),
+                ] {
+                    let backing = if !legacy && change == "no-op" {
+                        Some(pic.get_stable_memory(canister).await)
+                    } else {
+                        None
+                    };
+                    let before = pic.cycle_balance(canister).await;
+                    let reply = pic
+                        .update_call(canister, canister, "read_modify_write", encode(4, &row))
+                        .await
+                        .unwrap();
+                    let cycles = before - pic.cycle_balance(canister).await;
+                    let (stored, instructions) = decode::<(Option<Row>, u64)>(4, &reply);
+                    assert_eq!(stored, Some(row));
+                    if let Some(bytes) = backing {
+                        assert_eq!(pic.get_stable_memory(canister).await, bytes);
+                    }
+                    let settling = if legacy { Some(startup().await) } else { None };
+                    source[0] = row;
+                    let reply = pic
+                        .query_call(canister, canister, "lookup", encode(3, &row.0))
+                        .await
+                        .unwrap();
+                    assert_eq!(answer(3, &reply).0, Answer::Row(Some(row)));
+                    // Cover both the full category and its high-amount suffix.
+                    for (category, minimum) in [(0_u64, 0_u64), (0, 950), (3, 0), (3, 950)] {
+                        let count = source
+                            .iter()
+                            .filter(|r| r.1 == category && r.2 >= minimum)
+                            .count() as u64;
+                        for operation in [0_u8, 4] {
+                            let args = (operation, Some(category), minimum);
+                            let reply = pic
+                                .query_call(
+                                    canister,
+                                    canister,
+                                    "grouped_aggregate",
+                                    encode(7, &args),
+                                )
+                                .await
+                                .unwrap();
+                            assert_eq!(
+                                answer(7, &reply).0,
+                                Answer::Groups(vec![(category, count)])
+                            );
+                        }
+                    }
+                    eprintln!(
+                        "{engine} grouped-index replace={change} instructions={instructions} cycles={cycles} settling={settling:?}"
                     );
                 }
             }
@@ -586,4 +646,115 @@ fn report(directory: &std::path::Path, samples: &[Sample]) {
         samples.len(),
         pairs.len() - refused
     );
+}
+
+/// Matched size subjects are built separately from the scalar query matrix.
+#[tokio::test]
+#[ignore = "requires the paired growth artifacts"]
+async fn paired_entity_growth() {
+    let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_MATCHED_GROWTH_DIR").unwrap());
+    let mut receipt =
+        String::from("engine\tentities\tfluent_shapes\twasm_bytes\tcode_bytes\tsha256\n");
+    for count in [1_u8, 8, 32] {
+        for shapes in [0_u8, 1, 8] {
+            for engine in ["ic-db", "icydb"] {
+                let label = format!("{engine}-{count}-{shapes}");
+                let (wasm, facts) = artifact::read(
+                    std::fs::File::open(directory.join(format!("{label}.wasm"))).unwrap(),
+                )
+                .unwrap();
+                assert!(facts.exports.contains("canister_update exercise"));
+                let pic = instance().await.unwrap();
+                let canister = pic.create_canister().await;
+                pic.add_cycles(canister, 100_000_000_000_000).await;
+                pic.install_canister(canister, wasm, vec![], None).await;
+                let settle = async || {
+                    if engine == "icydb" {
+                        for _ in 0..100 {
+                            let bytes = pic
+                                .update_call(canister, canister, "advance_startup", encode(1, &()))
+                                .await
+                                .unwrap();
+                            if decode::<(bool, u64)>(1, &bytes).0 {
+                                return;
+                            }
+                        }
+                        panic!("{label} startup did not converge");
+                    }
+                };
+                settle().await;
+                let call = async |selector: u8, mode: u8, row: Row| {
+                    let bytes = pic
+                        .update_call(
+                            canister,
+                            canister,
+                            "exercise",
+                            encode(2, &(selector, mode, row)),
+                        )
+                        .await
+                        .unwrap_or_else(|e| panic!("{label} entity={selector} mode={mode}: {e:?}"));
+                    decode::<Vec<Row>>(2, &bytes)
+                };
+                // Overlapping keys expose cross-entity dispatch mistakes. A distinct
+                // category supplies an excluded high-value row in every entity.
+                for entity in 0..count {
+                    for (id, category, amount) in [(3, 7, 30), (1, 7, 10), (2, 7, 20), (4, 8, 40)] {
+                        assert!(
+                            call(entity, 0, (id, category, amount + u64::from(entity)))
+                                .await
+                                .is_empty()
+                        );
+                    }
+                    settle().await;
+                }
+                for entity in 0..count {
+                    let offset = u64::from(entity);
+                    let input = (2, 7, 20 + offset);
+                    assert_eq!(call(entity, 1, input).await, [input]);
+                    for shape in 0..shapes {
+                        for (key, threshold) in [(2, 20), (1, 30)] {
+                            let expected: Vec<Row> = (1..=3)
+                                .map(|id| (id, 7, id * 10 + offset))
+                                .filter(|&(id, _, amount)| match shape {
+                                    0 => true,
+                                    1 => amount >= threshold + offset,
+                                    2 => amount <= threshold + offset,
+                                    3 => amount == threshold + offset,
+                                    4 => amount > threshold + offset,
+                                    5 => amount < threshold + offset,
+                                    6 => id >= key,
+                                    7 => id <= key,
+                                    _ => unreachable!(),
+                                })
+                                .take(2)
+                                .collect();
+                            assert_eq!(
+                                call(entity, 2 + shape, (key, 7, threshold + offset)).await,
+                                expected,
+                                "{label} entity={entity} shape={shape}"
+                            );
+                        }
+                    }
+                }
+                println!(
+                    "paired-growth {label} raw={} code={}",
+                    facts.identity.bytes, facts.code_section_bytes
+                );
+                let hash = facts
+                    .identity
+                    .sha256
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                writeln!(
+                    receipt,
+                    "{engine}\t{count}\t{shapes}\t{}\t{}\t{hash}",
+                    facts.identity.bytes, facts.code_section_bytes
+                )
+                .unwrap();
+                pic.drop().await;
+            }
+        }
+    }
+    std::fs::write(directory.join("verified.tsv"), receipt).unwrap();
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.28.2] - Unreleased
+
+### 🐛 Fixes
+
+- Generated Wire clients now receive a present `QueryCursor` as a bounded `Uint8Array` in requests and replies. Existing Wire frames are byte-compatible. Regenerate TypeScript clients to pick up the corrected type. [#29](https://github.com/dragginzgame/ic-db/issues/29)
+
+### 📦 Dependencies
+
+- Updated optional Wire inspection and the active qualification fixtures to IC Wire 0.28.1.
+
+### ⚡ Retained aggregates
+
+- Expiry cleanup now releases up to 16 jobs with one directory write. The full near-limit PocketIC sweep fell from 30.49M to 8.13M cycles. The new job layout requires a fresh job allocation and incarnation. Finish or retire existing jobs with the previous executable before switching. [Matched measurements](qualification/README.md#fixed-slot-job-cleanup)
+
+### 🎯 Qualification
+
+- Qualified grouped counts under interleaved writes and retries after missing replies. A caller recovered its checkpoint across an upgrade and retrieved completed counts until expiry. Delayed retries and cancellations left the replacement job intact after slot reuse. [Completion and retry costs](qualification/README.md#mounted-grouped-count-under-interleaved-writes)
+- Qualified bounded expiry cleanup on a full 16-job store. Five expired jobs were removed while a live count continued. A map-only probe traced the previous layout’s extra writes to repeated serialization of surviving job frames. [Mounted cleanup](qualification/README.md#mounted-grouped-count-under-interleaved-writes) · [Near-limit costs](qualification/README.md#near-limit-job-cleanup-on-storage-0788)
+- Measured conditional fluent listings that build the query in branches and fetch once. The 32-entity fixture saved 11,944 Wasm bytes using the existing API. [Size and execution costs](qualification/README.md#conditional-listings-with-a-shared-fetch)
+- Compared 1, 8 and 32 entities on both engines. With eight indexed listing shapes, IC DB added 5,818 Wasm bytes per entity from 8 to 32, against 9,695 for frozen IcyDB. [Matched entity-growth receipt](qualification/README.md#matched-per-entity-wasm-growth)
+- Qualified returning one timestamped row from a two-row atomic update. It saved 73,935 handler instructions and 73,793 cycles against reading the row back in the same call. [Mounted batch comparison](qualification/README.md#returning-one-managed-row-from-a-mounted-batch)
+- Refreshed the [frozen IcyDB query comparison](qualification/README.md#query-matrix-on-0281) and measured the costs of a compound range index for selective grouped reads, inserts, and [read-modify-replace updates](qualification/README.md#replacing-a-row-with-a-compound-range-index).
+
 ## [0.28.1] - 2026-11-23
 
 ### ✨ Writes

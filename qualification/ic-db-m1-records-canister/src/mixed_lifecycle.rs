@@ -306,12 +306,40 @@ fn apply_update(request: Update, time_ns: u64, counter: fn() -> u64) -> Reply {
 
             Reply::Batch(result, counter() - start)
         }
+        Update::ReplaceManaged { returning, body } => {
+            let start = counter();
+            let result = replace_managed(returning, body)
+                .map(crate::managed::view)
+                .map_err(refusal);
+
+            Reply::Managed(result, counter() - start)
+        }
         Update::Count(request) => {
             let start = counter();
             let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
 
             Reply::Count(result, counter() - start)
         }
+    }
+}
+
+// Both paths update the same pair and return the first row with its database-assigned time.
+fn replace_managed(returning: bool, body: String) -> Result<crate::schema::ManagedRow, Error> {
+    use crate::schema::ManagedRow;
+
+    let mut db = crate::open(&runtime());
+    let mut first = db.get::<ManagedRow>(1_u64)?.ok_or(Error::Missing)?;
+    let mut second = db.get::<ManagedRow>(2_u64)?.ok_or(Error::Missing)?;
+    first.body = body;
+    second.body = "ready".into();
+    let mut batch = Batch::new();
+    batch.replace(&first)?;
+    batch.replace(&second)?;
+    if returning {
+        db.commit_returning(batch, first.id())
+    } else {
+        db.commit(batch)?;
+        db.get::<ManagedRow>(first.id)?.ok_or(Error::Missing)
     }
 }
 
@@ -330,6 +358,11 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
                 run_count::<Item>(&db, &mut jobs, action, now_ms)
             }
         }
+        CountRequest::CleanupExpired(limit) => {
+            let removed =
+                jobs.cleanup_expired(Timestamp::from_millis(now_ms), usize::from(limit))?;
+            Ok(CountReply::Removed(removed as u64))
+        }
         CountRequest::Cancel(bytes) => {
             jobs.cancel(&JobHandle::from_bytes(&bytes)?)?;
 
@@ -345,12 +378,15 @@ fn run_count<E: Entity>(
     now_ms: i64,
 ) -> Result<CountReply, Error> {
     match action {
-        CountAction::Start => {
-            let handle = db.query::<E>().start_count(
-                jobs,
-                Timestamp::from_millis(now_ms),
-                Timestamp::from_millis(now_ms + 3_600_000),
-            )?;
+        CountAction::Start | CountAction::StartGrouped => {
+            let now = Timestamp::from_millis(now_ms);
+            let expires = Timestamp::from_millis(now_ms + 3_600_000);
+            let query = db.query::<E>();
+            let handle = if matches!(action, CountAction::StartGrouped) {
+                query.start_group_count::<ParentKey>(jobs, now, expires)?
+            } else {
+                query.start_count(jobs, now, expires)?
+            };
 
             Ok(CountReply::Started(handle.to_bytes()))
         }
@@ -370,6 +406,34 @@ fn run_count<E: Entity>(
             };
 
             Ok(CountReply::Advanced(step.sequence, outcome))
+        }
+        CountAction::ResumeGrouped(bytes, sequence, work) => {
+            let handle = JobHandle::from_bytes(&bytes)?;
+            let step = db
+                .query::<E>()
+                .work_limit(usize::from(work))
+                .resume_group_count::<ParentKey>(
+                    jobs,
+                    &handle,
+                    sequence,
+                    Timestamp::from_millis(now_ms),
+                )?;
+            let outcome = match step.outcome {
+                JobOutcome::Running => CountOutcome::Running,
+                JobOutcome::Complete(page) => CountOutcome::Groups(
+                    page.rows
+                        .into_iter()
+                        .map(|r| (r.key.parent, r.count))
+                        .collect(),
+                ),
+                JobOutcome::Invalidated => CountOutcome::Invalidated,
+                JobOutcome::Expired => CountOutcome::Expired,
+            };
+            Ok(CountReply::GroupAdvanced(
+                step.sequence,
+                step.examined,
+                outcome,
+            ))
         }
     }
 }

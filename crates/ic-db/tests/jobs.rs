@@ -1521,17 +1521,14 @@ fn previous_job_header_is_refused_without_touching_existing_jobs() {
     use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
-    let (db, mut jobs) = create(&runtime, &[Some(1); 4], 0);
-    db.query::<Row>()
-        .start_count(&mut jobs, time(0), time(100))
-        .unwrap();
-    drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-    let mut header = raw.get(&0).unwrap();
-    header[..8].copy_from_slice(b"ICDBAJ01");
-    raw.insert(0, header);
+    let mut raw = StableBTreeMap::create(runtime.open_memory(&key).unwrap());
+    let mut header = b"ICDBAJ02".to_vec();
+    header.extend(1_u32.to_le_bytes());
+    header.extend([1; 16]);
+    header.extend(1_u64.to_le_bytes());
+    raw.insert(0_u8, header);
+    raw.insert(1, vec![42; 128]);
     drop(raw);
     let before = backing.borrow().clone();
     assert!(matches!(
@@ -1541,10 +1538,56 @@ fn previous_job_header_is_refused_without_touching_existing_jobs() {
     assert_eq!(*backing.borrow(), before);
 }
 
+// Independent byte oracle for the fixed-slot layout, including its 36-byte header.
+fn raw_frame(memory: &ic_storage::RuntimeMemory<VectorMemory>, slot: u8) -> Vec<u8> {
+    if slot == 0 {
+        let mut header = vec![0; 36];
+        memory.read(0, &mut header);
+        return header;
+    }
+    let index = u64::from(slot - 1);
+    let mut len = [0; 2];
+    memory.read(36 + 2 * index, &mut len);
+    let mut bytes = vec![0; usize::from(u16::from_le_bytes(len))];
+    memory.read(68 + 16384 * index, &mut bytes);
+    bytes
+}
+
+fn set_raw_frame(memory: &ic_storage::RuntimeMemory<VectorMemory>, slot: u8, bytes: &[u8]) {
+    if slot == 0 {
+        memory.write(0, bytes);
+    } else {
+        let index = u64::from(slot - 1);
+        memory.write(
+            36 + 2 * index,
+            &u16::try_from(bytes.len()).unwrap().to_le_bytes(),
+        );
+        memory.write(68 + 16384 * index, bytes);
+    }
+}
+
+#[test]
+fn invalid_slot_length_or_extent_refuses_open_intact() {
+    for (slot, len) in [(1_u64, 16_385_u16), (16, 1)] {
+        let backing = VectorMemory::default();
+        let runtime = host(backing.clone());
+        let (_, jobs) = create(&runtime, &[], 0);
+        drop(jobs);
+        let key = StableKey::parse("test.jobs.v1").unwrap();
+        let memory = runtime.open_memory(&key).unwrap();
+        memory.write(36 + 2 * (slot - 1), &len.to_le_bytes());
+        drop(memory);
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            AggregateJobs::open(runtime.open_memory(&key).unwrap()),
+            Err(Error::Corrupt)
+        ));
+        assert_eq!(*backing.borrow(), before);
+    }
+}
+
 #[test]
 fn new_jobs_preserve_each_initial_checkpoint_encoding() {
-    use ic_storage::adapter::StableBTreeMap;
-
     let runtime = host(VectorMemory::default());
     let (db, mut jobs) = create(&runtime, &[], 0);
     let query = || db.query::<Row>();
@@ -1564,13 +1607,12 @@ fn new_jobs_preserve_each_initial_checkpoint_encoding() {
     drop(jobs);
 
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
+    let raw = runtime.open_memory(&key).unwrap();
     // Eight fixed-width numbers, the framed 32-byte binding, phase and empty cursor
     // precede the state length. The last fixed-width number is the accumulator count.
     let state_length_offset = 8 * 8 + (4 + 32) + 1 + 4;
     for (slot, state_len) in [(1, 32_u32), (2, 32), (3, 0), (4, 1), (5, 1)] {
-        let record = raw.get(&slot).unwrap();
+        let record = raw_frame(&raw, slot);
         assert_eq!(
             &record[state_length_offset - 8..state_length_offset],
             &[0; 8]
@@ -1583,7 +1625,6 @@ fn new_jobs_preserve_each_initial_checkpoint_encoding() {
 
 #[test]
 fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
-    use ic_storage::adapter::StableBTreeMap;
     for corruption in 0..4 {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
@@ -1597,9 +1638,8 @@ fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
             .unwrap();
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
-        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        let mut record = raw.get(&2).unwrap();
+        let raw = runtime.open_memory(&key).unwrap();
+        let mut record = raw_frame(&raw, 2);
         // Scalar count carries a final 32-byte accumulator with a u32 prefix.
         // Damage the tail while keeping the lifecycle metadata untouched.
         let payload = record.len() - 32;
@@ -1612,7 +1652,7 @@ fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
             3 => record[payload..].fill(255),
             _ => unreachable!(),
         }
-        raw.insert(2, record);
+        set_raw_frame(&raw, 2, &record);
         drop(raw);
         let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
         let before = backing.borrow().clone();
@@ -1646,7 +1686,6 @@ fn lifecycle_checks_complete_framing_without_interpreting_accumulator_bytes() {
 
 #[test]
 fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
-    use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let host = host(backing.clone());
     let (db, mut jobs) = create(&host, &[], 0);
@@ -1658,9 +1697,8 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
         .unwrap();
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap());
-    raw.insert(2, vec![255]);
+    let raw = host.open_memory(&key).unwrap();
+    set_raw_frame(&raw, 2, &[255]);
     drop(raw);
     let mut jobs = AggregateJobs::open(host.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
@@ -1671,11 +1709,10 @@ fn unsupported_store_and_malformed_job_refuse_without_cleanup_damage() {
         "no early removal before checking remaining records"
     );
     drop(jobs);
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap());
-    let mut header = raw.get(&0).unwrap();
+    let raw = host.open_memory(&key).unwrap();
+    let mut header = raw_frame(&raw, 0);
     header[0] ^= 1;
-    raw.insert(0, header);
+    set_raw_frame(&raw, 0, &header);
     drop(raw);
     let before = backing.borrow().clone();
     assert!(AggregateJobs::open(host.open_memory(&key).unwrap()).is_err());
@@ -2360,8 +2397,6 @@ fn retained_distinct_scans_once_and_pages_all_keys_after_reopen() {
 
 #[test]
 fn retained_distinct_preserves_first_index_occurrence_and_rejects_duplicate_checkpoint_keys() {
-    use ic_storage::adapter::StableBTreeMap;
-
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let (db, mut jobs) = create(&runtime, &[Some(8), Some(9), None, Some(9)], 0);
@@ -2397,14 +2432,13 @@ fn retained_distinct_preserves_first_index_occurrence_and_rejects_duplicate_chec
     drop(jobs);
 
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-    let mut record = raw.get(&1).unwrap();
+    let raw = runtime.open_memory(&key).unwrap();
+    let mut record = raw_frame(&raw, 1);
     // The last projected Int128 is present. Turn it into a duplicate of the first.
     let tail = record.len() - 16;
     assert_eq!(&record[tail..], &9_i128.to_le_bytes());
     record[tail..].copy_from_slice(&8_i128.to_le_bytes());
-    raw.insert(1, record);
+    set_raw_frame(&raw, 1, &record);
     drop(raw);
     let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
@@ -3022,7 +3056,6 @@ fn grouped_job_frame_bound_is_independent_of_output_and_synchronous_state_limits
 
 #[test]
 fn grouped_jobs_handle_empty_sparse_and_corrupt_checkpoints() {
-    use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let host = host(backing.clone());
     let amounts = std::array::from_fn::<_, 8, _>(|id| Some(id as i128));
@@ -3070,11 +3103,10 @@ fn grouped_jobs_handle_empty_sparse_and_corrupt_checkpoints() {
     assert!(rows.rows.is_empty());
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap());
-    let mut record = raw.get(&1).unwrap();
+    let raw = host.open_memory(&key).unwrap();
+    let mut record = raw_frame(&raw, 1);
     *record.last_mut().unwrap() ^= 1;
-    raw.insert(1, record);
+    set_raw_frame(&raw, 1, &record);
     drop(raw);
     let mut jobs = AggregateJobs::open(host.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
@@ -3615,7 +3647,6 @@ fn grouped_numeric_frame_refusal_preserves_progress_before_output_selection() {
 
 #[test]
 fn grouped_numeric_corrupt_absent_total_refuses_and_remains_cancellable() {
-    use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let host = host(backing.clone());
     let (db, mut jobs) = create(&host, &[None, None], 0);
@@ -3629,11 +3660,10 @@ fn grouped_numeric_corrupt_absent_total_refuses_and_remains_cancellable() {
         .unwrap();
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(host.open_memory(&key).unwrap());
-    let mut record = raw.get(&1).unwrap();
+    let raw = host.open_memory(&key).unwrap();
+    let mut record = raw_frame(&raw, 1);
     *record.last_mut().unwrap() = 1; // Nonzero total with a zero present count.
-    raw.insert(1, record);
+    set_raw_frame(&raw, 1, &record);
     drop(raw);
     let mut jobs = AggregateJobs::open(host.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
@@ -4395,7 +4425,6 @@ fn retained_distinct_binding_output_and_source_revision_are_enforced() {
 
 #[test]
 fn retained_distinct_malformed_and_duplicate_keys_refuse_intact() {
-    use ic_storage::adapter::StableBTreeMap;
     for duplicate in [false, true] {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
@@ -4422,11 +4451,10 @@ fn retained_distinct_malformed_and_duplicate_keys_refuse_intact() {
         }
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
-        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        let mut record = raw.get(&1).unwrap();
+        let raw = runtime.open_memory(&key).unwrap();
+        let mut record = raw_frame(&raw, 1);
         *record.last_mut().unwrap() = if duplicate { 0 } else { 2 };
-        raw.insert(1, record);
+        set_raw_frame(&raw, 1, &record);
         drop(raw);
         let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
         let before = backing.borrow().clone();
@@ -4736,7 +4764,6 @@ fn retained_group_distinct_frame_limit_covers_all_sets_together() {
 
 #[test]
 fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
-    use ic_storage::adapter::StableBTreeMap;
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let (db, mut jobs) = create(&runtime, &[None; 4], 0);
@@ -4778,11 +4805,10 @@ fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
     assert!(rows.rows.is_empty());
     drop(jobs);
     let key = StableKey::parse("test.jobs.v1").unwrap();
-    let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-        StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-    let mut record = raw.get(&1).unwrap();
+    let raw = runtime.open_memory(&key).unwrap();
+    let mut record = raw_frame(&raw, 1);
     *record.last_mut().unwrap() = 2; // Invalid optional-key tag within the group's set.
-    raw.insert(1, record);
+    set_raw_frame(&raw, 1, &record);
     drop(raw);
     let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
     let before = backing.borrow().clone();
@@ -5520,7 +5546,6 @@ fn retained_text_extrema_restore_owned_encoding_and_replace_winners() {
 
 #[test]
 fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable() {
-    use ic_storage::adapter::StableBTreeMap;
     for corruption in 0..3 {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
@@ -5534,9 +5559,8 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
             .unwrap();
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
-        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        let mut record = raw.get(&1).unwrap();
+        let raw = runtime.open_memory(&key).unwrap();
+        let mut record = raw_frame(&raw, 1);
         // One optional i128 winner: 17 payload bytes after its u32 byte count.
         let payload = record.len() - 17;
         match corruption {
@@ -5544,7 +5568,7 @@ fn retained_extrema_corrupt_winners_refuse_without_repair_and_remain_cancellable
             1 => record[payload] = 2, // Invalid optional tag.
             _ => record[payload - 4 - 8] = 2, // At most one retained winner.
         }
-        raw.insert(1, record);
+        set_raw_frame(&raw, 1, &record);
         drop(raw);
         let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
         let before = backing.borrow().clone();
@@ -6022,7 +6046,6 @@ fn retained_group_extrema_cardinality_and_frame_caps_ignore_output_selection() {
 
 #[test]
 fn retained_group_extrema_corrupt_winner_framing_refuses_intact() {
-    use ic_storage::adapter::StableBTreeMap;
     for corruption in 0..3 {
         let backing = VectorMemory::default();
         let runtime = host(backing.clone());
@@ -6036,16 +6059,15 @@ fn retained_group_extrema_corrupt_winner_framing_refuses_intact() {
             .unwrap();
         drop(jobs);
         let key = StableKey::parse("test.jobs.v1").unwrap();
-        let mut raw: StableBTreeMap<u8, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        let mut record = raw.get(&1).unwrap();
+        let raw = runtime.open_memory(&key).unwrap();
+        let mut record = raw_frame(&raw, 1);
         let winner = record.len() - 17;
         match corruption {
             0 => record[winner] = 0,
             1 => record[winner] = 2,
             _ => record[winner - 5] = 2,
         }
-        raw.insert(1, record);
+        set_raw_frame(&raw, 1, &record);
         drop(raw);
         let mut jobs = AggregateJobs::open(runtime.open_memory(&key).unwrap()).unwrap();
         let before = backing.borrow().clone();

@@ -40,6 +40,7 @@ help:
 	  'make m3-jobs                    Check aggregate custody during maintenance' \
 	  'make m1-commit-failures         Check product rollback inside supplier writes' \
 	  'make m4-lifecycle               Check mixed writes, queries, jobs and migration' \
+	  'make m4-matched-growth          Compare installed IC DB and frozen IcyDB entity growth' \
 	  'make m1-write-envelope         Measure maximal rows, batches and index fan-out' \
 	  'make m1-store-width            Exercise one store (STORE_WIDTH=32 by default)' \
 	  'make m1-entity-growth           Measure 1/8/32-entity Wasm and execution growth' \
@@ -155,6 +156,11 @@ m2-count-comparison:
 
 m2-count-profile:
 	bash scripts/measure-records.sh count-profile
+
+.PHONY: m4-matched-growth
+m4-matched-growth:
+	python3 qualification/experiments/matched-growth/measure.py qualification/target/evidence/matched-growth
+	IC_DB_MATCHED_GROWTH_DIR="$(CURDIR)/qualification/target/evidence/matched-growth" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test query_matrix paired_entity_growth -- --ignored --nocapture
 
 .PHONY: m1-entity-growth
 m1-entity-growth:

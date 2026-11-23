@@ -95,11 +95,15 @@ impl Model {
         Ok(())
     }
 
-    fn snapshot(&self, parent: u64, minimum: u64) -> Snapshot {
+    fn group_counts(&self) -> Vec<(u64, u64)> {
         let mut groups = BTreeMap::<u64, u64>::new();
         for &(parent, _) in self.items.values() {
             *groups.entry(parent).or_default() += 1;
         }
+        groups.into_iter().collect()
+    }
+
+    fn snapshot(&self, parent: u64, minimum: u64) -> Snapshot {
         let mut ordered: Vec<_> = self
             .items
             .iter()
@@ -125,7 +129,7 @@ impl Model {
                 .filter(|(_, row)| row.0 == parent && row.1 >= u128::from(minimum))
                 .map(|(&id, _)| id)
                 .collect(),
-            groups.into_iter().collect(),
+            self.group_counts(),
             ordered.into_iter().map(|(_, id)| id).collect(),
         )
     }
@@ -1235,4 +1239,330 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         assert_eq!(outcome, CountOutcome::Running);
     }
     panic!("retained count did not finish");
+}
+
+#[tokio::test]
+async fn compare_returned_managed_row_with_read_after_commit() {
+    use ic_testkit::pocket_ic::Time;
+
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let mut control = None;
+    for returning in [false, true] {
+        let pic = instance().await.unwrap();
+        let canister = pic.create_canister().await;
+        pic.add_cycles(canister, 10_000_000_000_000).await;
+        pic.install_canister(canister, wasm.clone(), vec![], None)
+            .await;
+        let seeded = pic
+            .update_call(
+                canister,
+                canister,
+                "managed_write",
+                encode(82, &(1_u64, "pending", 100_i64, 5_u8, false)),
+            )
+            .await
+            .unwrap();
+        decode::<Result<(), u8>>(82, &seeded).unwrap();
+        let mut checkpoint = None;
+        for (step, body) in ["confirmed", "confirmed", "ready"].into_iter().enumerate() {
+            let millis = 2_000_000_000_000_u64 + 1000 * step as u64;
+            pic.set_time(Time::from_nanos_since_unix_epoch(millis * 1_000_000))
+                .await;
+            pic.tick().await;
+            let before = pic.cycle_balance(canister).await;
+            let bytes = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "db_write",
+                    application_request(
+                        241,
+                        &Update::ReplaceManaged {
+                            returning,
+                            body: body.into(),
+                        },
+                    ),
+                )
+                .await
+                .unwrap();
+            let cycles = before - pic.cycle_balance(canister).await;
+            let Reply::Managed(row, instructions) = application_reply(241, &bytes) else {
+                panic!("expected managed row");
+            };
+            let backing = pic.get_stable_memory(canister).await;
+            if step == 0 {
+                let (id, stored, created, updated) = row.unwrap();
+                assert_eq!((id, stored.as_str(), created), (1, "confirmed", 100));
+                assert_eq!(updated, millis as i64);
+                let bytes = pic
+                    .query_call(canister, canister, "managed_rows", encode(83, &updated))
+                    .await
+                    .unwrap();
+                type State = (Vec<(u64, String, i64, i64)>, Vec<u64>, u64);
+                assert_eq!(
+                    decode::<State>(83, &bytes),
+                    (
+                        vec![(1, stored, 100, updated), (2, "ready".into(), 100, updated)],
+                        vec![1, 2],
+                        2
+                    )
+                );
+                checkpoint = Some((backing, updated));
+            } else {
+                let (saved, updated) = checkpoint.as_ref().unwrap();
+                assert!(saved == &backing);
+                if step == 1 {
+                    assert_eq!(row.unwrap(), (1, "confirmed".into(), 100, *updated));
+                } else {
+                    assert_eq!(row, Err(4));
+                }
+            }
+            println!(
+                "managed replace returning={returning} step={step} handler_instructions={instructions} update_balance_delta={cycles}"
+            );
+        }
+        if returning {
+            assert!(control == checkpoint);
+        } else {
+            control = checkpoint;
+        }
+        pic.drop().await;
+    }
+}
+
+#[tokio::test]
+async fn grouped_count_under_interleaved_writes() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+
+    let update = async |request| {
+        let before = pic.cycle_balance(canister).await;
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "db_write",
+                application_request(241, &request),
+            )
+            .await
+            .unwrap();
+        (
+            application_reply::<Reply>(241, &bytes),
+            before - pic.cycle_balance(canister).await,
+        )
+    };
+    let write = async |model: &mut Model, commands: Vec<Command>| {
+        model.apply(&commands).unwrap();
+        assert!(matches!(
+            update(Update::Batch(false, commands)).await.0,
+            Reply::Batch(Ok(()), _)
+        ));
+    };
+    let count = async |request| {
+        let (Reply::Count(result, instructions), cycles) = update(Update::Count(request)).await
+        else {
+            panic!("expected count response")
+        };
+        (result.unwrap(), instructions, cycles)
+    };
+    let start = async || {
+        let (CountReply::Started(handle), work, charge) =
+            count(CountRequest::Run(false, CountAction::StartGrouped)).await
+        else {
+            panic!("expected grouped handle")
+        };
+        (handle, work, charge)
+    };
+    let request = |handle: &[u8], sequence| {
+        CountRequest::Run(
+            false,
+            CountAction::ResumeGrouped(handle.to_vec(), sequence, 3),
+        )
+    };
+    let mut model = Model::default();
+    for (_, commands) in seed_batches() {
+        write(&mut model, commands).await;
+    }
+    // Move the first scanned item on consecutive attempts, including just
+    // before the call that observes exhaustion of the last full chunk.
+    for (schedule, move_item) in [
+        ("quiet", None),
+        ("unrelated", None),
+        ("source-early", Some((1, 1))),
+        ("source-late", Some((3, 3))),
+        ("source-before-completion", Some((4, 4))),
+        ("quiet-retry", None),
+    ] {
+        let (handle, mut instructions, mut cycles) = start().await;
+        let mut invalidated = false;
+        let mut examined = 0;
+        for sequence in 0..=4 {
+            if schedule == "unrelated" && sequence > 0 {
+                write(&mut model, vec![(0, 1, 1, 100 + sequence, 0)]).await;
+            }
+            if let Some((at, parent)) = move_item
+                && sequence == at
+            {
+                write(&mut model, vec![(1, 1, 1, parent, 10)]).await;
+                invalidated = true;
+            }
+            let (reply, work, charge) = count(request(&handle, sequence)).await;
+            let CountReply::GroupAdvanced(next, seen, outcome) = reply else {
+                panic!("expected grouped advance")
+            };
+            assert_eq!(next, sequence + 1);
+            instructions += work;
+            cycles += charge;
+            if invalidated {
+                assert_eq!(outcome, CountOutcome::Invalidated);
+                assert_eq!(seen, examined);
+            } else if outcome == CountOutcome::Running {
+                assert_eq!(seen, examined + 3);
+                assert!(sequence < 4);
+                examined = seen;
+                continue;
+            } else {
+                assert!(
+                    move_item.is_none(),
+                    "job finished before its scheduled move"
+                );
+                assert_eq!(outcome, CountOutcome::Groups(model.group_counts()));
+                assert_eq!(seen, model.items.len() as u64);
+            }
+            println!(
+                "grouped/{schedule} advances={next} examined={seen} invalidated={invalidated} start_and_advance_instructions={instructions} start_and_advance_cycles={cycles} last_advance_instructions={work} last_advance_cycles={charge}"
+            );
+            break;
+        }
+        let (reply, work, charge) = count(CountRequest::Cancel(handle)).await;
+        assert_eq!(reply, CountReply::Cancelled);
+        println!("grouped/{schedule} cleanup_instructions={work} cleanup_cycles={charge}");
+    }
+    // Two advances commit, but their replies never reach the application.
+    // Retrying the older request after upgrade must return the latest checkpoint.
+    // Control the creation time so retries can straddle the exact expiry millisecond.
+    let started_ms = 2_000_000_000_000_u64;
+    let clock =
+        |millis| ic_testkit::pocket_ic::Time::from_nanos_since_unix_epoch(millis * 1_000_000);
+    pic.set_time(clock(started_ms)).await;
+    let (handle, _, _) = start().await;
+    count(request(&handle, 0)).await;
+    count(request(&handle, 1)).await;
+    ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    let (checkpoint, _, _) = count(request(&handle, 0)).await;
+    assert_eq!(
+        checkpoint,
+        CountReply::GroupAdvanced(2, 6, CountOutcome::Running)
+    );
+    let before_refusal = pic.get_stable_memory(canister).await;
+    let (reply, _) = update(Update::Count(request(&handle, 3))).await;
+    assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+    assert!(pic.get_stable_memory(canister).await == before_refusal);
+    for sequence in 2..4 {
+        let (reply, _, _) = count(request(&handle, sequence)).await;
+        assert_eq!(
+            reply,
+            CountReply::GroupAdvanced(sequence + 1, (sequence + 1) * 3, CountOutcome::Running)
+        );
+    }
+    let expected = model.group_counts();
+    count(request(&handle, 4)).await; // Lose the completion reply as well.
+    let (unfinished, _, _) = start().await;
+    count(request(&unfinished, 0)).await;
+    write(&mut model, vec![(1, 1, 1, 2, 10)]).await;
+    // The same source write must invalidate the unfinished job on a stale retry.
+    assert_eq!(
+        count(request(&unfinished, 0)).await.0,
+        CountReply::GroupAdvanced(2, 3, CountOutcome::Invalidated)
+    );
+    assert_eq!(
+        count(CountRequest::Cancel(unfinished)).await.0,
+        CountReply::Cancelled
+    );
+    assert_ne!(model.group_counts(), expected);
+    let (reply, _, _) = count(request(&handle, 4)).await;
+    assert_eq!(
+        reply,
+        CountReply::GroupAdvanced(5, 12, CountOutcome::Groups(expected))
+    );
+    let deadline = started_ms + 3_600_000;
+    pic.set_time(clock(deadline - 1)).await;
+    assert_eq!(count(request(&handle, 4)).await.0, reply);
+    pic.set_time(clock(deadline)).await;
+    assert_eq!(
+        count(request(&handle, 4)).await.0,
+        CountReply::GroupAdvanced(6, 12, CountOutcome::Expired)
+    );
+
+    // Force reuse of this specific slot without interpreting any opaque handle bytes.
+    let mut occupied = Vec::new();
+    for index in 0..15 {
+        if index == 5 {
+            pic.set_time(clock(deadline + 60_000)).await;
+        }
+        occupied.push(start().await.0);
+    }
+    let (full, _) = update(Update::Count(CountRequest::Run(
+        false,
+        CountAction::StartGrouped,
+    )))
+    .await;
+    assert!(matches!(full, Reply::Count(Err(reason), _) if reason == "JobCapacity"));
+    assert_eq!(
+        count(CountRequest::Cancel(handle.clone())).await.0,
+        CountReply::Cancelled
+    );
+    let (replacement, _, _) = start().await;
+    assert_ne!(handle, replacement);
+    let checkpoint = pic.get_stable_memory(canister).await;
+    for delayed in [request(&handle, 4), CountRequest::Cancel(handle)] {
+        let (reply, _) = update(Update::Count(delayed)).await;
+        assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+        assert!(pic.get_stable_memory(canister).await == checkpoint);
+    }
+    assert_eq!(
+        count(request(&replacement, 0)).await.0,
+        CountReply::GroupAdvanced(1, 3, CountOutcome::Running)
+    );
+    // Five handles now expire together. The other eleven have a minute left.
+    pic.set_time(clock(deadline + 3_600_000)).await;
+    for (sequence, expected_removed) in [(1, 2), (2, 2), (3, 1)] {
+        let (removed, work, cycles) = count(CountRequest::CleanupExpired(2)).await;
+        assert_eq!(removed, CountReply::Removed(expected_removed));
+        println!("grouped/sweep removed={expected_removed} instructions={work} cycles={cycles}");
+        assert_eq!(
+            count(request(&replacement, sequence)).await.0,
+            CountReply::GroupAdvanced(sequence + 1, (sequence + 1) * 3, CountOutcome::Running)
+        );
+    }
+    let before = pic.get_stable_memory(canister).await;
+    assert_eq!(
+        count(CountRequest::CleanupExpired(2)).await.0,
+        CountReply::Removed(0)
+    );
+    for expired in occupied.drain(..5) {
+        let (reply, _) = update(Update::Count(request(&expired, 0))).await;
+        assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+    }
+    assert!(pic.get_stable_memory(canister).await == before);
+    assert_eq!(
+        count(request(&replacement, 4)).await.0,
+        CountReply::GroupAdvanced(5, 12, CountOutcome::Groups(model.group_counts()))
+    );
+    occupied.push(replacement);
+    for live in occupied {
+        assert_eq!(
+            count(CountRequest::Cancel(live)).await.0,
+            CountReply::Cancelled
+        );
+    }
+    pic.drop().await;
 }

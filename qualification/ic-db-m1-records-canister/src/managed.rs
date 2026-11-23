@@ -96,7 +96,7 @@ fn managed_rows(millis: i64) -> (Vec<Row>, Vec<u64>, u64) {
 }
 
 type Row = (u64, String, i64, i64);
-fn view(row: ManagedRow) -> Row {
+pub(super) fn view(row: ManagedRow) -> Row {
     (
         row.id,
         row.body,

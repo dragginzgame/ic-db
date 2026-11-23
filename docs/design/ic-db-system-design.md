@@ -1952,6 +1952,8 @@ qualify the implemented contract, not a production write-rate distribution or
 completion SLA. The witness reuses existing qualification endpoints and adds no
 product mechanism; the historical M0 candidate remains separate evidence.
 
+The [mounted grouped-count witness](../../qualification/README.md#mounted-grouped-count-under-interleaved-writes) qualifies the end of this interval. A full final chunk can leave exhaustion unobserved. The source revision must remain valid through the call that produces the completed groups. Writes to another entity in the same store can proceed between advances.
+
 The 0.19 shared-capacity witness fills all 16 job slots with grouped sums,
 grouped counts, grouped DISTINCT counts and an optional-field count on a second entity.
 Three upgrades preserve progress and custody. A source mutation invalidates only
@@ -1984,10 +1986,10 @@ One `AggregateJobs` collection uses a
 separate host-governed allocation, leaving the row manifest and codec unchanged.
 Its versioned header admits the owned codec version and owns a fresh incarnation
 and monotonic slot generation.
-Only the current header (`ICDBAJ02`) and current codec version admit the job
+Only the current header (`ICDBAJ03`) and current codec version admit the job
 allocation. An older header returns `InvalidJob` before any write, including
-when the allocation has no remaining jobs. Retained v1 results and handles
-require the old executable. A host moving off v1 must provision a fresh job
+when the allocation has no remaining jobs. Retained results and handles from earlier layouts
+require their original executable. A host switching layouts must provision a fresh job
 allocation with a fresh incarnation. Row storage is independent.
 Internal envelope constructors reuse scalar encoding
 with a byte budget owned by jobs; public row constructors retain 4 KiB.
@@ -2001,15 +2003,18 @@ output-bound. Job records use the cursor codec's own encoded-frame bound.
 Expiry cleanup checks at most 16 frames before deletion; its caller limit bounds
 removals, not examined slots. Lifecycle inspection borrows cursor/accumulator
 slices through the same bounded frame decoder as resume; only resume materializes
-owned bytes. After identity/expiry admission, IC Storage's `remove_discard`
-avoids retrieving the deleted payload again. Complete outer framing and metadata
-checks remain required; cleanup does not interpret reducer-specific contents.
-This retains the scalar-view ownership lesson from frozen IcyDB `6d421e3` without
-a second decoder, metadata collection or durable-format change.
+owned bytes. The allocation has a 36-byte header, sixteen little-endian 16-bit lengths,
+and sixteen directly addressed 16 KiB frames. Storage grows the allocation on demand.
+A zero length releases the slot. Cleanup validates every occupied frame before
+writing the directory once, leaving surviving frames in place. Freed bytes can
+be overwritten on reuse and remain physically present until then.
+The borrowed frame inspection follows frozen IcyDB’s scalar-view ownership
+principle at `6d421e3`. Slot layout belongs to IC DB.
 The 0.20 envelope witness exercises invalidation,
 cancellation, interrupted cleanup and slot reuse with all 16 jobs near their
 frame bound, including a maximum-size expiry cleanup. This establishes selected
 logical progress/rollback and costs, not physical shrinking or general allocator reuse.
+On Storage 0.78.8 the [fixed-slot comparison](../../qualification/README.md#fixed-slot-job-cleanup) measured 8.13M cycles for the full warm sweep, down from 30.49M with the map layout.
 
 Re-admit the caller's fluent query on each advance. Bind the exact database/schema,
 access path, predicates, source entity, numeric operation, operand/result type and
@@ -2538,6 +2543,12 @@ retained capability scope. Later detail explains the implementation and evidence
 M4 rechecked both costs on 0.27.8. For the dense category, an owner-validated scalar count with identical predicates used 50.05M instructions and grouping used 50.12M. The eight-shape Wasm slope remained 4,504 bytes per entity from 8 to 32. Within one 64-alternative enum, distinct named scalar payloads added 4,090 bytes over sharing one type. Warm typed query work also increased, leading to the [paired typed-admission experiment](../../qualification/README.md#typed-admission-on-compiled-schema-v1). [Grouped cost controls](../../qualification/README.md#dense-grouped-count-on-0278) and [named-type growth](../../qualification/README.md#entity-and-named-type-growth-on-0278).
 
 On 0.28.0, the 8-to-32-entity growth was 2,683 bytes per entity with direct operations, 3,482 with one fluent shape and 4,519 with eight. Further size work should distinguish repeated typed call sites from shared query execution. [Installed growth matrix](../../qualification/README.md#reachable-queries-per-entity-on-0280).
+
+Three fetch-wrapper experiments on 0.28.1 left the eight-shape slope above the comparison ceiling. Keep the shared raw executor and the existing session read borrow through typed entity decoding. Revisit this boundary if a candidate preserves that lifetime and improves the measured size and read costs. [Matched PocketIC runs](../../qualification/README.md#fetch-wrapper-experiments-on-0281).
+
+The [matched per-entity growth comparison](../../qualification/README.md#matched-per-entity-wasm-growth) exercises the same inserts, key lookups and indexed listings on both engines. From 8 to 32 entities, IC DB adds 40% fewer bytes per entity with eight fluent shapes. At 5,818 bytes it still exceeds the roughly 4 KB guideline. Report direct operations and repeated fluent calls separately, and retain read-cost checks when changing either boundary.
+
+For dense-category grouped reads, a declared equality-plus-range index reduced cost when the amount predicate excluded most owners. On 0.28.1 it also raised the full-category count and insert costs. The fluent query already benefits without a hint. Keep index choice workload-specific. [Matched reads and writes](../../qualification/README.md#grouped-count-with-a-compound-range-index).
 
 #### Application qualification
 
@@ -5682,11 +5693,7 @@ test LOC separately when comparing implementations; include code moved into
 suppliers, adapters or consumer workarounds (filtering, sorting, retries and
 integrity checks) rather than claiming a local deletion as a system reduction.
 
-At adoption, compare the architecture with targeted IcyDB simplification under
-the same scope choices; implementing both is unnecessary. Explain why reaching
-the smaller contract in IcyDB would be harder or riskier before preferring a new
-repository. Report separately: simplification of the same promised behavior,
-deliberate scope reduction, and relocation into consumer/host/supplier code.
+The [in-place IcyDB comparison](../../qualification/README.md#what-could-be-simplified-in-icydb-itself) identifies SQL retirement and narrower actor generation as targeted alternatives. Replacing legacy journal publication or accepted-schema authority would also change recovery and reopen. These coupled changes motivate the independent experiment. Adoption still depends on comparable workload costs, including work moved into applications and Canic. No modified legacy build has been timed.
 
 Reuse IcyDB as a differential oracle only for intentionally preserved behavior.
 Use independent expected outcomes or a deliberately bounded SQLite oracle where

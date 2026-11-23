@@ -12,6 +12,13 @@ pub enum Update {
     Batch(bool, Vec<Command>),
     /// Manage one bounded count.
     Count(CountRequest),
+    /// Replace two managed rows and choose how the first persisted row is retrieved.
+    ReplaceManaged {
+        /// Capture the selected after-image during commit when true, otherwise read it back.
+        returning: bool,
+        /// New body for the selected row.
+        body: String,
+    },
 }
 
 /// Actions on a retained count.
@@ -21,6 +28,8 @@ pub enum CountRequest {
     Run(bool, CountAction),
     /// Release the retained job independently of schema admission.
     Cancel(Vec<u8>),
+    /// Remove at most this many expired jobs at host time.
+    CleanupExpired(u8),
 }
 
 /// Count operations that require a live entity.
@@ -30,6 +39,10 @@ pub enum CountAction {
     Start,
     /// Resume at the supplied sequence with a per-call candidate budget.
     Resume(Vec<u8>, u64, u16),
+    /// Start counting items per parent.
+    StartGrouped,
+    /// Advance counting by parent within the candidate budget.
+    ResumeGrouped(Vec<u8>, u64, u16),
 }
 
 /// Result of advancing a retained count at its captured revision.
@@ -43,6 +56,8 @@ pub enum CountOutcome {
     Invalidated,
     /// The application deadline passed.
     Expired,
+    /// Completed counts in parent key order.
+    Groups(Vec<(u64, u64)>),
 }
 
 /// Successful job action.
@@ -54,6 +69,10 @@ pub enum CountReply {
     Advanced(u64, CountOutcome),
     /// Job storage was released.
     Cancelled,
+    /// Sequence, cumulative examined candidates and grouped outcome.
+    GroupAdvanced(u64, u64, CountOutcome),
+    /// Number of expired jobs removed by this update.
+    Removed(u64),
 }
 
 /// Result from the application update mount.
@@ -63,6 +82,8 @@ pub enum Reply {
     Batch(Result<(), u8>, u64),
     /// Retained job outcome or refusal, and instructions inside its handler.
     Count(Result<CountReply, String>, u64),
+    /// Selected row (key, body, creation and update milliseconds) and handler instructions.
+    Managed(Result<(u64, String, i64, i64), u8>, u64),
 }
 
 /// Complete model observation: rows by entity, counts, revisions, filtered IDs,

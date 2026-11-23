@@ -114,6 +114,7 @@ mod tests {
 
     #[derive(Serialize, Deserialize, Wire)]
     struct PageReply {
+        id: u8,
         next: Option<ic_db::QueryCursor>,
     }
 
@@ -168,25 +169,11 @@ mod tests {
         let query = || db.query::<User>().limit(1);
         let first = query().fetch().unwrap();
         let cursor = first.next.unwrap();
-        for old in [None, Some(cursor.to_bytes())] {
-            let encoded = payload(&old);
-            let request: PageRequest =
-                ic_wire::decode(&encoded, Encoding::Payload, LIMITS).unwrap();
-            let page = match &request.after {
-                Some(after) => query().after(after).fetch().unwrap(),
-                None => query().fetch().unwrap(),
-            };
-            assert_eq!(
-                page.rows[0].id,
-                Ulid::from_u128(if old.is_some() { 2 } else { 1 })
-            );
-            assert_eq!(
-                payload(&PageReply {
-                    next: request.after
-                }),
-                encoded
-            );
-        }
+        assert_eq!(first.rows[0].id, Ulid::from_u128(1));
+        let id = first.rows[0].id.to_bytes()[15];
+        let json = serde_json::to_value(cursor.to_bytes()).unwrap();
+        assert_eq!(serde_json::to_value(&cursor).unwrap(), json);
+        assert_eq!(serde_json::from_value::<QueryCursor>(json).unwrap(), cursor);
         let mut bad_version = cursor.to_bytes();
         bad_version[0] = 0;
         let mut bad_flag = cursor.to_bytes();
@@ -203,27 +190,94 @@ mod tests {
             );
             assert!(ic_wire::decode::<PageRequest>(&encoded, Encoding::Payload, limits).is_err());
         }
-        let cursor_layout = serde_json::from_str::<serde_json::Value>(
-            &ValidatedRegistry::from_type::<Option<Vec<u8>>>("Cursor", SchemaLimits::default())
+        let limits = PayloadLimits {
+            bytes: 2048,
+            nodes: 256,
+            depth: 16,
+        };
+        let mut registry = SchemaRegistry::new(SchemaLimits::default()).unwrap();
+        registry.register::<PageRequest>("PageRequest").unwrap();
+        registry.register::<PageReply>("PageReply").unwrap();
+        let registry = registry.finish().unwrap();
+        assert!(
+            registry
+                .declarations()
                 .unwrap()
-                .metadata_json()
-                .unwrap(),
+                .contains("globalThis.Uint8Array")
+        );
+        let module = registry
+            .method_module(
+                &[Method {
+                    export: "page",
+                    id: 1,
+                    request: "PageRequest",
+                    response: "PageReply",
+                    request_limits: limits,
+                    response_limits: limits,
+                }],
+                "./runtime.ts",
+                &Default::default(),
+                |report| assert!(report.is_clean(), "{report}"),
+            )
+            .unwrap();
+        let frame = |direction| Encoding::Frame {
+            method: 1,
+            direction,
+        };
+        let response = frame(ic_wire::Direction::Response);
+        let request = frame(ic_wire::Direction::Request);
+        assert_eq!(
+            ic_wire::encode(&PageRequest { after: None }, request, LIMITS).unwrap(),
+            ic_wire::encode(&None::<Vec<u8>>, request, LIMITS).unwrap()
+        );
+        let old_reply = ic_wire::encode(&(id, Some(cursor.to_bytes())), response, LIMITS).unwrap();
+        let first_reply = ic_wire::encode(
+            &PageReply {
+                id,
+                next: Some(cursor.clone()),
+            },
+            response,
+            LIMITS,
         )
         .unwrap();
-        for registry in [
-            ValidatedRegistry::from_type::<PageRequest>("Page", SchemaLimits::default()),
-            ValidatedRegistry::from_type::<PageReply>("Page", SchemaLimits::default()),
-        ] {
-            let layouts: serde_json::Value =
-                serde_json::from_str(&registry.unwrap().metadata_json().unwrap()).unwrap();
-            assert_eq!(
-                layouts["Page"]["fields"][0]["value"],
-                cursor_layout["Cursor"]
-            );
-        }
+        assert_eq!(first_reply, old_reply);
+        let next_request = typescript_continue(&module, &first_reply);
+        assert_eq!(
+            next_request,
+            ic_wire::encode(&Some(cursor.to_bytes()), request, LIMITS).unwrap()
+        );
+        let decoded: PageRequest = ic_wire::decode(&next_request, request, LIMITS).unwrap();
+        let second = query().after(&decoded.after.unwrap()).fetch().unwrap();
+        assert_eq!(second.rows[0].id, Ulid::from_u128(2));
+        assert_eq!(second.rows.len(), 1);
         assert!(
             ic_wire::decode::<Option<QueryCursor>>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err()
         );
+    }
+
+    fn typescript_continue(module: &str, reply: &[u8]) -> Vec<u8> {
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+
+        let mut child = Command::new("node")
+            .arg("--experimental-transform-types")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/cursor-client.mjs"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = serde_json::json!({"module":module, "runtime":ic_wire::typescript::RUNTIME, "reply":reply});
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        output.stdout
     }
 
     #[test]

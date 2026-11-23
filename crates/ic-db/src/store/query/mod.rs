@@ -279,7 +279,7 @@ enum Resume {
     AfterUnemittedClass = 2,
 }
 impl QueryCursor {
-    pub(super) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
+    pub(crate) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
 
     /// Encode the bounded continuation for an application's transport.
     #[must_use]
@@ -314,7 +314,7 @@ impl QueryCursor {
 
 impl serde::Serialize for QueryCursor {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.to_bytes().serialize(serializer)
+        serializer.serialize_bytes(&self.to_bytes())
     }
 }
 
@@ -327,6 +327,10 @@ impl<'de> serde::Deserialize<'de> for QueryCursor {
 
             fn expecting(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 fmt.write_str("a bounded IC DB query cursor frame")
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<QueryCursor, E> {
+                QueryCursor::from_bytes(bytes).map_err(E::custom)
             }
 
             fn visit_seq<A: serde::de::SeqAccess<'de>>(
@@ -348,7 +352,7 @@ impl<'de> serde::Deserialize<'de> for QueryCursor {
             }
         }
 
-        deserializer.deserialize_seq(Frame)
+        deserializer.deserialize_bytes(Frame)
     }
 }
 

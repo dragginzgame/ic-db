@@ -156,8 +156,9 @@ Omit `using_index` for default primary-key result order. Filter operands must ma
 declared type. Pass a borrowed `String` or `Vec<u8>` directly, such as
 `.eq(Document::TITLE, &title)`. A byte literal such as `b"abc"` is a Blob operand.
 Endpoint request and reply fields can use `Option<ic_db::QueryCursor>` directly.
-Binary Serde preserves the length-prefixed `Option<Vec<u8>>` payload. The optional
-`wire` feature describes the cursor as opaque bytes. Decoding rejects invalid
+Wire preserves the length-prefixed `Option<Vec<u8>>` payload. With the optional
+`wire` feature, generated TypeScript clients receive a `Uint8Array` of up to
+546 bytes for a present cursor and can pass it directly to the next request. Decoding rejects invalid
 frame sizes, versions and resume flags. Query execution checks the binding and
 key shape. To handle framing errors as typed application errors, accept bytes
 and call `QueryCursor::from_bytes` explicitly.
@@ -453,8 +454,12 @@ are not aggregate compositions. Retained grouped operations and completed-output
 pagination use the separate job contract below.
 
 Count, numeric sums, and integer, Decimal and finite float averages also have retained variants. The host creates or
-opens an `AggregateJobs` store in a separate governed allocation. For example,
-given that store and host-captured timestamps:
+opens an `AggregateJobs` store in a separate governed allocation. When upgrading
+from the map-based job format, finish or retire retained jobs under the old
+executable, then create a fresh job allocation with a fresh incarnation. This
+change applies only to retained aggregates.
+
+Given that store and host-captured timestamps:
 
 ```rust,ignore
 let handle = db.query::<Entry>().start_count(&mut jobs, now, expires)?;

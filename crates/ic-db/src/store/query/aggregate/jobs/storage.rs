@@ -5,11 +5,25 @@ use crate::{
     Error, QueryCursor, Timestamp,
     codec::{Decoder, Encoder},
 };
-use ic_storage::{Memory, RuntimeMemory, adapter::StableBTreeMap};
+use ic_storage::{Memory, RuntimeMemory, WASM_PAGE_SIZE_BYTES as PAGE_BYTES};
 
 pub(super) const SLOTS: u8 = 16;
 pub(super) const MAX_JOB_BYTES: usize = 16 * 1024;
-const MAGIC: &[u8; 8] = b"ICDBAJ02";
+const MAGIC: &[u8; 8] = b"ICDBAJ03";
+
+const HEADER_BYTES: usize = 36;
+const DIRECTORY_BYTES: usize = SLOTS as usize * 2;
+const GENERATION_OFFSET: usize = HEADER_BYTES - 8;
+
+// Slot zero is reserved for the store header. Empty lengths make retired frames
+// unreachable. The supplier grows the named allocation only as frames need it.
+fn frame_offset(slot: u8) -> u64 {
+    (HEADER_BYTES + DIRECTORY_BYTES) as u64 + u64::from(slot - 1) * MAX_JOB_BYTES as u64
+}
+
+fn length_offset(slot: u8) -> u64 {
+    HEADER_BYTES as u64 + 2 * u64::from(slot - 1)
+}
 
 /// Durable bounded aggregates in a host-governed allocation.
 /// Holds at most 16 jobs, each at most 16 KiB encoded bytes. Creation requires a
@@ -17,7 +31,7 @@ const MAGIC: &[u8; 8] = b"ICDBAJ02";
 /// All mutation must run synchronously within one IC message, without awaits.
 /// Supplier failures trap; a later message trap rolls these changes back too.
 pub struct AggregateJobs<M: Memory> {
-    map: StableBTreeMap<u8, Vec<u8>, M>,
+    memory: RuntimeMemory<M>,
     incarnation: [u8; 16],
 }
 impl<M: Memory> AggregateJobs<M> {
@@ -33,34 +47,69 @@ impl<M: Memory> AggregateJobs<M> {
         if memory.size() != 0 {
             return Err(Error::Exists);
         }
-        let mut map = StableBTreeMap::create(memory);
-        map.insert(0, header(incarnation, 0));
+        memory.grow(1).expect("job allocation growth failed");
+        memory.write(0, &header(incarnation, 0));
 
-        Ok(Self { map, incarnation })
+        Ok(Self {
+            memory,
+            incarnation,
+        })
     }
 
     /// Reopen the current job-store format without modifying it.
     /// # Errors
     /// Refuses missing/corrupt headers and unsupported formats intact.
-    /// # Panics
-    /// Supplier corruption traps without repair.
     pub fn open(memory: RuntimeMemory<M>) -> Result<Self, Error> {
         if memory.size() == 0 {
             return Err(Error::Corrupt);
         }
-        let map: StableBTreeMap<u8, Vec<u8>, M> = StableBTreeMap::load(memory);
-        let bytes = map.get(&0).ok_or(Error::Corrupt)?;
+        let mut bytes = [0; HEADER_BYTES];
+        memory.read(0, &mut bytes);
         let (incarnation, _) = read_header(&bytes)?;
-        if map.len() > u64::from(SLOTS) + 1
-            || map
-                .range(..)
-                .next_back()
-                .is_some_and(|entry| *entry.key() > SLOTS)
-        {
-            return Err(Error::Corrupt);
-        }
+        let jobs = Self {
+            memory,
+            incarnation,
+        };
+        jobs.lengths()?;
+        Ok(jobs)
+    }
 
-        Ok(Self { map, incarnation })
+    fn lengths(&self) -> Result<[u16; SLOTS as usize], Error> {
+        let mut directory = [[0; 2]; SLOTS as usize];
+        self.memory
+            .read(HEADER_BYTES as u64, directory.as_flattened_mut());
+        let lengths = directory.map(u16::from_le_bytes);
+        let pages = self.memory.size();
+        for (index, &len) in lengths.iter().enumerate() {
+            if usize::from(len) > MAX_JOB_BYTES
+                || (len != 0
+                    && (frame_offset(index as u8 + 1) + u64::from(len)).div_ceil(PAGE_BYTES)
+                        > pages)
+            {
+                return Err(Error::Corrupt);
+            }
+        }
+        Ok(lengths)
+    }
+
+    fn read_frame(&self, slot: u8, len: u16) -> Vec<u8> {
+        let mut bytes = vec![0; usize::from(len)];
+        self.memory.read(frame_offset(slot), &mut bytes);
+        bytes
+    }
+
+    fn write_frame(&self, slot: u8, bytes: &[u8]) {
+        let offset = frame_offset(slot);
+        let pages = (offset + bytes.len() as u64).div_ceil(PAGE_BYTES);
+        let current = self.memory.size();
+        if pages > current {
+            self.memory
+                .grow(pages - current)
+                .expect("job allocation growth failed");
+        }
+        self.memory.write(offset, bytes);
+        self.memory
+            .write(length_offset(slot), &(bytes.len() as u16).to_le_bytes());
     }
 
     /// Cancel one job, immediately releasing its logical slot. Repeated/stale
@@ -72,7 +121,7 @@ impl<M: Memory> AggregateJobs<M> {
     /// Supplier mutation failures trap the enclosing message.
     pub fn cancel(&mut self, handle: &JobHandle) -> Result<(), Error> {
         self.with_record(handle, |_| ())?;
-        self.map.remove(&handle.slot);
+        self.memory.write(length_offset(handle.slot), &[0; 2]);
 
         Ok(())
     }
@@ -88,27 +137,36 @@ impl<M: Memory> AggregateJobs<M> {
         if !(1..=usize::from(SLOTS)).contains(&limit) {
             return Err(Error::Limit);
         }
-        let mut expired = Vec::new();
-        for slot in 1..=SLOTS {
-            if let Some(bytes) = self.map.get(&slot) {
+        let mut lengths = self.lengths()?;
+        let mut removed = 0;
+        for (index, len) in lengths.iter_mut().enumerate() {
+            if *len != 0 {
+                let bytes = self.read_frame(index as u8 + 1, *len);
                 let record = Record::decode(&bytes)?;
-                if record.expires <= now && expired.len() < limit {
-                    expired.push(slot);
+                if record.expires <= now && removed < limit {
+                    *len = 0;
+                    removed += 1;
                 }
             }
         }
-        for slot in &expired {
-            self.map.remove(slot);
+        if removed > 0 {
+            let directory = lengths.map(u16::to_le_bytes);
+            self.memory
+                .write(HEADER_BYTES as u64, directory.as_flattened());
         }
-
-        Ok(expired.len())
+        Ok(removed)
     }
 
     pub(super) fn insert(&mut self, mut record: Record) -> Result<JobHandle, Error> {
-        let slot = (1..=SLOTS)
-            .find(|slot| !self.map.contains_key(slot))
-            .ok_or(Error::JobCapacity)?;
-        let (incarnation, generation) = read_header(&self.map.get(&0).ok_or(Error::Corrupt)?)?;
+        let slot = self
+            .lengths()?
+            .iter()
+            .position(|len| *len == 0)
+            .ok_or(Error::JobCapacity)? as u8
+            + 1;
+        let mut bytes = [0; HEADER_BYTES];
+        self.memory.read(0, &mut bytes);
+        let (incarnation, generation) = read_header(&bytes)?;
         if incarnation != self.incarnation {
             return Err(Error::Corrupt);
         }
@@ -116,8 +174,9 @@ impl<M: Memory> AggregateJobs<M> {
         record.generation = generation;
         let bytes = record.encode()?;
         // No recoverable refusal after the first persistent write.
-        self.map.insert(0, header(incarnation, generation));
-        self.map.insert(slot, bytes);
+        self.memory
+            .write(GENERATION_OFFSET as u64, &generation.to_le_bytes());
+        self.write_frame(slot, &bytes);
 
         Ok(JobHandle {
             incarnation,
@@ -140,7 +199,11 @@ impl<M: Memory> AggregateJobs<M> {
         if handle.incarnation != self.incarnation {
             return Err(Error::InvalidJob);
         }
-        let bytes = self.map.get(&handle.slot).ok_or(Error::InvalidJob)?;
+        let len = self.lengths()?[usize::from(handle.slot - 1)];
+        if len == 0 {
+            return Err(Error::InvalidJob);
+        }
+        let bytes = self.read_frame(handle.slot, len);
         let record = Record::decode(&bytes)?;
         if record.generation != handle.generation {
             return Err(Error::InvalidJob);
@@ -156,7 +219,7 @@ impl<M: Memory> AggregateJobs<M> {
         changed: bool,
     ) -> Result<(), Error> {
         if changed {
-            self.map.insert(handle.slot, record.encode()?);
+            self.write_frame(handle.slot, &record.encode()?);
         }
 
         Ok(())
@@ -172,7 +235,7 @@ fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
 }
 
 fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
-    if bytes.len() != 36 {
+    if bytes.len() != HEADER_BYTES {
         return Err(Error::Corrupt);
     }
     if &bytes[..8] != MAGIC || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes() {
@@ -185,7 +248,11 @@ fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
 
     Ok((
         incarnation,
-        u64::from_le_bytes(bytes[28..].try_into().map_err(|_| Error::Corrupt)?),
+        u64::from_le_bytes(
+            bytes[GENERATION_OFFSET..]
+                .try_into()
+                .map_err(|_| Error::Corrupt)?,
+        ),
     ))
 }
 

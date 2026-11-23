@@ -620,8 +620,9 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(
-        control(1, &[], 200, 16, 0, false).await.unwrap().0.unwrap(),
-        16
+        control(1, &[], 200, 16, 0, false).await.unwrap(),
+        (Ok(16), 1),
+        "full expiry updates only the directory"
     );
     eprintln!(
         "job-lifecycle: 16 near-limit frames invalidated/cancelled/expired; rollback, upgrade and full-slot reuse passed"
