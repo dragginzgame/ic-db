@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.28.1] - Unreleased
+## [0.28.1] - 2026-11-23
 
 ### ✨ Writes
 
