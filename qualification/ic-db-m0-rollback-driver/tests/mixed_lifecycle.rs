@@ -486,18 +486,25 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             .contains("mixed workload caller denied"),
         "{refused:?}"
     );
-    let inspected = pic
-        .query_call(
-            canister,
-            canister,
-            "db_inspect",
-            application_request(246, &false),
-        )
-        .await
-        .unwrap();
+    use canic::db::inspection::{Admission, INSPECT, Response};
+    let inspect = async || {
+        let bytes = pic
+            .query_call(
+                canister,
+                canister,
+                "db_inspect",
+                application_request(INSPECT, &()),
+            )
+            .await
+            .unwrap();
+        application_reply::<Response>(INSPECT, &bytes)
+    };
+    let inspected = inspect().await;
     assert_eq!(
-        application_reply::<Result<u64, u8>>(246, &inspected),
-        Ok(model.parents.len() as u64)
+        inspected.admission,
+        Admission::Readable {
+            incarnation: [21; 16]
+        }
     );
     let job = async |request: CountRequest| {
         let bytes = update(
@@ -828,6 +835,13 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         assert_eq!(pic.get_stable_memory(canister).await, before);
     };
     migrate(0).await;
+    assert_eq!(
+        inspect().await,
+        Response {
+            schema: inspected.schema,
+            admission: Admission::Maintenance
+        }
+    );
     assert_eq!(read(false, 1, 25).await.0, Err(7));
     assert_eq!(read(true, 1, 25).await.0, Err(7));
     let mut copied = 0;

@@ -27,7 +27,7 @@ publish = false
 
 [workspace.dependencies]
 accounts = { package = "ic-db-schema-owner-producer", path = "experiments/schema-owner/producer" }
-canic = { version = "0.259.1", default-features = false, features = ["db"] }
+canic = { version = "0.264.0", default-features = false, features = ["db"] }
 ic-db = { path = "../crates/ic-db" }
 ic-db-cli = { path = "../crates/ic-db-cli", default-features = false }
 ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }
@@ -36,7 +36,7 @@ ic-host-artifacts = "0.80.6"
 ic-platform-runtime = { version = "0.23.22", default-features = false }
 ic-storage = "0.78.7"
 ic-testkit = { version = "0.110.3", default-features = false }
-ic-wire = "0.28.1"
+ic-wire = "0.29.0"
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
 records-schema = { package = "ic-db-m1-records-schema", path = "ic-db-m1-records-schema" }
 rusqlite = { version = "0.43.0", default-features = false, features = ["bundled"] }

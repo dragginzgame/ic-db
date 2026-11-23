@@ -48,7 +48,11 @@ impl<M: Memory> AggregateJobs<M> {
             return Err(Error::Exists);
         }
         memory.grow(1).expect("job allocation growth failed");
-        memory.write(0, &header(incarnation, 0));
+        let mut header = [0; HEADER_BYTES];
+        header[..8].copy_from_slice(MAGIC);
+        header[8..12].copy_from_slice(&crate::codec::ROW_CODEC_VERSION.to_le_bytes());
+        header[12..GENERATION_OFFSET].copy_from_slice(&incarnation);
+        memory.write(0, &header);
 
         Ok(Self {
             memory,
@@ -63,9 +67,16 @@ impl<M: Memory> AggregateJobs<M> {
         if memory.size() == 0 {
             return Err(Error::Corrupt);
         }
-        let mut bytes = [0; HEADER_BYTES];
-        memory.read(0, &mut bytes);
-        let (incarnation, _) = read_header(&bytes)?;
+        let mut prefix = [0; GENERATION_OFFSET];
+        memory.read(0, &mut prefix);
+        if &prefix[..8] != MAGIC || prefix[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes() {
+            return Err(Error::InvalidJob);
+        }
+        let mut incarnation = [0; 16];
+        incarnation.copy_from_slice(&prefix[12..]);
+        if incarnation == [0; 16] {
+            return Err(Error::Corrupt);
+        }
         let jobs = Self {
             memory,
             incarnation,
@@ -164,13 +175,12 @@ impl<M: Memory> AggregateJobs<M> {
             .position(|len| *len == 0)
             .ok_or(Error::JobCapacity)? as u8
             + 1;
-        let mut bytes = [0; HEADER_BYTES];
-        self.memory.read(0, &mut bytes);
-        let (incarnation, generation) = read_header(&bytes)?;
-        if incarnation != self.incarnation {
-            return Err(Error::Corrupt);
-        }
-        let generation = generation.checked_add(1).ok_or(Error::Limit)?;
+        // The exclusive lease admitted the immutable header at create/open.
+        let mut counter = [0; 8];
+        self.memory.read(GENERATION_OFFSET as u64, &mut counter);
+        let generation = u64::from_le_bytes(counter)
+            .checked_add(1)
+            .ok_or(Error::Limit)?;
         record.generation = generation;
         let bytes = record.encode()?;
         // No recoverable refusal after the first persistent write.
@@ -179,7 +189,7 @@ impl<M: Memory> AggregateJobs<M> {
         self.write_frame(slot, &bytes);
 
         Ok(JobHandle {
-            incarnation,
+            incarnation: self.incarnation,
             slot,
             generation,
         })
@@ -224,36 +234,6 @@ impl<M: Memory> AggregateJobs<M> {
 
         Ok(())
     }
-}
-fn header(incarnation: [u8; 16], generation: u64) -> Vec<u8> {
-    let mut bytes = MAGIC.to_vec();
-    bytes.extend(crate::codec::ROW_CODEC_VERSION.to_le_bytes());
-    bytes.extend(incarnation);
-    bytes.extend(generation.to_le_bytes());
-
-    bytes
-}
-
-fn read_header(bytes: &[u8]) -> Result<([u8; 16], u64), Error> {
-    if bytes.len() != HEADER_BYTES {
-        return Err(Error::Corrupt);
-    }
-    if &bytes[..8] != MAGIC || bytes[8..12] != crate::codec::ROW_CODEC_VERSION.to_le_bytes() {
-        return Err(Error::InvalidJob);
-    }
-    let incarnation = bytes[12..28].try_into().map_err(|_| Error::Corrupt)?;
-    if incarnation == [0; 16] {
-        return Err(Error::Corrupt);
-    }
-
-    Ok((
-        incarnation,
-        u64::from_le_bytes(
-            bytes[GENERATION_OFFSET..]
-                .try_into()
-                .map_err(|_| Error::Corrupt)?,
-        ),
-    ))
 }
 
 // The byte boundary has two representations: a validated borrowed frame for

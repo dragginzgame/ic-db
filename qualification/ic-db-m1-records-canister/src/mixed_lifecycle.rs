@@ -279,22 +279,35 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
 // Application-owned protocol for this installed workload. Canic owns the guards,
 // framed entrypoints and reply encoding. Only the fixture's own principal is admitted.
 mod protocol {
-    pub(super) const INSPECT: u64 = 246;
     pub(super) const QUERY: u64 = 242;
     pub(super) const WRITE: u64 = 241;
-    pub(super) type InspectRequest = bool;
-    pub(super) type InspectReply = Result<u64, u8>;
     pub(super) type QueryRequest = super::Query;
     pub(super) type QueryReply = super::QueryReply;
     pub(super) type WriteRequest = super::Update;
     pub(super) type WriteReply = super::Reply;
 }
 
-// Report the parent count for the selected live schema.
-fn inspect(_: ic_db::Principal, target: protocol::InspectRequest) -> protocol::InspectReply {
-    open(&runtime(), target)
-        .and_then(|db| db.cardinality::<Parent>())
-        .map_err(refusal)
+// Inspect the source store declared by this host, including while it is frozen.
+fn inspect(_: ic_db::Principal, (): ()) -> canic::db::inspection::Response {
+    use canic::db::inspection::{Admission, Response};
+
+    let source = schema(false);
+    let fingerprint = source.fingerprint();
+    let admission = match runtime().open_memory(&StableKey::parse(KEYS[0]).unwrap()) {
+        Ok(memory) => match Database::open(memory, source) {
+            Ok(db) => Admission::Readable {
+                incarnation: db.incarnation(),
+            },
+            Err(Error::Maintenance) => Admission::Maintenance,
+            Err(Error::IncompatibleSchema) => Admission::Incompatible,
+            Err(_) => Admission::Unavailable,
+        },
+        Err(_) => Admission::Unavailable,
+    };
+    Response {
+        schema: fingerprint,
+        admission,
+    }
 }
 
 // Commit a batch or operate on a retained count.

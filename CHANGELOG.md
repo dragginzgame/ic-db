@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0] - Unreleased
+
+### ⚠️ Breaking
+
+- IC DB’s optional `wire` feature implements the IC Wire 0.29 trait. Use a 0.29-compatible exporter for DB types. The CLI and downstream TypeScript cursor probe also use IC Wire 0.29.0.
+
+### 🔄 Retained aggregates
+
+- Starting a job reads its eight-byte generation counter. The store validates its format and incarnation once when opening its exclusive allocation lease. Existing jobs and handles retain the 0.28.2 layout.
+
+### 📦 Qualification
+
+- Updated fixture transport to IC Wire 0.29.0 and the mounted host to Canic 0.264.0. The fixture now serves Canic’s standard `db_inspect` status, reporting the source schema fingerprint and its admission during maintenance.
+
 ## [0.28.2] - 2026-11-23
 
 ### 🐛 Fixes
