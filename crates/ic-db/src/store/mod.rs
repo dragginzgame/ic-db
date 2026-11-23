@@ -194,6 +194,12 @@ struct Mutation {
     key: RowKey,
     kind: Kind,
 }
+struct ReturningRow<'a> {
+    entity: u32,
+    key: RowKey,
+    decode: &'a mut dyn FnMut(&[u8]) -> Result<(), Error>,
+}
+
 enum Kind {
     Insert(Vec<u8>, RowInfo),
     // Only maintenance can construct this; ordinary insert policies stay intact.
@@ -650,16 +656,34 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier failures after the first mutation trap; never catch and continue an IC commit.
     pub fn commit(&mut self, batch: Batch) -> Result<(), Error> {
-        self.commit_with_replacement(batch, |_| Ok(()))
+        observe!(commit, { self.commit_batch(batch, None, None).map(|_| ()) })
     }
 
-    pub(crate) fn commit_with_replacement(
+    /// Commit the whole batch and return the selected insert or replacement,
+    /// including its final managed timestamps. The row is decoded during preparation.
+    /// # Errors
+    /// Returns [`Error::Missing`] if the batch has no insert or replacement for
+    /// this entity and key. All ordinary [`Self::commit`] refusals apply.
+    /// # Panics
+    /// Supplier failures during publication trap as in [`Self::commit`].
+    pub fn commit_returning<E: Entity>(
         &mut self,
         batch: Batch,
-        mut receive: impl FnMut(&[u8]) -> Result<(), Error>,
-    ) -> Result<(), Error> {
+        key: impl Into<crate::Id<E>>,
+    ) -> Result<E, Error> {
         observe!(commit, {
-            self.commit_batch(batch, &mut receive, None).map(|_| ())
+            self.schema.admits(E::SCHEMA)?;
+            let mut row = None;
+            let selected = ReturningRow {
+                entity: E::SCHEMA.id,
+                key: key.into().key().into_row_key(),
+                decode: &mut |bytes| {
+                    row = Some(E::decode(bytes)?);
+                    Ok(())
+                },
+            };
+            self.commit_batch(batch, Some(selected), None)?;
+            Ok(row.expect("commit validated the selected row before publication"))
         })
     }
 
@@ -676,7 +700,7 @@ impl<M: Memory> Database<M> {
         let row = batch.insert_input(input)?;
         let prefix = index_prefix(entity.id, index.id);
         let applied = observe!(commit, {
-            self.commit_batch(batch, &mut |_| Ok(()), Some((entity, &prefix)))
+            self.commit_batch(batch, None, Some((entity, &prefix)))
         })?;
         Ok(if applied {
             crate::InsertOutcome::Inserted(row)
@@ -689,7 +713,7 @@ impl<M: Memory> Database<M> {
     fn commit_batch(
         &mut self,
         batch: Batch,
-        receive: &mut dyn FnMut(&[u8]) -> Result<(), Error>,
+        mut returning: Option<ReturningRow<'_>>,
         conflict_target: Option<(&EntitySchema, &[u8])>,
     ) -> Result<bool, Error> {
         let mut targets = BTreeSet::new();
@@ -739,8 +763,11 @@ impl<M: Memory> Database<M> {
                     Kind::Delete => {}
                 }
             }
-            if let Kind::Replace(bytes, _) = &mutation.kind {
-                receive(bytes)?;
+            if let Kind::Insert(bytes, _) | Kind::Replace(bytes, _) = &mutation.kind
+                && let Some(selected) = returning
+                    .take_if(|row| row.entity == mutation.entity.id && row.key == mutation.key)
+            {
+                (selected.decode)(bytes)?;
             }
             // Admit complete after-image keys even when the row is a no-op.
             // Retain these buffers for publication instead of encoding twice.
@@ -815,6 +842,9 @@ impl<M: Memory> Database<M> {
                     }
                 }
             }
+        }
+        if returning.is_some() {
+            return Err(Error::Missing);
         }
         // Check existing owners only after all releases in this batch are known.
         let mut skip_insert = false;

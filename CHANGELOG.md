@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.28.1] - Unreleased
+
+### ✨ Writes
+
+- `batch.commit_returning(project.id())` commits all queued changes and returns the selected inserted or replaced row, including its stored timestamps. This saves a follow-up lookup when an operation updates a receipt and returns the associated entity.
+
+### 🧪 Qualification
+
+- Extended installed Wasm growth qualification to isolate direct operations, one fluent shape and eight shapes at 1, 8 and 32 entities. At 32 entities, dispatch and typed fetch wrappers account for 98.2% of the increase from one to eight shapes. [Per-entity comparison and attribution](qualification/README.md#reachable-queries-per-entity-on-0280)
+
+- Qualified automatic index selection and optional cursors in the Canic-mounted listing across a write and an upgrade. The smaller parent examined 15 of 128 items after the move. [PocketIC comparison](qualification/README.md#automatic-index-selection-in-the-mounted-listing-0280)
+- The mounted listing now selects IDs directly on both sides of a schema migration. All 16 listing observations matched the entity-fetch control. [Projection costs](qualification/README.md#id-projection-in-the-mounted-listing-0280)
+- Measured retained count budgets on the mounted host. Processing 16 candidates per update counted 128 items in nine updates and used 85.9% fewer cycles than processing two per update. A subsequent item move invalidated the unfinished count and preserved the completed result for retry. [Count budget comparison](qualification/README.md#retained-count-update-budgets-in-the-mounted-host-0280)
+
 ## [0.28.0] - 2026-11-23
 
 ### ✨ Queries

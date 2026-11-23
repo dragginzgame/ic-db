@@ -3505,6 +3505,35 @@ IC_DB_QUERY_MATRIX_DIR="$PWD/qualification/target/evidence/aggregate-paths-0278"
 IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-paths-0278-final" make m2-count-paths
 ```
 
+### Reachable queries per entity on 0.28.0
+
+The retained host in `make m2-query-growth` exposes one exercise endpoint. All builds include writes, point lookup, primary paging and secondary-prefix reads. Each fluent variant adds the same query call sites to every entity. Input and output types, index declarations and release profile stay fixed.
+
+| Operations reachable per entity | 1 entity, Wasm bytes | 8 entities | 32 entities | Bytes per added entity, 8–32 |
+| --- | ---: | ---: | ---: | ---: |
+| Direct operations | 290,977 | 308,953 | 373,342 | 2,683 |
+| Direct plus one fluent shape | 356,697 | 381,054 | 464,630 | 3,482 |
+| Direct plus eight fluent shapes | 357,904 | 387,419 | 495,885 | 4,519 |
+
+Making seven more shapes reachable adds 1,207 bytes in the single-entity host and 31,255 bytes in the 32-entity host. From 8 to 32 entities, those shapes account for about 1,037 additional bytes per added entity. The single-entity result therefore understates the cost of repeating fluent call sites across a schema. These are differences between whole linked modules, including fixture dispatch, typed wrappers and inlining. They do not identify a duplicated planner or executor.
+
+All eleven variants were installed on PocketIC. The driver checked writes and reachable operations against independent tuples, then upgraded each host and checked reopening and replacement.
+
+**Attribution at 32 entities.** For each of the two fluent builds, rebuild only the final canister with `cargo rustc` in the same release profile and append `-- -Cstrip=none -Cdebuginfo=0`. Both diagnostic artifacts matched their installed controls byte for byte across all non-custom sections. The table counts named Wasm function bodies, including inlined callees. A zero indicates that the compiler emitted no separately named body in that build.
+
+| Source of linked size difference | One shape | Eight shapes | Difference |
+| --- | ---: | ---: | ---: |
+| Fixture dispatch, including inlined application and database code | 99,808 | 118,727 | +18,919 |
+| Separately emitted typed `Query::fetch` bodies | 0 | 11,776 | +11,776 |
+| Shared `fetch_rows` body | 15,197 | 15,197 | 0 |
+| Shared `Plan::admit` body | 13,747 | 13,747 | 0 |
+| Remaining functions, section metadata and data | | | +560 |
+| Whole module | 464,630 | 495,885 | +31,255 |
+
+The eight-shape build has one 368-byte `fetch` wrapper per entity. Only two byte positions vary across all 32 bodies. Together the dispatch and separately emitted wrappers explain 98.2% of the observed increase. The table cannot separate typed application logic from database work inlined into dispatch or predict how much a refactor would save. The [earlier specialization experiment](#deeper-specialization-investigation-018) also measured execution costs when changing the typed boundary. The evidence supports keeping the shared executor and measuring any future wrapper change against both size and read cost.
+
+Frozen IcyDB measured 4,466 bytes per entity in its own reachable-operation fixture (`6d421e3`, `docs/design/archive/0.250-generated-entity-specialization-reduction/0.250-landing-slice-6-receipt.md`). Its entity count and operations differ. IC DB's roughly 4 KB comparison ceiling remains open for the eight-shape workload. The [earlier symbol attribution](#application-workload-and-wasm-growth-on-storage-078) provides context for investigating the typed call sites.
+
 ### Entity and named-type growth on 0.27.8
 
 `make m2-named-growth` builds ten release Wasm modules from the same temporary copy of the eight-query-shape host. Each retains the same exports and supports writes, reads, filtered queries and replacement. The PocketIC driver exercised every entity, checked returned rows against tuples, upgraded each canister and repeated reads. Sizes below are uncompressed whole modules. The [artifact receipt](measurements/0.27.8-named-growth.csv) records code-section sizes, digests, cold schema costs and warm query measurements.
@@ -3747,6 +3776,45 @@ contains readiness costs and exact-result checks. Source HEAD/diff/hashes, the
 driver, lock, feature graphs, compiler/build receipts and both artifacts identify
 the run. The qualified lock SHA-256 is
 `0344fcaf2a4482df6935a9e70a146622095086f329ca594f6bb070ffcd078f1a`.
+
+### Automatic index selection in the mounted listing (0.28.0)
+
+Two `make m4-lifecycle` runs compared the explicit `parent,id` index prefix on tag `v0.28.0` with a fluent parent equality, the same residual minimum score and the same requested order. The mounted handler passes its decoded cursor to `.after_optional()`. The driver compares every returned ID with its independent map and requires the total examined to equal the size of the selected parent's range. The seed has 128 items. One write moves an item from the smaller parent to the larger parent.
+
+| Parent and phase | Candidates | Matches | Calls at work limit 8 | Explicit handler instructions | Automatic handler instructions |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Large, seeded | 112 | 9 | 15 | 18,864,434 | 19,259,049 |
+| Large, after move | 113 | 10 | 15 | 18,992,636 | 19,387,261 |
+| Large, after upgrade | 113 | 10 | 15 | 23,414,352 | 23,777,995 |
+| Small, seeded | 16 | 2 | 3 | Unmeasured | 3,189,538 |
+| Small, after move | 15 | 2 | 2 | Unmeasured | 2,594,694 |
+
+The automatic listing examined the same candidates on the large parent and cost 2.1% more handler instructions in the seeded case. This measures the complete handler, including query admission and execution. Frozen IcyDB `6d421e3` also proves ordering after equality-bound index components in `db/query/plan/order_contract/mod.rs`. Both runs passed all three installed lifecycle tests.
+
+### ID projection in the mounted listing (0.28.0)
+
+The same unhinted listing previously fetched entities and collected their IDs. It now calls `.select(|r| r.id)` on both sides of the score-widening migration and sends the resulting IDs in the same reply. The score predicate still needs the owner row. All 16 observations across the two parent sizes, work limits and lifecycle phases matched on page count, candidates, results and empty continued pages. Both installed hosts passed the independent model checks.
+
+| Work limit 8 | Entity fetch, handler instructions | ID projection, handler instructions |
+| --- | ---: | ---: |
+| Large parent, seeded | 19,259,049 | 19,273,704 |
+| Small parent, seeded | 3,189,538 | 3,192,540 |
+| Large parent, immediately after upgrade | 23,777,995 | 23,807,665 |
+
+The large seeded listing used 0.08% more handler instructions. Uncompressed mixed-host Wasm grew from 1,329,801 to 1,331,382 bytes. The host already uses full-entity reads for its snapshot endpoint. This fixture retains projection to exercise the public scalar result across the migration. The [isolated column listing](#typed-column-listing-on-pocketic-0273) measures projection with larger rows and reports database output bytes separately.
+
+### Retained count update budgets in the mounted host (0.28.0)
+
+`make m4-lifecycle` starts two exact item counts on the same warm 128-row database. The source revision stays fixed. The driver checks the answer against its map and checks the advance count against the requested budget, allowing a final call to observe exhaustion. Each job is cancelled after measurement.
+
+| Candidates per advance | Updates to finish | Total handler instructions | Peak handler instructions per update | Canister balance debited across advances |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 65 | 62,785,073 | 1,038,382 | 522,690,769 cycles |
+| 16 | 9 | 10,019,820 | 1,221,664 | 73,699,756 cycles |
+
+The larger budget reduced cycle debit by 85.9% and raised the peak handler instructions by 17.7%. Both measurements exclude starting and cancelling the job.
+
+The mounted workload also starts two jobs at the same item revision and gives each nine advances before a single committed update moves an item to another parent. At two candidates per call the job is still running and its next advance reports invalidation, even though the move preserves total cardinality. At 16 candidates per call the ninth advance finishes at 128. Replaying that ninth request after the move returns the same result and checkpoint sequence. Both jobs can then be cancelled. This fixed schedule tests the effect of available update calls; completion under application traffic depends on how many advances the caller can make between source writes.
 
 ### Skewed application workload (0.23.10)
 

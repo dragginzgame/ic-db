@@ -94,7 +94,7 @@ fn host_reopens_only_the_selected_canisters_allocations() {
         batch.insert_input(User::insert().id(42)).unwrap();
         batch.insert(&Entry { id: 42 }).unwrap();
         assert!(db.get::<User>(42).unwrap().is_none());
-        batch.commit().unwrap();
+        assert_eq!(batch.commit_returning::<User>(42).unwrap().id, 42);
         let mut refused = db.batch();
         refused.delete::<Entry>(42).unwrap();
         refused.insert(&User { id: 42 }).unwrap();

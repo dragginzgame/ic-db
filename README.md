@@ -1268,6 +1268,19 @@ The session captures the operation time. A replacement that changes no fields
 preserves the stored update time. Use `db.batch()` to group managed writes under one timestamp.
 Prepared changes become visible together when the store accepts the commit.
 
+When a caller needs one written row, select it at commit by entity and primary key:
+
+```rust
+batch.replace(&project)?;
+batch.replace(&receipt)?;
+let stored = batch.commit_returning(project.id())?;
+```
+
+Import `ic_db::Entity` for `project.id()`, or use
+`batch.commit_returning::<Project>(project.id)` with the raw key.
+The result includes the stored managed timestamps. Selecting a deletion or a row
+outside the batch returns `Error::Missing` before any changes are applied.
+
 When moving declarations into a shared
 library, remove the former consumer-side generation and its build dependencies.
 

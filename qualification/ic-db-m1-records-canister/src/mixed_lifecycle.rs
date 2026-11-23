@@ -6,7 +6,10 @@ use crate::{
     runtime,
 };
 use ic_db::design::prelude::*;
-use ic_db::{Batch, Comparison, CopyStatus, Error, JobHandle, JobOutcome, SchemaTransition};
+use ic_db::{
+    Batch, Column, Comparison, CopyStatus, Error, JobHandle, JobOutcome, SchemaTransition,
+    SelectColumns,
+};
 use ic_db_qualification_transport::mixed::{
     Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
     Reply, Snapshot, Update,
@@ -351,9 +354,9 @@ fn run_count<E: Entity>(
 
             Ok(CountReply::Started(handle.to_bytes()))
         }
-        CountAction::Resume(bytes, sequence) => {
+        CountAction::Resume(bytes, sequence, work) => {
             let handle = JobHandle::from_bytes(&bytes)?;
-            let step = db.query::<E>().work_limit(2).resume_count(
+            let step = db.query::<E>().work_limit(usize::from(work)).resume_count(
                 jobs,
                 &handle,
                 sequence,
@@ -472,9 +475,17 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
                             u128::from(minimum).into(),
                             work,
                             after.as_deref(),
+                            |r| r.id,
                         )
                     } else {
-                        item_page::<Item>(&db, parent, minimum.into(), work, after.as_deref())
+                        item_page::<Item>(
+                            &db,
+                            parent,
+                            minimum.into(),
+                            work,
+                            after.as_deref(),
+                            |r| r.id,
+                        )
                     }
                 })
                 .map_err(refusal);
@@ -484,29 +495,28 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
     }
 }
 
-fn item_page<E: Entity<Key = u64>>(
+fn item_page<E: SelectColumns<Key = u64>>(
     db: &Database,
     parent: u64,
     minimum: ic_db::IndexValue<'_>,
     work: u16,
     after: Option<&[u8]>,
+    id: impl FnOnce(E::Columns) -> Column<E, u64>,
 ) -> Result<ItemPage, Error> {
     let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
-    let prefix = [parent.into()];
-    let mut query = db
+    let page = db
         .query::<E>()
-        .using_index("parent,id", &prefix)
-        .filter("score", Comparison::Ge, minimum)
-        .order_by(&["parent", "id"])
+        .eq(Item::PARENT, parent)
+        .filter(Item::SCORE, Comparison::Ge, minimum)
+        .order_by(&[Item::PARENT, Item::ID])
         .work_limit(usize::from(work))
-        .limit(2);
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-    let page = query.fetch()?;
+        .limit(2)
+        .after_optional(cursor.as_ref())
+        .select(id)
+        .fetch()?;
 
     Ok(ItemPage {
-        ids: page.rows.iter().map(Entity::key).collect(),
+        ids: page.rows,
         next: page.next.map(|cursor| cursor.to_bytes()),
         examined: page.examined as u64,
     })

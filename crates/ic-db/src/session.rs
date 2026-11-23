@@ -214,20 +214,11 @@ impl DatabaseSession {
     /// # Errors
     /// Propagates batch preparation and commit errors.
     /// # Panics
-    /// Traps on a supplier write failure or if commit violates its single-replacement invariant.
+    /// Traps on a supplier write failure during publication.
     pub fn replace<E: Entity>(&self, row: &E) -> Result<E, Error> {
         let mut batch = Batch::new();
         batch.replace(row)?;
-        let mut stored = None;
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| Error::BorrowConflict)?
-            .commit_with_replacement(batch, |bytes| {
-                stored = Some(E::decode(bytes)?);
-                Ok(())
-            })?;
-
-        Ok(stored.expect("a successful single replacement produced its after-image"))
+        self.commit_returning(batch, row.id())
     }
 
     /// Delete one entity by primary key as one batch.
@@ -250,5 +241,20 @@ impl DatabaseSession {
             .try_borrow_mut()
             .map_err(|_| Error::BorrowConflict)?
             .commit(batch)
+    }
+
+    /// Commit the batch and return one queued insert or replacement by entity and key.
+    /// # Errors
+    /// Returns [`Error::BorrowConflict`] on an active borrow and propagates
+    /// [`Database::commit_returning`] errors.
+    pub fn commit_returning<E: Entity>(
+        &self,
+        batch: Batch,
+        key: impl Into<crate::Id<E>>,
+    ) -> Result<E, Error> {
+        self.0
+            .try_borrow_mut()
+            .map_err(|_| Error::BorrowConflict)?
+            .commit_returning(batch, key)
     }
 }

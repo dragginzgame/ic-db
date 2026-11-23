@@ -62,10 +62,14 @@ async fn fluent_shapes_and_mapping_growth() {
             ("direct", 1, 0),
             ("two-indexes", 1, 0),
             ("direct-entities", 8, 0),
+            ("direct-32", 32, 0),
             ("one", 1, 10),
+            ("one-8", 8, 10),
+            ("one-32", 32, 10),
             ("shapes", 1, 17),
             ("maps", 1, 27),
             ("entities", 8, 17),
+            ("shapes-32", 32, 17),
         ],
     )
     .await;

@@ -211,4 +211,14 @@ impl<S: Store> StoreBatch<'_, S> {
     pub fn commit(self) -> Result<(), Error> {
         self.session.commit(self.batch)
     }
+
+    /// Commit all queued changes and return one inserted or replaced row from this store.
+    /// # Errors
+    /// Propagates [`DatabaseSession::commit_returning`] borrow, selection and commit errors.
+    pub fn commit_returning<E: Entity<Store = S>>(
+        self,
+        key: impl Into<crate::Id<E>>,
+    ) -> Result<E, Error> {
+        self.session.commit_returning(self.batch, key)
+    }
 }

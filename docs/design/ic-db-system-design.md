@@ -19,7 +19,13 @@ an owned entity. The database owns this lookup. A store session takes one read
 borrow and delegates to it, and a canister session selects the key’s declared
 store. Session insert, replace and delete each submit one batch.
 Changes that depend on each other share an explicit batch. A mounted canister session binds the batch to the store inferred from its entities. As in frozen IcyDB’s typed batch, generated inputs carry entity identity into preparation. The IC DB store type constrains every queued operation at compile time, and the existing store commit validates their combined final state. A batch takes
-exclusive access only for the commit. A conflicting borrow
+exclusive access only for the commit. A caller can select one insert or replacement
+by entity and primary key with `commit_returning`. Preparation decodes that row
+after managed-time assignment, including an unchanged replacement. Only success
+of the entire batch releases the typed result. Frozen IcyDB `6d421e3` qualified
+ordered batch after-images in `db/session/write/identity_pre_key_tests/mod.rs`.
+Here the caller selects a single result and the store uses its prepared bytes.
+A conflicting borrow
 returns `BorrowConflict` before mutation. The last handle can return the database
 to the host for maintenance. Frozen IcyDB `6d421e3` shared a store and request
 root across sessions in `icydb-core/src/db/session/mod.rs`. IC DB keeps its
@@ -2530,6 +2536,8 @@ retained capability scope. Later detail explains the implementation and evidence
 **Disposition.** Close feature work for this bounded M2 contract. The composition review and selected SQLite and installed Wasm probes identified no outstanding correctness blocker for these combinations. A wider type/operation combination needs its own admission rule and witness. For M4 adoption, two measured costs remain: 4,504 Wasm bytes per added entity from 8 to 32 in the eight-shape fixture, and 50.30M instructions for a grouped count selecting 415 of 511 rows (32.12M on legacy). Controlled write schedules establish job invalidation and completion behavior; acceptance under real application traffic remains workload-specific. [Closeout measurements](../../qualification/README.md#bounded-m2-closeout-on-pocketic-0276-worktree)
 
 M4 rechecked both costs on 0.27.8. For the dense category, an owner-validated scalar count with identical predicates used 50.05M instructions and grouping used 50.12M. The eight-shape Wasm slope remained 4,504 bytes per entity from 8 to 32. Within one 64-alternative enum, distinct named scalar payloads added 4,090 bytes over sharing one type. Warm typed query work also increased, leading to the [paired typed-admission experiment](../../qualification/README.md#typed-admission-on-compiled-schema-v1). [Grouped cost controls](../../qualification/README.md#dense-grouped-count-on-0278) and [named-type growth](../../qualification/README.md#entity-and-named-type-growth-on-0278).
+
+On 0.28.0, the 8-to-32-entity growth was 2,683 bytes per entity with direct operations, 3,482 with one fluent shape and 4,519 with eight. Further size work should distinguish repeated typed call sites from shared query execution. [Installed growth matrix](../../qualification/README.md#reachable-queries-per-entity-on-0280).
 
 #### Application qualification
 

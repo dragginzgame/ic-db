@@ -28,8 +28,8 @@ pub enum CountRequest {
 pub enum CountAction {
     /// Capture the item revision for an exact count.
     Start,
-    /// Process at most two candidates.
-    Resume(Vec<u8>, u64),
+    /// Resume at the supplied sequence with a per-call candidate budget.
+    Resume(Vec<u8>, u64, u16),
 }
 
 /// Result of advancing a retained count at its captured revision.

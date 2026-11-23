@@ -253,7 +253,8 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
         let (CountReply::Started(handle), _) = count(CountAction::Start).await else {
             panic!("expected handle")
         };
-        let advance = async |sequence| count(CountAction::Resume(handle.clone(), sequence)).await;
+        let advance =
+            async |sequence| count(CountAction::Resume(handle.clone(), sequence, 2)).await;
         assert_eq!(
             advance(0).await.0,
             CountReply::Advanced(1, CountOutcome::Running)
@@ -519,7 +520,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let advance = async |target, handle: &[u8], sequence| {
         let CountReply::Advanced(next, outcome) = job(CountRequest::Run(
             target,
-            CountAction::Resume(handle.to_vec(), sequence),
+            CountAction::Resume(handle.to_vec(), sequence, 2),
         ))
         .await
         .unwrap() else {
@@ -680,7 +681,11 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     );
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(
-        job(CountRequest::Run(false, CountAction::Resume(expiring, 0))).await,
+        job(CountRequest::Run(
+            false,
+            CountAction::Resume(expiring, 0, 2)
+        ))
+        .await,
         Err("InvalidJob".into())
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -802,7 +807,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let resume_source_job = async |target| {
         job(CountRequest::Run(
             target,
-            CountAction::Resume(source_job.clone(), source_sequence),
+            CountAction::Resume(source_job.clone(), source_sequence, 2),
         ))
         .await
     };
@@ -1029,7 +1034,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         }
         write(&mut model, batch).await;
     }
-    let list = async |phase: &str, model: &Model, requested_work: Option<u16>| {
+    let list = async |phase: &str, model: &Model, parent: u64, requested_work: Option<u16>| {
         let work = requested_work.unwrap_or(8);
         let mut most_examined = 0;
         let mut after = None;
@@ -1041,7 +1046,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         for page_number in 1..=model.items.len() + 1 {
             let request = Query::Items {
                 target: false,
-                parent: 1,
+                parent,
                 minimum: 10,
                 work: requested_work,
                 after: after.clone(),
@@ -1068,13 +1073,13 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             empty_continued += usize::from(page.ids.is_empty() && page.next.is_some());
             found.extend(page.ids);
             if page.next.is_none() {
-                assert_eq!(found, model.snapshot(1, 10).5);
+                assert_eq!(found, model.snapshot(parent, 10).5);
                 assert_eq!(
                     examined as usize,
                     model
                         .items
                         .values()
-                        .filter(|(parent, _)| *parent == 1)
+                        .filter(|(owner, _)| *owner == parent)
                         .count()
                 );
                 if requested_work.is_none() {
@@ -1087,7 +1092,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
                     assert!(empty_continued > 0);
                 }
                 println!(
-                    "skew/list phase={phase} work={work} peak_instructions={peak_instructions} pages={page_number} examined={examined} matched={} empty_continued={empty_continued} handler_instructions={instructions}",
+                    "skew/list phase={phase} parent={parent} work={work} peak_instructions={peak_instructions} pages={page_number} examined={examined} matched={} empty_continued={empty_continued} handler_instructions={instructions}",
                     found.len()
                 );
 
@@ -1100,8 +1105,9 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     };
     let compare_budgets = async |phase: &str, model: &Model| {
         for work in [Some(1), None, Some(32)] {
-            list(phase, model, work).await;
+            list(phase, model, 1, work).await;
         }
+        list(phase, model, 2, None).await;
     };
     let count = async |request| {
         let Reply::Count(result, instructions) = update(Update::Count(request)).await else {
@@ -1119,10 +1125,10 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
 
         handle
     };
-    let resume = async |handle: &[u8], sequence| {
+    let resume = async |handle: &[u8], sequence, work| {
         let (CountReply::Advanced(next, outcome), cost) = count(CountRequest::Run(
             false,
-            CountAction::Resume(handle.to_vec(), sequence),
+            CountAction::Resume(handle.to_vec(), sequence, work),
         ))
         .await
         else {
@@ -1133,23 +1139,71 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         (outcome, cost)
     };
     compare_budgets("seeded", &model).await;
-    let handle = start().await;
-    assert_eq!(resume(&handle, 0).await.0, CountOutcome::Running);
+    // Hold the source revision fixed and measure only the update calls that advance each job.
+    for work in [2, 16] {
+        let handle = start().await;
+        let before = pic.cycle_balance(canister).await;
+        let mut instructions = 0;
+        let mut peak = 0;
+        for sequence in 0..=model.items.len() as u64 {
+            let (outcome, cost) = resume(&handle, sequence, work).await;
+            instructions += cost;
+            peak = peak.max(cost);
+            if let CountOutcome::Complete(value) = outcome {
+                assert_eq!(value, model.items.len() as u64);
+                // A full final chunk may require one more call to observe exhaustion.
+                let advances = sequence + 1;
+                let full_scan = value.div_ceil(u64::from(work));
+                assert!((full_scan..=full_scan + 1).contains(&advances));
+                let cycles = before - pic.cycle_balance(canister).await;
+                println!(
+                    "skew/warm-count work={work} advances={advances} result={value} instructions={instructions} peak={peak} cycles={cycles}"
+                );
+                break;
+            }
+            assert_eq!(outcome, CountOutcome::Running);
+            assert!(sequence < model.items.len() as u64, "count must finish");
+        }
+        assert_eq!(
+            count(CountRequest::Cancel(handle)).await.0,
+            CountReply::Cancelled
+        );
+    }
+    // Both jobs see the same source revision and get nine turns before the same write.
+    let slow = start().await;
+    let fast = start().await;
+    let expected_count = model.items.len() as u64;
+    for sequence in 0..9 {
+        assert_eq!(resume(&slow, sequence, 2).await.0, CountOutcome::Running);
+        let expected = if sequence == 8 {
+            CountOutcome::Complete(expected_count)
+        } else {
+            CountOutcome::Running
+        };
+        assert_eq!(resume(&fast, sequence, 16).await.0, expected);
+    }
     // Move a referenced item from the small parent into the listing.
     let before = pic.cycle_balance(canister).await;
     let cost = write(&mut model, vec![(1, 1, 128, 1, 10)]).await;
     let cycles = before - pic.cycle_balance(canister).await;
-    let (outcome, invalidate_cost) = resume(&handle, 1).await;
+    let (outcome, invalidate_cost) = resume(&slow, 9, 2).await;
     assert_eq!(outcome, CountOutcome::Invalidated);
+    // A caller that missed the terminal reply retries its original sequence.
     assert_eq!(
-        count(CountRequest::Cancel(handle)).await.0,
-        CountReply::Cancelled
+        resume(&fast, 8, 16).await.0,
+        CountOutcome::Complete(expected_count)
     );
+    for handle in [slow, fast] {
+        assert_eq!(
+            count(CountRequest::Cancel(handle)).await.0,
+            CountReply::Cancelled
+        );
+    }
     println!(
         "skew/move handler_instructions={cost} update_balance_delta={cycles} invalidation_instructions={invalidate_cost}"
     );
     let handle = start().await;
-    let (outcome, first_cost) = resume(&handle, 0).await;
+    let (outcome, first_cost) = resume(&handle, 0, 2).await;
     assert_eq!(outcome, CountOutcome::Running);
     compare_budgets("after-write", &model).await;
     ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
@@ -1158,7 +1212,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     compare_budgets("after-upgrade", &model).await;
     let mut advance_cost = first_cost;
     for sequence in 1..=model.items.len() as u64 {
-        let (outcome, cost) = resume(&handle, sequence).await;
+        let (outcome, cost) = resume(&handle, sequence, 2).await;
         advance_cost += cost;
         if sequence == 1 {
             assert_eq!(outcome, CountOutcome::Running);

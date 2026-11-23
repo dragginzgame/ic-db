@@ -111,7 +111,9 @@ fn independent_roles_share_batch_time_and_deletes_need_no_clock() {
     let mut batch = Batch::at_for_test(time(10));
     batch.replace(&created).unwrap();
     batch.replace(&updated).unwrap();
-    db.commit(batch).unwrap();
+    let stored = db.commit_returning(batch, updated.id()).unwrap();
+    assert_eq!(stored.value, updated.value);
+    assert_eq!(stored.time, time(10));
     assert_eq!(db.get::<CreationOnly>(1).unwrap().unwrap().time, time(-1));
     assert_eq!(db.get::<UpdateOnly>(1).unwrap().unwrap().time, time(10));
     let mut batch = Batch::new();
@@ -197,7 +199,7 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
     for now in [0, 200, 300] {
         let mut batch = Batch::at_for_test(time(now));
         batch.replace(&current).unwrap();
-        db.commit(batch).unwrap();
+        assert_eq!(db.commit_returning(batch, current.id()).unwrap(), current);
         assert_eq!(*backing.borrow(), before);
     }
     drop(db);
@@ -275,13 +277,27 @@ fn ownership_regression_and_constraint_refusals_leave_the_complete_batch_unchang
             )
             .unwrap();
         batch.replace(&candidate).unwrap();
-        let result = db.commit(batch);
+        let result = db.commit_returning(batch, candidate.id());
         match mode {
             0 | 1 => assert!(matches!(result, Err(Error::ManagedField))),
             2 => assert!(matches!(result, Err(Error::TimestampRegression))),
             3 => assert!(matches!(result, Err(Error::UniqueViolation))),
             _ => unreachable!(),
         }
+        assert_eq!(*backing.borrow(), before);
+    }
+    for delete_selected in [false, true] {
+        let mut batch = Batch::at_for_test(time(200));
+        batch
+            .insert_input(Entry::insert().id(2).body("other".into()))
+            .unwrap();
+        if delete_selected {
+            batch.delete::<Entry>(1).unwrap();
+        }
+        assert!(matches!(
+            db.commit_returning(batch, row.id()),
+            Err(Error::Missing)
+        ));
         assert_eq!(*backing.borrow(), before);
     }
     // Equal time is permitted for a real change; there is no hidden counter.
