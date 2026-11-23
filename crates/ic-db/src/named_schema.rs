@@ -225,90 +225,87 @@ pub(crate) struct TypeGraph {
     definitions: BTreeMap<&'static str, &'static TypeSchema>,
     // Addresses only terminate traversal of compiler-emitted static nodes; they
     // are never identities, persisted bytes or function-pointer comparisons.
-    visited: Vec<&'static TypeSchema>,
+    visited: BTreeSet<usize>,
 }
 impl TypeGraph {
     pub fn include(&mut self, value: FieldType) -> Result<(), Error> {
-        let value = if let FieldType::List { item, max_items } = value {
-            if max_items > MAX_COLLECTION_ITEMS as u32 || matches!(item, FieldType::List { .. }) {
+        let mut pending = Vec::new();
+        let mut first = Some(value);
+        while let Some(value) = first.take().or_else(|| pending.pop()) {
+            let value = if let FieldType::List { item, max_items } = value {
+                if max_items > MAX_COLLECTION_ITEMS as u32 || matches!(item, FieldType::List { .. })
+                {
+                    return Err(Error::InvalidSchema);
+                }
+
+                *item
+            } else {
+                value
+            };
+            let FieldType::Named(link) = value else {
+                continue;
+            };
+            let definition = (link.definition)();
+            if definition.name != link.name {
                 return Err(Error::InvalidSchema);
             }
-
-            *item
-        } else {
-            value
-        };
-        let FieldType::Named(link) = value else {
-            return Ok(());
-        };
-        let definition = (link.definition)();
-        if definition.name != link.name {
-            return Err(Error::InvalidSchema);
-        }
-        if self
-            .visited
-            .iter()
-            .any(|seen| std::ptr::eq(*seen, definition))
-        {
-            return Ok(());
-        }
-        if self.visited.len() >= 64 {
-            return Err(Error::InvalidSchema);
-        }
-        self.visited.push(definition);
-        if self
-            .definitions
-            .insert(link.name, definition)
-            .is_some_and(|old| old != definition)
-            || self.definitions.len() > 32
-        {
-            return Err(Error::InvalidSchema);
-        }
-        match &definition.body {
-            TypeBody::Wrapped(FieldType::Named(_)) => return Err(Error::InvalidSchema),
-            TypeBody::Wrapped(value) => self.include(*value)?,
-            TypeBody::Checked(_) => {}
-            TypeBody::Map {
-                key,
-                value,
-                max_items,
-            } => {
-                if *max_items > MAX_COLLECTION_ITEMS as u32 {
-                    return Err(Error::InvalidSchema);
-                }
-                self.include_ordered(*key)?;
-                self.include(value.value)?;
+            if !self.visited.insert(std::ptr::from_ref(definition).addr()) {
+                continue;
             }
-            TypeBody::Set { item, max_items } => {
-                if *max_items > MAX_COLLECTION_ITEMS as u32 {
-                    return Err(Error::InvalidSchema);
-                }
-                self.include_ordered(*item)?;
+            if self
+                .definitions
+                .insert(link.name, definition)
+                .is_some_and(|old| old != definition)
+            {
+                return Err(Error::InvalidSchema);
             }
-            TypeBody::Record(fields) => {
-                if fields.len() > MAX_FIELDS {
-                    return Err(Error::InvalidSchema);
+            match &definition.body {
+                TypeBody::Wrapped(FieldType::Named(_)) => return Err(Error::InvalidSchema),
+                TypeBody::Wrapped(value) => pending.push(*value),
+                TypeBody::Checked(_) => {}
+                TypeBody::Map {
+                    key,
+                    value,
+                    max_items,
+                } => {
+                    if *max_items > MAX_COLLECTION_ITEMS as u32 {
+                        return Err(Error::InvalidSchema);
+                    }
+                    Self::validate_ordered(*key)?;
+                    pending.push(*key);
+                    pending.push(value.value);
                 }
-                for field in *fields {
-                    self.include(field.value)?;
+                TypeBody::Set { item, max_items } => {
+                    if *max_items > MAX_COLLECTION_ITEMS as u32 {
+                        return Err(Error::InvalidSchema);
+                    }
+                    Self::validate_ordered(*item)?;
+                    pending.push(*item);
                 }
-            }
-            TypeBody::Enum(variants) => {
-                if variants.len() > 64 {
-                    return Err(Error::InvalidSchema);
+                TypeBody::Record(fields) => {
+                    if fields.len() > MAX_FIELDS {
+                        return Err(Error::InvalidSchema);
+                    }
+                    for field in *fields {
+                        pending.push(field.value);
+                    }
                 }
-                for variant in *variants {
-                    if let Some(payload) = variant.payload {
-                        self.include(payload.value)?;
+                TypeBody::Enum(variants) => {
+                    if variants.len() > 64 {
+                        return Err(Error::InvalidSchema);
+                    }
+                    for variant in *variants {
+                        if let Some(payload) = variant.payload {
+                            pending.push(payload.value);
+                        }
                     }
                 }
             }
         }
-
         Ok(())
     }
 
-    fn include_ordered(&mut self, value: FieldType) -> Result<(), Error> {
+    fn validate_ordered(value: FieldType) -> Result<(), Error> {
         match crate::key::operand_type(value) {
             FieldType::List { .. } => return Err(Error::InvalidSchema),
             FieldType::Named(link) if unit_enum_len((link.definition)()).is_none() => {
@@ -317,7 +314,7 @@ impl TypeGraph {
             _ => {}
         }
 
-        self.include(value)
+        Ok(())
     }
 
     pub fn definitions(&self) -> impl Iterator<Item = &'static TypeSchema> + '_ {
@@ -338,7 +335,8 @@ impl TypeGraph {
         bytes.extend(b"ICDBTY02");
         bytes.extend((MAX_DEPTH as u32).to_le_bytes());
         bytes.extend((MAX_NODES as u32).to_le_bytes());
-        bytes.extend((self.definitions.len() as u32).to_le_bytes());
+        let count = u32::try_from(self.definitions.len()).map_err(|_| Error::InvalidSchema)?;
+        bytes.extend(count.to_le_bytes());
         for definition in self.definitions.values() {
             let (kind, count) = match &definition.body {
                 TypeBody::Enum(v) => (1, v.len()),
@@ -422,38 +420,68 @@ impl TypeGraph {
                 }
             }
         }
-        // Least fixed point: an optional/list edge or unit alternative is a finite
-        // constructor; a required cycle without a base case never becomes viable.
-        let mut finite = BTreeSet::new();
-        for _ in 0..self.definitions.len() {
-            for (name, definition) in &self.definitions {
-                let viable = |value, optional| {
-                    optional
-                        || match value {
-                            FieldType::Named(link) => finite.contains(link.name),
-                            _ => true,
-                        }
-                };
-                let has_value = match &definition.body {
-                    TypeBody::Wrapped(_)
-                    | TypeBody::Checked(_)
-                    | TypeBody::Set { .. }
-                    | TypeBody::Map { .. } => true,
-                    TypeBody::Record(fields) => fields.iter().all(|f| viable(f.value, f.optional)),
-                    TypeBody::Enum(variants) => variants
+        self.validate_finite()?;
+        self.visited.clear();
+        Ok(())
+    }
+
+    fn validate_finite(&self) -> Result<(), Error> {
+        let mut dependents = BTreeMap::<_, Vec<_>>::new();
+        let mut remaining = BTreeMap::new();
+        let mut ready = Vec::new();
+        for definition in self.definitions() {
+            let mut requires = |value: FieldType, optional: bool| {
+                if let FieldType::Named(link) = value
+                    && !optional
+                {
+                    dependents
+                        .entry(link.name)
+                        .or_default()
+                        .push(definition.name);
+                    true
+                } else {
+                    false
+                }
+            };
+            // A record needs every required field. An enum needs one finite alternative.
+            let needed = match definition.body {
+                TypeBody::Record(fields) => fields
+                    .iter()
+                    .filter(|f| requires(f.value, f.optional))
+                    .count(),
+                TypeBody::Enum(variants) => usize::from(
+                    variants
                         .iter()
-                        .any(|v| v.payload.is_none_or(|p| viable(p.value, p.optional))),
-                };
-                if has_value {
-                    finite.insert(*name);
+                        .all(|v| v.payload.is_some_and(|p| requires(p.value, p.optional))),
+                ),
+                TypeBody::Wrapped(_)
+                | TypeBody::Checked(_)
+                | TypeBody::Set { .. }
+                | TypeBody::Map { .. } => 0,
+            };
+            if needed == 0 {
+                ready.push(definition.name);
+            } else {
+                remaining.insert(definition.name, needed);
+            }
+        }
+        while let Some(name) = ready.pop() {
+            for parent in dependents.remove(name).into_iter().flatten() {
+                if let std::collections::btree_map::Entry::Occupied(mut entry) =
+                    remaining.entry(parent)
+                {
+                    *entry.get_mut() -= 1;
+                    if *entry.get() == 0 {
+                        entry.remove();
+                        ready.push(parent);
+                    }
                 }
             }
         }
-        if finite.len() != self.definitions.len() {
-            return Err(Error::InvalidSchema);
+        if remaining.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::InvalidSchema)
         }
-        self.visited = Vec::new();
-
-        Ok(())
     }
 }

@@ -801,3 +801,96 @@ fn stored_composites_still_refuse_member_index_admission() {
         );
     }
 }
+
+#[test]
+fn a_store_admits_more_than_64_reachable_named_types() {
+    macro_rules! choices {
+        ($($leaf:ident = $name:tt),+ $(,)?) => {
+            $(
+                #[record(fields())]
+                struct $leaf {}
+            )+
+            #[enum_($(variant(name = $name, value(item(is = $name)))),+)]
+            struct Choice {}
+        };
+    }
+
+    choices!(
+        Leaf00 = "Leaf00",
+        Leaf01 = "Leaf01",
+        Leaf02 = "Leaf02",
+        Leaf03 = "Leaf03",
+        Leaf04 = "Leaf04",
+        Leaf05 = "Leaf05",
+        Leaf06 = "Leaf06",
+        Leaf07 = "Leaf07",
+        Leaf08 = "Leaf08",
+        Leaf09 = "Leaf09",
+        Leaf10 = "Leaf10",
+        Leaf11 = "Leaf11",
+        Leaf12 = "Leaf12",
+        Leaf13 = "Leaf13",
+        Leaf14 = "Leaf14",
+        Leaf15 = "Leaf15",
+        Leaf16 = "Leaf16",
+        Leaf17 = "Leaf17",
+        Leaf18 = "Leaf18",
+        Leaf19 = "Leaf19",
+        Leaf20 = "Leaf20",
+        Leaf21 = "Leaf21",
+        Leaf22 = "Leaf22",
+        Leaf23 = "Leaf23",
+        Leaf24 = "Leaf24",
+        Leaf25 = "Leaf25",
+        Leaf26 = "Leaf26",
+        Leaf27 = "Leaf27",
+        Leaf28 = "Leaf28",
+        Leaf29 = "Leaf29",
+        Leaf30 = "Leaf30",
+        Leaf31 = "Leaf31",
+        Leaf32 = "Leaf32",
+        Leaf33 = "Leaf33",
+        Leaf34 = "Leaf34",
+        Leaf35 = "Leaf35",
+        Leaf36 = "Leaf36",
+        Leaf37 = "Leaf37",
+        Leaf38 = "Leaf38",
+        Leaf39 = "Leaf39",
+        Leaf40 = "Leaf40",
+        Leaf41 = "Leaf41",
+        Leaf42 = "Leaf42",
+        Leaf43 = "Leaf43",
+        Leaf44 = "Leaf44",
+        Leaf45 = "Leaf45",
+        Leaf46 = "Leaf46",
+        Leaf47 = "Leaf47",
+        Leaf48 = "Leaf48",
+        Leaf49 = "Leaf49",
+        Leaf50 = "Leaf50",
+        Leaf51 = "Leaf51",
+        Leaf52 = "Leaf52",
+        Leaf53 = "Leaf53",
+        Leaf54 = "Leaf54",
+        Leaf55 = "Leaf55",
+        Leaf56 = "Leaf56",
+        Leaf57 = "Leaf57",
+        Leaf58 = "Leaf58",
+        Leaf59 = "Leaf59",
+        Leaf60 = "Leaf60",
+        Leaf61 = "Leaf61",
+        Leaf62 = "Leaf62",
+        Leaf63 = "Leaf63",
+    );
+    #[entity(store = ic_db::testing::FixtureStore, pk(field = "id"), fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "choice", value(item(is = "Choice")))
+    ))]
+    struct ChoiceRow {}
+
+    let schema = Schema::new(&[ChoiceRow::SCHEMA, NodeRow::SCHEMA]).unwrap();
+    let selected = schema.describe(Some("ChoiceRow")).unwrap();
+    assert_eq!(selected.types.len(), 65);
+    assert_eq!(schema.describe(None).unwrap().types.len(), 66);
+    let reordered = Schema::new(&[NodeRow::SCHEMA, ChoiceRow::SCHEMA]).unwrap();
+    assert_eq!(schema.fingerprint(), reordered.fingerprint());
+}

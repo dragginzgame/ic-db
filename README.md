@@ -1324,7 +1324,7 @@ The description can also be built directly from a compiled schema before opening
 Serde exports field bounds, defaults, managed timestamps, primary keys, references and index
 components. Wrapped types retain their inner type. Checked types expose their primitive and
 validation rule. Recursive links carry a logical name, with each reachable definition listed
-once. Schema admission bounds the graph to 128 entities and 32 named definitions per store.
+once. A store admits up to 128 entities. Its entities can use any number of reachable named types within the schema fingerprint format’s 32-bit count.
 Select one entity when an endpoint has a smaller response budget. The embedding application
 owns response limits, authorization and transport. Counts read maintained metadata through
 an admitted database handle.

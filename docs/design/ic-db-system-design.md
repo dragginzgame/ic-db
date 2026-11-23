@@ -624,22 +624,22 @@ pub struct Lifecycle {}
 `name` overrides preserve logical identity across Rust source renames; Rust resolves
 imported/qualified paths. The compiled link stores the exact logical name and a
 function returning static metadata, which breaks recursive constant evaluation.
-Function/static addresses are never durable identity. A bounded traversal visits
+Function/static addresses are never durable identity. An iterative traversal visits
 static nodes, coalesces equal definitions by name and refuses conflicting ones;
 registration order cannot affect canonical bytes. Transitive definitions are
 checked on typed access as well as reopen. Constructor collection remains host-only,
 and no second mutable registration mechanism is added for named types.
 
-Current bounds are 32 logical definitions (64 visited static declarations), 16
-fields per record, 64 variants per enum and 64 UTF-8 bytes per name. Nested records
+Store admission follows the reachable graph without a separate named-type quota.
+Each record admits up to 32 fields. Enums admit 64 variants and names admit 64 UTF-8 bytes. Nested records
 may be empty. The graph must have a finite value for every type: optional edges,
 unit variants, empty lists and finite payload alternatives provide base cases. A least-fixed-point
 check rejects required-value cycles with no finite constructor. `indirect` boxes a
 named Rust value but does not change its stored representation or contract.
 
 Typed encoding, decoding and borrowed stored-row inspection share a 32-level depth
-limit, 256 structured-value visits across the whole row, and the existing 4 KiB byte
-limit. Each entered record/enum/list/set/map counts once, including empty records, empty
+limit, 256 structured-value visits across the whole row, and the entity’s row byte
+limit (4 KiB by default, up to 32 KiB). Each entered record/enum/list/set/map counts once, including empty records, empty
 lists and unit variants; absent optional values do not count. Scalars retain their existing byte
 and field limits. Write exhaustion returns Limit during preparation; malformed or
 over-budget stored values return Corrupt. Nested writes reuse one output buffer;

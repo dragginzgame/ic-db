@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.27.8] - Unreleased
+
+### ✨ Schema
+
+- A store can use more than 32 named value types. Admission visits reachable declarations and checks that each type can describe a finite value. Existing schema fingerprints and per-row limits are preserved. [Issue #27](https://github.com/dragginzgame/ic-db/issues/27)
+
+### 🧪 Qualification
+
+- Updated the mixed-lifecycle canister and its driver to Canic 0.259.1.
+
 ## [0.27.7] - 2026-11-23
 
 ### ✨ Schema

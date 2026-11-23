@@ -227,12 +227,12 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.246.0"
+version = "0.259.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e44b1f79548759d4dfc9bfa7c39e4284dd1da9fbe5f04bec93120a8e108d1db4"
+checksum = "d61d61ea3be059c4a93c0c68dd52d01cfbe155c934c7f7d51832f708b5322e13"
 dependencies = [
  "ic-platform-runtime 0.23.25",
- "ic-wire 0.27.1",
+ "ic-wire 0.28.0",
  "serde",
 ]
 
@@ -1257,18 +1257,6 @@ name = "ic-wire"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12f9ea1376af8b628c513c838043106a79d0c94c2946fe4a79b8fefbc595c250"
-dependencies = [
- "bytemuck",
- "postcard",
- "serde",
- "serde_bytes",
-]
-
-[[package]]
-name = "ic-wire"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cda4acc0a5815dfb96de0e23509cece62f9fa24abf18f1ce900827fa975dad17"
 dependencies = [
  "bytemuck",
  "postcard",
