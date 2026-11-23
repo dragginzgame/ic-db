@@ -125,14 +125,9 @@ pub(super) fn select<'a>(
     {
         return Ok(Path::Index(path, primary_direction));
     }
-    // Before 0.23.13 a default-order page could only resume on the primary
-    // path. The cursor still has to pass the complete binding and key checks.
     let default_primary = request.order.is_none()
         && (!matches!(output, super::PlanOutput::Rows)
             || request.distinct
-            || request
-                .cursor
-                .is_some_and(|c| c.position.first() == Some(&2))
             || request.fixed_equalities(entity).next().is_none());
     if default_primary {
         return Ok(Path::Primary);

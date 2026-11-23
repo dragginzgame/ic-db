@@ -20,7 +20,7 @@ use std::ops::Bound;
 )]
 fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
     let start = ic_platform_runtime::raw::instruction_counter();
-    if matches!(mode, 0 | 1 | 5..=8) {
+    if matches!(mode, 0 | 1 | 5..=10) {
         let db = database();
         let opened = ic_platform_runtime::raw::instruction_counter();
         let mut query = db.query::<Entry>().work_limit(512);
@@ -38,9 +38,13 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
                 query = query.using_index("category,id", &[category.into()]);
             }
         }
+        // Same amount predicate as the minimum-zero grouped-count workload.
+        if matches!(mode, 9 | 10) {
+            query = query.filter("amount", Comparison::Ge, 0_u64);
+        }
         let count = match mode {
             5 => query.count_index_entries(),
-            6 | 7 => query.count(),
+            6 | 7 | 9 => query.count(),
             _ => query.count_validated(),
         };
         let result = match count {

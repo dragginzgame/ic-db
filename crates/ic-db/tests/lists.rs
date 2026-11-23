@@ -246,7 +246,7 @@ fn list_order_duplicates_absence_and_element_bounds_are_exact() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "edd3cd3e92634f85edde3e8ee997d28fbe88ffe20c5560d148174db1f5e8f18b"
+        "9bc237d432b7ce89d5ceea8356c54acd570404687623e87ca14789359eac10bd"
     );
     let golden = [7, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 1, 1, 0, 2, 1];
     assert_eq!(row.encode().unwrap(), golden);

@@ -504,10 +504,7 @@ fn default_equality_pages_preserve_primary_order() {
         0, 0, 0, 1,
     ])
     .unwrap();
-    assert_eq!(
-        ids(&q().after(&old).work_limit(8).fetch().unwrap().rows),
-        [2, 4, 6, 8]
-    );
+    assert!(matches!(q().after(&old).fetch(), Err(Error::InvalidCursor)));
     for descending in [false, true] {
         let mut cursor = None;
         let mut result = Vec::new();
@@ -516,10 +513,10 @@ fn default_equality_pages_preserve_primary_order() {
             if descending {
                 query = query.descending();
             }
-            if let Some(after) = &cursor {
-                query = query.after(after);
-            }
-            let page = query.fetch_as::<Summary>().unwrap();
+            let page = query
+                .after_optional(cursor.as_ref())
+                .fetch_as::<Summary>()
+                .unwrap();
             assert_eq!(page.examined, page.rows.len());
             result.extend(page.rows.iter().map(|r| r.id));
             cursor = page.next;
@@ -849,13 +846,21 @@ fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
             .filter_fields("id", C::Eq, right)
             .work_limit(1)
     };
-    let cursor = query("maybe").fetch().unwrap().next.unwrap();
-    assert_eq!(
-        ids(&query("maybe").after(&cursor).fetch().unwrap().rows),
-        [2]
-    );
+    let first = query("maybe").fetch().unwrap();
+    let optional = query("maybe").after_optional(None).fetch().unwrap();
+    assert_eq!(ids(&optional.rows), ids(&first.rows));
+    assert_eq!(optional.next, first.next);
+    let cursor = first.next.unwrap();
+    let resumed = query("maybe").after(&cursor).fetch().unwrap();
+    let optional = query("maybe")
+        .after_optional(Some(&cursor))
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&resumed.rows), [2]);
+    assert_eq!(ids(&optional.rows), ids(&resumed.rows));
+    assert_eq!(optional.next, resumed.next);
     assert!(matches!(
-        query("amount").after(&cursor).fetch(),
+        query("amount").after_optional(Some(&cursor)).fetch(),
         Err(Error::InvalidCursor)
     ));
     for (comparison, right) in [(C::Eq, "category"), (C::Eq, "missing"), (C::Contains, "id")] {

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.28.0] - Unreleased
+
+### ✨ Queries
+
+- Fluent listings can pass an `Option<&QueryCursor>` directly to `.after_optional(cursor)`. Use `None` for the first page or the previous page’s cursor to resume. [Issue #28](https://github.com/dragginzgame/ic-db/issues/28)
+
+### ✨ Schema
+
+- Hard cut to compiled schema v1. Every store gets a new fingerprint, including scalar-only schemas. Opening 0.27.8 backing returns `IncompatibleSchema` before reading rows, and pre-cut cursors refuse. Export data with the old executable before switching if it must be retained.
+- Typed operations reuse the exact immutable entity descriptor already admitted by the store. Independently supplied descriptors still undergo structural and transitive named-type checks.
+- Schema admission checks recursive dependencies between records and enums. Scalar wrappers and collections provide base cases directly, reducing [cold schema construction](qualification/README.md#cold-schema-construction-on-compiled-schema-v1) on the 64-payload fixture by 44%. A checked Text type requiring nonblank content now refuses a zero-byte or zero-character limit.
+- Cloning a compiled schema shares its entity roster and named definitions. Opening an allocation still checks its current durable manifest.
+
 ## [0.27.8] - 2026-11-23
 
 ### ✨ Schema

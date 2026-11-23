@@ -1258,8 +1258,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Continue this query; page resource limits may change between calls.
     #[must_use]
-    pub fn after(mut self, cursor: &'a QueryCursor) -> Self {
-        self.request.cursor = Some(cursor);
+    pub fn after(self, cursor: &'a QueryCursor) -> Self {
+        self.after_optional(Some(cursor))
+    }
+
+    /// Set the continuation cursor. Passing `None` selects the first page.
+    #[must_use]
+    pub fn after_optional(mut self, cursor: Option<&'a QueryCursor>) -> Self {
+        self.request.cursor = cursor;
 
         self
     }

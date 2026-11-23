@@ -111,7 +111,7 @@ fn default_identity_and_exact_fixed_bytes_share_one_canonical_representation() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "b6df0493c64fd993efe97eb5069d00785b48e29ce1e8991a786a14965cb1354e"
+        "fd371c7f1f629e960520548b552e57d395af538ba93cea068f710831682ccf87"
     );
     for len in 0..=29 {
         let owner = vec![0xa5; len];

@@ -220,7 +220,7 @@ pub trait Value: Sized {
     fn decode_from(reader: &mut Decoder<'_>) -> Result<Self, Error>;
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct TypeGraph {
     definitions: BTreeMap<&'static str, &'static TypeSchema>,
     // Addresses only terminate traversal of compiler-emitted static nodes; they
@@ -332,7 +332,7 @@ impl TypeGraph {
         if self.definitions.is_empty() {
             return Ok(());
         }
-        bytes.extend(b"ICDBTY02");
+        bytes.extend(b"ic-db:named-types\0");
         bytes.extend((MAX_DEPTH as u32).to_le_bytes());
         bytes.extend((MAX_NODES as u32).to_le_bytes());
         let count = u32::try_from(self.definitions.len()).map_err(|_| Error::InvalidSchema)?;
@@ -359,9 +359,11 @@ impl TypeGraph {
                         NewtypeRule::Text {
                             non_blank,
                             max_chars,
-                            ..
+                            max_bytes,
                         } => {
-                            if !non_blank && max_chars.is_none() {
+                            if (!non_blank && max_chars.is_none())
+                                || (*non_blank && (*max_bytes == 0 || *max_chars == Some(0)))
+                            {
                                 return Err(Error::InvalidSchema);
                             }
                             bytes.extend([2, u8::from(*non_blank), u8::from(max_chars.is_some())]);
@@ -430,9 +432,14 @@ impl TypeGraph {
         let mut remaining = BTreeMap::new();
         let mut ready = Vec::new();
         for definition in self.definitions() {
+            // Only required record/enum edges can propagate a recursive obligation.
             let mut requires = |value: FieldType, optional: bool| {
                 if let FieldType::Named(link) = value
                     && !optional
+                    && matches!(
+                        (link.definition)().body,
+                        TypeBody::Record(_) | TypeBody::Enum(_)
+                    )
                 {
                     dependents
                         .entry(link.name)
@@ -457,7 +464,7 @@ impl TypeGraph {
                 TypeBody::Wrapped(_)
                 | TypeBody::Checked(_)
                 | TypeBody::Set { .. }
-                | TypeBody::Map { .. } => 0,
+                | TypeBody::Map { .. } => continue,
             };
             if needed == 0 {
                 ready.push(definition.name);

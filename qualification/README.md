@@ -392,7 +392,7 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | 4,168 raw bytes per added entity from 1 to 8 and 4,504 from 8 to 32 in the 0.27.6 worktree eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#bounded-m2-closeout-on-pocketic-0276-worktree) |
+| Added reachable entity size | 4,171 raw bytes per added entity from 1 to 8 and 4,504 from 8 to 32 in the 0.27.8 eight-shape fixture | Historical 4,451 raw bytes after shrinking, different build/workload | Above the roughly 4 KB ceiling. The 2 KB objective and a matched legacy growth result remain open. [Current receipt](#entity-and-named-type-growth-on-0278) |
 | ID membership and indexed empty Text | Six matched handler costs on 0.26.10 and the 0.26.11 candidate | Release-to-release comparison | Early existence costs 17.1% more, late existence costs 33.8% less. [Filter costs](#filter-costs-before-02611) |
 | Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,666 of 1,908 successful pairs. The median paired ratio was 0.391. | Owner-validated prefix counts reached 31.72× legacy. This workload uses three Nat64 fields. [Current measurements](#query-matrix-for-the-0276-worktree) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
@@ -3480,6 +3480,89 @@ The closeout used the local query worktree after v0.27.5, Rust 1.100.0 and the l
 **Reachable fluent code.** `make m2-query-growth` installed and exercised seven host variants. With one entity, moving from one fluent shape to eight added 1,251 uncompressed Wasm bytes (344,239 to 345,490). Adding eight application mapping sites to the eight-shape host added 1,703 bytes. Keeping eight shapes per entity, the 8-entity host measured 374,667 bytes and the 32-entity host 482,773 bytes. That is 4,168 bytes per added entity from 1 to 8 and 4,504 from 8 to 32. The 32-entity figure comes from a size-only build with `retained-host,fluent-shapes,entities-32`. The roughly 2 KB objective and 4 KB comparison ceiling remain open for adoption.
 
 For this run, the aggregate-path and growth drivers kept their raw evidence under `qualification/target/evidence/aggregate-paths-0276-closeout/` and `query-growth-0276-closeout/` respectively. Set `IC_DB_QUERY_MATRIX_DIR` and `IC_DB_QUERY_GROWTH_DIR` to select separate output directories on a rerun.
+
+### Dense grouped count on 0.27.8
+
+Released engine `03e42b4` and frozen IcyDB `6d421e3`, SQL disabled. Both fixtures used the same deterministic rows and independent tuple oracle. The table gives handler instructions including database opening, settled after upgrade on 511 skewed rows. Category 0 contains 415 rows, category 3 contains 32 and category 99 is absent.
+
+| Operation | Rows matching | IC DB | Frozen IcyDB |
+| --- | ---: | ---: | ---: |
+| Unfiltered scalar count | 511 | 651,507 | 1,465,946 |
+| Automatic scalar count, category 0 | 415 | 3,822,013 | 1,553,991 |
+| Automatic scalar count, category 0 and amount ≥ 0 | 415 | 3,840,345 | — |
+| Owner-validated scalar count, same predicates | 415 | 50,054,913 | — |
+| Group by category and count, same predicates | 415 | 50,124,958 | 32,123,807 |
+| Group by category and count, category 3 and amount ≥ 0 | 32 | 4,821,112 | 5,153,376 |
+| Group by category and count, category 99 and amount ≥ 0 | 0 | 862,671 | 2,120,179 |
+| Group by category and count, all categories and amount ≥ 0 | 511 | 8,494,020 | 40,641,571 |
+
+Amount is required Nat64, so every row satisfies the zero lower bound. Automatic scalar count can answer from covered keys. Grouped execution checks the owners. The validated scalar and grouped totals differ by 70,045 instructions (0.14%) across separate benchmark hosts. This comparison locates the expensive execution path without assigning an exact cost to the reducer. Forcing the category index for all 511 rows raised the IC DB grouped cost from 8,494,020 to 62,001,507. Dense and sparse inputs need different tradeoffs. These results give no reason to weaken grouped integrity checks or introduce a fixed selectivity threshold.
+
+Legacy's scalar controls for the filtered cases call its maintained exact category count. The two omitted legacy cells would measure that same terminal again. Legacy's grouped cells execute the full predicates. All 1,536 aggregate pairs and 192 count-control pairs agreed with their expected answers before and after upgrade. Reproduce from the repository root:
+
+```sh
+IC_DB_QUERY_MATRIX_DIR="$PWD/qualification/target/evidence/aggregate-paths-0278" make m2-aggregate-paths
+IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-paths-0278-final" make m2-count-paths
+```
+
+### Entity and named-type growth on 0.27.8
+
+`make m2-named-growth` builds ten release Wasm modules from the same temporary copy of the eight-query-shape host. Each retains the same exports and supports writes, reads, filtered queries and replacement. The PocketIC driver exercised every entity, checked returned rows against tuples, upgraded each canister and repeated reads. Sizes below are uncompressed whole modules. The [artifact receipt](measurements/0.27.8-named-growth.csv) records code-section sizes, digests, cold schema costs and warm query measurements.
+
+| Reachable entity layout | 1 entity | 8 entities | 32 entities | Bytes per added entity, 8–32 |
+| --- | ---: | ---: | ---: | ---: |
+| Original three Nat64 fields | 359,766 | 388,966 | 497,071 | 4,504 |
+| Same layout plus one shared named Nat64 field | 360,125 | 389,854 | 499,637 | 4,574 |
+
+The original marginal cost matches the rounded 0.27.6 result. The second layout includes the additional field, its codec and the fixture’s check of the returned value. Both slopes exceed the roughly 4 KB objective for comparison with legacy; the historical legacy measurement used a different workload.
+
+| Single entity, fourth field is a payload enum | One shared Nat64 newtype | Distinct Nat64 newtype per variant | Difference |
+| --- | ---: | ---: | ---: |
+| 8 alternatives | 362,160 | 362,439 | +279 bytes |
+| 64 alternatives | 370,008 | 374,098 | +4,090 bytes |
+
+At fixed width the same runtime input selects the variant, each payload has the same eight-byte layout, and the query returns the same values. Moving from one to 64 leaf types adds about 65 bytes per extra logical type here. Cold schema construction rose from 279,530 to 910,805 instructions. Subsequent warm filtered query work (mode 10, after opening) also rose from 307,210 to 794,210 instructions. Typed admission currently traverses the proposed entity’s reachable definitions on access. Isolating that traversal would test how much of the warm difference it explains. These synthetic scalar wrappers establish neither arbitrary composite-type costs nor a production latency estimate.
+
+### Typed admission on compiled schema v1
+
+Two PocketIC runs of `make m2-named-growth NAMED_GROWTH_DIR=...` used the same v1 fingerprint grammar and eight query shapes. The control structurally checked the proposed entity on every typed access. The candidate first compared the descriptor address with the immutable descriptor already admitted for that entity. Address equality is sufficient within the running executable. On a miss, structural and transitive checks still apply. Frozen IcyDB also tests object identity for bindings in its store registry (`6d421e3`, `icydb-core/src/db/registry/registry.rs`). This optimization requires no registry or durable identity field.
+
+| Warm filtered query, after opening | Control instructions | Reusing admitted descriptor | Whole-call cycles, control → candidate |
+| --- | ---: | ---: | ---: |
+| One three-field entity | 184,156 | 178,394 | 7,342,773 → 7,337,011 |
+| One 64-alternative enum, shared named payload | 307,450 | 183,504 | 7,466,491 → 7,342,545 |
+| One 64-alternative enum, distinct named payloads | 794,210 | 182,744 | 7,965,464 → 7,353,636 |
+
+Both runs verified the returned rows, writes, upgrades and all eight fluent shapes in ten installed variants. In the last row, the reduction was 77.0% of the measured warm query work and 7.7% of whole-call cycles. Cold schema construction still took 910,502 instructions in both builds. Independent descriptor addresses can differ even for equivalent declarations. The fallback accepts reordered equivalent named types and refuses a changed transitive definition. The paired builds isolate admission before the independent removal of pre-cut cursor routing. [Per-variant sizes, hashes and costs](measurements/compiled-schema-v1-admission.csv).
+
+### Cold schema construction on compiled schema v1
+
+The finite-value check propagates required dependencies between records and enums. A scalar wrapper has a primitive or list constructor, and lists, sets and maps can be empty. Those definitions still undergo full structural validation and contribute to the fingerprint. Skipping them in the recursion work queue avoids allocating dependency entries for every named scalar alternative.
+
+Two `make m2-named-growth` runs used the same compiled v1 format, locked release profile, typed-admission fast path and ten installed variants. The table gives the schema acquisition phase on the first query after upgrade, including construction of the retained schema and the clone returned to open.
+
+| Fixture | Before, instructions | After, instructions |
+| --- | ---: | ---: |
+| 32 entities, primitive fields | 566,407 | 566,407 |
+| 1 entity, 8 variants with distinct named scalar payloads | 122,979 | 95,148 |
+| 1 entity, 64 variants sharing a named scalar payload | 279,924 | 244,015 |
+| 1 entity, 64 variants with distinct named scalar payloads | 910,502 | 506,082 |
+
+In the last case the whole cold call went from 8,471,787 to 8,067,761 cycles. Uncompressed Wasm grew from 374,047 to 374,115 bytes. The result applies to scalar-heavy schemas; deeply recursive record graphs still need dependency propagation. Both runs checked rows, writes, filtered queries and upgrades on PocketIC. The artifacts are under `qualification/target/evidence/schema-finite-control` and `schema-finite-final`; select an output location with `NAMED_GROWTH_DIR`.
+
+### Retained schema handles on compiled schema v1
+
+Opening from a retained schema shares its immutable entity roster and named-type graph. Each open still checks the allocation's manifest. Frozen IcyDB used a shared payload for schema snapshots (`6d421e3`, `crates/icydb-core/src/db/schema/snapshot/mod.rs`). Here the payload lives only in memory for the lifetime of the schema handles.
+
+Two matched `make m2-named-growth` runs measured the same warm filtered query (mode 10) across ten installed Wasms. The instruction columns isolate acquiring the schema handle. Cycles include the entire query call.
+
+| Fixture | Acquisition instructions before → after | Whole-call cycles before → after |
+| --- | ---: | ---: |
+| 1 entity, primitive fields | 619 → 263 | 7,337,006 → 7,336,495 |
+| 32 entities sharing named types | 990 → 263 | 7,495,621 → 7,493,286 |
+| 1 entity, 64 distinct named scalar payloads | 7,807 → 263 | 7,353,087 → 7,340,372 |
+
+In the last fixture, uncompressed Wasm fell from 374,115 to 372,016 bytes. The whole warm call used 0.17% fewer cycles. The paired artifacts are under `qualification/target/evidence/schema-finite-final` and `schema-metadata-shared`.
 
 ### Indexed owner lookup in the 0.27.7 worktree
 

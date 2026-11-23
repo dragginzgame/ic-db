@@ -156,7 +156,7 @@ fn exact_date_bytes_and_invalid_stored_domains() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "9f5e19d2556292998de7aea40084f804bc1bb2ab400b3d18e7372d131f29dc4e"
+        "425c91779bd76c7a39be8d48ac42ab05c3658385b4b3159ccd63a4c23cb08cc1"
     );
     for value in values() {
         let row = DateRow {

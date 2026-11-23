@@ -56,15 +56,38 @@ async fn fluent_shapes_and_mapping_growth() {
     let directory = std::path::PathBuf::from(
         std::env::var_os("IC_DB_QUERY_GROWTH_DIR").expect("run make m2-query-growth"),
     );
-    for (variant, count, last_mode) in [
-        ("direct", 1, 0),
-        ("two-indexes", 1, 0),
-        ("direct-entities", 8, 0),
-        ("one", 1, 10),
-        ("shapes", 1, 17),
-        ("maps", 1, 27),
-        ("entities", 8, 17),
-    ] {
+    exercise(
+        &directory,
+        [
+            ("direct", 1, 0),
+            ("two-indexes", 1, 0),
+            ("direct-entities", 8, 0),
+            ("one", 1, 10),
+            ("shapes", 1, 17),
+            ("maps", 1, 27),
+            ("entities", 8, 17),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "run make m2-named-growth"]
+async fn named_growth() {
+    let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_QUERY_GROWTH_DIR").unwrap());
+    let roster = std::fs::read_to_string(directory.join("variants.tsv")).unwrap();
+    let variants = roster.lines().map(|line| {
+        let (variant, count) = line.split_once('\t').unwrap();
+        (variant, count.parse().unwrap(), 17)
+    });
+    exercise(&directory, variants).await;
+}
+
+async fn exercise<'a>(
+    directory: &std::path::Path,
+    variants: impl IntoIterator<Item = (&'a str, u8, u8)>,
+) {
+    for (variant, count, last_mode) in variants {
         let (wasm, facts) = crate::artifact::read(
             std::fs::File::open(directory.join(format!("{variant}.wasm"))).unwrap(),
         )

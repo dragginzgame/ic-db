@@ -168,6 +168,12 @@ m1-store-width:
 	  bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
 	    -p ic-db-m0-rollback-driver --test schema_owner wide_store_on_replica -- --ignored --exact --nocapture
 
+NAMED_GROWTH_DIR ?= $(CURDIR)/qualification/target/evidence/named-growth
+.PHONY: m2-named-growth
+m2-named-growth:
+	python3 qualification/experiments/named-growth/measure.py "$(NAMED_GROWTH_DIR)"
+	IC_DB_QUERY_GROWTH_DIR="$(NAMED_GROWTH_DIR)" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test query_growth named_growth -- --ignored --exact --nocapture
+
 .PHONY: m2-query-growth
 m2-query-growth:
 	bash scripts/measure-records.sh queries

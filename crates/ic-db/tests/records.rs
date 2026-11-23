@@ -435,11 +435,12 @@ fn previous_codec_identities_are_refused_without_changing_storage() {
     drop(db);
     // Earlier numbered contracts: row codecs v1 (Wire), v2 (owned varint),
     // and v3 (fixed width). Admission refuses before any row decoding.
-    // Admission must refuse before interpreting those bytes under the new codec.
     for old in [
         "daeb2925a2a9e739d630f56189a8956a63e88fe624984a25034c5600ca2e7b60",
         "cf31e2057b1a4137cc59547765556c77ad8aaad97bf235b66d962da134e9d4aa",
         "a1e8982196ded1c94a3625762e178927acc467051a8c37210a4e84c7c76ab851",
+        // Last released compiled grammar (0.27.8), with the current row codec.
+        "34c3b07f55b52646501835ddd758029761e7c40901f48610559c670b50b20626",
         // Named schema with owned row bytes, before complete-key semantics v2.
         "0b7e8c6d325ad8572c3bc388975ceebf7d26a03c266ea2e724ecf7b078aac3db",
     ] {
@@ -486,7 +487,7 @@ fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
     // digest verified independently, not the product's schema serializer.
     assert_eq!(
         one.fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "34c3b07f55b52646501835ddd758029761e7c40901f48610559c670b50b20626"
+        "1e819d3b58989a2b49522f2235ce68a844ac66ad746ab90c2363388d95e5d39f"
     );
     assert_eq!(
         one.fingerprint(),
@@ -565,7 +566,7 @@ fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "324c35cdb4ded35300f3dd06b351efe8ec9f38be98c3f0d8712d033344a8cc8a"
+        "3ea550d57a9fa9d9fba8c1cefe8d2a67b644360ba7282ecbb16326e27a716d6b"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -687,7 +688,7 @@ fn wide_integers_preserve_all_bits_and_require_exact_widths() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "4b181c9d29c86462df255b917118521fa3926c6971bfe8aa96a9a8fd08f4eefb"
+        "4b321fef6fad2098296767ab372a5bbdfb6749d60ad94044f787ee6373317a6f"
     );
     let values = [
         (i128::MIN, u128::MAX),
@@ -831,7 +832,7 @@ fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
     // name lengths and OpenSSL SHA-256, alongside the unchanged Nat64 vector.
     assert_eq!(
         fingerprint.map(|b| format!("{b:02x}")).concat(),
-        "3adaa8dc2c8318fae48cc3dce3f736a612e6b4957f08e86695db9defa935414e"
+        "af636e1c110a8a273284db8280ef39603ad9f97430d69cce14b4a8a8a3f359aa"
     );
     for variant in 0..3 {
         let mut fields = Document::SCHEMA.fields.to_vec();
@@ -1116,7 +1117,7 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "2669a982e08ec0931505e7d268d3e97329afef6b24b85f83c326801e670b08ec"
+        "5537d29d1915ec0e07442405c929c64e5b0e874c37927ef2076b73ecda1cfc06"
     );
     assert!(matches!(
         Schema::new(&[Child::SCHEMA]),
@@ -1494,7 +1495,7 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "906a491993e3a46d027520e23c71cd249d57db45cafabd84fed5123c5d747d66"
+        "ea70133ec027f1a8c83b882b44378a8aba56a40a0c7814424985e5bb71d97585"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1723,7 +1724,7 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "e0f4be4328cfae8a0ccc16fcdc0e51554ce2f0b40cd30693941b3898ce90be3d"
+        "26b521b53ff6efb90f3cc9f0ffb6367fb206a80b4fd1891add8c7bbd9625a84d"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1802,7 +1803,7 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "581058955e0ecb8d7af7a60486c6815dafd161387504754299bdaa5940ea2770"
+        "6d1c7f5df447067a6115cc362617cb5011c327dbed46829f808ed7664d6f9300"
     );
 
     let backing = VectorMemory::default();
@@ -2403,10 +2404,10 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
         0, 0, 0, 0, 0, 0, 1,
     ])
     .unwrap();
-    let resumed = lookup().after(&old_cursor).work_limit(32).fetch().unwrap();
-    assert_eq!(resumed.rows.len(), 1);
-    assert_eq!(resumed.rows[0].first, "😀");
-    assert!(resumed.next.is_none());
+    assert!(matches!(
+        lookup().after(&old_cursor).fetch(),
+        Err(Error::InvalidCursor)
+    ));
     let page = lookup().limit(1).fetch().unwrap();
     assert_eq!((page.examined, page.fetched), (1, 1));
     assert_eq!(page.rows[0].first, "😀");
@@ -3092,7 +3093,7 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "f65b2dea1070b84fd62a941de81bd497fd9b266fc4fdaf28c451bdd05c0351b0"
+        "dc4ff9025d100b68cb39ea27e8238befbdeed61f30c021cf4ed299420f32fa8d"
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -3444,7 +3445,7 @@ fn named_enums_use_canonical_ordinals_and_exact_admission() {
             .fingerprint()
             .map(|byte| format!("{byte:02x}"))
             .concat(),
-        "20e6f1d4b2c5b8a34fa2b3032c7686c1872302d22934dd9b70a428f373ea0e3e"
+        "a18b6361e6432e3b7c6e84378bfdd212d3f03a76d96fdf1c2a2cae4a10a8c306"
     );
     assert_eq!(
         contract().fingerprint(),
@@ -3572,20 +3573,26 @@ fn earlier_unit_enum_contract_is_refused_without_touching_its_bytes() {
         .unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
-    let mut manifest = raw.get(&vec![0]).unwrap();
-    let old = "3fc6bb4b60668c7a04518cbad5659ce829b313eb2e35cda7d30a38ec3d73a715";
-    for i in 0..32 {
-        manifest[8 + i] = u8::from_str_radix(&old[i * 2..i * 2 + 2], 16).unwrap();
+    for old in [
+        // Provisional unit-enum schema and the last released named-type schema.
+        "3fc6bb4b60668c7a04518cbad5659ce829b313eb2e35cda7d30a38ec3d73a715",
+        "20e6f1d4b2c5b8a34fa2b3032c7686c1872302d22934dd9b70a428f373ea0e3e",
+    ] {
+        let mut raw =
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+        let mut manifest = raw.get(&vec![0]).unwrap();
+        for i in 0..32 {
+            manifest[8 + i] = u8::from_str_radix(&old[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        raw.insert(vec![0], manifest);
+        drop(raw);
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            Database::open(runtime.open_memory(&key).unwrap(), contract()),
+            Err(Error::IncompatibleSchema)
+        ));
+        assert_eq!(*backing.borrow(), before);
     }
-    raw.insert(vec![0], manifest);
-    drop(raw);
-    let before = backing.borrow().clone();
-    assert!(matches!(
-        Database::open(runtime.open_memory(&key).unwrap(), contract()),
-        Err(Error::IncompatibleSchema)
-    ));
-    assert_eq!(*backing.borrow(), before);
 }
 
 #[cfg(feature = "test-support")]

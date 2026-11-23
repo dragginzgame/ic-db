@@ -659,7 +659,7 @@ fn reference_types_are_exact_and_schema_identity_is_independent() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "aff5474ffb42e4093e383b9fd543f5bda640d70623c610394e9d3e6ed30af7bf"
+        "03877cee237172770935146709b8f5af6e9d0343dedc580d405339670617dd31"
     );
     for wrong in [WrongSignedness::SCHEMA, WrongWidth::SCHEMA] {
         assert!(matches!(

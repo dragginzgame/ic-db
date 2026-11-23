@@ -493,6 +493,7 @@ fn transitive_named_contracts_are_checked_at_typed_access_and_reopen() {
     let changed = || Schema::new(&[ChangedWrapped::SCHEMA]).unwrap();
     assert_ne!(old.fingerprint(), changed().fingerprint());
     let db = Database::create(runtime.open_memory(&key).unwrap(), old, [5; 16]).unwrap();
+    assert_eq!(db.get::<ReorderedWrapped>(1).unwrap(), None);
     let before = backing.borrow().clone();
     assert!(matches!(
         db.get::<ChangedWrapped>(1),

@@ -38,6 +38,8 @@ values, maintains indexes and entity revisions, and applies bounded final-state
 batches with required/optional integer, Ulid, Principal, Account or Subaccount references and indexed restricted deletion. This is
 experimental: there is no production compatibility promise or deployment.
 
+Compiled schema v1 changes every store fingerprint from 0.27.8. To retain data, export it with the previous executable, then import it into a fresh allocation. Opening the old backing refuses before reading rows. Cursors and migration checkpoints bound to the old fingerprints cannot resume under the new executable.
+
 M3 now has a first product maintenance boundary. Construct a
 `SchemaTransition::new(&source, &target, "widen-amount", 1, fixed_inputs)`, then
 consume the live handle with `db.begin_maintenance(&transition)`. Ordinary access

@@ -136,7 +136,7 @@ fn order_and_count_are_validated_before_materialization() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "486936ccde04e7d35ebeae22524df9ce34319ff3a6d3a14b6403aff817632ba4"
+        "7f90e9bb47b31ac0dcc4efab810e7e29c56a0376c6d9c45a0adfe43d412d73b8"
     );
     let golden = [7, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1];
     assert_eq!(row.encode().unwrap(), golden);

@@ -216,7 +216,7 @@ fn exact_rows_refuse_nonfinite_and_noncanonical_stored_values() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "cc54e10395bc01f03c4fac6ad075b400326d2b3ff81d427eacb3583c76c97a04"
+        "7c1698d8f52068ad67e2cf52544b467a8671cde439d14b49a344bc76284ec2ae"
     );
     let row = FloatRow {
         id: 7,

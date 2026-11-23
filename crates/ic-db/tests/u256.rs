@@ -116,7 +116,7 @@ fn exact_bytes_and_schema_do_not_narrow_large_integers() {
             .fingerprint()
             .map(|b| format!("{b:02x}"))
             .concat(),
-        "f68531ad0f79c99125a0f3152b4199eaf82ffbe6df177006101ee563afc60788"
+        "60487d694da48eb3266fb37d87f86e9454f1c0bbb9ada879104079cf099adbc3"
     );
     for value in values() {
         let row = BigNumbers {

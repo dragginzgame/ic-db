@@ -415,8 +415,8 @@ named value types can be shared. These links add no bytes to the row or schema
 fingerprint. The host owns grants, installation and reopen policy. The producer checks target
 membership at compile time and checks the descriptor fingerprint at admission.
 See the [single-tree producer and consumer proof](../../qualification/experiments/schema-owner/README.md).
-An admitted `Schema` can be cloned for host-owned reuse: it contains immutable
-executable metadata only. Generated assembly validates the host/target fingerprint
+Clones of an admitted `Schema` share one immutable entity roster and named-type graph.
+Each clone carries the store fingerprint inline. Generated assembly validates the host/target fingerprint
 once per thread, retains that immutable schema and returns clones. It never caches
 database admission. The local M1 host also retains supplier runtime custody; each
 call still opens a fresh database/collection lease and reads the current manifest.
@@ -500,7 +500,7 @@ accept new declarations. Fresh initialization requires a proven fresh backing.
 Typed accessors reference the admitted compiled contract; there is no recurring
 proposal/reconciliation/candidate-publication pass on ordinary startup.
 
-For M1, select SHA-256 with the domain prefix `ic-db:schema:v1\0` over the bounded
+For M1, select SHA-256 with the domain prefix `ic-db:compiled-schema:v1\0` over the bounded
 canonical contract bytes. Retain the full 32-byte fingerprint in the minimal
 manifest, without a second competing schema hash. The compiled schema producer
 computes it; reopening compares the admitted identity before row decoding.
@@ -626,15 +626,15 @@ imported/qualified paths. The compiled link stores the exact logical name and a
 function returning static metadata, which breaks recursive constant evaluation.
 Function/static addresses are never durable identity. An iterative traversal visits
 static nodes, coalesces equal definitions by name and refuses conflicting ones;
-registration order cannot affect canonical bytes. Transitive definitions are
-checked on typed access as well as reopen. Constructor collection remains host-only,
+registration order cannot affect canonical bytes. Typed access reuses the exact immutable descriptor admitted by this store.
+Other descriptors must match every reachable definition. Reopen always checks the durable fingerprint. Constructor collection remains host-only,
 and no second mutable registration mechanism is added for named types.
 
 Store admission follows the reachable graph without a separate named-type quota.
 Each record admits up to 32 fields. Enums admit 64 variants and names admit 64 UTF-8 bytes. Nested records
 may be empty. The graph must have a finite value for every type: optional edges,
 unit variants, empty lists and finite payload alternatives provide base cases. A least-fixed-point
-check rejects required-value cycles with no finite constructor. `indirect` boxes a
+check follows required edges between records and enums and rejects cycles with no finite constructor. Scalar wrappers and empty collections supply base cases directly. A nonblank text type requires room for at least one byte and one Unicode scalar. `indirect` boxes a
 named Rust value but does not change its stored representation or contract.
 
 Typed encoding, decoding and borrowed stored-row inspection share a 32-level depth
@@ -650,8 +650,8 @@ selected payload, including explicit presence when that payload is optional.
 The provisional unit-only `Enum` trait/`EnumSchema` give way to one generated
 `Value` codec boundary and finite metadata for both shapes. This trait is a small
 typed codec interface, not IcyDB's materialized universal value representation.
-Named metadata uses `ICDBTY02`, including traversal limits and payload shapes.
-Earlier unit-only manifests refuse intact; scalar-only identities remain unchanged.
+Compiled schema v1 includes traversal limits and payload shapes in its named-types section.
+The new hash domain changes scalar-only and named-type fingerprints alike.
 No fallback decoder or migration is implied. `db schema` renders each reachable
 record/enum/set/map definition once, using names for recursive links.
 
@@ -2529,6 +2529,8 @@ retained capability scope. Later detail explains the implementation and evidence
 
 **Disposition.** Close feature work for this bounded M2 contract. The composition review and selected SQLite and installed Wasm probes identified no outstanding correctness blocker for these combinations. A wider type/operation combination needs its own admission rule and witness. For M4 adoption, two measured costs remain: 4,504 Wasm bytes per added entity from 8 to 32 in the eight-shape fixture, and 50.30M instructions for a grouped count selecting 415 of 511 rows (32.12M on legacy). Controlled write schedules establish job invalidation and completion behavior; acceptance under real application traffic remains workload-specific. [Closeout measurements](../../qualification/README.md#bounded-m2-closeout-on-pocketic-0276-worktree)
 
+M4 rechecked both costs on 0.27.8. For the dense category, an owner-validated scalar count with identical predicates used 50.05M instructions and grouping used 50.12M. The eight-shape Wasm slope remained 4,504 bytes per entity from 8 to 32. Within one 64-alternative enum, distinct named scalar payloads added 4,090 bytes over sharing one type. Warm typed query work also increased, leading to the [paired typed-admission experiment](../../qualification/README.md#typed-admission-on-compiled-schema-v1). [Grouped cost controls](../../qualification/README.md#dense-grouped-count-on-0278) and [named-type growth](../../qualification/README.md#entity-and-named-type-growth-on-0278).
+
 #### Application qualification
 
 The [skewed application workload](../../qualification/README.md#skewed-application-workload-02310)
@@ -3311,7 +3313,7 @@ checks that the row belongs to the visited index entry.
 may traverse a non-unique equality prefix when the remaining key produces primary-key
 order. Admission uses the same membership and ordering proofs as an explicit
 primary-key order. Index reads validate the owners visited within that range.
-Primary cursors from earlier releases resume on primary storage.
+Pre-cut cursors fail the schema binding check.
 Frozen IcyDB `6d421e3` distinguishes unordered traversal from primary order in
 `db/query/plan/planner/prefix/branch_tests.rs`. IC DB promises primary order
 even when the caller omits `order_by`.
@@ -4766,16 +4768,16 @@ The product maintenance gate and copy manifests described in section 4 now close
 ordinary admission during supported transformations. This remains an experimental
 format: arbitrary historical upgrades and live deployment are not authorized.
 
-The scalar contract grammar uses header `ICDBSC01`: five little-endian `u32`
-versions (grammar=2, row codec=3, key codec=1, semantics=2, supplier contract=1),
+The compiled schema v1 hash domain is followed by four little-endian `u32`
+versions (row codec=3, key codec=1, semantics=2, supplier contract=1),
 entity count, then entities ordered by logical name. Each contains its
 length-prefixed name, field count, sorted field names and type tags, primary-key
 name, index count, then indexes ordered by logical name (name, flags byte, ordered
 field names). Index flags use bit 0 for unique and bit 1 for present-only membership.
 Counts/name lengths are `u32` little-endian; names are exact UTF-8. SHA-256 uses
-domain `ic-db:schema:v1\0`. Generated physical handles are derived, not separately
+domain `ic-db:compiled-schema:v1\0`. Generated physical handles are derived, not separately
 serialized into the canonical contract. Supplier contract 1 is qualified here
-against Storage 0.74.1. Earlier grammar 1 used explicit entity/index IDs and excluded
+against Storage 0.74.1. The retired numbered schema used explicit entity/index IDs and excluded
 entity display names. Row codec 1 used Wire, 2 used provisional owned varints,
 and 3 uses owned fixed-width scalars. Earlier numbered manifests refuse intact
 before row decoding, including those already using row codec 3. No implicit
@@ -4790,7 +4792,7 @@ type tag and payload. The item is required and has no reference flag. Including
 these limits in each list descriptor binds scalar-only lists as well as named
 lists to their traversal contract; contracts without lists remain unchanged.
 Optional fields set bit `0x80`. Named types use tag `15` and their length-prefixed
-logical name. If any named definitions are reachable, append `ICDBTY02`,
+logical name. If any named definitions are reachable, append `ic-db:named-types\0`,
 u32 depth/node limits (32/256), a u32 definition count and definitions ordered by
 name. Each begins with kind byte (1=enum, 2=record, 3=set, 4=map), name and u32 member count.
 Sets have one item definition: member count 1, declared maximum count (u32),
@@ -4803,7 +4805,7 @@ tag/optionality/payload. Existing contracts without maps remain unchanged.
 Record members encode name, type tag/optionality and type payload. Enum members
 encode name, strict payload-presence byte and, if present, the payload's type tag,
 optionality and type payload. Counts/name lengths remain little-endian u32.
-Scalar-only schemas have no suffix; earlier `ICDBTY01` manifests refuse intact.
+Scalar-only schemas omit this section. All pre-cut fingerprints refuse intact.
 Text and Blob append their `u32` little-endian maximum byte length. These new tags
 extend the grammar without altering unused type definitions. The codec version
 change independently changes every schema fingerprint and integer row encoding.

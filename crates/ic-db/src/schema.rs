@@ -9,7 +9,7 @@ use crate::{
     primary::RowKey,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 /// Verify producer-owned membership during constant evaluation. Entries are Rust
 /// paths relative to the crate, separated by a character forbidden in identifiers.
@@ -396,13 +396,17 @@ impl EntitySchema {
 }
 
 /// Validated executable schema. It is never reconstructed from stored data.
-/// Clones retain only immutable executable metadata; each database open still
+/// Clones share the admitted entity roster and named definitions; each open still
 /// validates the current durable manifest independently. Revision reads and
 /// writes validate the affected counters when used, without caching them.
 #[derive(Clone)]
 pub struct Schema {
-    entities: Vec<&'static EntitySchema>,
+    metadata: Arc<SchemaMetadata>,
     pub(crate) fingerprint: [u8; 32],
+}
+
+struct SchemaMetadata {
+    entities: Vec<&'static EntitySchema>,
     types: TypeGraph,
 }
 
@@ -435,13 +439,14 @@ impl Schema {
         }
         let mut entities = entities.to_vec();
         entities.sort_by_key(|entity| entity.name);
-        let mut bytes = b"ICDBSC01".to_vec();
-        // Contract grammar, row codec, key codec, semantics, supplier contract.
+        let mut bytes = Vec::new();
+        // The hash domain identifies the compiled schema grammar. These versions
+        // identify independent row, key, semantics and supplier contracts.
         // Supplier contract 1 is qualified with Storage 0.74.1; it is not a guess
         // that every future supplier release uses a compatible collection format.
         // Semantics 2 admits complete physical index keys of at most 512 bytes.
         // Older wider-key contracts refuse intact; stored component bytes are unchanged.
-        for version in [2, crate::codec::ROW_CODEC_VERSION, 1, 2, 1] {
+        for version in [crate::codec::ROW_CODEC_VERSION, 1, 2, 1] {
             bytes.extend(version.to_le_bytes());
         }
         bytes.extend((entities.len() as u32).to_le_bytes());
@@ -645,12 +650,11 @@ impl Schema {
             }
         }
         let mut hash = Sha256::new();
-        hash.update(b"ic-db:schema:v1\0");
+        hash.update(b"ic-db:compiled-schema:v1\0");
         hash.update(bytes);
 
         Ok(Self {
-            entities,
-            types,
+            metadata: Arc::new(SchemaMetadata { entities, types }),
             fingerprint: hash.finalize().into(),
         })
     }
@@ -664,7 +668,7 @@ impl Schema {
     /// Compiled entities in logical-name order, for bounded inspection.
     #[must_use]
     pub fn entities(&self) -> &[&'static EntitySchema] {
-        &self.entities
+        &self.metadata.entities
     }
 
     /// Describe the compiled schema without opening storage. A selected entity
@@ -676,19 +680,19 @@ impl Schema {
     pub fn describe(&self, selected: Option<&str>) -> Result<SchemaDescription<'_>, Error> {
         let (entities, types) = if let Some(name) = selected {
             let position = self
-                .entities
+                .entities()
                 .binary_search_by_key(&name, |entity| entity.name)
                 .map_err(|_| Error::UnknownEntity)?;
-            let entity = self.entities[position];
+            let entity = self.entities()[position];
             let mut reachable = TypeGraph::default();
             for field in entity.fields {
                 reachable.include(field.value)?;
             }
-            if !self.types.contains(&reachable) {
+            if !self.metadata.types.contains(&reachable) {
                 return Err(Error::InvalidSchema);
             }
             (
-                &self.entities[position..=position],
+                &self.entities()[position..=position],
                 reachable.definitions().collect(),
             )
         } else {
@@ -702,19 +706,22 @@ impl Schema {
     }
 
     pub(crate) fn entity_by_id(&self, id: u32) -> Option<&'static EntitySchema> {
-        self.entities.iter().copied().find(|entity| entity.id == id)
+        self.entities()
+            .iter()
+            .copied()
+            .find(|entity| entity.id == id)
     }
 
     pub(crate) fn entity_by_name(&self, name: &str) -> Option<&'static EntitySchema> {
-        self.entities
+        self.entities()
             .binary_search_by_key(&name, |entity| entity.name)
             .ok()
-            .map(|position| self.entities[position])
+            .map(|position| self.entities()[position])
     }
 
     /// Reachable named definitions in logical-name order, without expanding cycles.
     pub fn types(&self) -> impl Iterator<Item = &'static crate::TypeSchema> + '_ {
-        self.types.definitions()
+        self.metadata.types.definitions()
     }
 
     // Return the existing admitted descriptor after checking the complete type
@@ -722,6 +729,10 @@ impl Schema {
     // their executable's descriptor address.
     pub(crate) fn admits(&self, proposed: &EntitySchema) -> Result<&'static EntitySchema, Error> {
         let current = self.entity_by_id(proposed.id).ok_or(Error::UnknownEntity)?;
+        // The exact immutable descriptor and its compiled links were checked by Schema::new.
+        if std::ptr::eq(current, proposed) {
+            return Ok(current);
+        }
         if current.max_row_bytes != proposed.max_row_bytes
             || current.name != proposed.name
             || current.fields != proposed.fields
@@ -736,7 +747,7 @@ impl Schema {
                 .include(field.value)
                 .map_err(|_| Error::UnknownEntity)?;
         }
-        if !self.types.contains(&proposed_types) {
+        if !self.metadata.types.contains(&proposed_types) {
             return Err(Error::UnknownEntity);
         }
 

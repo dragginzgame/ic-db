@@ -56,26 +56,41 @@ fn stored_and_indexed_names_preserve_whitespace_and_escaped_nul() {
     }
 }
 
+macro_rules! collection_schema {
+    ($bytes:tt, $($rules:tt)*) => {{
+        #[newtype(name = "CollectionName", item(prim = "Text", max_bytes = $bytes), validate($($rules)*))]
+        struct Name {}
+        #[entity(
+            name = "Collection",
+            store = ic_db::testing::FixtureStore,
+            pk(field = "id"),
+            index(field = "name", unique),
+            fields(
+                field(name = "id", value(item(prim = "Nat64"))),
+                field(name = "name", value(item(is = "Name")))
+            )
+        )]
+        struct Row {}
+        Schema::new(&[Row::SCHEMA])
+    }};
+}
+
+#[test]
+fn non_blank_requires_room_for_one_character() {
+    assert!(matches!(
+        collection_schema!(0, non_blank),
+        Err(Error::InvalidSchema)
+    ));
+    assert!(matches!(
+        collection_schema!(1, non_blank, max_chars = 0),
+        Err(Error::InvalidSchema)
+    ));
+    assert!(collection_schema!(1, non_blank, max_chars = 1).is_ok());
+    assert!(collection_schema!(0, max_chars = 0).is_ok());
+}
+
 #[test]
 fn rule_order_has_one_identity_and_a_changed_limit_requires_transition() {
-    macro_rules! schema {
-        ($($rules:tt)*) => {{
-            #[newtype(name = "CollectionName", item(prim = "Text", max_bytes = 200), validate($($rules)*))]
-            struct Name {}
-            #[entity(
-                name = "Collection",
-                store = ic_db::testing::FixtureStore,
-                pk(field = "id"),
-                index(field = "name", unique),
-                fields(
-                    field(name = "id", value(item(prim = "Nat64"))),
-                    field(name = "name", value(item(is = "Name")))
-                )
-            )]
-            struct Row {}
-            Schema::new(&[Row::SCHEMA]).unwrap()
-        }};
-    }
     let fixture = Fixture::new("test.names.v1");
     let current = || Schema::new(&[Collection::SCHEMA]).unwrap();
     let mut db = fixture.create(current(), [1; 16]).unwrap();
@@ -87,10 +102,10 @@ fn rule_order_has_one_identity_and_a_changed_limit_requires_transition() {
     batch.insert(&row).unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let reordered = schema!(max_chars = 50, non_blank);
+    let reordered = collection_schema!(200, max_chars = 50, non_blank).unwrap();
     assert_eq!(current().fingerprint(), reordered.fingerprint());
     drop(fixture.open(reordered).unwrap());
-    let tightened = schema!(non_blank, max_chars = 40);
+    let tightened = collection_schema!(200, non_blank, max_chars = 40).unwrap();
     assert_ne!(current().fingerprint(), tightened.fingerprint());
     assert!(fixture.open(tightened).is_err());
     assert_eq!(

@@ -100,10 +100,29 @@ fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
 // The profile endpoint times open and execution separately on the same artifact.
 // Legacy supplies its maintained result as the control for each IC DB path.
 fn prefix_counts(source: &[Row], legacy: bool) -> Vec<Case> {
-    let mut cases = Vec::new();
+    let (method, id, request) = if legacy {
+        ("count_rows", 8, encode(8, &None::<u64>))
+    } else {
+        ("count_profile", 9, encode(9, &(6_u8, None::<u64>)))
+    };
+    let mut cases = vec![Case {
+        name: "count-all".into(),
+        family: "count-entity",
+        method,
+        id,
+        request,
+        expected: Answer::Count(Some(source.len() as u64)),
+        legacy_refuses: false,
+    }];
     for category in [0_u64, 3, 99] {
         let count = source.iter().filter(|row| row.1 == category).count() as u64;
-        for (mode, family) in [(1_u8, "validated"), (5, "entries"), (6, "automatic")] {
+        for (mode, family) in [
+            (1_u8, "validated"),
+            (5, "entries"),
+            (6, "automatic"),
+            (9, "minimum-zero"),
+            (10, "minimum-zero-validated"),
+        ] {
             let (method, id, request) = if legacy {
                 ("count_rows", 8, encode(8, &Some(category)))
             } else {
