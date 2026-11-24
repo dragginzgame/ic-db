@@ -101,7 +101,12 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
     assert_eq!(pic.get_stable_memory(canister).await, full);
     for (operation, handle, sequence) in &mut jobs {
         let step = advance(handle, *operation, *sequence, 1).await.unwrap();
-        assert_eq!((step.2, step.4, step.5), (1, 0, None));
+        let expected = if *operation == 6 {
+            (1, 1, Some("0"))
+        } else {
+            (1, 0, None)
+        };
+        assert_eq!((step.2, step.4, step.5.as_deref()), expected);
         *sequence = step.0;
     }
     // Complete one grouped sum and retain its historical result. Expected values
@@ -353,12 +358,12 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         let handle = start().await;
         let mut sequence = 0;
         let mut revision = None;
-        for call in 1..=9 {
+        for call in 1..=8 {
             let step = advance(&handle, sequence, 12).await.unwrap();
             assert_eq!(step.1, *revision.get_or_insert(step.1));
             assert_eq!(step.2, (call * 12).min(96));
             sequence = step.0;
-            if call == 9 {
+            if call == 8 {
                 assert_eq!((step.4, step.5), (1, Some(base.to_string())));
                 break;
             }
@@ -380,11 +385,10 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         }
         controlled(control(0, &handle).await.unwrap());
         assert!(advance(&handle, sequence, 12).await.is_err());
-        eprintln!("schedule={name} rows=96 work=12 advances=9 outcome=complete sum={base}");
+        eprintln!("schedule={name} rows=96 work=12 advances=8 outcome=complete sum={base}");
     }
 
     // Start at each of four offsets before the next committed source write.
-    // A full final chunk still needs another call to establish end of input.
     for work in [12_u32, 48] {
         let mut completions = 0;
         for calls_before_write in 1..=4 {
@@ -401,7 +405,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             }
             assert_eq!(write(1, 12, 0).await, Ok(()));
             let outcome = advance(&handle, sequence, work).await.unwrap();
-            if calls_before_write * work > 96 {
+            if calls_before_write * work >= 96 {
                 assert_eq!(
                     (outcome.2, outcome.4, outcome.5),
                     (96, 1, Some(base.to_string()))
@@ -466,12 +470,12 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     let handle = start().await;
     let mut sequence = 0;
     let mut captured_revision = 0;
-    for call in 1..=9 {
+    for call in 1..=8 {
         let step = advance(&handle, sequence, 12).await.unwrap();
         sequence = step.0;
         captured_revision = step.1;
 
-        if call == 9 {
+        if call == 8 {
             assert_eq!(
                 (step.2, step.4, step.5),
                 (96, 1, Some((base + changes).to_string()))
@@ -488,7 +492,7 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     );
     controlled(control(0, &handle).await.unwrap());
     eprintln!(
-        "schedule=quiet-after-writes advances=9 outcome=complete sum={}",
+        "schedule=quiet-after-writes advances=8 outcome=complete sum={}",
         base + changes
     );
     owned.drop().await;

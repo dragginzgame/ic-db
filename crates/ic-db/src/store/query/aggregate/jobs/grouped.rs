@@ -383,8 +383,21 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         field: Option<&str>,
         summary_sum: Option<crate::ValueSchema>,
     ) -> Result<GroupJob<'p>, Error> {
-        let groups = self.admit_groups(&plan, reducer, summary_sum)?;
-        let binding = field_binding(group_binding(&plan, &groups, self.request.rows)?, field);
+        GroupJob::admit(&self.request, E::SCHEMA, plan, reducer, field, summary_sum)
+    }
+}
+
+impl<'p> GroupJob<'p> {
+    fn admit(
+        request: &super::Request<'_>,
+        entity: &crate::EntitySchema,
+        plan: Plan<'p>,
+        reducer: Reducer,
+        field: Option<&str>,
+        summary_sum: Option<crate::ValueSchema>,
+    ) -> Result<Self, Error> {
+        let groups = request.admit_groups(entity, &plan, reducer, summary_sum)?;
+        let binding = field_binding(group_binding(&plan, &groups, request.rows)?, field);
 
         Ok(GroupJob {
             plan,

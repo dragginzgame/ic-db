@@ -11,10 +11,10 @@ IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable co
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.29.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.30.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.264.0 endpoints built with Wire 0.28.1. The downstream schema probe uses Wire 0.29.0 to exercise IC DB’s public inspection trait. The mounted fixture tests framed transport between the two versions. The frozen IcyDB comparison
+with Canic 0.266.2 endpoints built with Wire 0.29.0. The downstream schema probe uses Wire 0.30.0 to exercise IC DB’s public inspection trait. The mounted fixture tests framed transport between the two versions. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -47,7 +47,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.264.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.266.2 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -268,7 +268,7 @@ The frozen IcyDB source/revision and sibling Canic integration are unchanged.
 
 ## Comparison with frozen IcyDB
 
-The [0.28.1 comparison](#query-matrix-on-0281) covers the broad query host against frozen IcyDB. The [0.27.6 worktree comparison](#query-matrix-for-the-0276-worktree) also covers automatic counts and indexed existence in separate hosts.
+The [0.29.1 worktree comparison](#query-matrix-on-the-0291-worktree) covers the broad query host against frozen IcyDB. The [0.27.6 worktree comparison](#query-matrix-for-the-0276-worktree) also covers automatic counts and indexed existence in separate hosts.
 
 The [November 18 three-engine performance matrix](#three-engine-performance-matrix-0234)
 records the earlier PocketIC run and matched native timings for SQLite.
@@ -397,9 +397,9 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | --- | --- | --- | --- |
 | Stable Storage adoption | Storage 0.78.0 passes the installed count upgrade witness. | At 512 rows, IC DB uses fewer instructions for whole-entity and missing-category counts. IcyDB uses fewer for populated categories. [Measurements](#storage-078-count-comparison) | Other query shapes and larger populations remain open. |
 | Blob queries (0.21) | Native exact-byte comparisons, indexed pages, DISTINCT, groups/extrema, unique changes and corrupt-key refusal; retained winner upgrade probe; synchronous/retained hex CLI | Frozen `6d421e3` rejects Blob index keys | New capability, no matched performance result. 0.22 adds retained CLI payload bounds. [Scope](#blob-query-contract-0210) |
-| Added reachable entity size | From 8 to 32 entities on 0.28.0, each added entity averaged 2,683 raw Wasm bytes for direct operations, 3,482 with one fluent shape and 4,519 with eight | On the matched eight-shape indexed workload, IC DB adds 5,818 bytes per entity and frozen IcyDB adds 9,695 (8–32). | Per-entity growth depends on reachable operations. The roughly 2 KB objective and 4 KB guideline remain open for broad fluent use. [IC DB attribution](#reachable-queries-per-entity-on-0280) · [Matched growth](#matched-per-entity-wasm-growth) |
+| Added reachable entity size | From 8 to 32 entities on 0.28.0, each added entity averaged 2,683 raw Wasm bytes for direct operations, 3,482 with one fluent shape and 4,519 with eight | On the matched eight-shape indexed workload, IC DB adds 5,818 bytes per entity and frozen IcyDB adds 9,695 (8–32). | Per-entity growth depends on reachable operations. The matched eight-shape slope fits the current 8 KiB budget. [IC DB attribution](#reachable-queries-per-entity-on-0280) · [Matched growth](#matched-per-entity-wasm-growth) |
 | ID membership and indexed empty Text | Six matched handler costs on 0.26.10 and the 0.26.11 candidate | Release-to-release comparison | Early existence costs 17.1% more, late existence costs 33.8% less. [Filter costs](#filter-costs-before-02611) |
-| Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,670 of 1,908 successful pairs on 0.28.1. The median paired ratio was 0.389. | Owner-validated prefix counts reached 31.62× legacy. This workload uses three Nat64 fields. [Current measurements](#query-matrix-on-0281) |
+| Broad query matrix | 195 scalar cases over 32/128/511 rows, balanced and skewed, before and after upgrade | IC DB used fewer instructions in 1,670 of 1,908 successful pairs on the 0.29.1 worktree. The median paired ratio was 0.389. | Owner-validated prefix counts reached 31.62× legacy. This workload uses three Nat64 fields. [Current measurements](#query-matrix-on-the-0291-worktree) |
 | Selective grouping and prefix-count candidates | Explicit-index control plus isolated stable-prefix experiment | Index choice helps sparse cases but hurts dense ones; candidate metadata count beats scanned IC DB and legacy metadata in the selected fixture | No automatic planner change or prefix-count product API adopted; write/storage/qualification costs remain explicit. [Paths](#aggregate-access-path-control-019), [candidate](#maintained-prefix-count-candidate-019) |
 | Fluent query shapes and application mapping | Six first-page cases now matched over 32 rows; separate controlled shape/map growth builds | 64.8–73.7% fewer instructions in the selected successful queries | Pagination contracts differ; broader shapes, maps and entity growth remain unmatched. [Receipt](#matched-fluent-first-pages-018) |
 | Complete sparse ID listing | 128 rows, two categories, default-order IC DB and explicit-index control | Automatic IC DB used 51.7–55.1% fewer handler instructions than legacy after upgrade and readiness | Two-row pages on fixed input with last-ID boundaries. [0.23.13 comparison](#automatic-equality-listings-02313) |
@@ -1472,13 +1472,12 @@ The same-build direct control adds 36,136 bytes across seven entities: about
 totals include compiler layout, codecs, metadata, typed boundaries and fixture
 dispatch; they are not isolated removable ownership totals.
 
-Maintainer feedback retains roughly 2 KB as the per-entity objective and roughly
-4 KB as the working comparison ceiling. IcyDB's frozen
+This historical run used a roughly 2 KB per-entity objective and a roughly
+4 KB comparison ceiling. IcyDB's frozen
 [0.251 investigation](https://github.com/dragginzgame/icydb/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/docs/design/archive/0.251-runtime-and-entity-codec-wasm-reduction/0.251-status.md#codec-baseline)
 records a 2 KiB objective and 4,451-byte reachable result after post-link shrinking;
 its older compiler, different workload and separate 8 KiB gate do not redefine
-IC DB's target or provide a matched subtraction baseline. The current reachable
-result is an unresolved size gap, not an accepted budget.
+the comparison used in that run. The measured slope exceeded its budget.
 
 A separate symbol-preserving diagnostic shows shared planning/execution alongside
 eight typed `fetch` wrappers and a large dispatch body containing inlined typed
@@ -3337,6 +3336,19 @@ to IDs. Transport encoding and decoding are outside the counter. The runner
 saves the Wasm, build information and output in `target/evidence/ranked-listing`
 under the qualification workspace.
 
+### ID-ordered listings with a wider index (0.29.1 worktree)
+
+The four-layout PocketIC fixture also lists open items for one project in ascending ID order, with a price ceiling that admits both stored prices. Each page allows two output rows and eight examined candidates. The driver follows every continuation and compares the complete ordered ID sequence with SQLite.
+
+| Project matches out of 128 | Declared index | Owners fetched | Query calls | Total handler instructions |
+| ---: | --- | ---: | ---: | ---: |
+| 90 | (project_id, open) | 90 | 46 | 53,420,501 |
+| 90 | (project_id, open, price) | 128 | 46 | 42,019,444 |
+| 13 | (project_id, open) | 13 | 7 | 8,062,576 |
+| 13 | (project_id, open, price) | 128 | 17 | 16,686,091 |
+
+The narrower index orders each selected prefix by its owner ID. In the wider index, price varies within that prefix, so iterating it cannot deliver global ID order. The primary-key scan preserves pagination but visits all 128 owners. It cost fewer instructions on the dense project and more than twice as many on the sparse project. Reproduce with `make m2-ranked-listing`. The same fixture checks complete sorting at the current work boundary: 89 candidates refuse, and exactly 90 suffice for the SQLite top rows.
+
 ### Ranked listing planner qualification for 0.27.2
 
 On 2026-11-22, two fresh PocketIC 16.1.0 installations ran the ranked-listing fixture above.
@@ -3499,6 +3511,53 @@ The closeout used the local query worktree after v0.27.5, Rust 1.100.0 and the l
 
 For this run, the aggregate-path and growth drivers kept their raw evidence under `qualification/target/evidence/aggregate-paths-0276-closeout/` and `query-growth-0276-closeout/` respectively. Set `IC_DB_QUERY_MATRIX_DIR` and `IC_DB_QUERY_GROWTH_DIR` to select separate output directories on a rerun.
 
+### Query matrix on the 0.29.1 worktree
+
+At `494f014` plus the recorded qualification changes, the two installed hosts produced all 4,680 expected outcomes before and after upgrade. Every case on both engines repeated its 0.28.1 handler instruction count exactly. Among the 1,908 successful pairs IC DB used fewer instructions in 1,670, with an upper median IC DB / legacy ratio of 0.389. The largest disadvantage was the owner-validated count of the dense category after upgrade at 511 rows (49,155,061 versus 1,554,501 instructions). The 432 expected legacy sort refusals are excluded. [Family medians and ranges shared by both runs](measurements/0.28.1-query-matrix.tsv)
+
+The raw query-host Wasm sizes were 415,929 bytes for IC DB and 3,295,349 for frozen IcyDB `6d421e3`. Reproduce with `IC_DB_QUERY_MATRIX_DIR="$PWD/qualification/target/evidence/query-matrix-0291" make m2-query-matrix`. The receipt includes per-call results, both Wasm files, the compiler, lockfile and source diff. Growth and schema-owner experiments now compile their generated variants in disposable target directories. Sharing compiled artifacts previously allowed the scalar baseline host to pick up a growth fixture’s generated schema.
+
+#### Unfiltered fluent count admission (0.29.1 worktree)
+
+A plain synchronous `.count()` checks the common request limits and calls the existing typed cardinality read. The store verifies that the entity belongs to its schema. This avoids constructing a row traversal plan and hashing a continuation binding for an operation that visits zero candidates. Every other request shape goes through the existing planner, including filters that can be proven true only after admission.
+
+Two `make m2-count-paths` runs used identical fixture data and qualification settings. Each run verified 384 answers across IC DB and frozen IcyDB. The IC DB figures below are median canister instructions including database opening, across balanced and skewed inputs before and after upgrade.
+
+| Rows | Plain count before | Plain count after |
+| ---: | ---: | ---: |
+| 32 | 497,336 | 480,669 |
+| 128 | 524,160 | 507,144 |
+| 511 | 642,341 | 624,858 |
+
+All 12 plain counts saved between 16,515 and 17,883 instructions. The other 180 IC DB controls took 19–67 additional instructions. The stripped count-profile host grew from 392,128 to 392,412 bytes. The comparison concerns synchronous fluent counts. Retained jobs still bind requests to their original input and revision.
+
+#### Order admission for filtered counts (0.29.1 worktree)
+
+An aggregate without a requested row order or explicit index starts from the primary path. Its terminal can then select a covered index or validated row traversal using the admitted predicates. Returning that initial path before testing for a single primary-key match avoids testing equality solely to establish row order. Explicit index admission, predicate validation, work accounting and retained query bindings keep their existing owners.
+
+Compared with the preceding plain-count build, the installed count matrix produced the same 384 answers across both engines. All 36 automatic category counts saved 801 instructions each. Adding the minimum amount predicate saved 1,973 per call for both automatic and owner-validating counts (72 calls). The 72 explicit-index controls cost seven extra instructions each. All 12 bare counts and 192 frozen IcyDB measurements repeated exactly. The stripped IC DB count-profile host grew by 212 bytes, from 392,412 to 392,624. These are fixed planning costs per call, including the same database opening workload in both measurements.
+
+#### Ordinary fluent counts and the default work budget
+
+The broad matrix’s 31.62× case uses explicit owner validation. In the count-profile host, ordinary `.count()` automatically selects a covered index range for the same category equality. Frozen IcyDB `6d421e3` serves that equality from maintained cardinality metadata. These handler instructions include opening the database, with 511 rows settled after upgrade and an explicit 512-candidate IC DB work limit.
+
+| Indexed category | Matches | Fluent count | Owner-validated count | Legacy maintained count |
+| --- | ---: | ---: | ---: | ---: |
+| Balanced, 3 | 128 | 1,728,088 | 16,601,471 | 1,497,435 |
+| Skewed, 0 | 415 | 3,819,188 | 49,371,781 | 1,553,991 |
+| Skewed, 3 | 32 | 1,044,317 | 4,725,599 | 1,561,362 |
+| Skewed, 99 | 0 | 836,225 | 836,503 | 1,559,694 |
+
+A separate control omitted the work limit. The balanced category with exactly 128 matches completed under the default allowance. The skewed category with 415 matches returned `Error::Limit` without a partial answer. An unfiltered count returned all 511 from metadata. These checks passed before and after upgrade, with stable backing preserved. An application can use a larger explicit work limit for a known bounded range. The measurements do not justify maintaining additional counters for every indexed prefix.
+
+Reproduce with `IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-paths-0291-default-budget" make m2-count-paths`. [All 36 equality-prefix comparisons](measurements/0.29.1-prefix-counts.csv)
+
+**Finishing a dense count across updates.** On the 0.29.1 worktree, `make m4-lifecycle` seeded the Canic host with 511 items, 415 belonging to one parent. The application started a retained count with that parent equality and supplied the same predicate on each advance. With a budget of 128 candidates per advance and a quiet source revision, four advances returned the exact count of 415. The driver computed the expected answer from the seed tuples.
+
+Starting and advancing took five update calls, 11,870,740 handler instructions in total, 2,820,058 instructions at peak and 47,193,460 cycles debited. Explicit cleanup took a sixth update and 223,500 handler instructions, excluded from those totals. The single-call profile above uses a different host and schema. A caller choosing retained work owns the handle and must handle source invalidation.
+
+Two unfinished counts then selected different parents on the same item entity. Each advanced once with a 64-candidate budget. Inserting one item for the smaller parent invalidated both jobs on their next advance. After explicit cancellation and restart, the counts finished at 415 and 97. The larger parent’s count stayed at 415 throughout. A frequently updated parent can therefore interrupt another parent’s retained count even when their index ranges are disjoint.
+
 ### Query matrix on 0.28.1
 
 Released IC DB `3270aae` and frozen IcyDB `6d421e3` ran 195 query cases across two data distributions, three populations and two settled phases (before and after upgrade). All 4,680 outcomes matched the independent oracle, including 432 bounded sorts that legacy refused. Of the 1,908 successful pairs, IC DB used fewer handler instructions in 1,670 and more in 238. The upper median paired IC DB / legacy ratio was 0.389. Each case has equal weight in this comparison. [All family medians and ranges](measurements/0.28.1-query-matrix.tsv).
@@ -3561,6 +3620,10 @@ IC_DB_COUNT_EVIDENCE_DIR="$PWD/qualification/target/evidence/count-paths-0278-fi
 ```
 
 ### Matched per-entity Wasm growth
+
+The IC DB budget is 8,192 uncompressed Wasm bytes per added reachable entity. The paired qualification checks each workload separately across the 24 added entities from 8 to 32. Older receipts use the budget in force when they were recorded.
+
+The isolated 0.29.1 worktree run installed and exercised all 18 variants. From 8 to 32 entities, IC DB added 1,521 bytes per entity for insert and lookup, 2,415 with one indexed listing, and 5,818 with eight listings (rounded). Frozen IcyDB added 4,337, 5,399 and 9,695 bytes respectively. All six slopes repeat the earlier comparison to the nearest byte. The ordinary legacy matrix host also rebuilt byte-for-byte identically while the disposable growth workspace compiled its own schema. [Current artifact sizes and hashes](measurements/0.29.1-matched-growth.tsv)
 
 `make m4-matched-growth` compares the 0.28.2 worktree (runtime from `3270aae`) with frozen IcyDB `6d421e3` on the same logical workload. Each subject has one store, one application update endpoint and 1, 8 or 32 entities. Every entity exposes insert and primary lookup on three Nat64 fields with one compound index on `(category, id)`. The host selects the entity and operation from the request. Both engines use the locked qualification release profile with size optimization, fat LTO and stripped symbols.
 
@@ -3903,6 +3966,91 @@ The same unhinted listing previously fetched entities and collected their IDs. I
 
 The large seeded listing used 0.08% more handler instructions. Uncompressed mixed-host Wasm grew from 1,329,801 to 1,331,382 bytes. The host already uses full-entity reads for its snapshot endpoint. This fixture retains projection to exercise the public scalar result across the migration. The [isolated column listing](#typed-column-listing-on-pocketic-0273) measures projection with larger rows and reports database output bytes separately.
 
+### Installed multi-entity host footprint (0.29.1 worktree)
+
+Two builds of the records qualification canister used the same locked release profile and seeded records schema. The second enabled `mixed-lifecycle`, adding Canic’s database mount, the parent/item/link workload, retained counts, schema-copy support and their Wire handlers. Each Wasm was installed on a fresh PocketIC instance and upgraded to the same executable. The complete stable backing survived upgrade byte for byte on each instance, and both returned the three expected indexed records afterward.
+
+| Host | Raw Wasm bytes | Code-section bytes | Query/update exports | Seeded stable bytes | Install cycles | Stop/upgrade/start cycles |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Records | 1,221,720 | 1,162,309 | 109 | 262,144 | 6,504,562,533 | 2,513,372,480 |
+| Records plus mounted workload | 1,349,361 | 1,286,154 | 113 | 393,216 | 7,176,021,107 | 2,772,793,160 |
+
+The mounted workload added 127,641 uncompressed Wasm bytes (10.4%) in this already populated fixture. This delta includes its application and maintenance code together with Canic. Neither binary represents a production application. Seeded stable bytes are physical backing length; install and upgrade cycles are whole-operation canister balance deltas. A ten-minute simulated cooldown between the two operations replenished the install-code allowance and is excluded from the upgrade delta.
+
+A second build series isolated the entry points in a disposable source copy with Rust 1.100.0, the same lockfile and the same fat-LTO release profile. The rows are cumulative. Each increment includes the newly reachable handler, transport and shared routines first used at that step. Attribution depends on the order.
+
+| Newly reachable in the records host | Raw Wasm bytes | Added bytes | Code-section bytes | Query/update exports |
+| --- | ---: | ---: | ---: | ---: |
+| Records baseline | 1,221,800 | — | 1,162,309 | 109 |
+| Mixed store, schema and retained-job initialization | 1,224,216 | 2,416 | 1,163,522 | 109 |
+| Mounted inspection | 1,229,144 | 4,928 | 1,168,069 | 110 |
+| Mounted snapshot and paged queries | 1,259,995 | 30,851 | 1,198,296 | 111 |
+| Mounted batches, managed replacements and retained counts | 1,323,979 | 63,984 | 1,261,134 | 112 |
+| Migration, validation, publication and cleanup | 1,349,441 | 25,462 | 1,286,154 | 113 |
+
+A separate compile-only control kept all 112 exports and the same request and reply types, then replaced the retained-count dispatch arm with a refusal trap. The artifact fell from 1,323,979 to 1,282,065 bytes. Restoring that arm made 41,914 bytes reachable, about two-thirds of the write increment. It exercises starting and resuming scalar and grouped jobs, expiry and cancellation across the source and target row types. This measures the complete handler and everything the linker can drop with it. It does not separate per-entity duplication from shared job machinery.
+
+Holding the mounted protocol and job lifecycle fixed, a second experiment enabled the same scalar and grouped count operations on one more Rust entity type. The one-type controls returned `Error::InvalidTransition` on the second selector. Both retained the original filtered count on `Item`, cleanup and cancellation. All five Wasm modules validated with identical sets of 112 query/update exports. The binaries were compared at compile time. [Sizes and artifact hashes](measurements/0.29.1-retained-count-growth.tsv)
+
+| Second count target | One type, raw bytes | Two types, raw bytes | Added raw bytes | Added code bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Migration target (same logical `Item`, wider score) | 1,316,657 | 1,323,979 | 7,322 | 7,298 |
+| Separately named `OtherItem` in the same store, identical fields and indexes | 1,316,728 | 1,324,097 | 7,369 | 7,347 |
+
+For the migration pair, vary only the `TargetItem` arm of `CountRequest::Run`. The two-type build reproduced the original mounted write artifact byte for byte. For the same-store pair, declare `OtherItem` alongside `Item` in both builds, always open the source store for that request, and vary only the second arm between refusal and `run_count(db.query::<OtherItem>(), …)`. Both use the same `ParentKey` group projection. Almost the entire increment is executable code. It includes specialization of the fixture's generic dispatch as well as reachable engine code. Two types establish a marginal cost at this composition, not a many-entity growth rate.
+
+The copied baseline and full build each differed from the installed artifacts by 80 bytes outside the code section. Their raw delta reproduced the installed 127,641 bytes exactly. To reconstruct the intermediate builds, enable `mixed-lifecycle`, retain initialization, omit the standalone `mixed_migrate` entry point and add the pinned Canic 0.264.0 mount's original `@method` invocations in inspection, query, write order. Restore the unmodified fixture for the full build. Each intermediate artifact retained every baseline query/update export. Only the two original complete hosts were exercised on PocketIC.
+
+The same records endpoint then moved entry 1 from category 1 to 0 and changed its amount from 11 to 12. The first update followed upgrade and a query. A second update restored the row, and the third replayed the original move against the warm host. After every update the driver checked both complete category listings. The amounts below are canister balance deltas around each update, excluding the verification queries. Two runs on fresh instances reproduced all six charges exactly.
+
+| Indexed replacement | Records cycles | Records plus mounted workload cycles | Increase |
+| --- | ---: | ---: | ---: |
+| First update after upgrade | 9,168,069 | 9,389,874 | 2.42% |
+| Warm update, same move | 7,957,387 | 8,100,122 | 1.79% |
+
+These measurements cover the shared records endpoint while the extra workload is idle. Requests sent through the Canic mount have their own application costs.
+
+Reproduce from the repository root:
+
+```sh
+make m1-records-artifact
+make m4-lifecycle
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" \
+IC_DB_M4_WASM="$PWD/qualification/target/evidence/mixed-lifecycle/host.wasm" \
+bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test mixed_lifecycle compare_records_host_composition -- --exact --ignored --nocapture
+```
+
+#### Sharing aggregate admission across entities
+
+Before the change, the same-store symbol builds showed separate `Query<OtherItem>::aggregate_plan` and `retained_groups` bodies (676 and 673 bytes respectively). Enabling names changed each code section by 558 bytes and preserved the 7,347-byte code delta. Fat LTO also redistributed code between the mounted update dispatcher and its handlers, so adding the largest symbol differences would overstate the opportunity. The product change passes the resolved entity descriptor into shared request planning, group selection and retained-group construction. The typed fluent methods still select the entity. All size decisions below use the stripped release builds.
+
+| Stripped workload | Before, bytes | After, bytes | Bytes saved |
+| --- | ---: | ---: | ---: |
+| Retained counts on one entity | 1,316,728 | 1,311,996 | 4,732 |
+| Same retained counts on two entities | 1,324,097 | 1,317,980 | 6,117 |
+| Increment for the second entity | 7,369 | 5,984 | 1,385 |
+| Complete installed records host | 1,221,720 | 1,218,605 | 3,115 |
+| Complete installed mixed host | 1,349,361 | 1,343,842 | 5,519 |
+
+The two-type build retains 112 query/update exports. The remaining 5,984-byte increment includes typed dispatch and engine operations. Its owner-level breakdown is still open. [Matched build hashes](measurements/0.29.1-retained-count-growth.tsv)
+
+The installed mixed-history suite passed across writes, grouping, retained-job retries, invalidation, upgrade and schema copy. The quiet grouped count fell from 5,238,431 to 5,238,341 handler instructions. The dense filtered count rose from 11,870,740 to 11,870,795 instructions over four advances. Indexed replacement cycle charges matched the earlier table on both hosts. Physical seeded backing and query/update export counts matched as well.
+
+### Mounted indexed updates by batch size
+
+On the 0.29.1 worktree, `make m4-lifecycle` installed the same Canic host on three fresh PocketIC instances. Each started with the same 12 items across four parents. The workload read and updated every item's score, reversing their score order. Only the number of changes sent in each update varied.
+
+| Rows per update | Update calls | Total handler instructions | Peak handler instructions per call | Total cycles charged |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 12 | 16,400,936 | 1,486,650 | 100,579,241 |
+| 4 | 3 | 12,163,442 | 4,210,453 | 33,318,612 |
+| 12 | 1 | 10,281,361 | 10,281,361 | 17,427,365 |
+
+Cycles are the canister balance delta across the measured update calls. Installation, seeding and verification are outside that interval. After each run, snapshots for all four parents matched the independent model, including the indexed order and entity revisions. The item revision advanced once per committed batch.
+
+For these rows, one batch used 37% fewer handler instructions and 83% fewer cycles than twelve calls. Its peak handler work was 6.9 times higher. A second pass gave the last item a reference to a missing parent. With batches of 1, 4 and 12, respectively, 11, 8 and 0 of the second pass’s changes survived. In each case the refused update left stable memory byte-for-byte identical to its state immediately before that call. Retrying just that batch with a valid final command completed the pass. Snapshots after refusal and retry checked the rows, both index orders and entity revisions against the independent model.
+
 ### Returning one managed row from a mounted batch
 
 On the 0.28.2 worktree, `make m4-lifecycle` installed the same Wasm on two fresh PocketIC instances. Each Canic update opened the records store, read two managed rows, queued both replacements and returned the first row. One path used `commit` followed by `get` within the update. The other used `commit_returning`. Both returned the same Wire shape.
@@ -3944,6 +4092,16 @@ The driver also discarded the completion reply, started a second job and moved a
 
 **Cleaning a full store while a count runs.** Five of the 16 jobs reached their deadline one minute before the other eleven. With a removal limit of two, consecutive mounted cleanup calls removed 2, 2 and 1 jobs. These calls cost 8,034,542, 8,068,821 and 7,819,389 cycles respectively, including the Canic update. Between calls the surviving grouped count advanced three items at a time, then completed with all four counts matching the independent model. A fourth cleanup removed zero. That call and attempts to resume the five removed handles preserved the entire stable backing. These are small job frames. The [near-limit cleanup comparison](#near-limit-job-cleanup-on-storage-0788) measures larger records on the same supplier through the standalone qualification host.
 
+On the 0.29.1 worktree, two new jobs took both freed slots immediately after the first cleanup. The driver upgraded the mounted canister, then issued the same cleanup request twice. Those calls removed the remaining two and one expired jobs respectively. The original live count finished with the model’s group counts, both new handles advanced from sequence zero, and all five expired handles refused. Retrying cleanup performs another bounded sweep of the current store, so a caller that misses a reply can continue until a sweep returns zero. Each removal count belongs to that call.
+
+### Live listing after the cursor row is deleted
+
+On the 0.29.0 engine, `make m4-lifecycle` used the existing 128-item Canic fixture to resume a filtered listing across an atomic write. The first page examined eight candidates for parent 1, ending at ID 9 with no matches. A control read from that continuation returned ID 10. One batch then deleted ID 9, moved ID 10 to another parent, made IDs 3 and 12 qualify, and appended qualifying ID 130.
+
+Resuming the original token returned IDs 12 and 130 and skipped ID 3, which had already been passed. Across 14 subsequent pages the driver examined 105 candidates, returned 11 matches and observed three empty continued pages. Both the ordered IDs and examined count matched the independent model restricted to the current parent range after ID 9. The resumed calls used 19,397,389 handler instructions in total, peaking at 1,559,308 in one call. This qualifies live enumeration with an immutable ID tie-breaker and changing filter membership.
+
+**Changing the sort key between pages.** The same fixture uses its existing `(score, id)` index to list four qualifying items with tied scores. Page one returns IDs 132 and 133 at score 100. A control read from that cursor returns 131 and 134. A single batch raises 132’s score to 101 and lowers 131’s to 100. All four items still qualify. Resuming the original cursor now returns 132 and 134, matching the independent model sorted strictly after `(100, 133)`. ID 132 appears twice across pages, while ID 131 moves behind the boundary before the caller sees it. Callers that require every identity exactly once need a stronger enumeration contract.
+
 ### Retained count update budgets in the mounted host (0.28.0)
 
 `make m4-lifecycle` starts two exact item counts on the same warm 128-row database. The source revision stays fixed. The driver checks the answer against its map and checks the advance count against the requested budget, allowing a final call to observe exhaustion. Each job is cancelled after measurement.
@@ -3956,6 +4114,30 @@ The driver also discarded the completion reply, started a second job and moved a
 The larger budget reduced cycle debit by 85.9% and raised the peak handler instructions by 17.7%. Both measurements exclude starting and cancelling the job.
 
 The mounted workload also starts two jobs at the same item revision and gives each nine advances before a single committed update moves an item to another parent. At two candidates per call the job is still running and its next advance reports invalidation, even though the move preserves total cardinality. At 16 candidates per call the ninth advance finishes at 128. Replaying that ninth request after the move returns the same result and checkpoint sequence. Both jobs can then be cancelled. This fixed schedule tests the effect of available update calls; completion under application traffic depends on how many advances the caller can make between source writes.
+
+#### Retained count at the default query work budget (0.29.1 worktree)
+
+The same installed 128-item workload compared three explicit advance budgets on an unchanged source revision. Each job returned 128 and was then cancelled. Cycle totals cover only advances. A final update observes exhaustion when the last chunk exactly fills its budget.
+
+| Candidates per advance | Updates | Total handler instructions | Peak handler instructions | Total cycles |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 65 | 59,981,200 | 996,192 | 519,873,296 |
+| 16 | 9 | 9,627,395 | 1,174,799 | 73,305,578 |
+| 128 | 2 | 3,367,269 | 2,392,135 | 17,522,822 |
+
+Using the existing default-sized budget of 128 cut advance cycles by 76% relative to 16, with approximately twice the peak instructions. This qualifies the throughput tradeoff for this scalar count and row shape.
+
+#### Completing a full final retained chunk (0.29.1 worktree)
+
+At a retained work or input-byte boundary, the scan now checks the existing range iterator for one more lazy entry. It leaves that entry's row and index owner unread. The saved cursor still points after the last processed candidate. The probe adds bounded traversal work on intermediate chunks and can remove a whole update at exhaustion. Ordinary list pages use their existing continuation rules.
+
+| Work per advance | Updates before → after | Advance cycles before → after | Peak handler instructions before → after |
+| ---: | ---: | ---: | ---: |
+| 2 | 65 → 64 | 519,873,296 → 512,527,509 | 996,192 → 1,039,340 |
+| 16 | 9 → 8 | 73,305,578 → 65,330,517 | 1,174,799 → 1,176,148 |
+| 128 | 2 → 1 | 17,522,822 → 9,469,294 | 2,392,135 → 2,391,094 |
+
+All runs returned exactly 128. Cycle totals cover advances only. The unchanged 12-row grouped workload at work 3 finished in four advances and preserved its completed result on retry after a source mutation. The complete mixed host grew by 62 raw Wasm bytes.
 
 ### Skewed application workload (0.23.10)
 
@@ -6339,6 +6521,38 @@ from the broad matrix. IC DB Wasm SHA-256
 `7a2e25d1f090aa59b8e5261c0b33d4b13c0fa86a79cbb2e27985d68e1de6dadc`;
 legacy `88fc1aa3a228ecde1458842a461c6a19612c5b9cf630e7899b8debfe599c491c`.
 
+
+### Indexed existence with a residual equality (0.29.1 worktree)
+
+The 511-row fixture has an index on `(category, id)`. A category equality narrows the candidate range. Checking a second equality on the unindexed amount requires the owner row. The driver uses independent source tuples to find the first match in ID order and checks the exact examined and fetched counts for every successful call. The matched category-only comparison also runs against frozen IcyDB. The additional amount-filter measurements below cover IC DB only.
+
+In the skewed fixture, category zero contains 415 rows. After upgrade the first matching amount appeared on candidate 1 or 64, depending on the request. Amount 1001 was absent.
+
+| Amount | Candidate budget | Outcome | Handler instructions |
+| ---: | ---: | --- | ---: |
+| 370 | 1 | Present | 990,546 |
+| 850 | 63 | Work limit reached | 7,973,894 |
+| 850 | 64 | Present | 8,061,082 |
+| 1001 | 414 | Work limit reached | 49,354,295 |
+| 1001 | 415 | Absent | 49,496,247 |
+
+The same boundaries held before upgrade and on the balanced 127-row category. A positive answer can finish on the final unit of work. An absent amount requires exhausting the selected category; a shorter budget yields `Error::Limit`. Each read set preserved stable backing. Reproduce with `IC_DB_QUERY_MATRIX_DIR="$PWD/qualification/target/evidence/exists-residual-0291" bash scripts/measure-records.sh exists`.
+
+#### Adding amount to the indexed prefix
+
+A disposable build added `(category, amount, id)` alongside `(category, id)`. The same fluent call supplied both equalities and no index hint. Both hit cases examined and fetched one owner. The missing pair examined and fetched zero. All three completed with a budget of one, before and after upgrade on both distributions.
+
+Handler instructions for the skewed 511-row fixture after upgrade, using the same budget in each paired measurement:
+
+| Amount and result | Candidate budget | Original index | With compound index |
+| --- | ---: | ---: | ---: |
+| 370, early hit | 1 | 990,546 | 1,007,134 |
+| 850, late hit | 64 | 8,061,082 | 983,807 |
+| 1001, absent | 415 | 49,496,247 | 812,323 |
+
+Seeding the same 511 skewed rows took 711,873,832 handler instructions with the original index and 864,213,521 with both indexes, a 21.4% increase across the inserts. The compound index paid off most for late hits and misses. The original index already answered an early hit with one owner read. These are fixture measurements for one schema and data distribution.
+
+Reproduce the additional arm by applying the [schema and expected-work patch](experiments/exists-compound-index.patch) in a disposable checkout, then running the same existence comparison with a separate `IC_DB_QUERY_MATRIX_DIR`. The frozen engine retains its original category-only workload.
 
 ### Indexed existence (0.23.7)
 

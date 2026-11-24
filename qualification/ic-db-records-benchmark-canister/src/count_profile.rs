@@ -20,10 +20,14 @@ use std::ops::Bound;
 )]
 fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
     let start = ic_platform_runtime::raw::instruction_counter();
-    if matches!(mode, 0 | 1 | 5..=10) {
+    if matches!(mode, 0 | 1 | 5..=11) {
         let db = database();
         let opened = ic_platform_runtime::raw::instruction_counter();
-        let mut query = db.query::<Entry>().work_limit(512);
+        let mut query = db.query::<Entry>();
+        // Mode 11 exercises the application default. The comparison arms admit 512 candidates.
+        if mode != 11 {
+            query = query.work_limit(512);
+        }
         if matches!(mode, 7 | 8) {
             query = query.filter("id", Comparison::Ge, 1_u64).filter(
                 "id",
@@ -44,7 +48,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
         }
         let count = match mode {
             5 => query.count_index_entries(),
-            6 | 7 | 9 => query.count(),
+            6 | 7 | 9 | 11 => query.count(),
             _ => query.count_validated(),
         };
         let result = match count {

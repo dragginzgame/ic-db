@@ -15,7 +15,7 @@ ARTIFACTS.mkdir(exist_ok=True, parents=True)
 
 
 def check_variant(root, args, refusal=None):
-    env = dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target"), CARGO_PROFILE_RELEASE_STRIP="none")
+    env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"), CARGO_PROFILE_RELEASE_STRIP="none")
     run = subprocess.run(["cargo", *args, "--locked", "-p", PACKAGE], cwd=root,
                          env=env, capture_output=True, text=True)
     if refusal is None and run.returncode == 0:
@@ -72,7 +72,7 @@ def probe(root):
 
     def artifact(name):
         check_variant(root, wasm)
-        binary = QUAL / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
+        binary = root / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
         image = binary.read_bytes()
         assert b"schema_size" in image and b"ic_db_schema_owner_consumer" in image
         for symbol in (b"__register_schema", b"build8__entity", b"build7__store",
@@ -208,7 +208,7 @@ def store_width(root, width):
     (root / "producer/src/model/mod.rs").write_text(model + fillers)
     shutil.copy(templates / "workload.rs", root / "consumer/src/lib.rs")
     check_variant(root, ["build", "--release", "--lib", "--target", "wasm32-unknown-unknown"])
-    binary = QUAL / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
+    binary = root / "target/wasm32-unknown-unknown/release/ic_db_schema_owner_consumer.wasm"
     shutil.copy(binary, ARTIFACTS / f"width-{width}.wasm")
 
 
@@ -218,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix="schema-owner-") as temp:
     if sys.argv[1:] == ["--admission"]:
         subprocess.run(["cargo", "test", "--locked", "-p", "ic-db-schema-owner-producer",
                         "-p", "ic-db-local-schema-test", "--test", "admission", "--test", "schema_build"],
-                       cwd=root, env=dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target")), check=True)
+                       cwd=root, env=dict(os.environ, CARGO_TARGET_DIR=str(root / "target")), check=True)
     elif len(sys.argv) == 3 and sys.argv[1] == "--store-width":
         store_width(root, int(sys.argv[2]))
     elif not sys.argv[1:]:

@@ -724,16 +724,10 @@ fn range_counts_resume_after_reopen_without_visiting_outside_rows() {
             .resume_count(&mut jobs, &handle, first.sequence, time(2))
             .unwrap();
         assert_eq!(second.examined, 4);
-        assert!(matches!(second.outcome, JobOutcome::Running));
-        let final_step = query()
-            .work_limit(1)
-            .resume_count(&mut jobs, &handle, second.sequence, time(3))
-            .unwrap();
-        assert_eq!(final_step.examined, 4);
-        assert!(matches!(final_step.outcome, JobOutcome::Complete(4)));
+        assert!(matches!(second.outcome, JobOutcome::Complete(4)));
         let retry = query()
             .work_limit(1)
-            .resume_count(&mut jobs, &handle, second.sequence, time(3))
+            .resume_count(&mut jobs, &handle, first.sequence, time(3))
             .unwrap();
         assert_eq!(retry.examined, 4);
         assert!(matches!(retry.outcome, JobOutcome::Complete(4)));
@@ -3535,7 +3529,7 @@ fn grouped_numeric_decimal_rounding_and_u256_survive_multiple_steps() {
         .query::<NumericRow>()
         .start_group_sum::<Wide, Price>(&mut jobs, time(0), time(100))
         .unwrap();
-    for sequence in 0..4 {
+    for sequence in 0..3 {
         assert!(matches!(
             db.query::<NumericRow>()
                 .work_limit(1)
@@ -3559,7 +3553,8 @@ fn grouped_numeric_decimal_rounding_and_u256_survive_multiple_steps() {
     }
     let JobOutcome::Complete(s) = db
         .query::<NumericRow>()
-        .resume_group_sum::<Price, Wide>(&mut jobs, &sum, 4, time(2))
+        .work_limit(1)
+        .resume_group_sum::<Price, Wide>(&mut jobs, &sum, 3, time(2))
         .unwrap()
         .outcome
     else {
@@ -3574,7 +3569,7 @@ fn grouped_numeric_decimal_rounding_and_u256_survive_multiple_steps() {
     );
     let JobOutcome::Complete(a) = db
         .query::<NumericRow>()
-        .resume_group_avg::<Wide, Price>(&mut jobs, &avg, 4, time(2))
+        .resume_group_avg::<Wide, Price>(&mut jobs, &avg, 3, time(2))
         .unwrap()
         .outcome
     else {
@@ -3589,7 +3584,7 @@ fn grouped_numeric_decimal_rounding_and_u256_survive_multiple_steps() {
     );
     let JobOutcome::Complete(s) = db
         .query::<NumericRow>()
-        .resume_group_sum::<Wide, Price>(&mut jobs, &decimal_sum, 4, time(2))
+        .resume_group_sum::<Wide, Price>(&mut jobs, &decimal_sum, 3, time(2))
         .unwrap()
         .outcome
     else {
@@ -4288,7 +4283,7 @@ fn retained_distinct_empty_absent_and_text_keys_keep_exact_equality() {
         .query::<LabelRow>()
         .start_count_distinct::<Label>(&mut jobs, time(0), time(100))
         .unwrap();
-    for sequence in 0..6 {
+    for sequence in 0..5 {
         assert!(matches!(
             db.query::<LabelRow>()
                 .work_limit(1)
@@ -4300,7 +4295,8 @@ fn retained_distinct_empty_absent_and_text_keys_keep_exact_equality() {
     }
     assert_eq!(
         db.query::<LabelRow>()
-            .resume_count_distinct::<Label>(&mut jobs, &handle, 6, time(1))
+            .work_limit(1)
+            .resume_count_distinct::<Label>(&mut jobs, &handle, 5, time(1))
             .unwrap()
             .outcome,
         JobOutcome::Complete(3)
@@ -4776,12 +4772,7 @@ fn retained_group_distinct_empty_sparse_and_corrupt_sets_are_explicit() {
         .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 0, time(1))
         .unwrap();
     assert_eq!(step.examined, 1);
-    assert!(matches!(step.outcome, JobOutcome::Running));
-    let JobOutcome::Complete(rows) = query()
-        .resume_group_count_distinct::<Flag, Amount>(&mut jobs, &handle, 1, time(2))
-        .unwrap()
-        .outcome
-    else {
+    let JobOutcome::Complete(rows) = step.outcome else {
         panic!("missing groups")
     };
     assert_eq!(

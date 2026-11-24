@@ -125,10 +125,10 @@ Read the owning design contract before changing its behavior:
   and cold/post-upgrade/warm costs separate. The [comparison matrix](qualification/README.md#comparison-with-frozen-icydb)
   owns receipts, historical baselines and unmeasured gaps. Retain the isolated
   baseline until the maintainer revisits retirement; it is not a release gate.
-- Entity-growth objective remains roughly 2 KB per entity, with roughly 4 KB as
-  the IcyDB comparison ceiling. The design owns current measurements. Do not
-  weaken reachable behavior or increase budgets to pass; read/write regressions
-  require an explicit tradeoff even when Wasm shrinks.
+- Budget 8 KiB (8,192 uncompressed Wasm bytes) per added reachable entity.
+  Use the matched 8-to-32-entity slope at fixed operations and build settings.
+  Below budget, prioritize measured query and write costs. Preserve reachable
+  behavior and report instruction or cycle tradeoffs alongside size savings.
 - Use Storage’s named stable-memory allocations. Preserve the DB-owned codecs and reject incompatible backing intact.
 - Storage source changes needed for this experimental integration are authorized.
   Preserve concurrent sibling work and follow Storage's local instructions; this

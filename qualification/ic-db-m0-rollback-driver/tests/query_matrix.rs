@@ -338,6 +338,9 @@ async fn matched_query_matrix() {
         ];
         if exists {
             expected.push("canister_query category_exists");
+            if !legacy {
+                expected.push("canister_query filtered_exists");
+            }
         } else {
             expected.push("canister_query count_rows");
         }
@@ -498,6 +501,69 @@ async fn matched_query_matrix() {
                             instructions,
                         });
                     }
+                    if exists && !legacy && population == 511 {
+                        let candidates: Vec<_> = source.iter().filter(|row| row.1 == 0).collect();
+                        for amount in [candidates[0].2, candidates[63].2, 1001] {
+                            let first = candidates.iter().position(|row| row.2 == amount);
+                            let needed = first.map_or(candidates.len(), |index| index + 1);
+                            for budget in [needed.saturating_sub(1), needed]
+                                .into_iter()
+                                .filter(|n| *n > 0)
+                            {
+                                let bytes = pic
+                                    .query_call(
+                                        canister,
+                                        canister,
+                                        "filtered_exists",
+                                        encode(
+                                            12,
+                                            &(0_u64, amount, u16::try_from(budget).unwrap()),
+                                        ),
+                                    )
+                                    .await
+                                    .unwrap();
+                                let (result, work): (Option<(bool, u64, u64)>, u64) =
+                                    decode(12, &bytes);
+                                assert_eq!(
+                                    result,
+                                    (budget == needed).then_some((
+                                        first.is_some(),
+                                        needed as u64,
+                                        needed as u64
+                                    ))
+                                );
+                                eprintln!(
+                                    "filtered-exists {profile} {phase} amount={amount} budget={budget} result={result:?} instructions={work}"
+                                );
+                            }
+                        }
+                    }
+                    if count_paths && !legacy && population == 511 {
+                        // Bare count uses metadata. A category count must finish the
+                        // index range within the default 128 candidates, across upgrade.
+                        for category in [None, Some(0_u64), Some(3), Some(99)] {
+                            let matches = source
+                                .iter()
+                                .filter(|row| category.is_none_or(|c| c == row.1))
+                                .count() as u64;
+                            let expected =
+                                (category.is_none() || matches <= 128).then_some(matches);
+                            let bytes = pic
+                                .query_call(
+                                    canister,
+                                    canister,
+                                    "count_profile",
+                                    encode(9, &(11_u8, category)),
+                                )
+                                .await
+                                .unwrap();
+                            assert_eq!(
+                                answer(9, &bytes).0,
+                                Answer::Count(expected),
+                                "default count: {profile}/{phase}/{category:?}, {matches} matches"
+                            );
+                        }
+                    }
                     assert_eq!(
                         pic.get_stable_memory(canister).await,
                         backing,
@@ -655,6 +721,7 @@ async fn paired_entity_growth() {
     let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_MATCHED_GROWTH_DIR").unwrap());
     let mut receipt =
         String::from("engine\tentities\tfluent_shapes\twasm_bytes\tcode_bytes\tsha256\n");
+    let mut eight_entity_bytes = std::collections::BTreeMap::new();
     for count in [1_u8, 8, 32] {
         for shapes in [0_u8, 1, 8] {
             for engine in ["ic-db", "icydb"] {
@@ -740,6 +807,26 @@ async fn paired_entity_growth() {
                     "paired-growth {label} raw={} code={}",
                     facts.identity.bytes, facts.code_section_bytes
                 );
+                if engine == "ic-db" {
+                    const BYTES_PER_ADDED_ENTITY: u64 = 8 * 1024;
+                    match count {
+                        8 => {
+                            eight_entity_bytes.insert(shapes, facts.identity.bytes);
+                        }
+                        32 => {
+                            let added = facts
+                                .identity
+                                .bytes
+                                .saturating_sub(eight_entity_bytes[&shapes]);
+                            assert!(
+                                added <= 24 * BYTES_PER_ADDED_ENTITY,
+                                "{label} added {added} Wasm bytes over 24 entities, budget {}",
+                                24 * BYTES_PER_ADDED_ENTITY
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 let hash = facts
                     .identity
                     .sha256

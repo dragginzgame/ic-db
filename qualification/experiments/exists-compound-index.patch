@@ -1,0 +1,42 @@
+--- a/qualification/ic-db-records-benchmark-canister/src/lib.rs
++++ b/qualification/ic-db-records-benchmark-canister/src/lib.rs
+@@ -419,6 +419,7 @@
+     store = crate::RecordsStore,
+     pk(field = "id"),
+     index(fields = ["category", "id"]),
++    index(fields = ["category", "amount", "id"]),
+     fields(
+         field(name = "id", value(item(prim = "Nat64"))),
+         field(name = "category", value(item(prim = "Nat64"))),
+--- a/qualification/ic-db-m0-rollback-driver/tests/query_matrix.rs
++++ b/qualification/ic-db-m0-rollback-driver/tests/query_matrix.rs
+@@ -506,10 +506,8 @@
+                         for amount in [candidates[0].2, candidates[63].2, 1001] {
+                             let first = candidates.iter().position(|row| row.2 == amount);
+                             let needed = first.map_or(candidates.len(), |index| index + 1);
+-                            for budget in [needed.saturating_sub(1), needed]
+-                                .into_iter()
+-                                .filter(|n| *n > 0)
+-                            {
++                            // The compound prefix can answer each case within one candidate.
++                            for budget in std::collections::BTreeSet::from([1, needed]) {
+                                 let bytes = pic
+                                     .query_call(
+                                         canister,
+@@ -524,14 +522,8 @@
+                                     .unwrap();
+                                 let (result, work): (Option<(bool, u64, u64)>, u64) =
+                                     decode(12, &bytes);
+-                                assert_eq!(
+-                                    result,
+-                                    (budget == needed).then_some((
+-                                        first.is_some(),
+-                                        needed as u64,
+-                                        needed as u64
+-                                    ))
+-                                );
++                                let hits = u64::from(first.is_some());
++                                assert_eq!(result, Some((first.is_some(), hits, hits)));
+                                 eprintln!(
+                                     "filtered-exists {profile} {phase} amount={amount} budget={budget} result={result:?} instructions={work}"
+                                 );

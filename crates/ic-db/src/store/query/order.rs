@@ -51,6 +51,14 @@ pub(super) fn select<'a>(
     request: &Request<'_>,
     output: super::PlanOutput,
 ) -> Result<Path<'a>, Error> {
+    // Unordered aggregates choose their filtered access path after predicate
+    // admission. Only an explicit index needs order admission at this stage.
+    if request.order.is_none()
+        && request.index.is_none()
+        && matches!(output, super::PlanOutput::Aggregate { .. })
+    {
+        return Ok(Path::Primary);
+    }
     // Plan admission bounds the order to four fields. Indexed paths allocate no
     // additional sort metadata; materialize it only for the complete fallback.
     let mut positions = [SortField {
@@ -126,9 +134,7 @@ pub(super) fn select<'a>(
         return Ok(Path::Index(path, primary_direction));
     }
     let default_primary = request.order.is_none()
-        && (!matches!(output, super::PlanOutput::Rows)
-            || request.distinct
-            || request.fixed_equalities(entity).next().is_none());
+        && (request.distinct || request.fixed_equalities(entity).next().is_none());
     if default_primary {
         return Ok(Path::Primary);
     }

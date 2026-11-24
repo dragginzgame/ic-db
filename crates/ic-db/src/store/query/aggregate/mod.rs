@@ -552,6 +552,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.bytes < 8 {
                 return Err(Error::RowTooLarge);
             }
+            if self.request.is_plain_count() {
+                return self.entity_count();
+            }
             let mut plan = self.aggregate_plan(None, false)?;
             if self.request.index.is_none()
                 && self
@@ -565,12 +568,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                         })
                     })
             {
-                return Ok(Aggregate {
-                    value: self.db.read()?.cardinality::<E>()?,
-                    examined: 0,
-                    fetched: 0,
-                    output_bytes: 8,
-                });
+                return self.entity_count();
             }
             if let Some(count) = probe_members(
                 &self.db,
@@ -601,6 +599,15 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             let reducer = self.count_reducer(None)?;
 
             self.scalar_count_value(&plan, reducer)
+        })
+    }
+
+    fn entity_count(&self) -> Result<Aggregate<u64>, Error> {
+        Ok(Aggregate {
+            value: self.db.read()?.cardinality::<E>()?,
+            examined: 0,
+            fetched: 0,
+            output_bytes: 8,
         })
     }
 
@@ -859,7 +866,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if self.request.groups.page.is_some() {
             return Err(Error::InvalidQuery);
         }
-        let mut groups = self.admit_groups(plan, initial, summary_sum)?;
+        let mut groups = self
+            .request
+            .admit_groups(E::SCHEMA, plan, initial, summary_sum)?;
         let page = execute(
             &self.db.read()?.map,
             E::SCHEMA,
@@ -871,22 +880,46 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok((groups, page))
     }
 
+    fn aggregate_plan(
+        &self,
+        output: Option<&TypeSchema>,
+        group_output: bool,
+    ) -> Result<Plan<'static>, Error> {
+        self.request
+            .aggregate_plan(&self.db, E::SCHEMA, output, group_output)
+    }
+}
+
+impl super::Request<'_> {
+    // Only a plain, bounded request can use entity metadata before planning.
+    // Match every request field so new builder options require an explicit decision.
+    fn is_plain_count(&self) -> bool {
+        matches!(self, Self {
+            predicates,
+            groups,
+            index: None,
+            order: None,
+            order_descending: 0,
+            descending: false,
+            distinct: false,
+            cursor: None,
+            single_result_probe: None,
+            rows: _, work: _, bytes: _, over_limit: _,
+        } if predicates.is_empty() && groups.is_empty() && self.within_limits())
+    }
+
     fn admit_groups(
         &self,
+        entity: &EntitySchema,
         plan: &Plan<'_>,
         initial: Reducer,
         summary_sum: Option<ValueSchema>,
     ) -> Result<Groups, Error> {
-        if summary_sum.is_none()
-            && matches!(self.request.groups.order, Some(GroupOrder::Summary(..)))
-        {
+        if summary_sum.is_none() && matches!(self.groups.order, Some(GroupOrder::Summary(..))) {
             return Err(Error::InvalidQuery);
         }
         Ok(Groups {
-            selection: self
-                .request
-                .groups
-                .admit(E::SCHEMA, &initial, summary_sum)?,
+            selection: self.groups.admit(entity, &initial, summary_sum)?,
             summary_sum,
             mask: plan.projection.ok_or(Error::InvalidQuery)?,
             initial,
@@ -895,23 +928,25 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         })
     }
 
-    fn aggregate_plan(
+    fn aggregate_plan<M: Memory>(
         &self,
+        source: &super::QuerySource<'_, M>,
+        entity: &'static EntitySchema,
         output: Option<&TypeSchema>,
         group_output: bool,
     ) -> Result<Plan<'static>, Error> {
-        if self.request.cursor.is_some()
-            || self.request.distinct
-            || ((self.request.order.is_some() || self.request.descending)
-                && self.request.groups.order != Some(GroupOrder::FirstOccurrence))
+        if self.cursor.is_some()
+            || self.distinct
+            || ((self.order.is_some() || self.descending)
+                && self.groups.order != Some(GroupOrder::FirstOccurrence))
         {
             return Err(Error::InvalidQuery);
         }
-        let db = self.db.read()?;
-        db.schema.admits(E::SCHEMA)?;
+        let db = source.read()?;
+        db.schema.admits(entity)?;
         let mut plan = Plan::admit(
-            E::SCHEMA,
-            &self.request,
+            entity,
+            self,
             db.schema.fingerprint(),
             db.incarnation,
             output.map(super::Projection::Record),
@@ -920,7 +955,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             },
         )?;
         if let Some(mask) = plan.projection {
-            admit_ordered_fields(E::SCHEMA, mask)?;
+            admit_ordered_fields(entity, mask)?;
             plan.selected |= mask;
         }
 

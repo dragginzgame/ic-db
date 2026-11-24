@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.30.0] - Unreleased
+
+### ⚠️ Breaking
+
+- Updated the optional application `wire` feature, CLI and qualification tools to IC Wire 0.30.0. Applications using IC DB types in Wire schemas should use the same Wire version.
+
+### ⚡ Query execution
+
+- Unordered aggregates skip a primary-key equality check used for row ordering. Filtered counts saved 801–1,973 instructions per call in the comparison fixture. [Measured paths](qualification/README.md#order-admission-for-filtered-counts-0291-worktree)
+
+- Plain fluent `.count()` now reads the maintained entity count directly after admission. It saved 16.5k–17.9k instructions per measured call. [Count comparison](qualification/README.md#unfiltered-fluent-count-admission-0291-worktree)
+
+- Retained aggregates now finish on the advance that processes the last candidate, including a full chunk. A 128-row count at work 128 used one advance and 9.47M advance cycles, down from two and 17.52M. [Matched costs](qualification/README.md#completing-a-full-final-retained-chunk-0291-worktree)
+
+- Shared aggregate planning and group admission across entity types. Enabling retained counts on a second entity now adds 5,984 Wasm bytes in the matched fixture, down from 7,369. The complete mixed host shrank by 5,519 bytes. [Before and after](qualification/README.md#sharing-aggregate-admission-across-entities)
+
+### 🎯 Qualification
+
+- Updated the mounted qualification host to Canic 0.266.2. Its endpoints use Wire 0.29.0 and the driver uses Wire 0.30.0.
+
+- Set the matched Wasm growth budget to 8 KiB per added entity. On a 128-row retained count, increasing the advance budget from 16 to 128 reduced cycles by 76% and raised peak instructions per update from 1.17M to 2.39M. [Retained count results](qualification/README.md#retained-count-at-the-default-query-work-budget-0291-worktree)
+
+- Measured whole-host Wasm and install/upgrade cycles for the records fixture with and without the mounted multi-entity workload. The workload added 127,641 bytes and raised the cycle cost of a warm indexed replacement through the shared records endpoint by 1.79%. A controlled build attributed 41,914 bytes to the retained-count handler and its dependencies. Enabling the same operations on a second, identically shaped entity added 7,369 bytes. [Installed host comparison](qualification/README.md#installed-multi-entity-host-footprint-0291-worktree)
+- Checked complete ID-ordered listings against SQLite with narrow and wider indexes. For the sparse project, the wider layout needed 17 calls versus 7 with the narrow index. [Listing measurements](qualification/README.md#id-ordered-listings-with-a-wider-index-0291-worktree)
+- Verified indexed existence with an unindexed amount filter before and after upgrade. A match on candidate 64 succeeded at a budget of 64, and checking absence in a 415-row category required all 415 candidates. Adding a compound index let all three probes finish within one candidate and raised seed insert instructions by 21.4%. [Existence measurements](qualification/README.md#indexed-existence-with-a-residual-equality-0291-worktree)
+- Qualified ordinary fluent counts at the default 128-candidate boundary and measured their cost alongside explicit owner validation and frozen IcyDB. A mounted retained count finished 415 matches in four bounded advances. A write for another parent invalidated an unfinished count on the same entity. [Count results](qualification/README.md#ordinary-fluent-counts-and-the-default-work-budget)
+- Rechecked 4,680 query outcomes against frozen IcyDB and isolated experimental schema builds after a growth fixture interfered with the baseline build. Per-query instruction counts matched the 0.28.1 run on both engines. [Current comparison](qualification/README.md#query-matrix-on-the-0291-worktree)
+- Verified that a filtered listing resumes after an atomic batch deletes its cursor row and changes which items qualify on either side of the cursor. A second case verifies which IDs repeat or are missed when a score used for ordering changes between pages. [Mounted continuation results](qualification/README.md#live-listing-after-the-cursor-row-is-deleted)
+- Measured 12 indexed score updates in batches of 1, 4 and 12 on the mounted Canic host. One batch used 83% fewer cycles than twelve calls and 6.9 times the peak handler instructions. A bad reference in the final batch preserved earlier commits, and retrying that batch completed the writes. [Batch measurements](qualification/README.md#mounted-indexed-updates-by-batch-size)
+- Verified that expired-job cleanup resumes across a canister upgrade after new jobs reuse the freed slots. The running count completed and both new handles remained usable. [Mounted cleanup results](qualification/README.md#mounted-grouped-count-under-interleaved-writes)
+
 ## [0.29.0] - 2026-11-23
 
 ### ⚠️ Breaking

@@ -30,6 +30,8 @@ pub enum CountRequest {
     Cancel(Vec<u8>),
     /// Remove at most this many expired jobs at host time.
     CleanupExpired(u8),
+    /// Run an item count with the given parent equality on the source schema.
+    ForParent(u64, CountAction),
 }
 
 /// Count operations that require a live entity.
@@ -115,6 +117,13 @@ pub enum Query {
         /// Optional candidate budget. The application selects its listing default when omitted.
         work: Option<u16>,
         /// Opaque continuation returned by the previous page.
+        after: Option<Vec<u8>>,
+    },
+    /// List source items at or above a score in ascending (score, ID) order.
+    RankedItems {
+        /// Inclusive lower bound.
+        minimum: u64,
+        /// Continuation returned by the previous ranked page.
         after: Option<Vec<u8>>,
     },
 }

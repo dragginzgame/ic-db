@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
-QUAL = ROOT / "qualification"
 CURRENT = "ic-db-entity-growth-canister"
 FROZEN = "ic-db-icydb-baseline-canister"
 # All eight use an admitted (category, id) range with ascending IDs.
@@ -132,10 +131,10 @@ def build(root, out):
                     ["cargo", "build", "--offline", "--locked", "--release", "--target",
                      "wasm32-unknown-unknown", "-p", package, *features],
                     cwd=workspace, check=True,
-                    env=dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target")),
+                    env=dict(os.environ, CARGO_TARGET_DIR=str(root / "target")),
                 )
                 artifact = package.replace("-", "_") + ".wasm"
-                wasm = QUAL / "target/wasm32-unknown-unknown/release" / artifact
+                wasm = root / "target/wasm32-unknown-unknown/release" / artifact
                 dest = out / f'{"icydb" if frozen else "ic-db"}-{count}-{shapes}.wasm'
                 shutil.copyfile(wasm, dest)
                 print(dest.name, dest.stat().st_size, flush=True)

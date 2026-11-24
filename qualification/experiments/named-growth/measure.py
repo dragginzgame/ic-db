@@ -7,7 +7,6 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
-QUAL = ROOT / "qualification"
 PACKAGE = "ic-db-entity-growth-canister"
 OUT = Path(sys.argv[1]).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
@@ -83,8 +82,8 @@ def measure(root):
         subprocess.run(["cargo", "build", "--locked", "--release", "--target",
                         "wasm32-unknown-unknown", "-p", PACKAGE, "--features", ",".join(features)],
                        cwd=root / "qualification", check=True,
-                       env=dict(os.environ, CARGO_TARGET_DIR=str(QUAL / "target")))
-        wasm = QUAL / "target/wasm32-unknown-unknown/release/ic_db_entity_growth_canister.wasm"
+                       env=dict(os.environ, CARGO_TARGET_DIR=str(root / "target")))
+        wasm = root / "target/wasm32-unknown-unknown/release/ic_db_entity_growth_canister.wasm"
         shutil.copyfile(wasm, OUT / f"{label}.wasm")
         print(label, wasm.stat().st_size, flush=True)
     (OUT / "variants.tsv").write_text("".join(f"{label}\t{n}\n" for label, n, _ in cases))

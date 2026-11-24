@@ -379,7 +379,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     );
     controlled(control(3, &vec![], 0, 0).await.unwrap()); // Noop source replacement.
     controlled(control(4, &vec![], 0, 0).await.unwrap()); // Another entity may change.
-    for sequence in 1..=3 {
+    for sequence in 1..=2 {
         let c = decode(advance(&count, 0, sequence, 2, 0, false).await.unwrap());
         let s = decode(advance(&sum, 1, sequence, 2, 0, false).await.unwrap());
         let a = decode(advance(&average, 2, sequence, 2, 0, false).await.unwrap());
@@ -401,7 +401,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
                 .unwrap(),
         );
 
-        if sequence < 3 {
+        if sequence < 2 {
             assert_eq!((c.4, s.4, a.4, g.4), (0, 0, 0, 0));
             assert_eq!((gs.4, ga.4, d.4, gd.4), (0, 0, 0, 0));
         } else {
@@ -532,15 +532,21 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
         assert!(advance(&handle, operation, 0, 0, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
         let step = decode(advance(&handle, operation, 0, 0, false).await.unwrap());
-        assert_eq!((step.0, step.2, step.4, step.5), (1, 1, 0, None));
-        jobs.push((operation, handle));
+        assert_eq!(
+            (step.0, step.2, step.4, step.5.as_deref()),
+            (1, 1, 1, Some(if operation == 6 { "0" } else { "1:0" }))
+        );
+        jobs.push((operation, handle, step));
     }
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
-    for (operation, handle) in jobs {
+    for (operation, handle, saved) in jobs {
         let retry = decode(advance(&handle, operation, 0, 0, false).await.unwrap());
-        assert_eq!((retry.0, retry.2, retry.4, retry.5), (1, 1, 0, None));
+        assert_eq!(
+            (retry.0, retry.2, retry.4, retry.5.as_deref()),
+            (saved.0, saved.2, saved.4, saved.5.as_deref())
+        );
         let complete = decode(advance(&handle, operation, 1, 0, false).await.unwrap());
         assert_eq!(
             (complete.2, complete.4, complete.5.as_deref()),

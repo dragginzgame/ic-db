@@ -7,6 +7,12 @@ use ic_db::{Batch, Database, Error, QueryCursor};
 type Input = (u64, u64, bool, i64, i64);
 type Page = (Vec<u64>, Option<QueryCursor>, usize, usize);
 
+enum ListingShape {
+    Ranked,
+    FixedOwner,
+    Id,
+}
+
 macro_rules! listing_entity {
     ($name:ident, $([$($component:tt),+]),+) => {
         /// Qualification item carrying its project's listing fields.
@@ -31,15 +37,15 @@ macro_rules! listing_entity {
                     .updated_at(Timestamp::from_millis(millis))).unwrap();
             }
 
-            fn page<const FIXED_OWNER: bool>(db: &Database, ceiling: Decimal, work: usize, limit: usize, after: Option<&QueryCursor>) -> Result<Page, Error> {
-                let prefix = [1_u64.into(), true.into()];
+            fn page(db: &Database, (shape, project): (ListingShape, u64), ceiling: Decimal, work: usize, limit: usize, after: Option<&QueryCursor>) -> Result<Page, Error> {
+                let prefix = [project.into(), true.into()];
                 let query = db.query::<Self>();
-                let mut query = if FIXED_OWNER {
-                    query.using_index("project_id,open", &prefix)
-                        .filter_fields(Self::ID, ic_db::Comparison::Eq, Self::PROJECT_ID)
-                } else {
-                    query.eq(Self::PROJECT_ID, 1_u64).eq(Self::OPEN, true)
-                        .order_by(&[Self::UPDATED_AT, Self::ID]).descending()
+                let mut query = match shape {
+                    ListingShape::FixedOwner => query.using_index("project_id,open", &prefix)
+                        .filter_fields(Self::ID, ic_db::Comparison::Eq, Self::PROJECT_ID),
+                    ListingShape::Ranked => query.eq(Self::PROJECT_ID, project).eq(Self::OPEN, true)
+                        .order_by(&[Self::UPDATED_AT, Self::ID]).descending(),
+                    ListingShape::Id => query.eq(Self::PROJECT_ID, project).eq(Self::OPEN, true).order_by(&[Self::ID]),
                 }.lte(Self::PRICE, ceiling).limit(limit).work_limit(work);
                 if let Some(cursor) = after {
                     query = query.after(cursor);
@@ -88,20 +94,30 @@ fn seed_listing(rows: Vec<Input>) {
     guard = transport::admit::<12>, decode = transport::decode::<_, 12>,
     encode = transport::encode::<_, 12>, max_bytes = 65_536, on_error = crate::transport::endpoint_error)]
 fn ranked_listing(
-    (layout, cents, work, limit, after): (u8, i64, usize, usize, Option<QueryCursor>),
+    (layout, project, cents, work, limit, after): (u8, u64, i64, usize, usize, Option<QueryCursor>),
 ) -> (Option<Page>, u64) {
     measure(|| {
         let db = database();
-        let read = match layout {
-            0 => ByProject::page::<false>,
-            1 => ByTime::page::<false>,
-            2 => ByPrice::page::<false>,
-            3 => ByPriceAndTime::page::<false>,
-            4 => ByProject::page::<true>,
+        type Read = fn(
+            &Database,
+            (ListingShape, u64),
+            Decimal,
+            usize,
+            usize,
+            Option<&QueryCursor>,
+        ) -> Result<Page, Error>;
+        let (read, shape): (Read, _) = match layout {
+            0 => (ByProject::page, ListingShape::Ranked),
+            1 => (ByTime::page, ListingShape::Ranked),
+            2 => (ByPrice::page, ListingShape::Ranked),
+            3 => (ByPriceAndTime::page, ListingShape::Ranked),
+            4 => (ByProject::page, ListingShape::FixedOwner),
+            5 => (ByProject::page, ListingShape::Id),
+            6 => (ByPrice::page, ListingShape::Id),
             _ => panic!("unknown listing layout"),
         };
         let ceiling = Decimal::try_new(i128::from(cents), 2).unwrap();
-        match read(&db, ceiling, work, limit, after.as_ref()) {
+        match read(&db, (shape, project), ceiling, work, limit, after.as_ref()) {
             Ok(page) => Some(page),
             Err(Error::Limit) => None,
             Err(error) => panic!("unexpected ranked listing error: {error:?}"),

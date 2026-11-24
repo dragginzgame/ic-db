@@ -538,14 +538,10 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(resume(&original, &handle, 0).await.unwrap(), first);
-    let mut sequence = first.0;
-    for examined in [4, 6] {
-        let next = resume(&original, &handle, sequence).await.unwrap();
-        assert_eq!((next.1.as_str(), next.2), ("Running", examined));
-        assert!(next.5.1.is_empty());
-        sequence = next.0;
-    }
-    let complete = resume(&original, &handle, sequence).await.unwrap();
+    let second = resume(&original, &handle, first.0).await.unwrap();
+    assert_eq!((second.1.as_str(), second.2), ("Running", 4));
+    assert!(second.5.1.is_empty());
+    let complete = resume(&original, &handle, second.0).await.unwrap();
     assert_eq!((complete.1.as_str(), complete.2), ("Complete", 6));
     // Empty needle in row 1, a suffix in 3, and two occurrences in 5 count once each.
     assert_eq!(complete.5.1, [vec!["3"]]);
@@ -722,29 +718,26 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 (retry.0, retry.1.as_str(), retry.2, retry.4),
                 (1, "Running", 1, 0)
             );
-            let mut sequence = retry.0;
-            for (work, examined) in [(2_u32, 3), (1_u32, 4)] {
-                let step: Step = call::<Result<Step, String>>(
-                    pic,
-                    canister,
-                    "aggregate_resume",
-                    121,
-                    &(
-                        &selection,
-                        &handle,
-                        sequence,
-                        work,
-                        4096_u32,
-                        1_u32,
-                        None::<Vec<u8>>,
-                    ),
-                )
-                .await
-                .unwrap();
-                assert_eq!((step.1.as_str(), step.2, step.4), ("Running", examined, 0));
-                assert!(step.5.1.is_empty());
-                sequence = step.0;
-            }
+            let step: Step = call::<Result<Step, String>>(
+                pic,
+                canister,
+                "aggregate_resume",
+                121,
+                &(
+                    &selection,
+                    &handle,
+                    retry.0,
+                    2_u32,
+                    4096_u32,
+                    1_u32,
+                    None::<Vec<u8>>,
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!((step.1.as_str(), step.2, step.4), ("Running", 3, 0));
+            assert!(step.5.1.is_empty());
+            let sequence = step.0;
             if index == 0 {
                 let before = pic.get_stable_memory(canister).await;
                 let refusal: Result<Step, String> = call(
@@ -906,11 +899,8 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                     .await
                     .unwrap();
             let first = advance(&selection, &handle, 0, 4096).await.unwrap();
-            assert_eq!(
-                (first.0, first.1.as_str(), first.2, first.4),
-                (1, "Running", 1, 0)
-            );
-            assert!(first.5.1.is_empty());
+            assert_eq!((first.0, first.1.as_str(), first.2), (1, "Complete", 1));
+            assert_eq!(first.5.1, expected);
             jobs.push((selection, handle, expected));
         }
         let before = pic.get_stable_memory(canister).await;
@@ -1028,8 +1018,8 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             assert_eq!((first.1.as_str(), first.2), ("Complete", 0));
             assert_eq!(first.5.1, vec![vec!["0"]]);
         } else {
-            assert_eq!((first.1.as_str(), first.2), ("Running", 1));
-            assert!(first.5.1.is_empty());
+            assert_eq!((first.1.as_str(), first.2), ("Complete", 1));
+            assert_eq!(first.5.1, [vec![if matches { "1" } else { "0" }]]);
         }
         upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
@@ -1088,9 +1078,9 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await
         .unwrap();
-    advance(&selection, &handle, 0, 4096).await.unwrap();
+    // Mutate before the only candidate is consumed; the job is still running.
     replace(vec![1], None).await;
-    let changed = advance(&selection, &handle, 1, 4096).await.unwrap();
+    let changed = advance(&selection, &handle, 0, 4096).await.unwrap();
     assert_eq!(changed.1, "Invalidated");
     assert!(changed.5.1.is_empty());
     call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)

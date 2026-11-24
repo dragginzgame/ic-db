@@ -1952,7 +1952,7 @@ qualify the implemented contract, not a production write-rate distribution or
 completion SLA. The witness reuses existing qualification endpoints and adds no
 product mechanism; the historical M0 candidate remains separate evidence.
 
-The [mounted grouped-count witness](../../qualification/README.md#mounted-grouped-count-under-interleaved-writes) qualifies the end of this interval. A full final chunk can leave exhaustion unobserved. The source revision must remain valid through the call that produces the completed groups. Writes to another entity in the same store can proceed between advances.
+The [mounted grouped-count witness](../../qualification/README.md#mounted-grouped-count-under-interleaved-writes) qualifies the end of this interval. At a full retained chunk boundary, the scanner probes the range iterator for one more lazy entry. Exhaustion finalizes the job in that advance. Otherwise it checkpoints the last processed key and reads the next candidate on resume. The source revision must remain valid through the call that produces the completed groups. Writes to another entity in the same store can proceed between advances.
 
 The 0.19 shared-capacity witness fills all 16 job slots with grouped sums,
 grouped counts, grouped DISTINCT counts and an optional-field count on a second entity.
@@ -2534,7 +2534,7 @@ retained capability scope. Later detail explains the implementation and evidence
 | Projection + DISTINCT | A unique projection or contiguous equal keys can stream. Otherwise, one call can collect a complete bounded set. | Scattered duplicates require state. The synchronous collector admits up to 32 distinct tuples within its work, result and byte limits. Retained DISTINCT can page up to 255 completed tuples if the job fits its 16 KiB frame. |
 | Ordering without a matching index, including sorted DISTINCT | Inspect the complete admitted input and retain the best 1–32 results. For non-unique projected tuples, sorted DISTINCT requires that the order lead with the varying projected fields after equality proofs. | No fallback sort cursor. An unsupported DISTINCT order refuses. Insufficient work or retained space refuses the whole result. An explicit index must supply the requested order. |
 | Filter + scalar or grouped aggregate | Counts, extrema, sums, averages and supported summaries use qualifying input. Group predicates, aggregate ordering and output limits apply to completed groups. | A row limit cannot truncate aggregate input. Row-page cursors cannot serve as aggregate checkpoints. Grouped reductions admit up to 32 groups before group filtering. State and output must also fit the selected operation’s byte bounds. |
-| Retained exact aggregate + writes + completed pages | Steps resume against the captured entity revision. Group filtering and ordering precede completed-output pagination. | A committed source change invalidates a running job. Retrying is explicit. Unrelated writes allow progress. An already completed result remains independently pageable within its lifecycle. |
+| Retained exact aggregate + writes + completed pages | Steps resume against the captured entity revision. Group filtering and ordering precede completed-output pagination. | A committed change to the source entity invalidates a running job, including a write outside its filter. Writes to other entities allow progress. Retrying is explicit. An already completed result remains independently pageable within its lifecycle. |
 
 **Sort decision.** Keep the bounded complete sorter. The largest qualified open-ended workload sorts 512 candidates with a 512-candidate budget, up to four requested sort fields, a 4 KiB comparison key and 128 KiB of retained key/output buffers. Use an order-producing index for larger live listings. Reopen cross-message sorting when an actual query needs an order that an index cannot supply and the consumer can specify input consistency, page semantics and space. Frozen IcyDB’s `6d421e3` executor also separates order admission from bounded selection. Its larger-window machinery has no demonstrated need at a 32-result limit.
 
@@ -2546,11 +2546,13 @@ On 0.28.0, the 8-to-32-entity growth was 2,683 bytes per entity with direct oper
 
 Three fetch-wrapper experiments on 0.28.1 left the eight-shape slope above the comparison ceiling. Keep the shared raw executor and the existing session read borrow through typed entity decoding. Revisit this boundary if a candidate preserves that lifetime and improves the measured size and read costs. [Matched PocketIC runs](../../qualification/README.md#fetch-wrapper-experiments-on-0281).
 
-The [matched per-entity growth comparison](../../qualification/README.md#matched-per-entity-wasm-growth) exercises the same inserts, key lookups and indexed listings on both engines. From 8 to 32 entities, IC DB adds 40% fewer bytes per entity with eight fluent shapes. At 5,818 bytes it still exceeds the roughly 4 KB guideline. Report direct operations and repeated fluent calls separately, and retain read-cost checks when changing either boundary.
+The [matched per-entity growth comparison](../../qualification/README.md#matched-per-entity-wasm-growth) exercises the same inserts, key lookups and indexed listings on both engines. From 8 to 32 entities, IC DB adds 40% fewer bytes per entity with eight fluent shapes. At 5,818 bytes per entity it fits the 8 KiB budget. Report direct operations and repeated fluent calls separately, and retain read-cost checks when changing either boundary.
 
 For dense-category grouped reads, a declared equality-plus-range index reduced cost when the amount predicate excluded most owners. On 0.28.1 it also raised the full-category count and insert costs. The fluent query already benefits without a hint. Keep index choice workload-specific. [Matched reads and writes](../../qualification/README.md#grouped-count-with-a-compound-range-index).
 
 #### Application qualification
+
+The [installed host comparison](../../qualification/README.md#installed-multi-entity-host-footprint-0291-worktree) measures Wasm and install/upgrade cycles for the records fixture with and without the mounted workload. Sharing aggregate admission through the resolved entity descriptor reduced the combined delta from 127,641 to 125,237 bytes. In a separate matched pair, enabling the same retained counts on a second entity still adds 5,984 bytes. A production canister still needs its own size and cycle budget.
 
 The [skewed application workload](../../qualification/README.md#skewed-application-workload-02310)
 checks a 128-item listing and exact count on the same Canic mount. Moving an
@@ -2559,7 +2561,9 @@ count finishes across upgrade. The fixture measures complete listings before
 and after the first post-upgrade update, with budgets of 1, 8 and 32
 candidates per page and a fixed two-row output limit. The qualification
 application uses eight candidates by default and accepts an explicit budget
-for sparse-page and larger-page comparisons.
+for sparse-page and larger-page comparisons. The [live continuation witness](../../qualification/README.md#live-listing-after-the-cursor-row-is-deleted) also resumes an empty page after its last examined row is deleted and other items enter or leave the filter. A second mounted case holds filter membership fixed and moves two items across a score-order boundary, demonstrating both a repeated ID and a missed ID.
+
+The [mounted batch comparison](../../qualification/README.md#mounted-indexed-updates-by-batch-size) measures total cycles and peak handler work for the same twelve indexed changes committed in batches of one, four and twelve. Each run checks the resulting rows, index order and per-batch revision advancement.
 
 The CLI demonstrates product schemas, bounded queries and aggregates against a
 temporary local fixture. Version 0.18 adds `db migration-demo`
@@ -5481,15 +5485,11 @@ settings while adding entities, query shapes, result-mapping closures and Canic 
 Report total uncompressed Wasm and code-section deltas plus IC instructions/cycles;
 source LOC, generic elegance and native timings cannot establish absence of bloat.
 Include generated codec/field glue and application mapping, not just the shared core.
-Maintainer feedback on 2026-11-16 retains approximately 2 KB per added entity as
-the objective and the approximately 4 KB IcyDB result as the working comparison
-ceiling. The latest 0.18 fluent composition fixture measures approximately 4.30 KB
-per added reachable entity (down from the earlier 5.8 KB result); this remains an
-unresolved size gap. Small query-shape/map increments do not establish acceptable entity
-growth. Attribute the full reachable delta before choosing a reduction; do not
-raise the budget or substitute dead-strippable schema measurements. Historical
-IcyDB thresholds and post-link optimization recipes are separate evidence, not
-automatic IC DB acceptance criteria.
+The current budget is 8 KiB (8,192 raw Wasm bytes) per added reachable entity.
+For each matched workload, subtract the 8-entity build from the 32-entity build
+and divide by 24. The earlier 2 KB objective and 4 KB comparison threshold
+describe historical investigations below. While the measured slopes fit, prioritize
+query and write costs. Continue reporting whole-host size and operation reachability.
 `make m1-entity-growth` now selects the first controlled 1/8/32-entity probe with
 one endpoint and the same typed scalar operations. Its
 [qualification contract](../../qualification/README.md#controlled-entity-growth)

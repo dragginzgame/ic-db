@@ -7891,6 +7891,17 @@ fn exact_counts_and_groups_complete_before_output_limits() {
         ),
         (8, 0, 0, 8)
     );
+    for invalid in [
+        db.query::<Entry>().limit(0),
+        db.query::<Entry>().work_limit(0),
+        db.query::<Entry>().test_output_limit(usize::MAX),
+    ] {
+        assert!(matches!(invalid.count(), Err(Error::Limit)));
+    }
+    assert!(matches!(
+        db.query::<Entry>().order_by(&[Entry::ID]).count(),
+        Err(Error::InvalidQuery)
+    ));
     let groups = db
         .query::<Entry>()
         .filter("id", C::Ge, 3_u64)

@@ -960,7 +960,7 @@ fn console_inspects_and_queries() {
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
             if !options.contains("--entry-id 2") {
-                assert!(section.contains("Running; sequence 1; 1 examined"));
+                assert!(section.contains("Complete; sequence 1; 1 examined"));
             }
         }
         let decimals: [ConsoleCase<'_>; 14] = [
@@ -1000,7 +1000,7 @@ fn console_inspects_and_queries() {
             );
             assert_eq!(section.matches("Complete;").count(), 1);
             assert!(section.contains("Running; sequence 1; 1 examined"));
-            assert!(section.contains("Running; sequence 3; 3 examined"));
+            assert!(section.contains("Complete; sequence 3; 3 examined"));
             let complete = section.find("Complete;").unwrap();
             assert!(!section[..complete].contains(['│', '|']));
         }
@@ -1074,7 +1074,7 @@ fn console_inspects_and_queries() {
             let first_step = if *options == reversed_bounds {
                 "Complete; sequence 1; 0 examined; 0 input bytes"
             } else {
-                "Running; sequence 1; 1 examined"
+                "Complete; sequence 1; 1 examined"
             };
             assert!(section.contains(first_step), "{options}: {section}");
             assert!(!section[..section.find("Complete;").unwrap()].contains(['│', '|']));
@@ -1085,7 +1085,7 @@ fn console_inspects_and_queries() {
         );
         assert_eq!(
             stdout.matches("update call (aggregate_resume):").count(),
-            2 * blobs.len() - 1
+            blobs.len()
         );
         assert_eq!(
             stdout.matches("update call (aggregate_cancel):").count(),

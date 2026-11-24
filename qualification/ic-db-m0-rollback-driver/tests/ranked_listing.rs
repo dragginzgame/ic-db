@@ -9,6 +9,8 @@ const BY_TIME: u8 = 1;
 const BY_PRICE: u8 = 2;
 const BY_PRICE_AND_TIME: u8 = 3;
 const FIXED_OWNER: u8 = 4;
+const ID_BY_PROJECT: u8 = 5;
+const ID_BY_PRICE: u8 = 6;
 
 type Page = (Vec<u64>, Option<Vec<u8>>, usize, usize);
 
@@ -87,13 +89,18 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
             |r| r.get(0),
         )
         .unwrap();
-    let read = async |layout: u8, cents: i64, work: usize, limit: usize, after: Option<Vec<u8>>| {
+    let read = async |layout: u8,
+                      project: u64,
+                      cents: i64,
+                      work: usize,
+                      limit: usize,
+                      after: Option<Vec<u8>>| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "ranked_listing",
-                request(12, &(layout, cents, work, limit, after)),
+                request(12, &(layout, project, cents, work, limit, after)),
             )
             .await
             .unwrap();
@@ -104,7 +111,7 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
     let (mut pages, mut empty, mut examined, mut fetched, mut total) = (0, 0, 0, 0, 0);
     loop {
         assert!(pages <= 128);
-        let (page, instructions) = read(BY_PRICE_AND_TIME, 10_000, 4, 2, cursor.clone()).await;
+        let (page, instructions) = read(BY_PRICE_AND_TIME, 1, 10_000, 4, 2, cursor.clone()).await;
         let (rows, next, work, reads) = page.unwrap();
         assert!(work <= 4 && rows.len() <= 2);
         empty += usize::from(rows.is_empty() && next.is_some());
@@ -126,7 +133,7 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
         "dual index: rows={} pages={pages} empty_continued={empty} examined={examined} fetched={fetched} instructions={total}",
         ids.len()
     );
-    let (page, instructions) = read(BY_TIME, 10_000, 128, 20, None).await;
+    let (page, instructions) = read(BY_TIME, 1, 10_000, 128, 20, None).await;
     let (ids, next, work, reads) = page.unwrap();
     assert_eq!(ids, expected);
     assert!(next.is_none());
@@ -139,7 +146,7 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
             |row| row.get(0),
         )
         .unwrap();
-    let (page, instructions) = read(FIXED_OWNER, 10_000, 128, 2, None).await;
+    let (page, instructions) = read(FIXED_OWNER, 1, 10_000, 128, 2, None).await;
     let (ids, next, work, reads) = page.unwrap();
     assert_eq!(ids, [u64::from(owner)]);
     assert!(next.is_none());
@@ -147,16 +154,16 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
         "fixed owner: ids={ids:?} examined={work} fetched={reads} instructions={instructions}"
     );
 
-    // Even the last candidate cannot prove that no better row follows it.
+    // The complete sort refuses one candidate short and finishes at exact exhaustion.
     assert!(
-        read(BY_PROJECT, 10_000, candidates as usize, 2, None)
+        read(BY_PROJECT, 1, 10_000, candidates as usize - 1, 2, None)
             .await
             .0
             .is_none()
     );
     for limit in [2, 32] {
         let (page, instructions) =
-            read(BY_PROJECT, 10_000, candidates as usize + 1, limit, None).await;
+            read(BY_PROJECT, 1, 10_000, candidates as usize, limit, None).await;
         let (ids, next, work, reads) = page.unwrap();
         assert_eq!(ids, expected[..limit.min(expected.len())]);
         assert_eq!(work, candidates as usize);
@@ -169,7 +176,7 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
         let matches = expected_ids(cents);
         let mut time_work = None;
         for layout in [BY_TIME, BY_PROJECT, BY_PRICE, BY_PRICE_AND_TIME] {
-            let (page, instructions) = read(layout, cents, 128, 2, None).await;
+            let (page, instructions) = read(layout, 1, cents, 128, 2, None).await;
             let (ids, next, examined, fetched) = page.unwrap();
             assert_eq!(ids, matches[..2.min(matches.len())]);
             assert_eq!(
@@ -191,6 +198,51 @@ async fn ranked_listing_matches_sqlite_on_each_layout() {
             }
             println!(
                 "first two: cents={cents} layout={layout} ids={ids:?} examined={examined} fetched={fetched} instructions={instructions}"
+            );
+        }
+    }
+    for project in [1_u32, 2] {
+        let by_id: Vec<_> = sql
+            .prepare(
+                "SELECT id FROM items WHERE project_id=? AND open AND cents<=10001 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([project], |row| row.get::<_, u32>(0).map(u64::from))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for layout in [ID_BY_PROJECT, ID_BY_PRICE] {
+            let mut after = None;
+            let mut ids = Vec::new();
+            let (mut pages, mut examined, mut fetched, mut instructions) = (0, 0, 0, 0);
+            loop {
+                let (page, cost) =
+                    read(layout, u64::from(project), 10_001, 8, 2, after.clone()).await;
+                let (rows, next, work, reads) = page.unwrap();
+                assert!(work <= 8 && rows.len() <= 2);
+                ids.extend(rows);
+                pages += 1;
+                instructions += cost;
+                examined += work;
+                fetched += reads;
+                if next.is_none() {
+                    break;
+                }
+                assert_ne!(next, after);
+                assert!(pages <= 128);
+                after = next;
+            }
+            assert_eq!(ids, by_id);
+            let expected_work = if layout == ID_BY_PROJECT {
+                by_id.len()
+            } else {
+                sql.query_row("SELECT COUNT(*) FROM items", [], |row| row.get::<_, u32>(0))
+                    .unwrap() as usize
+            };
+            assert_eq!((examined, fetched), (expected_work, expected_work));
+            println!(
+                "id-order project={project} layout={layout} rows={} pages={pages} examined={examined} fetched={fetched} instructions={instructions}",
+                ids.len()
             );
         }
     }

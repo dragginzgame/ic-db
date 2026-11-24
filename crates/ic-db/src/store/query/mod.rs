@@ -605,6 +605,13 @@ impl Default for Request<'_> {
 // Request construction depends on operand shapes, not the entity's Rust type.
 // Keep allocation and clause loops out of every typed builder instantiation.
 impl<'a> Request<'a> {
+    fn within_limits(&self) -> bool {
+        !self.over_limit
+            && (1..=32).contains(&self.rows)
+            && (1..=MAX_WORK).contains(&self.work)
+            && (1..=MAX_OUTPUT).contains(&self.bytes)
+    }
+
     // A single-result probe never returns two rows. Once both are proven,
     // the second needs no space in the response.
     fn check_result_count(&self, count: usize) -> Result<(), Error> {
@@ -1675,11 +1682,7 @@ impl<'a> Plan<'a> {
         projection: Option<Projection<'_>>,
         output: PlanOutput,
     ) -> Result<Self, Error> {
-        if request.over_limit
-            || !(1..=32).contains(&request.rows)
-            || !(1..=MAX_WORK).contains(&request.work)
-            || !(1..=MAX_OUTPUT).contains(&request.bytes)
-        {
+        if !request.within_limits() {
             return Err(Error::Limit);
         }
         if !matches!(output, PlanOutput::Aggregate { grouped: true }) && !request.groups.is_empty()
@@ -2170,11 +2173,14 @@ fn execute_inner<M: Memory>(
         };
     // Inspection overwrites every declared field's span, including absent fields.
     let mut spans = [(0_u16, 0_u16); crate::schema::MAX_FIELDS];
-    while let Some(entry) = if plan.descending {
-        entries.next_back()
-    } else {
-        entries.next()
-    } {
+    let mut next_entry = || {
+        if plan.descending {
+            entries.next_back()
+        } else {
+            entries.next()
+        }
+    };
+    while let Some(entry) = next_entry() {
         // An exhausted iterator proves completion even at the candidate budget.
         // Refuse another entry before inspecting its key, value or owner.
         if page.examined == request.work {
@@ -2407,6 +2413,12 @@ fn execute_inner<M: Memory>(
                 // A complete result can use the final work unit. The next iteration
                 // either observes exhaustion or refuses the extra candidate.
                 continue;
+            }
+            // A retained job can finish on a full chunk. Probe the iterator
+            // without fetching another row or index owner. A later advance
+            // resumes after the last processed key and visits the probed entry.
+            if input_bytes.is_some() && next_entry().is_none() {
+                break;
             }
             let resume = if boundary.is_some_and(|key| previous.as_deref() != Some(key)) {
                 Resume::AfterUnemittedClass

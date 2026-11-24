@@ -366,10 +366,19 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
             let db = open(&host, target)?;
 
             if target {
-                run_count::<TargetItem>(&db, &mut jobs, action, now_ms)
+                run_count(db.query::<TargetItem>(), &mut jobs, action, now_ms)
             } else {
-                run_count::<Item>(&db, &mut jobs, action, now_ms)
+                run_count(db.query::<Item>(), &mut jobs, action, now_ms)
             }
+        }
+        CountRequest::ForParent(parent, action) => {
+            let db = open(&host, false)?;
+            run_count(
+                db.query::<Item>().eq(Item::PARENT, parent),
+                &mut jobs,
+                action,
+                now_ms,
+            )
         }
         CountRequest::CleanupExpired(limit) => {
             let removed =
@@ -385,7 +394,7 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
 }
 
 fn run_count<E: Entity>(
-    db: &Database,
+    query: crate::handles::Query<'_, E>,
     jobs: &mut AggregateJobs,
     action: CountAction,
     now_ms: i64,
@@ -394,7 +403,6 @@ fn run_count<E: Entity>(
         CountAction::Start | CountAction::StartGrouped => {
             let now = Timestamp::from_millis(now_ms);
             let expires = Timestamp::from_millis(now_ms + 3_600_000);
-            let query = db.query::<E>();
             let handle = if matches!(action, CountAction::StartGrouped) {
                 query.start_group_count::<ParentKey>(jobs, now, expires)?
             } else {
@@ -405,7 +413,7 @@ fn run_count<E: Entity>(
         }
         CountAction::Resume(bytes, sequence, work) => {
             let handle = JobHandle::from_bytes(&bytes)?;
-            let step = db.query::<E>().work_limit(usize::from(work)).resume_count(
+            let step = query.work_limit(usize::from(work)).resume_count(
                 jobs,
                 &handle,
                 sequence,
@@ -422,8 +430,7 @@ fn run_count<E: Entity>(
         }
         CountAction::ResumeGrouped(bytes, sequence, work) => {
             let handle = JobHandle::from_bytes(&bytes)?;
-            let step = db
-                .query::<E>()
+            let step = query
                 .work_limit(usize::from(work))
                 .resume_group_count::<ParentKey>(
                     jobs,
@@ -546,7 +553,7 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
             let result = open(&runtime(), target)
                 .and_then(|db| {
                     if target {
-                        item_page::<TargetItem>(
+                        parent_page::<TargetItem>(
                             &db,
                             parent,
                             u128::from(minimum).into(),
@@ -555,7 +562,7 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
                             |r| r.id,
                         )
                     } else {
-                        item_page::<Item>(
+                        parent_page::<Item>(
                             &db,
                             parent,
                             minimum.into(),
@@ -569,10 +576,22 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
 
             QueryReply::Items(result, counter() - start)
         }
+        Query::RankedItems { minimum, after } => {
+            let result = open(&runtime(), false)
+                .and_then(|db| {
+                    let ranked = db
+                        .query::<Item>()
+                        .filter(Item::SCORE, Comparison::Ge, minimum)
+                        .order_by(&[Item::SCORE, Item::ID]);
+                    item_page(ranked, 8, after.as_deref(), |r| r.id)
+                })
+                .map_err(refusal);
+            QueryReply::Items(result, counter() - start)
+        }
     }
 }
 
-fn item_page<E: SelectColumns<Key = u64>>(
+fn parent_page<E: SelectColumns<Key = u64>>(
     db: &Database,
     parent: u64,
     minimum: ic_db::IndexValue<'_>,
@@ -580,12 +599,22 @@ fn item_page<E: SelectColumns<Key = u64>>(
     after: Option<&[u8]>,
     id: impl FnOnce(E::Columns) -> Column<E, u64>,
 ) -> Result<ItemPage, Error> {
-    let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
-    let page = db
+    let query = db
         .query::<E>()
         .eq(Item::PARENT, parent)
         .filter(Item::SCORE, Comparison::Ge, minimum)
-        .order_by(&[Item::PARENT, Item::ID])
+        .order_by(&[Item::PARENT, Item::ID]);
+    item_page(query, work, after, id)
+}
+
+fn item_page<E: SelectColumns<Key = u64>>(
+    query: crate::handles::Query<'_, E>,
+    work: u16,
+    after: Option<&[u8]>,
+    id: impl FnOnce(E::Columns) -> Column<E, u64>,
+) -> Result<ItemPage, Error> {
+    let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
+    let page = query
         .work_limit(usize::from(work))
         .limit(2)
         .after_optional(cursor.as_ref())

@@ -163,10 +163,10 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
             .collect::<Vec<_>>()
             .join(",");
         let handle = start(operation).await;
-        let prefix = advance(pic, canister, &handle, operation, 0, rows as u32)
+        let prefix = advance(pic, canister, &handle, operation, 0, (rows - 1) as u32)
             .await
             .unwrap();
-        assert_eq!((prefix.2, prefix.4), (rows, 0));
+        assert_eq!((prefix.2, prefix.4), (rows - 1, 0));
         let complete = advance(pic, canister, &handle, operation, prefix.0, 1)
             .await
             .unwrap();
@@ -183,8 +183,8 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let distinct = start(8).await;
     let mut sequences = [0, 0];
     let mut examined = 0;
-    while examined < rows {
-        let work = (rows - examined).min(16) as u32;
+    while examined < rows - 1 {
+        let work = (rows - 1 - examined).min(16) as u32;
         let step = advance(pic, canister, &grouped, 3, sequences[0], work)
             .await
             .unwrap();
@@ -196,7 +196,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let step = advance(pic, canister, &distinct, 8, 0, rows as u32)
         .await
         .unwrap();
-    assert_eq!((step.2, step.4), (rows, 0));
+    assert_eq!((step.2, step.4), (rows, 1));
     sequences[1] = step.0;
     upgrade().await;
     let before = pic.get_stable_memory(canister).await;
@@ -206,7 +206,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let retry = advance(pic, canister, &grouped, 3, sequences[0] - 1, 16)
         .await
         .unwrap();
-    assert_eq!((retry.0, retry.2, retry.4), (sequences[0], rows, 0));
+    assert_eq!((retry.0, retry.2, retry.4), (sequences[0], rows - 1, 0));
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let mut after = None;
     let mut actual = Vec::new();
@@ -300,7 +300,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     .await
     .unwrap();
     let mut sequence = 0;
-    for examined in (32..=1024).step_by(32) {
+    for examined in (32..1024).step_by(32) {
         let step = advance(pic, bytes_canister, &numeric, 16, sequence, 32)
             .await
             .unwrap();
@@ -312,7 +312,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
                 .unwrap();
         }
     }
-    let done = advance(pic, bytes_canister, &numeric, 16, sequence, 1)
+    let done = advance(pic, bytes_canister, &numeric, 16, sequence, 32)
         .await
         .unwrap();
     let expected = (0..32)
@@ -414,7 +414,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let prefix = advance(pic, bytes_canister, &fresh, 0, prefix.0, 512)
         .await
         .unwrap();
-    assert_eq!((prefix.2, prefix.4), (1024, 0));
+    assert_eq!((prefix.2, prefix.4), (1024, 1));
     let done = advance(pic, bytes_canister, &fresh, 0, prefix.0, 1)
         .await
         .unwrap();
@@ -741,7 +741,7 @@ async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
         expected.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let handle = start(operation, 32).await;
         let mut sequence = 0;
-        for chunk in 0..6 {
+        for chunk in 0..5 {
             // A tiny output allowance does not reject a provisional winner.
             let step = advance(&handle, operation, 32, sequence, 2, 2, &None, 1)
                 .await
@@ -786,7 +786,7 @@ async fn retained_text_winners_preserve_bounds_upgrade_and_pages() {
     // Raw non-UTF-8 bytes survive a retained winner checkpoint and heap loss.
     let handle = start(3, 32).await;
     let saved = advance(&handle, 3, 32, 0, 1, 2, &None, 4096).await.unwrap();
-    assert_eq!((saved.1, saved.4), (0, 1));
+    assert_eq!((saved.1, saved.4), (1, 1));
     upgrade().await;
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(

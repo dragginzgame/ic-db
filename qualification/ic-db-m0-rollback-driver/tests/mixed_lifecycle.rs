@@ -292,8 +292,8 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
         println!(
             "opening/count-advance upgraded={upgraded}: handler_instructions={instructions} update_balance_delta={cycles}"
         );
-        for sequence in 2..=6 {
-            let expected = if sequence == 6 {
+        for sequence in 2..=5 {
+            let expected = if sequence == 5 {
                 CountOutcome::Complete(12)
             } else {
                 CountOutcome::Running
@@ -303,6 +303,91 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
                 CountReply::Advanced(sequence + 1, expected)
             );
         }
+        pic.drop().await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "compares the records and mixed-lifecycle release artifacts"]
+async fn compare_records_host_composition() {
+    for (variant, variable, mounted) in [
+        ("records", "IC_DB_M1_RECORDS_WASM", false),
+        ("mixed", "IC_DB_M4_WASM", true),
+    ] {
+        let path = std::env::var_os(variable).expect(variable);
+        let (wasm, facts) = artifact::read(std::fs::File::open(path).unwrap()).unwrap();
+        assert_eq!(facts.exports.contains("canister_update db_write"), mounted);
+        assert_eq!(facts.exports.contains("canister_query db_query"), mounted);
+        assert!(!facts.exports.contains("canister_update fault_batch"));
+        let endpoints = facts
+            .exports
+            .iter()
+            .filter(|name| {
+                name.starts_with("canister_query ") || name.starts_with("canister_update ")
+            })
+            .count();
+        let pic = instance().await.unwrap();
+        let canister = pic.create_canister().await;
+        pic.add_cycles(canister, 10_000_000_000_000).await;
+        let before = pic.cycle_balance(canister).await;
+        pic.install_canister(canister, wasm.clone(), vec![], None)
+            .await;
+        let installed = pic.cycle_balance(canister).await;
+        // Replenish the install-code allowance outside the measured upgrade interval.
+        pic.advance_time(std::time::Duration::from_secs(600)).await;
+        pic.tick().await;
+        let before_upgrade = pic.cycle_balance(canister).await;
+        let backing = pic.get_stable_memory(canister).await;
+        ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
+            .await
+            .unwrap();
+        let upgraded = pic.cycle_balance(canister).await;
+        assert!(pic.get_stable_memory(canister).await == backing);
+        let category = async |key: u64| {
+            let bytes = pic
+                .query_call(canister, canister, "category", encode(5, &key))
+                .await
+                .unwrap();
+            decode::<Vec<(u64, u64)>>(5, &bytes)
+        };
+        assert_eq!(category(1).await, [(1, 11), (3, 31), (5, 51)]);
+        // Restore the original row between measurements so both moves maintain
+        // the same index entries with the same request and reply.
+        for (phase, key, amount) in [
+            ("first-after-upgrade", 0_u64, 12_u64),
+            ("restore", 1, 11),
+            ("warm", 0, 12),
+        ] {
+            let before_write = pic.cycle_balance(canister).await;
+            let bytes = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "write",
+                    encode(4, &(1_u64, key, amount, 0_u8)),
+                )
+                .await
+                .unwrap();
+            let charge = before_write - pic.cycle_balance(canister).await;
+            decode::<Result<(), u8>>(4, &bytes).unwrap();
+            let (mut even, mut odd) = (vec![(2, 20), (4, 40), (6, 60)], vec![(3, 31), (5, 51)]);
+            if key == 0 {
+                even.insert(0, (1, amount));
+            } else {
+                odd.insert(0, (1, amount));
+            }
+            assert_eq!(category(0).await, even);
+            assert_eq!(category(1).await, odd);
+            println!("host-write variant={variant} phase={phase} cycles={charge}");
+        }
+        println!(
+            "host-composition variant={variant} wasm={} code={} endpoints={endpoints} seeded_stable_bytes={} install_cycles={} stopped_upgrade_cycles={}",
+            facts.identity.bytes,
+            facts.code_section_bytes,
+            backing.len(),
+            before - installed,
+            before_upgrade - upgraded
+        );
         pic.drop().await;
     }
 }
@@ -1052,36 +1137,50 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         }
         write(&mut model, batch).await;
     }
-    let list = async |phase: &str, model: &Model, parent: u64, requested_work: Option<u16>| {
+    let read_page = async |request: Query| {
+        let bytes = pic
+            .query_call(
+                canister,
+                canister,
+                "db_query",
+                application_request(242, &request),
+            )
+            .await
+            .unwrap();
+        let QueryReply::Items(result, cost) = application_reply(242, &bytes) else {
+            panic!("expected items reply")
+        };
+        (result.unwrap(), cost)
+    };
+    let page = async |parent, work, after| {
+        read_page(Query::Items {
+            target: false,
+            parent,
+            minimum: 10,
+            work,
+            after,
+        })
+        .await
+    };
+    let list = async |phase: &str,
+                      model: &Model,
+                      parent: u64,
+                      requested_work: Option<u16>,
+                      continuation: Option<(u64, Vec<u8>)>| {
         let work = requested_work.unwrap_or(8);
         let mut most_examined = 0;
-        let mut after = None;
+        use std::ops::Bound::{Excluded, Unbounded};
+        let (start, mut after) = match continuation {
+            Some((id, cursor)) => (Excluded(id), Some(cursor)),
+            None => (Unbounded, None),
+        };
         let mut found = Vec::new();
         let mut instructions = 0;
         let mut examined = 0;
         let mut peak_instructions = 0;
         let mut empty_continued = 0;
         for page_number in 1..=model.items.len() + 1 {
-            let request = Query::Items {
-                target: false,
-                parent,
-                minimum: 10,
-                work: requested_work,
-                after: after.clone(),
-            };
-            let bytes = pic
-                .query_call(
-                    canister,
-                    canister,
-                    "db_query",
-                    application_request(242, &request),
-                )
-                .await
-                .unwrap();
-            let QueryReply::Items(result, cost) = application_reply(242, &bytes) else {
-                panic!("expected items reply")
-            };
-            let page = result.unwrap();
+            let (page, cost) = page(parent, requested_work, after.clone()).await;
             assert!(page.examined <= u64::from(work));
             assert!(page.ids.len() <= 2);
             peak_instructions = peak_instructions.max(cost);
@@ -1091,15 +1190,17 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             empty_continued += usize::from(page.ids.is_empty() && page.next.is_some());
             found.extend(page.ids);
             if page.next.is_none() {
-                assert_eq!(found, model.snapshot(parent, 10).5);
-                assert_eq!(
-                    examined as usize,
-                    model
-                        .items
-                        .values()
-                        .filter(|(owner, _)| *owner == parent)
-                        .count()
-                );
+                let candidates = model
+                    .items
+                    .range((start, Unbounded))
+                    .filter(|(_, (owner, _))| *owner == parent);
+                let expected: Vec<_> = candidates
+                    .clone()
+                    .filter(|(_, (_, score))| *score >= 10)
+                    .map(|(&id, _)| id)
+                    .collect();
+                assert_eq!(found, expected);
+                assert_eq!(examined as usize, candidates.count());
                 if requested_work.is_none() {
                     assert_eq!(
                         most_examined, 8,
@@ -1123,9 +1224,9 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     };
     let compare_budgets = async |phase: &str, model: &Model| {
         for work in [Some(1), None, Some(32)] {
-            list(phase, model, 1, work).await;
+            list(phase, model, 1, work, None).await;
         }
-        list(phase, model, 2, None).await;
+        list(phase, model, 2, None, None).await;
     };
     let count = async |request| {
         let Reply::Count(result, instructions) = update(Update::Count(request)).await else {
@@ -1158,7 +1259,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     };
     compare_budgets("seeded", &model).await;
     // Hold the source revision fixed and measure only the update calls that advance each job.
-    for work in [2, 16] {
+    for work in [2, 16, 128] {
         let handle = start().await;
         let before = pic.cycle_balance(canister).await;
         let mut instructions = 0;
@@ -1169,10 +1270,10 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             peak = peak.max(cost);
             if let CountOutcome::Complete(value) = outcome {
                 assert_eq!(value, model.items.len() as u64);
-                // A full final chunk may require one more call to observe exhaustion.
+                // These small rows reach the candidate limit before the input-byte limit.
                 let advances = sequence + 1;
                 let full_scan = value.div_ceil(u64::from(work));
-                assert!((full_scan..=full_scan + 1).contains(&advances));
+                assert_eq!(advances, full_scan);
                 let cycles = before - pic.cycle_balance(canister).await;
                 println!(
                     "skew/warm-count work={work} advances={advances} result={value} instructions={instructions} peak={peak} cycles={cycles}"
@@ -1187,13 +1288,13 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             CountReply::Cancelled
         );
     }
-    // Both jobs see the same source revision and get nine turns before the same write.
+    // Both jobs see the same source revision and get eight turns before the same write.
     let slow = start().await;
     let fast = start().await;
     let expected_count = model.items.len() as u64;
-    for sequence in 0..9 {
+    for sequence in 0..8 {
         assert_eq!(resume(&slow, sequence, 2).await.0, CountOutcome::Running);
-        let expected = if sequence == 8 {
+        let expected = if sequence == 7 {
             CountOutcome::Complete(expected_count)
         } else {
             CountOutcome::Running
@@ -1204,11 +1305,11 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     let before = pic.cycle_balance(canister).await;
     let cost = write(&mut model, vec![(1, 1, 128, 1, 10)]).await;
     let cycles = before - pic.cycle_balance(canister).await;
-    let (outcome, invalidate_cost) = resume(&slow, 9, 2).await;
+    let (outcome, invalidate_cost) = resume(&slow, 8, 2).await;
     assert_eq!(outcome, CountOutcome::Invalidated);
     // A caller that missed the terminal reply retries its original sequence.
     assert_eq!(
-        resume(&fast, 8, 16).await.0,
+        resume(&fast, 7, 16).await.0,
         CountOutcome::Complete(expected_count)
     );
     for handle in [slow, fast] {
@@ -1229,7 +1330,11 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         .unwrap();
     compare_budgets("after-upgrade", &model).await;
     let mut advance_cost = first_cost;
-    for sequence in 1..=model.items.len() as u64 {
+    for sequence in 1.. {
+        assert!(
+            sequence <= model.items.len() as u64,
+            "retained count did not finish"
+        );
         let (outcome, cost) = resume(&handle, sequence, 2).await;
         advance_cost += cost;
         if sequence == 1 {
@@ -1246,13 +1351,287 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
                 count(CountRequest::Cancel(handle)).await.0,
                 CountReply::Cancelled
             );
-            pic.drop().await;
-
-            return;
+            break;
         }
         assert_eq!(outcome, CountOutcome::Running);
     }
-    panic!("retained count did not finish");
+    // The first eight candidates for parent 1 end at ID 9. No row
+    // matches yet, so the client only has the opaque continuation.
+    let (first, _) = page(1, None, None).await;
+    assert!(first.ids.is_empty());
+    assert_eq!(first.examined, 8);
+    let after = first.next.expect("sparse first page");
+    let (control, _) = page(1, None, Some(after.clone())).await;
+    assert_eq!(control.ids, [10]);
+
+    // Change membership behind and ahead of the position, delete its
+    // owner, and append a new match. Resume the original token.
+    write(
+        &mut model,
+        vec![
+            (1, 1, 3, 1, 10),
+            (1, 2, 9, 0, 0),
+            (1, 1, 10, 2, 10),
+            (1, 1, 12, 1, 10),
+            (1, 0, 130, 1, 10),
+        ],
+    )
+    .await;
+    list("live-after-batch", &model, 1, None, Some((9, after))).await;
+    // All four rows qualify throughout. Only their order changes between pages.
+    write(
+        &mut model,
+        vec![
+            (1, 0, 131, 1, 101),
+            (1, 0, 132, 1, 100),
+            (1, 0, 133, 1, 100),
+            (1, 0, 134, 1, 101),
+        ],
+    )
+    .await;
+    let ranked = async |after| {
+        read_page(Query::RankedItems {
+            minimum: 100,
+            after,
+        })
+        .await
+        .0
+    };
+    let first = ranked(None).await;
+    assert_eq!(first.ids, [132, 133]);
+    let after = first.next.expect("two more ranked items");
+    assert_eq!(ranked(Some(after.clone())).await.ids, [131, 134]);
+    write(&mut model, vec![(1, 1, 132, 1, 101), (1, 1, 131, 1, 100)]).await;
+    let second = ranked(Some(after)).await;
+    let boundary = (100_u128, 133_u64);
+    let mut remaining: Vec<_> = model
+        .items
+        .iter()
+        .map(|(&id, &(_, score))| (score, id))
+        .filter(|key| *key > boundary)
+        .collect();
+    remaining.sort_unstable();
+    assert_eq!(
+        second.ids,
+        remaining.iter().map(|key| key.1).collect::<Vec<_>>()
+    );
+    assert_eq!(second.ids, [132, 134]);
+    if let Some(after) = second.next {
+        let end = ranked(Some(after)).await;
+        assert!(end.ids.is_empty() && end.next.is_none());
+    }
+    pic.drop().await;
+}
+
+#[tokio::test]
+async fn retained_count_for_a_dense_parent() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    let update = async |request| {
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "db_write",
+                application_request(241, &request),
+            )
+            .await
+            .unwrap();
+        application_reply::<Reply>(241, &bytes)
+    };
+    let write = async |commands| {
+        assert!(matches!(
+            update(Update::Batch(false, commands)).await,
+            Reply::Batch(Ok(()), _)
+        ));
+    };
+    write(vec![(0, 0, 1, 10, 0), (0, 0, 2, 20, 0)]).await;
+    let items: Vec<Command> = (1..=511)
+        .map(|id| {
+            let parent = if id % 16 < 13 { 1 } else { 2 };
+            (1, 0, id, parent, id)
+        })
+        .collect();
+    for chunk in items.chunks(16) {
+        write(chunk.to_vec()).await;
+    }
+    let expected = items.iter().filter(|item| item.3 == 1).count() as u64;
+    assert_eq!(expected, 415);
+    let count = async |request| {
+        let Reply::Count(reply, work) = update(Update::Count(request)).await else {
+            panic!("expected count reply")
+        };
+        (reply.unwrap(), work)
+    };
+    let start = async |parent| {
+        let (CountReply::Started(handle), work) =
+            count(CountRequest::ForParent(parent, CountAction::Start)).await
+        else {
+            panic!("expected count handle")
+        };
+        (handle, work)
+    };
+    let advance = async |parent, handle: &[u8], sequence, budget| {
+        let (reply, work) = count(CountRequest::ForParent(
+            parent,
+            CountAction::Resume(handle.to_vec(), sequence, budget),
+        ))
+        .await;
+        let CountReply::Advanced(next, outcome) = reply else {
+            panic!("expected progress")
+        };
+        assert_eq!(next, sequence + 1);
+        (outcome, work)
+    };
+    let before = pic.cycle_balance(canister).await;
+    let (handle, mut total) = start(1).await;
+    let mut peak = total;
+    let mut sequence = 0;
+    loop {
+        assert!(sequence <= (items.len() as u64).div_ceil(128));
+        let (outcome, work) = advance(1, &handle, sequence, 128).await;
+        sequence += 1;
+        total += work;
+        peak = peak.max(work);
+        if outcome != CountOutcome::Running {
+            assert_eq!(outcome, CountOutcome::Complete(expected));
+            break;
+        }
+    }
+    let cycles = before - pic.cycle_balance(canister).await;
+    let (reply, cleanup) = count(CountRequest::Cancel(handle)).await;
+    assert_eq!(reply, CountReply::Cancelled);
+    println!(
+        "dense-parent matches={expected} advances={sequence} start_and_advance_instructions={total} peak_instructions={peak} start_and_advance_cycles={cycles} cleanup_instructions={cleanup}"
+    );
+
+    // The two parent filters have disjoint matches but share the Item revision.
+    let (dense, _) = start(1).await;
+    let (small, _) = start(2).await;
+    for (parent, handle) in [(1, &dense), (2, &small)] {
+        assert_eq!(
+            advance(parent, handle, 0, 64).await.0,
+            CountOutcome::Running
+        );
+    }
+    write(vec![(1, 0, 512, 2, 512)]).await;
+    for (parent, handle, expected_after_write) in [
+        (1, dense, expected),
+        (2, small, items.len() as u64 - expected + 1),
+    ] {
+        assert_eq!(
+            advance(parent, &handle, 1, 64).await.0,
+            CountOutcome::Invalidated
+        );
+        assert_eq!(
+            count(CountRequest::Cancel(handle)).await.0,
+            CountReply::Cancelled
+        );
+        let (retry, _) = start(parent).await;
+        let mut outcome = CountOutcome::Running;
+        for sequence in 0..5 {
+            outcome = advance(parent, &retry, sequence, 128).await.0;
+            if outcome != CountOutcome::Running {
+                break;
+            }
+        }
+        assert_eq!(outcome, CountOutcome::Complete(expected_after_write));
+        assert_eq!(
+            count(CountRequest::Cancel(retry)).await.0,
+            CountReply::Cancelled
+        );
+    }
+    pic.drop().await;
+}
+
+#[tokio::test]
+async fn compare_mounted_read_modify_write_batch_sizes() {
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let updates: Vec<Command> = (1..=12).map(|id| (1, 3, id, 0, 150 - 11 * id)).collect();
+    for width in [1, 4, 12] {
+        let pic = instance().await.unwrap();
+        let canister = pic.create_canister().await;
+        pic.add_cycles(canister, 10_000_000_000_000).await;
+        pic.install_canister(canister, wasm.clone(), vec![], None)
+            .await;
+        let write = async |commands| {
+            let bytes = pic
+                .update_call(
+                    canister,
+                    canister,
+                    "db_write",
+                    application_request(241, &Update::Batch(false, commands)),
+                )
+                .await
+                .unwrap();
+            let Reply::Batch(result, work) = application_reply(241, &bytes) else {
+                panic!("expected batch reply")
+            };
+            (result, work)
+        };
+        let mut model = Model::default();
+        for (_, commands) in seed_batches() {
+            model.apply(&commands).unwrap();
+            write(commands).await.0.unwrap();
+        }
+        let before = pic.cycle_balance(canister).await;
+        let mut total = 0;
+        let mut peak = 0;
+        for chunk in updates.chunks(width) {
+            model.apply(chunk).unwrap();
+            let (result, work) = write(chunk.to_vec()).await;
+            result.unwrap();
+            total += work;
+            peak = peak.max(work);
+        }
+        let cycles = before - pic.cycle_balance(canister).await;
+        let verify = async |model: &Model| {
+            for parent in 1..=4 {
+                let bytes = pic
+                    .query_call(
+                        canister,
+                        canister,
+                        "db_query",
+                        application_request(242, &Query::Snapshot(false, parent, 143)),
+                    )
+                    .await
+                    .unwrap();
+                let QueryReply::Snapshot(result, _) = application_reply(242, &bytes) else {
+                    panic!("expected snapshot reply")
+                };
+                assert_eq!(result.unwrap(), model.snapshot(parent, 143));
+            }
+        };
+        verify(&model).await;
+        println!(
+            "score-batch width={width} updates={} total_instructions={total} peak_instructions={peak} cycles={cycles}",
+            updates.len() / width
+        );
+        // A second pass ends with a reference to a missing parent.
+        let (earlier, last) = updates.split_at(updates.len() - width);
+        for chunk in earlier.chunks(width) {
+            model.apply(chunk).unwrap();
+            write(chunk.to_vec()).await.0.unwrap();
+        }
+        let mut invalid = last.to_vec();
+        *invalid.last_mut().unwrap() = (1, 1, 12, 999, 0);
+        let before_refusal = pic.get_stable_memory(canister).await;
+        assert_eq!(model.apply(&invalid), Err(5));
+        assert_eq!(write(invalid).await.0, Err(5));
+        assert!(pic.get_stable_memory(canister).await == before_refusal);
+        verify(&model).await;
+
+        // Retry only the refused batch with its valid final command.
+        model.apply(last).unwrap();
+        write(last.to_vec()).await.0.unwrap();
+        verify(&model).await;
+        pic.drop().await;
+    }
 }
 
 #[tokio::test]
@@ -1404,19 +1783,19 @@ async fn grouped_count_under_interleaved_writes() {
         write(&mut model, commands).await;
     }
     // Move the first scanned item on consecutive attempts, including just
-    // before the call that observes exhaustion of the last full chunk.
+    // before the final chunk.
     for (schedule, move_item) in [
         ("quiet", None),
         ("unrelated", None),
         ("source-early", Some((1, 1))),
-        ("source-late", Some((3, 3))),
-        ("source-before-completion", Some((4, 4))),
+        ("source-late", Some((2, 3))),
+        ("source-before-completion", Some((3, 4))),
         ("quiet-retry", None),
     ] {
         let (handle, mut instructions, mut cycles) = start().await;
         let mut invalidated = false;
         let mut examined = 0;
-        for sequence in 0..=4 {
+        for sequence in 0..4 {
             if schedule == "unrelated" && sequence > 0 {
                 write(&mut model, vec![(0, 1, 1, 100 + sequence, 0)]).await;
             }
@@ -1438,7 +1817,7 @@ async fn grouped_count_under_interleaved_writes() {
                 assert_eq!(seen, examined);
             } else if outcome == CountOutcome::Running {
                 assert_eq!(seen, examined + 3);
-                assert!(sequence < 4);
+                assert!(sequence < 3);
                 examined = seen;
                 continue;
             } else {
@@ -1468,7 +1847,7 @@ async fn grouped_count_under_interleaved_writes() {
     let (handle, _, _) = start().await;
     count(request(&handle, 0)).await;
     count(request(&handle, 1)).await;
-    ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
+    ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
     let (checkpoint, _, _) = count(request(&handle, 0)).await;
@@ -1480,15 +1859,12 @@ async fn grouped_count_under_interleaved_writes() {
     let (reply, _) = update(Update::Count(request(&handle, 3))).await;
     assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
     assert!(pic.get_stable_memory(canister).await == before_refusal);
-    for sequence in 2..4 {
-        let (reply, _, _) = count(request(&handle, sequence)).await;
-        assert_eq!(
-            reply,
-            CountReply::GroupAdvanced(sequence + 1, (sequence + 1) * 3, CountOutcome::Running)
-        );
-    }
+    assert_eq!(
+        count(request(&handle, 2)).await.0,
+        CountReply::GroupAdvanced(3, 9, CountOutcome::Running)
+    );
     let expected = model.group_counts();
-    count(request(&handle, 4)).await; // Lose the completion reply as well.
+    count(request(&handle, 3)).await; // Lose the completion reply as well.
     let (unfinished, _, _) = start().await;
     count(request(&unfinished, 0)).await;
     write(&mut model, vec![(1, 1, 1, 2, 10)]).await;
@@ -1502,18 +1878,18 @@ async fn grouped_count_under_interleaved_writes() {
         CountReply::Cancelled
     );
     assert_ne!(model.group_counts(), expected);
-    let (reply, _, _) = count(request(&handle, 4)).await;
+    let (reply, _, _) = count(request(&handle, 3)).await;
     assert_eq!(
         reply,
-        CountReply::GroupAdvanced(5, 12, CountOutcome::Groups(expected))
+        CountReply::GroupAdvanced(4, 12, CountOutcome::Groups(expected))
     );
     let deadline = started_ms + 3_600_000;
     pic.set_time(clock(deadline - 1)).await;
-    assert_eq!(count(request(&handle, 4)).await.0, reply);
+    assert_eq!(count(request(&handle, 3)).await.0, reply);
     pic.set_time(clock(deadline)).await;
     assert_eq!(
-        count(request(&handle, 4)).await.0,
-        CountReply::GroupAdvanced(6, 12, CountOutcome::Expired)
+        count(request(&handle, 3)).await.0,
+        CountReply::GroupAdvanced(5, 12, CountOutcome::Expired)
     );
 
     // Force reuse of this specific slot without interpreting any opaque handle bytes.
@@ -1537,7 +1913,7 @@ async fn grouped_count_under_interleaved_writes() {
     let (replacement, _, _) = start().await;
     assert_ne!(handle, replacement);
     let checkpoint = pic.get_stable_memory(canister).await;
-    for delayed in [request(&handle, 4), CountRequest::Cancel(handle)] {
+    for delayed in [request(&handle, 3), CountRequest::Cancel(handle)] {
         let (reply, _) = update(Update::Count(delayed)).await;
         assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
         assert!(pic.get_stable_memory(canister).await == checkpoint);
@@ -1548,13 +1924,32 @@ async fn grouped_count_under_interleaved_writes() {
     );
     // Five handles now expire together. The other eleven have a minute left.
     pic.set_time(clock(deadline + 3_600_000)).await;
+    let mut refilled = Vec::new();
     for (sequence, expected_removed) in [(1, 2), (2, 2), (3, 1)] {
         let (removed, work, cycles) = count(CountRequest::CleanupExpired(2)).await;
         assert_eq!(removed, CountReply::Removed(expected_removed));
         println!("grouped/sweep removed={expected_removed} instructions={work} cycles={cycles}");
+        if sequence == 1 {
+            // Reoccupy both freed slots before the next sweep. A fresh executable
+            // must discover the remaining expired jobs from the durable directory.
+            for _ in 0..2 {
+                refilled.push(start().await.0);
+            }
+            ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)
+                .await
+                .unwrap();
+        }
         assert_eq!(
             count(request(&replacement, sequence)).await.0,
-            CountReply::GroupAdvanced(sequence + 1, (sequence + 1) * 3, CountOutcome::Running)
+            CountReply::GroupAdvanced(
+                sequence + 1,
+                (sequence + 1) * 3,
+                if sequence == 3 {
+                    CountOutcome::Groups(model.group_counts())
+                } else {
+                    CountOutcome::Running
+                }
+            )
         );
     }
     let before = pic.get_stable_memory(canister).await;
@@ -1568,9 +1963,16 @@ async fn grouped_count_under_interleaved_writes() {
     }
     assert!(pic.get_stable_memory(canister).await == before);
     assert_eq!(
-        count(request(&replacement, 4)).await.0,
-        CountReply::GroupAdvanced(5, 12, CountOutcome::Groups(model.group_counts()))
+        count(request(&replacement, 3)).await.0,
+        CountReply::GroupAdvanced(4, 12, CountOutcome::Groups(model.group_counts()))
     );
+    for handle in &refilled {
+        assert_eq!(
+            count(request(handle, 0)).await.0,
+            CountReply::GroupAdvanced(1, 3, CountOutcome::Running)
+        );
+    }
+    occupied.extend(refilled);
     occupied.push(replacement);
     for live in occupied {
         assert_eq!(

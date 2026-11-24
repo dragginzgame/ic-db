@@ -380,6 +380,36 @@ fn category_exists(category: u64) -> (bool, u64) {
     })
 }
 
+// filtered_exists
+// Check for a category member with an exact unindexed amount within a candidate budget.
+// guard  : validates the request frame for method 12.
+// limits : 64 KiB request, 64 KiB reply.
+#[cfg(feature = "exists-comparison")]
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "filtered_exists",
+    guard = crate::transport::admit::<12>,
+    decode = crate::transport::decode::<_, 12>,
+    encode = crate::transport::encode::<_, 12>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn filtered_exists((category, amount, work): (u64, u64, u16)) -> (Option<(bool, u64, u64)>, u64) {
+    measure(|| {
+        match database()
+            .query::<Entry>()
+            .eq(Entry::CATEGORY, category)
+            .eq(Entry::AMOUNT, amount)
+            .work_limit(usize::from(work))
+            .exists()
+        {
+            Ok(result) => Some((result.value, result.examined as u64, result.fetched as u64)),
+            Err(Error::Limit) => None,
+            Err(error) => panic!("unexpected existence refusal: {error:?}"),
+        }
+    })
+}
+
 ///
 /// Entry
 /// Exercises indexed access by `category` and `id` on rows keyed by `id`.
