@@ -203,6 +203,14 @@ fn single_mutations_match_batches_including_refusals_and_index_effects() {
     check!(delete::<Friendship>(1), Ok(()));
     check!(delete::<Friendship>(1), Ok(()));
     check!(replace(&row), Err(Error::Missing));
+    check!(upsert(&row), Ok(()));
+    row.owner = 10;
+    check!(upsert(&row), Ok(()));
+    assert_eq!(direct.upsert(&row).unwrap(), row);
+    check!(
+        upsert(&Friendship { id: 2, ..row }),
+        Err(Error::UniqueViolation)
+    );
     check!(delete::<Other>(1), Err(Error::UnknownEntity));
 }
 

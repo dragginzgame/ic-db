@@ -200,11 +200,17 @@ struct ReturningRow<'a> {
     decode: &'a mut dyn FnMut(&[u8]) -> Result<(), Error>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteMode {
+    Insert,
+    Replace,
+    Upsert,
+}
+
 enum Kind {
-    Insert(Vec<u8>, RowInfo),
+    Put(WriteMode, Vec<u8>, RowInfo),
     // Only maintenance can construct this; ordinary insert policies stay intact.
     CopyInsert(Vec<u8>, RowInfo, [Option<crate::Timestamp>; 2]),
-    Replace(Vec<u8>, RowInfo),
     Delete,
 }
 
@@ -233,7 +239,7 @@ impl Batch {
             return Err(Error::ManagedField);
         }
 
-        self.put(row, Kind::Insert)
+        self.save(row, WriteMode::Insert)
     }
 
     /// Resolve a typed insert input, append it to this batch and return its full row.
@@ -249,7 +255,7 @@ impl Batch {
             .operation_time
             .get_or_insert_with(crate::Timestamp::now);
         let row = input.__into_entity(Some(time))?;
-        self.put(&row, Kind::Insert)?;
+        self.save(&row, WriteMode::Insert)?;
 
         Ok(row)
     }
@@ -260,11 +266,23 @@ impl Batch {
     /// # Errors
     /// Refuses encoding or batch capacity before mutation.
     pub fn replace<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
+        self.save(row, WriteMode::Replace)
+    }
+
+    /// Queue a full row for insertion or replacement by primary key. Managed
+    /// times are assigned by the database. Defaults and key generation do not run.
+    /// # Errors
+    /// Refuses encoding or batch capacity. Commit enforces ordinary constraints.
+    pub fn upsert<E: Entity>(&mut self, row: &E) -> Result<(), Error> {
+        self.save(row, WriteMode::Upsert)
+    }
+
+    fn save<E: Entity>(&mut self, row: &E, mode: WriteMode) -> Result<(), Error> {
         if E::SCHEMA.has_managed() {
             self.operation_time
                 .get_or_insert_with(crate::Timestamp::now);
         }
-        self.put(row, Kind::Replace)
+        self.put(row, |bytes, info| Kind::Put(mode, bytes, info))
     }
 
     /// Delete the matching row if present. An absent key has no effect.
@@ -659,6 +677,17 @@ impl<M: Memory> Database<M> {
         observe!(commit, { self.commit_batch(batch, None, None).map(|_| ()) })
     }
 
+    /// Insert or replace one row by primary key and return its stored value.
+    /// # Errors
+    /// Propagates batch preparation and commit errors, including unique conflicts.
+    /// # Panics
+    /// Supplier failures during publication trap as in [`Self::commit`].
+    pub fn upsert<E: Entity>(&mut self, row: &E) -> Result<E, Error> {
+        let mut batch = Batch::new();
+        batch.upsert(row)?;
+        self.commit_returning(batch, row.id())
+    }
+
     /// Commit the whole batch and return the selected insert or replacement,
     /// including its final managed timestamps. The row is decoded during preparation.
     /// # Errors
@@ -733,23 +762,21 @@ impl<M: Memory> Database<M> {
             }
             let old = self.map.get(&key);
             match (&mutation.kind, &old) {
-                (Kind::Insert(..) | Kind::CopyInsert(..), Some(_)) => return Err(Error::Exists),
-                (Kind::Replace(..), None) => return Err(Error::Missing),
+                (Kind::Put(WriteMode::Insert, ..) | Kind::CopyInsert(..), Some(_)) => {
+                    return Err(Error::Exists);
+                }
+                (Kind::Put(WriteMode::Replace, ..), None) => return Err(Error::Missing),
                 (Kind::Delete, None) => continue,
                 _ => {}
             }
             if mutation.entity.has_managed() {
                 match &mut mutation.kind {
-                    Kind::Insert(bytes, _) => crate::managed::validate_insert(
-                        mutation.entity,
-                        bytes,
-                        batch.operation_time.ok_or(Error::MissingOperationTime)?,
-                    )?,
-                    Kind::Replace(bytes, info) => {
-                        if crate::managed::replace(
+                    Kind::Put(mode, bytes, info) => {
+                        if crate::managed::save(
                             mutation.entity,
                             bytes,
-                            old.as_deref().ok_or(Error::Missing)?,
+                            old.as_deref(),
+                            *mode == WriteMode::Upsert,
                             batch.operation_time.ok_or(Error::MissingOperationTime)?,
                         )? {
                             *info = mutation.entity.inspect_row(bytes)?;
@@ -763,7 +790,7 @@ impl<M: Memory> Database<M> {
                     Kind::Delete => {}
                 }
             }
-            if let Kind::Insert(bytes, _) | Kind::Replace(bytes, _) = &mutation.kind
+            if let Kind::Put(_, bytes, _) = &mutation.kind
                 && let Some(selected) = returning
                     .take_if(|row| row.entity == mutation.entity.id && row.key == mutation.key)
             {
@@ -772,7 +799,7 @@ impl<M: Memory> Database<M> {
             // Admit complete after-image keys even when the row is a no-op.
             // Retain these buffers for publication instead of encoding twice.
             let mut after_indexes = match &mutation.kind {
-                Kind::Insert(_, info) | Kind::CopyInsert(_, info, _) | Kind::Replace(_, info) => {
+                Kind::Put(_, _, info) | Kind::CopyInsert(_, info, _) => {
                     index_entries(mutation.entity, info)?
                 }
                 Kind::Delete => Vec::new(),
@@ -785,13 +812,13 @@ impl<M: Memory> Database<M> {
                     0_i64,
                 )),
             };
-            if let (Kind::Replace(bytes, _), Some(old)) = (&mutation.kind, &old)
+            if let (Kind::Put(_, bytes, _), Some(old)) = (&mutation.kind, &old)
                 && bytes == old
             {
                 continue;
             }
-            if let Some(old) = old {
-                let info = mutation.entity.inspect_row(&old)?;
+            if let Some(old) = &old {
+                let info = mutation.entity.inspect_row(old)?;
                 if info.key != mutation.key {
                     return Err(Error::Corrupt);
                 }
@@ -814,9 +841,8 @@ impl<M: Memory> Database<M> {
             }
             *changed = true;
             *delta += match &mutation.kind {
-                Kind::Insert(..) | Kind::CopyInsert(..) => 1,
+                Kind::Put(..) | Kind::CopyInsert(..) => i64::from(old.is_none()),
                 Kind::Delete => -1,
-                Kind::Replace(..) => 0,
             };
             // Private migration inserts may precede their targets. The frozen
             // complete target validates references before it can be published.
@@ -827,9 +853,7 @@ impl<M: Memory> Database<M> {
                     deleted.push((mutation.entity.id, mutation.key));
                     removes.insert(key);
                 }
-                Kind::Insert(bytes, info)
-                | Kind::CopyInsert(bytes, info, _)
-                | Kind::Replace(bytes, info) => {
+                Kind::Put(_, bytes, info) | Kind::CopyInsert(bytes, info, _) => {
                     writes.insert(key, bytes);
                     for (key, is_unique) in after_indexes {
                         if is_unique && !unique.insert(key.clone()) {

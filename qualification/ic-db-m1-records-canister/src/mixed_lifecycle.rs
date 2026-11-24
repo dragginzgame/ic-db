@@ -371,14 +371,23 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
                 run_count(db.query::<Item>(), &mut jobs, action, now_ms)
             }
         }
-        CountRequest::ForParent(parent, action) => {
+        CountRequest::ForParent {
+            parent,
+            indexed,
+            action,
+        } => {
             let db = open(&host, false)?;
-            run_count(
-                db.query::<Item>().eq(Item::PARENT, parent),
-                &mut jobs,
-                action,
-                now_ms,
-            )
+            let query = db.query::<Item>().eq(Item::PARENT, parent);
+            if indexed {
+                run_count(
+                    query.using_index("parent,id", &[parent.into()]),
+                    &mut jobs,
+                    action,
+                    now_ms,
+                )
+            } else {
+                run_count(query, &mut jobs, action, now_ms)
+            }
         }
         CountRequest::CleanupExpired(limit) => {
             let removed =

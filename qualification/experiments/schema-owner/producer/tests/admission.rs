@@ -108,6 +108,24 @@ fn host_reopens_only_the_selected_canisters_allocations() {
             Err(ic_db::Error::Exists)
         ));
         assert_eq!(events.try_one().unwrap().unwrap().revision, Revision(9));
+        let mut batch = db.batch();
+        batch
+            .upsert(&AuditEvent {
+                id: 7,
+                revision: Revision(70),
+            })
+            .unwrap();
+        assert_eq!(
+            batch.commit_returning::<AuditEvent>(7).unwrap().revision,
+            Revision(70)
+        );
+        let stored = db
+            .upsert(&AuditEvent {
+                id: 7,
+                revision: Revision(71),
+            })
+            .unwrap();
+        assert_eq!(db.get::<AuditEvent>(7).unwrap(), Some(stored));
     }
     let runtime = open_runtime();
     assert!(matches!(

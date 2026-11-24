@@ -31,7 +31,14 @@ pub enum CountRequest {
     /// Remove at most this many expired jobs at host time.
     CleanupExpired(u8),
     /// Run an item count with the given parent equality on the source schema.
-    ForParent(u64, CountAction),
+    ForParent {
+        /// Required parent ID.
+        parent: u64,
+        /// Select the compound parent index explicitly.
+        indexed: bool,
+        /// Start or advance the selected job.
+        action: CountAction,
+    },
 }
 
 /// Count operations that require a live entity.

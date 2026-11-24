@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.30.1] - Unreleased
+
+### ➕ Added
+
+- Added `db.upsert(&row)?` and `batch.upsert(&row)?` for full entities with a known primary key. The single-row call returns the stored entity, including its managed timestamps.
+
+### 🎯 Qualification
+
+- Compared retained counts over 415, 96 and zero matches in 511 items. The primary scan used fewer cycles for 415 matches. At 96 matches the parent index saved 37% of cycles in one advance. Splitting it into two advances lowered its peak instructions by 44% and still saved 19% of cycles over the default scan. [Work boundaries and costs](qualification/README.md#retained-count-at-the-end-of-an-index-range)
+
+- Verified that a retained index count preserves its checkpoint when an owner is missing or its indexed field no longer matches, including when the same advance already processed a healthy entry.
+
 ## [0.30.0] - 2026-11-24
 
 ### ⚠️ Breaking

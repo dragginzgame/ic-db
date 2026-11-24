@@ -1268,7 +1268,9 @@ Use `Id<E>` in application signatures when two entities share a primitive key ty
 `db.delete(row.id())` infer its entity. Deleting an absent key succeeds without
 advancing the entity revision. A surviving reference still prevents deletion.
 
-For one managed row, use `db.insert_input(input)?` or `db.replace(&row)?`.
+Use `let stored = db.upsert(&row)?;` when a full entity with a known primary key may be new or already stored. The database assigns managed timestamps on insertion, preserves creation time on update, and preserves update time when the application fields are identical. The supplied row must encode successfully. Upsert does not generate a missing key or apply insert defaults. A secondary unique key owned by another row returns `Error::UniqueViolation`. For an atomic group, queue `batch.upsert(&row)?;` alongside the other writes.
+
+For an insert with defaults, use `db.insert_input(input)?`. Use `db.replace(&row)?` when a missing row should return `Error::Missing`.
 The session captures the operation time. A replacement that changes no fields
 preserves the stored update time. Use `db.batch()` to group managed writes under one timestamp.
 Prepared changes become visible together when the store accepts the commit.

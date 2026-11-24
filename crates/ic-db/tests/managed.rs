@@ -213,6 +213,66 @@ fn one_batch_time_preserves_creation_and_updates_only_real_changes() {
 }
 
 #[test]
+fn upsert_assigns_managed_times_and_replays_the_original_request() {
+    let backing = VectorMemory::default();
+    let host = runtime(backing.clone());
+    let mut db = Database::create(
+        host.open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[Entry::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let mut request = Entry {
+        id: 1,
+        body: "pending".into(),
+        born: CreatedAt(time(5)),
+        changed: Box::new(UpdatedAt(time(6))),
+    };
+    for (now, body, updated, revision) in [
+        (100, "pending", 100, 1),
+        (200, "a longer nomination", 200, 2),
+        (300, "a longer nomination", 200, 2),
+    ] {
+        let before = backing.borrow().clone();
+        request.body = body.into();
+        let mut batch = Batch::at_for_test(time(now));
+        batch.upsert(&request).unwrap();
+        let stored = db.commit_returning(batch, request.id()).unwrap();
+        assert_eq!(
+            (stored.born.0, stored.changed.0),
+            (time(100), time(updated))
+        );
+        assert_eq!(stored.body, body);
+        assert_eq!(db.get(request.id()).unwrap(), Some(stored.clone()));
+        assert_eq!(
+            db.index_prefix::<Entry>("changed", &[time(updated).into()], 32)
+                .unwrap(),
+            vec![stored]
+        );
+        assert_eq!(db.cardinality::<Entry>().unwrap(), 1);
+        assert_eq!(db.revision::<Entry>().unwrap(), revision);
+        if now == 300 {
+            assert_eq!(*backing.borrow(), before);
+        }
+    }
+    let before = backing.borrow().clone();
+    request.body = "too early".into();
+    let mut batch = Batch::at_for_test(time(199));
+    batch.upsert(&request).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::TimestampRegression)));
+    assert_eq!(*backing.borrow(), before);
+
+    // Two distinct primary keys cannot claim the same secondary unique value.
+    let mut batch = Batch::at_for_test(time(400));
+    batch.upsert(&request).unwrap();
+    request.id = 2;
+    batch.upsert(&request).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::UniqueViolation)));
+    assert_eq!(*backing.borrow(), before);
+}
+
+#[test]
 fn single_row_session_writes_supply_managed_time_and_preserve_replays() {
     let host = runtime(VectorMemory::default());
     let db = Database::create(

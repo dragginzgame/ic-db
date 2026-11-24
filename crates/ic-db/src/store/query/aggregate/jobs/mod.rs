@@ -237,7 +237,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     /// Advance count within `work_limit` (1..=512) and 64 KiB of source row/key
     /// bytes. Each job admits at most one million examined candidates. A budget
-    /// boundary returns Running; it never changes the mathematical input set.
+    /// boundary returns Running if candidates remain. Exhausting the range can
+    /// complete the count on the last work unit. Index scans read each visited
+    /// owner and check that the stored row agrees with the index entry.
     /// Supply zero first, then the last returned sequence. An older sequence only
     /// reads saved progress; a future sequence refuses. Source changes invalidate
     /// running jobs, including on retries; completed results keep their boundary.

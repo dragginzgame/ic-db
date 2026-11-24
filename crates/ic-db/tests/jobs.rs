@@ -1119,6 +1119,71 @@ fn retained_length_filter_binds_threshold_and_resumes_the_same_clause() {
 }
 
 #[test]
+fn retained_index_count_preserves_checkpoint_on_invalid_owner() {
+    use ic_storage::adapter::StableBTreeMap;
+
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let (db, mut jobs) = create(&runtime, &[None; 5], 0);
+    fn query(db: &Database) -> ic_db::Query<'_, Row> {
+        db.query::<Row>().using_index("flag", &[0_u8.into()])
+    }
+    let handle = query(&db)
+        .start_count(&mut jobs, time(0), time(100))
+        .unwrap();
+    let first = query(&db)
+        .work_limit(1)
+        .resume_count(&mut jobs, &handle, 0, time(1))
+        .unwrap();
+    assert!(matches!(first.outcome, JobOutcome::Running));
+    assert_eq!(first.examined, 1);
+    let mut changed = db.get::<Row>(4).unwrap().unwrap();
+    changed.flag = 1;
+    drop(db);
+
+    // Keep the flag-0 entries for IDs 0, 2 and 4. Both faults occur after
+    // the advance has processed the healthy owner at ID 2.
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let row = [
+        &[2][..],
+        &Row::SCHEMA.id.to_be_bytes(),
+        &4_u64.to_be_bytes(),
+    ]
+    .concat();
+    let raw = || StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let saved = raw().remove(&row).unwrap();
+    let reopen = || Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
+    let mut check_refusal = |expected_flag| {
+        let db = reopen();
+        assert_eq!(
+            db.get::<Row>(4).unwrap().map(|owner| owner.flag),
+            expected_flag
+        );
+        assert_eq!(query(&db).count().unwrap().value, 3);
+        let before = backing.borrow().clone();
+        assert!(matches!(
+            query(&db)
+                .work_limit(2)
+                .resume_count(&mut jobs, &handle, first.sequence, time(2)),
+            Err(Error::Corrupt)
+        ));
+        assert_eq!(*backing.borrow(), before);
+    };
+    check_refusal(None);
+    raw().insert(row.clone(), changed.encode().unwrap());
+    check_refusal(Some(1));
+
+    raw().insert(row, saved);
+    let db = reopen();
+    let done = query(&db)
+        .work_limit(2)
+        .resume_count(&mut jobs, &handle, first.sequence, time(2))
+        .unwrap();
+    assert!(matches!(done.outcome, JobOutcome::Complete(3)));
+    assert_eq!((done.sequence, done.examined), (first.sequence + 1, 3));
+}
+
+#[test]
 fn count_and_sum_resume_beyond_synchronous_budget_without_prefix_results() {
     let host = host(VectorMemory::default());
     let (db, mut jobs) = create(&host, &vec![Some(7); 520], 0);

@@ -3558,6 +3558,36 @@ Starting and advancing took five update calls, 11,870,740 handler instructions i
 
 Two unfinished counts then selected different parents on the same item entity. Each advanced once with a 64-candidate budget. Inserting one item for the smaller parent invalidated both jobs on their next advance. After explicit cancellation and restart, the counts finished at 415 and 97. The larger parent’s count stayed at 415 throughout. A frequently updated parent can therefore interrupt another parent’s retained count even when their index ranges are disjoint.
 
+#### Retained count at the end of an index range
+
+On the 0.30.0 engine, the mounted Canic fixture ran a retained count for each of three parent IDs against the same 511 items. For each ID it used the same equality predicate and a budget of 128 candidates per advance, first with the default primary scan, then with the existing `parent,id` index prefix. Expected counts came from the seed tuples.
+
+| Matches | Access path | Candidates | Advances | Start + advance instructions | Peak handler instructions | Start + advance cycles |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 415 | Default primary scan | 511 | 4 | 11,904,043 | 2,819,896 | 47,237,262 |
+| 415 | Parent index | 415 | 4 | 62,548,718 | 19,259,292 | 97,882,274 |
+| 96 | Default primary scan | 511 | 4 | 11,873,367 | 2,813,760 | 47,205,915 |
+| 96 | Parent index | 96 | 1 | 15,617,205 | 14,690,317 | 29,711,598 |
+| 0 | Default primary scan | 511 | 4 | 11,852,468 | 2,812,619 | 47,185,282 |
+| 0 | Parent index | 0 | 1 | 2,151,395 | 1,224,507 | 16,245,681 |
+
+The index path fetches and validates each matching owner row. For 415 matches this made the default scan cheaper. For 96 matches the index finished in one advance and saved 37% of the cycles, while its peak handler instructions were 5.2 times higher. The empty index range finished in one advance with the lowest peak. Cycle totals exclude seeding and cleanup. These measurements concern retained exact counts. Ordinary single-call counts can use covered index entries.
+
+For the 415-match case, after three advances of 128, the primary scan finished with exactly 127 more work units and the index scan with exactly 31. Giving either path one unit less returned `Running`; one final unit returned 415. The adjacent parent's entries required no additional advance. Reproduce with `make m4-lifecycle`.
+
+With the parent fixed at 96 matches, lowering the index work budget spread owner validation across more updates. Every run returned exactly 96.
+
+| Index candidates per advance | Advances | Peak handler instructions | Start + advance cycles |
+| ---: | ---: | ---: | ---: |
+| 128 | 1 | 14,690,317 | 29,711,598 |
+| 48 | 2 | 8,278,604 | 38,089,574 |
+| 32 | 3 | 5,906,852 | 46,223,958 |
+| 24 | 4 | 4,766,973 | 54,631,918 |
+
+At work 48 the peak fell 44% from the work-128 index run, and total cycles remained 19% below the default primary scan at work 128. At work 32 the cycle advantage narrowed to 2%. At work 24 the index used more cycles than the primary scan and its peak remained higher. These are fixture measurements at fixed selectivity.
+
+The native `retained_index_count_preserves_checkpoint_on_invalid_owner` test checkpoints the first of three index entries, then injects two faults at the last entry in turn. Its owner is first missing, then present under the correct primary key with an indexed field outside the selected range. A primary-key lookup confirms each condition. An ordinary covered count returns three in both cases. Each retained advance processes one healthy entry before returning `Corrupt` and preserves the full stable backing. After the fixture restores the original owner bytes, retrying the same sequence completes at three without double-counting.
+
 ### Query matrix on 0.28.1
 
 Released IC DB `3270aae` and frozen IcyDB `6d421e3` ran 195 query cases across two data distributions, three populations and two settled phases (before and after upgrade). All 4,680 outcomes matched the independent oracle, including 432 bounded sorts that legacy refused. Of the 1,908 successful pairs, IC DB used fewer handler instructions in 1,670 and more in 238. The upper median paired IC DB / legacy ratio was 0.389. Each case has equal weight in this comparison. [All family medians and ranges](measurements/0.28.1-query-matrix.tsv).

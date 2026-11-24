@@ -144,6 +144,16 @@ impl<C: CompiledCanister> CanisterSession<C> {
         self.session::<E::Store>().replace(row)
     }
 
+    /// Insert or replace by primary key in the declared store and return the stored row.
+    /// # Errors
+    /// Propagates [`DatabaseSession::upsert`] errors.
+    pub fn upsert<E: Entity<Store: MountedStore<Canister = C>>>(
+        &self,
+        row: &E,
+    ) -> Result<E, Error> {
+        self.session::<E::Store>().upsert(row)
+    }
+
     /// Delete one row from its declared store by primary key.
     /// # Errors
     /// Propagates batch preparation and commit errors.
@@ -193,6 +203,13 @@ impl<S: Store> StoreBatch<'_, S> {
     /// Propagates [`Batch::replace`] admission errors.
     pub fn replace<E: Entity<Store = S>>(&mut self, row: &E) -> Result<(), Error> {
         self.batch.replace(row)
+    }
+
+    /// Queue an insertion or replacement by primary key in this store.
+    /// # Errors
+    /// Propagates [`Batch::upsert`] admission errors.
+    pub fn upsert<E: Entity<Store = S>>(&mut self, row: &E) -> Result<(), Error> {
+        self.batch.upsert(row)
     }
 
     /// Queue a deletion in this store.

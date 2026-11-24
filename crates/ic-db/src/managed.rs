@@ -59,48 +59,59 @@ pub(crate) fn values(schema: &EntitySchema, bytes: &[u8]) -> Result<[Option<Time
     Ok(positions(schema, bytes)?.map(|entry| entry.map(|(_, value)| value)))
 }
 
-pub(crate) fn validate_insert(
-    schema: &EntitySchema,
-    bytes: &[u8],
-    now: Timestamp,
-) -> Result<(), Error> {
-    if positions(schema, bytes)?
-        .into_iter()
-        .flatten()
-        .any(|(_, value)| value != now)
-    {
-        return Err(Error::ManagedField);
-    }
-
-    Ok(())
+// All offsets come from positions() decoding this same fixed-width timestamp.
+fn write_time(bytes: &mut [u8], offset: usize, time: Timestamp) {
+    bytes[offset..offset + 8].copy_from_slice(&time.as_millis().to_le_bytes());
 }
 
-pub(crate) fn replace(
+// Report whether the encoded row changed so the caller can reuse its typed index metadata.
+pub(crate) fn save(
     schema: &EntitySchema,
     bytes: &mut [u8],
-    old: &[u8],
+    old: Option<&[u8]>,
+    upsert: bool,
     now: Timestamp,
 ) -> Result<bool, Error> {
-    let before = positions(schema, old)?;
-    validate_order(before.map(|entry| entry.map(|(_, value)| value)))?;
-    if bytes == old {
-        return Ok(false);
-    }
-    let after = positions(schema, bytes)?;
-    for (previous, supplied) in before.iter().zip(&after) {
-        if previous.map(|(_, value)| value) != supplied.map(|(_, value)| value) {
-            return Err(Error::ManagedField);
+    let stored = old.map(|row| values(schema, row)).transpose()?;
+    if let Some(times) = stored {
+        validate_order(times)?;
+        if Some(&*bytes) == old {
+            return Ok(false);
         }
     }
-    if before.into_iter().flatten().any(|(_, value)| now < value) {
-        return Err(Error::TimestampRegression);
-    }
-    if let Some((offset, _)) = after[1] {
-        bytes
-            .get_mut(offset..offset + 8)
-            .ok_or(Error::Corrupt)?
-            .copy_from_slice(&now.as_millis().to_le_bytes());
+
+    let supplied = positions(schema, bytes)?;
+    let mut rewritten = false;
+    for (slot, field) in supplied.into_iter().enumerate() {
+        let Some((offset, proposed)) = field else {
+            continue;
+        };
+        let expected = stored.and_then(|times| times[slot]).unwrap_or(now);
+        if proposed != expected {
+            if !upsert {
+                return Err(Error::ManagedField);
+            }
+            write_time(bytes, offset, expected);
+            rewritten = true;
+        }
     }
 
-    Ok(true)
+    let Some(stored) = stored else {
+        return Ok(rewritten);
+    };
+    // A retry can carry the original request's timestamps.
+    if rewritten && Some(&*bytes) == old {
+        return Ok(true);
+    }
+    if stored.into_iter().flatten().any(|value| now < value) {
+        return Err(Error::TimestampRegression);
+    }
+    let updated = ManagedTimestamp::UpdatedAt.slot();
+    if let Some((offset, _)) = supplied[updated]
+        && stored[updated] != Some(now)
+    {
+        write_time(bytes, offset, now);
+        rewritten = true;
+    }
+    Ok(rewritten)
 }

@@ -221,6 +221,16 @@ impl DatabaseSession {
         self.commit_returning(batch, row.id())
     }
 
+    /// Insert or replace by primary key and return the stored row with managed times.
+    /// # Errors
+    /// Propagates borrow, preparation and commit errors.
+    pub fn upsert<E: Entity>(&self, row: &E) -> Result<E, Error> {
+        self.0
+            .try_borrow_mut()
+            .map_err(|_| Error::BorrowConflict)?
+            .upsert(row)
+    }
+
     /// Delete one entity by primary key as one batch.
     /// # Errors
     /// Propagates batch preparation and commit errors.

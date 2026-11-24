@@ -1424,7 +1424,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
 }
 
 #[tokio::test]
-async fn retained_count_for_a_dense_parent() {
+async fn retained_counts_by_parent_selectivity() {
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
     let pic = instance().await.unwrap();
@@ -1467,19 +1467,24 @@ async fn retained_count_for_a_dense_parent() {
         };
         (reply.unwrap(), work)
     };
-    let start = async |parent| {
-        let (CountReply::Started(handle), work) =
-            count(CountRequest::ForParent(parent, CountAction::Start)).await
+    let start = async |parent, indexed| {
+        let (CountReply::Started(handle), work) = count(CountRequest::ForParent {
+            parent,
+            indexed,
+            action: CountAction::Start,
+        })
+        .await
         else {
             panic!("expected count handle")
         };
         (handle, work)
     };
-    let advance = async |parent, handle: &[u8], sequence, budget| {
-        let (reply, work) = count(CountRequest::ForParent(
+    let advance = async |parent, indexed, handle: &[u8], sequence, budget| {
+        let (reply, work) = count(CountRequest::ForParent {
             parent,
-            CountAction::Resume(handle.to_vec(), sequence, budget),
-        ))
+            indexed,
+            action: CountAction::Resume(handle.to_vec(), sequence, budget),
+        })
         .await;
         let CountReply::Advanced(next, outcome) = reply else {
             panic!("expected progress")
@@ -1487,34 +1492,58 @@ async fn retained_count_for_a_dense_parent() {
         assert_eq!(next, sequence + 1);
         (outcome, work)
     };
-    let before = pic.cycle_balance(canister).await;
-    let (handle, mut total) = start(1).await;
-    let mut peak = total;
-    let mut sequence = 0;
-    loop {
-        assert!(sequence <= (items.len() as u64).div_ceil(128));
-        let (outcome, work) = advance(1, &handle, sequence, 128).await;
-        sequence += 1;
-        total += work;
-        peak = peak.max(work);
-        if outcome != CountOutcome::Running {
-            assert_eq!(outcome, CountOutcome::Complete(expected));
-            break;
+    // Compare identical work budgets first, then exercise the exact final boundary.
+    for parent in [1, 2, 3] {
+        let matches = items.iter().filter(|item| item.3 == parent).count();
+        for indexed in [false, true] {
+            let candidates = if indexed { matches } else { items.len() };
+            let last = candidates.saturating_sub(1) % 128 + 1;
+            let mut schedules: Vec<(u16, u16)> = vec![(128, 128)];
+            if last > 1 && last < 128 {
+                let last = u16::try_from(last).unwrap();
+                schedules.extend([(128, last), (128, last - 1)]);
+            }
+            // Split the 96-entry sparse index range into two, three or four updates.
+            if parent == 2 && indexed {
+                schedules.extend([(48, 48), (32, 32), (24, 24)]);
+            }
+            for (work_limit, final_budget) in schedules {
+                let full_chunks = candidates.saturating_sub(1) / usize::from(work_limit);
+                let before = pic.cycle_balance(canister).await;
+                let (handle, mut total) = start(parent, indexed).await;
+                let mut peak = total;
+                let mut advances = 0;
+                let mut remaining = candidates;
+                for budget in std::iter::repeat_n(work_limit, full_chunks).chain([final_budget, 1])
+                {
+                    let (outcome, work) = advance(parent, indexed, &handle, advances, budget).await;
+                    advances += 1;
+                    remaining = remaining.saturating_sub(usize::from(budget));
+                    total += work;
+                    peak = peak.max(work);
+                    if remaining == 0 {
+                        assert_eq!(outcome, CountOutcome::Complete(matches as u64));
+                        break;
+                    }
+                    assert_eq!(outcome, CountOutcome::Running);
+                }
+                assert_eq!(remaining, 0);
+                let cycles = before - pic.cycle_balance(canister).await;
+                let (reply, cleanup) = count(CountRequest::Cancel(handle)).await;
+                assert_eq!(reply, CountReply::Cancelled);
+                println!(
+                    "parent={parent} indexed={indexed} matches={matches} work_limit={work_limit} final_budget={final_budget} advances={advances} start_and_advance_instructions={total} peak_instructions={peak} start_and_advance_cycles={cycles} cleanup_instructions={cleanup}"
+                );
+            }
         }
     }
-    let cycles = before - pic.cycle_balance(canister).await;
-    let (reply, cleanup) = count(CountRequest::Cancel(handle)).await;
-    assert_eq!(reply, CountReply::Cancelled);
-    println!(
-        "dense-parent matches={expected} advances={sequence} start_and_advance_instructions={total} peak_instructions={peak} start_and_advance_cycles={cycles} cleanup_instructions={cleanup}"
-    );
 
     // The two parent filters have disjoint matches but share the Item revision.
-    let (dense, _) = start(1).await;
-    let (small, _) = start(2).await;
+    let (dense, _) = start(1, false).await;
+    let (small, _) = start(2, false).await;
     for (parent, handle) in [(1, &dense), (2, &small)] {
         assert_eq!(
-            advance(parent, handle, 0, 64).await.0,
+            advance(parent, false, handle, 0, 64).await.0,
             CountOutcome::Running
         );
     }
@@ -1524,17 +1553,17 @@ async fn retained_count_for_a_dense_parent() {
         (2, small, items.len() as u64 - expected + 1),
     ] {
         assert_eq!(
-            advance(parent, &handle, 1, 64).await.0,
+            advance(parent, false, &handle, 1, 64).await.0,
             CountOutcome::Invalidated
         );
         assert_eq!(
             count(CountRequest::Cancel(handle)).await.0,
             CountReply::Cancelled
         );
-        let (retry, _) = start(parent).await;
+        let (retry, _) = start(parent, false).await;
         let mut outcome = CountOutcome::Running;
         for sequence in 0..5 {
-            outcome = advance(parent, &retry, sequence, 128).await.0;
+            outcome = advance(parent, false, &retry, sequence, 128).await.0;
             if outcome != CountOutcome::Running {
                 break;
             }

@@ -2248,7 +2248,9 @@ boundary instead of introducing durable batch records, replay, checkpointing or
 log retirement. This choice is conditional on the M0 Wasm/supplier evidence;
 removing SQL is not its justification.
 
-Insert, replace/update and delete lower into one concrete prepared batch of row
+Primary-key upsert chooses insert or replace from the stored row read during batch preparation. It takes a complete entity, assigns managed times from the batch clock on insert, and preserves stored times on an identical retry. Secondary unique conflicts and final-state reference checks use the ordinary batch rules.
+
+Insert, upsert, replace/update and delete lower into one concrete prepared batch of row
 and derived-index changes. Read required current rows once, validate types and
 constraints, calculate changes, then commit. Distinct user commands retain their
 semantics; they do not each get a staging/validation engine.
