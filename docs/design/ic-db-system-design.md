@@ -2541,6 +2541,11 @@ retained capability scope. Later detail explains the implementation and evidence
 
 #### M2 bounded query closeout
 
+The synchronous `has_at_least(n)` terminal shares count admission and access paths.
+A maintained count or the nth match proves the threshold. Exhaustion proves a
+shortfall, and an inconclusive work limit refuses. Zero succeeds after admission.
+The result occupies one byte. Covered index ranges need no owner reads.
+
 | Query combination | Supported result | Boundary callers can rely on |
 | --- | --- | --- |
 | Filter + ordered path + entity or projection | Live pages of entities, named records, one typed column or a tuple of 2–4 columns. A unique tie-breaker orders equal keys. | Sparse pages can be empty and still carry a continuation. Updating an ordering key or filter membership between calls can repeat or omit a row. |

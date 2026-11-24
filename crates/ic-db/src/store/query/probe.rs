@@ -21,6 +21,7 @@ pub(super) fn probe_members<M: Memory>(
     request: &Request<'_>,
     plan: &Plan<'_>,
     mode: MemberProbe,
+    stop: u64,
 ) -> Result<Option<Aggregate<u64>>, Error> {
     let Some(members) = point_members(entity, plan, request, mode != MemberProbe::CountKeys) else {
         return Ok(None);
@@ -33,7 +34,7 @@ pub(super) fn probe_members<M: Memory>(
         examined += 1;
         let key = crate::store_key::StoreKey::new(components.concat())?;
         if needs_row || matches!(mode, MemberProbe::CountValidated | MemberProbe::Exists) {
-            let mut found = false;
+            let mut remaining = 1;
             let bounds = (
                 std::ops::Bound::Included(key.clone()),
                 std::ops::Bound::Included(key),
@@ -44,16 +45,16 @@ pub(super) fn probe_members<M: Memory>(
                 request,
                 plan,
                 Some(bounds),
-                Some(&mut Accumulator::Exists(&mut found)),
+                Some(&mut Accumulator::Until(&mut remaining)),
                 None,
             )?;
-            count += u64::from(found);
+            count += 1 - remaining;
             fetched += page.fetched;
-            if found && mode == MemberProbe::Exists {
-                break;
-            }
         } else {
             count += u64::from(db.map.contains_key(&key));
+        }
+        if count == stop {
+            break;
         }
     }
 

@@ -506,6 +506,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                 &self.request,
                 &plan,
                 MemberProbe::Exists,
+                1,
             )? {
                 return Ok(Aggregate {
                     value: result.value != 0,
@@ -514,17 +515,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                     output_bytes: 1,
                 });
             }
-            let mut found = false;
+            let mut remaining = 1;
             let page = execute(
                 &self.db.read()?.map,
                 E::SCHEMA,
                 &self.request,
                 &plan,
-                Some(Accumulator::Exists(&mut found)),
+                Some(Accumulator::Until(&mut remaining)),
             )?;
 
             Ok(Aggregate {
-                value: found,
+                value: remaining == 0,
                 examined: page.examined,
                 fetched: page.fetched,
                 output_bytes: 1,
@@ -552,53 +553,96 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.bytes < 8 {
                 return Err(Error::RowTooLarge);
             }
-            if self.request.is_plain_count() {
-                return self.entity_count();
-            }
-            let mut plan = self.aggregate_plan(None, false)?;
-            if self.request.index.is_none()
-                && self
-                    .request
-                    .clauses()
-                    .zip(plan.clauses())
-                    .all(|(clause, terms)| {
-                        clause.iter().zip(terms).any(|(p, term)| {
-                            p.constant_comparison(E::SCHEMA) == Some(true)
-                                || (term.tests_presence && E::SCHEMA.field_is_required(p.field))
-                        })
-                    })
-            {
-                return self.entity_count();
-            }
-            if let Some(count) = probe_members(
-                &self.db,
-                E::SCHEMA,
-                &self.request,
-                &plan,
-                MemberProbe::CountKeys,
-            )? {
-                return Ok(count);
-            }
-            if super::order::select_filtered_path(
-                E::SCHEMA,
-                &self.request,
-                &mut plan,
-                Some(MemberProbe::CountWithRows),
-            )? {
-                return self.count_keys(&plan);
-            }
-            if let Some(count) = probe_members(
-                &self.db,
-                E::SCHEMA,
-                &self.request,
-                &plan,
-                MemberProbe::CountWithRows,
-            )? {
-                return Ok(count);
-            }
-            let reducer = self.count_reducer(None)?;
+            self.count_until(u64::MAX)
+        })
+    }
 
-            self.scalar_count_value(&plan, reducer)
+    /// Test a minimum match count, stopping as soon as the requested number is proven.
+    /// Uses the same maintained counts and covered keys as `count`.
+    /// Zero is true after admission. The result occupies one byte.
+    /// # Errors
+    /// Returns ordinary count admission errors and `Limit` if work runs out before
+    /// either reaching the threshold or exhausting the input.
+    pub fn has_at_least(self, minimum: u64) -> Result<Aggregate<bool>, Error> {
+        observe!(query, {
+            let result = self.count_until(minimum)?;
+            Ok(Aggregate {
+                value: result.value >= minimum,
+                examined: result.examined,
+                fetched: result.fetched,
+                output_bytes: 1,
+            })
+        })
+    }
+
+    fn count_until(self, stop: u64) -> Result<Aggregate<u64>, Error> {
+        if self.request.is_plain_count() {
+            return self.entity_count();
+        }
+        let mut plan = self.aggregate_plan(None, false)?;
+        if stop == 0 {
+            return Ok(Aggregate {
+                value: 0,
+                examined: 0,
+                fetched: 0,
+                output_bytes: 8,
+            });
+        }
+        if self.request.index.is_none()
+            && self
+                .request
+                .clauses()
+                .zip(plan.clauses())
+                .all(|(clause, terms)| {
+                    clause.iter().zip(terms).any(|(p, term)| {
+                        p.constant_comparison(E::SCHEMA) == Some(true)
+                            || (term.tests_presence && E::SCHEMA.field_is_required(p.field))
+                    })
+                })
+        {
+            return self.entity_count();
+        }
+        if let Some(count) = probe_members(
+            &self.db,
+            E::SCHEMA,
+            &self.request,
+            &plan,
+            MemberProbe::CountKeys,
+            stop,
+        )? {
+            return Ok(count);
+        }
+        if super::order::select_filtered_path(
+            E::SCHEMA,
+            &self.request,
+            &mut plan,
+            Some(MemberProbe::CountWithRows),
+        )? {
+            return self.count_keys(&plan, stop);
+        }
+        if let Some(count) = probe_members(
+            &self.db,
+            E::SCHEMA,
+            &self.request,
+            &plan,
+            MemberProbe::CountWithRows,
+            stop,
+        )? {
+            return Ok(count);
+        }
+        let mut remaining = stop;
+        let page = execute(
+            &self.db.read()?.map,
+            E::SCHEMA,
+            &self.request,
+            &plan,
+            Some(Accumulator::Until(&mut remaining)),
+        )?;
+        Ok(Aggregate {
+            value: stop - remaining,
+            examined: page.examined,
+            fetched: page.fetched,
+            output_bytes: 8,
         })
     }
 
@@ -641,11 +685,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             }
             let plan = self.aggregate_plan(None, false)?;
 
-            self.count_keys(&plan)
+            self.count_keys(&plan, u64::MAX)
         })
     }
 
-    fn count_keys(&self, plan: &Plan<'_>) -> Result<Aggregate<u64>, Error> {
+    fn count_keys(&self, plan: &Plan<'_>, stop: u64) -> Result<Aggregate<u64>, Error> {
         let bounds = super::range::bounds(E::SCHEMA, &self.request, plan)?;
         let mut examined = 0;
         if let Some(range) = bounds {
@@ -656,6 +700,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
                     return Err(Error::Limit);
                 }
                 examined += 1;
+                if examined as u64 == stop {
+                    break;
+                }
             }
         }
 
@@ -722,7 +769,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let probe = field.is_none().then_some(MemberProbe::CountValidated);
         self.select_aggregate_row_path(&mut plan, probe)?;
         if let Some(probe) = probe
-            && let Some(count) = probe_members(&self.db, E::SCHEMA, &self.request, &plan, probe)?
+            && let Some(count) =
+                probe_members(&self.db, E::SCHEMA, &self.request, &plan, probe, u64::MAX)?
         {
             return Ok(count);
         }
@@ -1030,8 +1078,8 @@ fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
 
 // Closed choices over delivered reducers and one grouping table, not user extensions.
 pub(super) enum Accumulator<'a> {
-    // Synchronous existence can complete on the first matching row; no job state.
-    Exists(&'a mut bool),
+    // A synchronous threshold can finish on the last required matching row.
+    Until(&'a mut u64),
     Scalar(&'a mut Reducer),
     Groups(&'a mut Groups),
 }
@@ -1039,7 +1087,7 @@ impl Accumulator<'_> {
     pub(super) fn needs_spans(&self) -> bool {
         !matches!(
             self,
-            Self::Exists(_)
+            Self::Until(_)
                 | Self::Scalar(
                     Reducer::Numeric(_)
                         | Reducer::Count { presence: None, .. }
@@ -1057,8 +1105,8 @@ impl Accumulator<'_> {
         scratch: &mut Vec<u8>,
     ) -> Result<(), Error> {
         match self {
-            Self::Exists(found) => {
-                **found = true;
+            Self::Until(remaining) => {
+                **remaining -= 1;
 
                 Ok(())
             }

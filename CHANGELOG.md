@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.3] - Unreleased
+
+### ➕ Added
+
+- Added `.has_at_least(n)` to answer filtered capacity checks. A covered index can stop at the nth match without fetching any rows. An inconclusive work budget returns `Limit`.
+
+### 📦 Dependencies
+
+- Updated mounted qualification to Canic 0.268.0. The endpoints and driver now share IC Wire 0.30.1 and use Canic’s RPC limits directly.
+
+### 🎯 Qualification
+
+- Measured repeated parent-only delete refusals with 1, 32 and 255 surviving children. All nine preserved the stable backing. [Installed costs](qualification/README.md#repeated-parent-only-delete-refusals)
+
 ## [0.30.2] - 2026-11-24
 
 ### ➕ Added

@@ -90,3 +90,47 @@ async fn atomic_delete_costs() {
     }
     owned.drop().await;
 }
+
+#[tokio::test]
+async fn repeated_parent_delete_refusals() {
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+
+    // Installation gives entry 1 one child. Grow the same reverse-index range
+    // between trials and submit the identical parent-only request each time.
+    let mut seeded = 1_u64;
+    for children in [1, 32, 255] {
+        let rows: Vec<_> = (seeded + 1..=children)
+            .map(|id| (id, "variant", false))
+            .collect();
+        for chunk in rows.chunks(32) {
+            call::<Result<(), u8>>(pic, canister, "text_index_batch", 23, &(chunk, false))
+                .await
+                .unwrap();
+        }
+        seeded = children;
+        let backing = pic.get_stable_memory(canister).await;
+        // The same endpoint opens the store before rejecting an unknown mode.
+        let before = pic.cycle_balance(canister).await;
+        let result: Result<(), u8> = call(pic, canister, "reference_batch", 10, &255_u8).await;
+        let control = before - pic.cycle_balance(canister).await;
+        assert_eq!(result, Err(2));
+        assert_eq!(pic.get_stable_memory(canister).await, backing);
+        println!("open-only control: children={children} update_cycles={control}");
+        for attempt in 1..=3 {
+            let before = pic.cycle_balance(canister).await;
+            let result: Result<(), u8> = call(pic, canister, "reference_batch", 10, &1_u8).await;
+            let charged = before - pic.cycle_balance(canister).await;
+            assert_eq!(result, Err(1)); // Only ReferenceViolation has this code.
+            assert_eq!(pic.get_stable_memory(canister).await, backing);
+            println!(
+                "restricted delete: children={children} attempt={attempt} update_cycles={charged}"
+            );
+        }
+    }
+    owned.drop().await;
+}

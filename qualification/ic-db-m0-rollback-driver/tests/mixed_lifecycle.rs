@@ -158,17 +158,6 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     .unwrap()
 }
 
-// Use the endpoint owner's budgets with the driver's Wire codec.
-const APPLICATION_LIMITS: ic_wire::Limits = {
-    let limits = canic::db::RPC_LIMITS;
-    ic_wire::Limits {
-        bytes: limits.bytes,
-        allocation: limits.allocation,
-        nodes: limits.nodes,
-        depth: limits.depth,
-    }
-};
-
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
     ic_wire::encode(
         value,
@@ -176,7 +165,7 @@ fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
             method,
             direction: ic_wire::Direction::Request,
         },
-        APPLICATION_LIMITS,
+        canic::db::RPC_LIMITS,
     )
     .unwrap()
 }
@@ -188,7 +177,7 @@ fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
             method,
             direction: ic_wire::Direction::Response,
         },
-        APPLICATION_LIMITS,
+        canic::db::RPC_LIMITS,
     )
     .unwrap()
 }

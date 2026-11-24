@@ -11,10 +11,10 @@ IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable co
 Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.30.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.30.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.266.2 endpoints built with Wire 0.29.0. The downstream schema probe uses Wire 0.30.0 to exercise IC DB’s public inspection trait. The mounted fixture tests framed transport between the two versions. The frozen IcyDB comparison
+with Canic 0.268.0 endpoints. Both use Wire 0.30.1, as does the downstream schema inspection probe. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -47,7 +47,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.266.2 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.268.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -6451,6 +6451,30 @@ plus the parent's row and index. Other measured intervals took 25.21M for old
 row reads, 8.31M for secondary-index reads, 5.49M for final reference validation
 and 0.47M for entity state reads and writes. These are PocketIC instruction
 measurements, not replica I/O latency, retained allocation size or cycle charges.
+
+#### Repeated parent-only delete refusals
+
+The ordinary records Wasm at 0.30.2 handled three identical parent-only update
+requests at each population. Each returned `ReferenceViolation` and preserved
+the complete stable backing byte for byte. For this single-row batch the
+reverse-index check validates the first surviving child and returns immediately.
+
+| Children referencing the parent | Median whole-update cycles (3 refusals) | Same endpoint, open then refuse unknown mode (1 call) | Difference |
+| ---: | ---: | ---: | ---: |
+| 1 | 7,525,305 | 7,171,720 | 353,585 |
+| 32 | 7,534,779 | 7,185,432 | 349,347 |
+| 255 | 7,984,353 | 7,299,191 | 685,162 |
+
+Charges are PocketIC canister balance deltas. The control uses the same request
+type, database open and error reply shape. The difference includes preparing
+the parent delete and checking the reference. Setup and backing snapshots were
+outside the measured calls. Run `make m1-records-artifact`, then:
+
+```sh
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" \
+  bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
+  -p ic-db-m0-rollback-driver --test delete_costs repeated_parent_delete_refusals -- --nocapture
+```
 
 #### Experimental sorted bulk removal
 

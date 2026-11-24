@@ -2391,8 +2391,8 @@ fn execute_inner<M: Memory>(
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {
             accumulator.push(entity, &values, &bytes, &spans, &mut component)?;
-            if matches!(accumulator, aggregate::Accumulator::Exists(_)) {
-                // One validated match proves existence, even at the work boundary.
+            if matches!(accumulator, aggregate::Accumulator::Until(remaining) if **remaining == 0) {
+                // The last required match proves the threshold, even at the work boundary.
                 return Ok(page);
             }
         } else if matches && let Some(collection) = collected.as_mut() {

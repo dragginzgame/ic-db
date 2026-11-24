@@ -16,8 +16,8 @@ use crate::{
 impl Accumulator<'_> {
     pub(super) fn restore(&mut self, entity: &EntitySchema, record: &Record) -> Result<(), Error> {
         match self {
-            // Existence is synchronous-only and has no admitted durable payload.
-            Self::Exists(_) => Err(Error::InvalidQuery),
+            // Threshold evaluation is synchronous-only and has no admitted durable payload.
+            Self::Until(_) => Err(Error::InvalidQuery),
             Self::Groups(groups) => groups.restore(entity, record),
             Self::Scalar(reducer @ Reducer::Extremum { .. }) => {
                 reducer.restore_extremum(entity, record.count, &record.state)
@@ -41,7 +41,7 @@ impl Accumulator<'_> {
 
     pub(super) fn checkpoint(&self) -> Result<(u64, Vec<u8>), Error> {
         Ok(match self {
-            Self::Exists(_) => return Err(Error::InvalidQuery),
+            Self::Until(_) => return Err(Error::InvalidQuery),
             Self::Groups(groups) => groups.checkpoint()?,
             Self::Scalar(Reducer::Extremum { selected, .. }) => selected
                 .as_ref()

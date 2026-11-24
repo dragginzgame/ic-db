@@ -11449,3 +11449,62 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
         Err(Error::Corrupt)
     ));
 }
+
+#[test]
+fn threshold_counts_stop_at_the_proof_and_refuse_inconclusive_work() {
+    let runtime = host(VectorMemory::default());
+    let mut db = create(&runtime, 1);
+    // Exactly 255 matches on the two-field prefix, plus the eight unrelated seeded rows.
+    for start in (9..264).step_by(32) {
+        let mut batch = Batch::new();
+        for id in start..(start + 32).min(264) {
+            let mut entry = row(id);
+            entry.category = 2;
+            entry.amount = 33;
+            batch.insert(&entry).unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+    let covered = || {
+        db.query::<Entry>()
+            .eq(Entry::CATEGORY, 2_u8)
+            .eq(Entry::AMOUNT, 33_u64)
+    };
+    let result = covered().work_limit(20).has_at_least(20).unwrap();
+    assert_eq!(
+        (
+            result.value,
+            result.examined,
+            result.fetched,
+            result.output_bytes
+        ),
+        (true, 20, 0, 1)
+    );
+    assert!(matches!(
+        covered().work_limit(19).has_at_least(20),
+        Err(Error::Limit)
+    ));
+    assert!(
+        !db.query::<Entry>()
+            .eq(Entry::CATEGORY, 0_u8)
+            .work_limit(4)
+            .has_at_least(5)
+            .unwrap()
+            .value
+    );
+    assert!(db.query::<Other>().has_at_least(0).unwrap().value);
+    assert!(matches!(
+        db.query::<Entry>().eq("unknown", 0_u8).has_at_least(0),
+        Err(Error::InvalidQuery)
+    ));
+    let residual = || {
+        db.query::<Entry>()
+            .using_index("category", &[0_u8.into()])
+            .filter("amount", C::Ge, 40_u64)
+    };
+    assert!(residual().work_limit(3).has_at_least(2).unwrap().value);
+    assert!(matches!(
+        residual().work_limit(2).has_at_least(2),
+        Err(Error::Limit)
+    ));
+}
