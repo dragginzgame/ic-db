@@ -3588,6 +3588,49 @@ At work 48 the peak fell 44% from the work-128 index run, and total cycles remai
 
 The native `retained_index_count_preserves_checkpoint_on_invalid_owner` test checkpoints the first of three index entries, then injects two faults at the last entry in turn. Its owner is first missing, then present under the correct primary key with an indexed field outside the selected range. A primary-key lookup confirms each condition. An ordinary covered count returns three in both cases. Each retained advance processes one healthy entry before returning `Corrupt` and preserves the full stable backing. After the fixture restores the original owner bytes, retrying the same sequence completes at three without double-counting.
 
+#### Retained count under writes to another parent
+
+On IC DB 0.30.1, `make m4-lifecycle` counted parent 2's 96 items among 511. In each schedule the driver started a fresh job, allowed up to 0, 1, 2 or 4 advances, then incremented the score of item 1, which belongs to parent 1. This committed write changed the item entity's revision while leaving all 96 matches intact. Each unfinished job received one further advance to observe invalidation. Each completed job returned exactly 96.
+
+Cells show **millions of cycles charged** for starting the job, advancing it through completion or invalidation, and explicitly cancelling its handle. The balance deltas exclude the interleaved write. The last column gives the largest handler instruction count observed in any one job call across the four schedules.
+
+| Path and work per advance | Write before first advance | After 1 opportunity | After 2 opportunities | After 4 opportunities | Peak instructions |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Primary scan, 128 | 23.23 invalidated | 32.91 invalidated | 42.80 invalidated | 54.52 complete | 2.82M |
+| Parent index, 48 | 23.24 invalidated | 38.05 invalidated | 45.41 complete | 45.39 complete | 8.30M |
+| Parent index, 128 | 23.24 invalidated | 37.02 complete | 37.02 complete | 37.02 complete | 14.71M |
+
+One quiet advance sufficed with the index at 128, two at 48, and four with the primary scan. Even invalidation before the first advance cost about 23.2M cycles for start, detection and cleanup. These fixed message schedules establish the required quiet interval in advance opportunities. Estimating an application's completion rate requires its actual write timing and job budget.
+
+**Per-update costs.** The same 12 schedules measured 45 job updates. For each update the driver recorded the host's handler instruction count and the canister balance debit. For every attempt it checked that the individual debits summed to the whole job debit with the interleaved application write excluded. Invalidation is the advance that detects a changed revision before scanning further.
+
+| Update | Calls | Peak handler instructions | Observed cycles per call | Calls over 10M instructions | Calls over 10M cycles |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Start | 12 | 928,053 | 7,934,502–7,942,415 | 0 | 0 |
+| Primary scan advance, work 128 | 7 | 2,815,265 | 9,672,405–9,894,706 | 0 | 0 |
+| Parent index advance, work 48 | 5 | 8,296,307 | 14,806,776–15,374,071 | 0 | 5 |
+| Parent index advance, work 128 | 3 | 14,713,315 | 21,788,004–21,793,298 | 3 | 3 |
+| Detect invalidation | 6 | 933,348 | 8,004,781–8,012,931 | 0 | 0 |
+| Cancel and clean up | 12 | 224,323 | 7,288,467–7,289,277 | 0 | 0 |
+
+All observed primary-scan calls met both per-call targets, with four quiet advances required to finish. The work-48 index finished in two quiet advances and met the handler instruction target, but every scanning advance exceeded the cycle target. The work-128 index finished in one quiet advance and exceeded both. This measures retained update calls on the mounted PocketIC host. Ordinary read-only queries require their own measurements.
+
+#### Ordinary query calls on the mounted host
+
+The 0.30.1 engine served 11 read-only `db_query` calls on the same mounted Canic fixture with two parents and 511 items. Each measurement covers opening the store, executing the query and constructing the handler result. It excludes endpoint transport. The largest observed handler cost was 3,932,377 instructions. This harness cannot attribute a cycle debit to an individual query call.
+
+| Operation | Candidates examined | Owner rows fetched | Result | Handler instructions |
+| --- | ---: | ---: | --- | ---: |
+| Parent by primary ID, hit / miss | — | — | 1 / 0 rows | 692,543 / 692,336 |
+| Parent by unique code, hit / miss | — | — | 1 / 0 rows | 854,986 / 701,255 |
+| Indexed count, empty range | 0 | 0 | 0 | 719,548 |
+| Indexed count, smaller range | 96 | 0 | 96 | 1,519,045 |
+| Indexed count, dense range | 415 | 0 | 415 | 3,932,377 |
+| Listing, first page / continuation | 2 / 2 | 2 / 2 | 2 / 2 IDs | 906,320 / 939,546 |
+| Sparse listing, empty first page / continuation | 8 / 5 | 8 / 5 | 0 / 2 IDs | 1,671,832 / 1,343,602 |
+
+Point lookups return an optional row and expose no traversal counters. Each count returned one scalar and explicitly allowed 512 candidates so the dense case could finish. The listing selected IDs in parent and ID order, with two results per page and the application's eight-candidate allowance. Raising the minimum score to 12 produced the empty first page; its cursor resumed to return IDs 12 and 16. The driver verified counts and listing IDs against the seed tuples. Reproduce with `make m4-lifecycle`.
+
 ### Query matrix on 0.28.1
 
 Released IC DB `3270aae` and frozen IcyDB `6d421e3` ran 195 query cases across two data distributions, three populations and two settled phases (before and after upgrade). All 4,680 outcomes matched the independent oracle, including 432 bounded sorts that legacy refused. Of the 1,908 successful pairs, IC DB used fewer handler instructions in 1,670 and more in 238. The upper median paired IC DB / legacy ratio was 0.389. Each case has equal weight in this comparison. [All family medians and ranges](measurements/0.28.1-query-matrix.tsv).
@@ -4094,6 +4137,12 @@ On the 0.28.2 worktree, `make m4-lifecycle` installed the same Wasm on two fresh
 Instructions cover the application handler. Cycles are whole-update balance deltas. On the changed batch, returning the prepared row saved 73,935 instructions (2.4%) and 73,793 cycles (0.7%). Both paths already finished in one update call.
 
 An independent query checked both rows, their creation and update times, the timestamp index and the entity revision. Both paths produced identical stable bytes. The unchanged replay preserved the original update time, and both replay and refusal preserved the full backing. This measures two small rows of one entity on the qualification host. The Toko registry uses a different schema.
+
+### Managed upsert across an installed upgrade
+
+Using IC DB 0.30.1, the Canic-mounted update upserted a missing row, then used a single batch to update that row and create a receipt. Both requests supplied epoch timestamps. The first reply carried the insertion time; the second returned the persisted row with its original creation time and the batch update time.
+
+After advancing the clock ten minutes and upgrading to the same Wasm, the driver replayed the batch and received the same row with the same times. A subsequent batch assigning the same unique body to both rows returned the unique constraint error. The driver compared the complete stable backing against the pre-upgrade snapshot after each call. An independent query confirmed both stored rows, an empty index range at the original update time, both IDs at the new update time and an entity revision of two. Reproduce with `make m4-lifecycle`.
 
 ### Mounted grouped count under interleaved writes
 
@@ -6343,6 +6392,300 @@ The earlier arithmetic-only installation measured 133,696 and 132,736 IC
 instructions in two 512-addition loops. Those measurements excluded query
 scanning, storage, rounding and job encoding. They are not end-to-end query costs.
 
+### Installed atomic delete costs
+
+The maintained benchmark models a one-way reference using Document.entry_id
+pointing to Entry. Every seeded document references entry 1, and no entity
+references Document. The update receives known child keys and queues the
+parent deletion first when requested. Documents have three secondary indexes.
+
+| Before adjacent index reads, experimental 256-delete commit | Parent primary-row gets | Target-existence gets | Reverse-index seeks | Matching entries visited | Child secondary-index gets | Commit instructions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 255 children and parent | 1 | 0 | 1 | 255 | 765 | 326,484,358 |
+| 256 children, keep parent | 0 | 0 | 0 | 0 | 768 | 328,961,232 |
+
+A disposable instrumented Wasm asserted the operation counts. Instructions
+come from a separate build without counters. The row get counts preparation;
+the later physical removal by primary key is separate. Each child index entry
+is verified before removal. The heavier Document fixture differs in both row
+shape and index fan-out from the historical reciprocal-reference fixture below.
+
+The engine now tries a bounded iterator per ordinary secondary index while
+preparing consecutive deletes from an entity. It compares the entire physical
+key and owner. A mismatch switches that slot to exact point reads. List-reference
+entries continue to use point reads. All iterators are released before publication.
+Matched builds below changed only this preparation logic. The interleaved fixture
+alternates indexed field values across IDs, so neighbors in the batch usually
+occupy different parts of all three indexes.
+
+| Children + parent | Delete order / index layout | Before commit instructions | After commit instructions | After whole-update cycles |
+| --- | --- | ---: | ---: | ---: |
+| 31 + 1 | Ascending, adjacent | 33,534,737 | 28,480,809 | 35,832,992 |
+| 31 + 1 | Descending, adjacent | 33,000,957 | 27,989,873 | 35,342,058 |
+| 31 + 1 | Ascending, interleaved | 33,872,126 | 33,935,699 | 41,288,987 |
+| 255 + 1 | Ascending, adjacent | 326,484,358 | 263,534,834 | 271,318,356 |
+| 255 + 1 | Descending, adjacent | 316,366,772 | 253,113,199 | 260,896,766 |
+| 255 + 1 | Ascending, interleaved | 325,322,131 | 325,204,072 | 332,980,379 |
+
+The expanded measurement Wasm grew by 840 uncompressed bytes. At 32 mutations
+the interleaved control cost an additional 0.19% commit instructions. The normal
+build retains the same 32-mutation cap. The native corruption test verifies both
+a mismatched owner and a missing secondary key refuse before any backing change.
+
+Two disposable probes profiled the ascending, adjacent one-way fixture after
+index iterator reuse. One bracketed each physical DefaultMemoryImpl call,
+subtracting a pair of consecutive instruction-counter reads per sample. Another
+used the ordinary backing and bracketed map operations at commit call sites.
+Percentages use the corresponding uninstrumented commit above. The estimates
+overlap because map operations call the physical backing.
+
+| Children + parent | Raw stable reads (calls / bytes) | Raw stable writes (calls / bytes) | Estimated read + write instructions | Map removal instructions |
+| --- | ---: | ---: | ---: | ---: |
+| 31 + 1 | 11,657 / 125,177 | 7,850 / 96,917 | 0.946M (3.3%) | 21.86M (76.8%) |
+| 255 + 1 | 114,354 / 1,255,665 | 60,505 / 762,613 | 8.269M (3.1%) | 198.72M (75.4%) |
+
+Neither commit issued a physical size or grow call. For 255 children, raw reads
+accounted for an estimated 5.189M instructions and writes 3.079M. The 1,022
+physical map removals include one primary row and three index entries per child,
+plus the parent's row and index. Other measured intervals took 25.21M for old
+row reads, 8.31M for secondary-index reads, 5.49M for final reference validation
+and 0.47M for entity state reads and writes. These are PocketIC instruction
+measurements, not replica I/O latency, retained allocation size or cycle charges.
+
+#### Experimental sorted bulk removal
+
+A disposable copy of the locked 0.7.2 tree accepted the exact sorted removal
+set through a disposable IC Storage 0.78.8 adapter. The bulk build collected
+the admitted keys into a vector. After an ordinary descent reached a leaf, it
+removed additional requested keys found there until the next key was outside
+the leaf or another removal would violate minimum occupancy. It then saved
+the leaf and resumed ordinary deletion. Internal separator replacement and
+rebalancing still used the existing algorithm. No product dependency, stored
+layout or published API changed.
+
+Both installed builds used the same patched tree and experimental 256-mutation
+envelope. The control called ordinary single-key removal; only the candidate
+passed the entire sorted set. Instructions bracket the full commit, excluding
+fixture setup and survivor assertions. These are ascending child ID requests.
+
+| Atomic delete workload | Point commit instructions | Bulk commit instructions | Reduction |
+| --- | ---: | ---: | ---: |
+| 31 children and parent, adjacent index entries | 28,466,949 | 18,638,500 | 34.5% |
+| 255 children and parent, adjacent index entries | 263,312,616 | 139,391,879 | 47.1% |
+| 255 children and parent, interleaved indexed values | 325,414,785 | 217,825,864 | 33.1% |
+| Delete odd IDs, keep all 256 even neighbors and their parent | 450,331,648 | 374,472,652 | 16.8% |
+
+Separate instrumented builds counted removal operations for the adjacent
+255-child case. Map-level node loads fell from 3,800 to 996, saves from 1,449 to
+672 and sibling rotations from 15 to 10. Both performed 197 merges. Load counts
+exclude recursive minimum/maximum reads internal to nodes. The uninstrumented
+measurement Wasm grew 285 bytes relative to the matched control that also
+contained the experimental tree code. This is not a production growth result.
+
+Both installed paths trapped after commit, verified byte-identical stable memory
+against the pre-call snapshot, then retried successfully. The sparse case
+verified every surviving even row and absent odd row. The separate
+[native oracle](experiments/bulk-delete/main.rs) checked every reopened key and
+value against a Rust ordered map after each batch across 16 insertion-order and
+batch-size combinations, including overflow values, empty root and reinsertion.
+**Handoff for the next Storage engine.** The revised [tree prototype](experiments/bulk-delete/leaf-batch.patch)
+takes ownership of the ordered set IC DB already prepares. Set iteration supplies
+distinct keys in order with one key of lookahead, eliminating the extra vector
+of physical keys. The supplier removes existing entries and returns their count;
+empty input, missing keys and replay after success remove zero for those keys.
+A missing key may still trigger ordinary tree rebalancing. The guarantee concerns
+the logical contents. IC DB has already verified its removal set at commit time,
+so it compares the count with the set size and traps on disagreement. Native
+tests mix absent and existing keys, replay each set and compare the entire
+reopened tree with an independent map. The existing bound on batch preparation
+continues to apply. Peak heap use has not been measured. The packaged PocketIC
+comparison reproduced 263,335,163 versus 139,241,210 commit instructions for
+255 children plus their parent in ascending ID order. Deleting alternating
+rows while retaining every neighbor used 450,434,789 versus 373,749,322.
+
+IC DB uses the released Storage 0.78.9 `remove_many` contract in its ordinary
+commit path. The adapter consumes the prepared set and performs one tree removal
+per key. Only the experimental build applies the leaf optimization. The 32-mutation
+production limit and stored formats are unchanged. The crates.io build committed
+31 children plus their parent in 28,481,707 instructions and refused the 256-row
+attempts intact. With the expanded test envelope, the matched 0.78.9 adapter
+control and leaf prototype measured 265,929,959 and 140,499,249 commit
+instructions respectively for the adjacent 255-child case. A new engine can use its own node layout. It should pass
+the same count, reopen, sparse-neighbor and trap/retry cases and rerun the
+point-versus-bulk cost comparison before adoption.
+
+Run the [native oracle](experiments/bulk-delete/run-native.sh) and the
+[installed comparison](experiments/bulk-delete/run-pocketic.sh) from this checkout.
+Pass the local source directories for the exact versions shown. Prepare PocketIC
+with `make m0-setup` first. The scripts patch disposable copies and the installed
+comparison uses the qualification Cargo target cache.
+
+```sh
+bash qualification/experiments/bulk-delete/run-native.sh /path/to/ic-stable-structures-0.7.2
+bash qualification/experiments/bulk-delete/run-pocketic.sh /path/to/ic-stable-structures-0.7.2 /path/to/ic-storage-0.78.9
+```
+
+Run the following for the stock envelope. The 32-delete cases commit. Both
+256-delete attempts refuse at batch construction and preserve the seeded counts.
+
+```sh
+make m2-sort-costs-artifact
+IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/sort-costs.wasm" \
+  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml \
+  --locked -p ic-db-m0-rollback-driver --test delete_costs -- --ignored --nocapture
+```
+
+To reproduce the expanded envelope in a disposable checkout, change only
+`MAX_BATCH` in `crates/ic-db/src/store/mod.rs` from 32 to 256, rebuild there,
+and run the same command with `IC_DB_DELETE_EXPERIMENT_256=1`. Both builds
+gave identical 32-row measurements. Cycles include endpoint overhead, database
+open and two post-operation cardinality checks. Commit instructions cover
+validation and storage changes. These samples exclude key discovery, application
+authorization, transition rows and any other Toko indexes.
+
+#### Historical reciprocal-reference fixture
+
+This earlier version deleted indexed Numbered rows with known primary keys.
+In the parent case, each row references the same KeyRow. The batch queues the
+parent first, so restricted deletion must account for all child removals in the
+final batch state. Each sample seeds a fresh canister in separate updates,
+performs one measured update, and checks both maintained counts after commit or
+refusal. All seeded rows are scheduled for deletion. The first table records the
+original per-target seek implementation.
+
+| Rows in batch | Reference shape | Build instructions | Commit instructions | Whole update cycles |
+| ---: | --- | ---: | ---: | ---: |
+| 32 | Absent target | 24,014 | 20,170,312 | 27,460,739 |
+| 256 | Absent target | 334,738 | 178,153,232 | 185,862,514 |
+| 31 + 1 | Children and parent | 24,010 | 21,931,688 | 29,226,904 |
+| 255 + 1 | Children and parent | 335,290 | 189,647,568 | 197,360,949 |
+
+A disposable instrumented build split the 255-child-plus-parent commit into
+55.92M instructions preparing rows and index changes, 30.12M validating final
+references, 102.97M removing stable-map entries, and 0.17M preparing and writing
+entity state (189.33M total including counter overhead). Numbered has a secondary
+index on target and ID, so each child contributes two physical removals. KeyRow
+contributes its row and two indexes. This is 513 removals.
+
+Finer counters measured 87.64M instructions before publication on the same
+255-child-plus-parent fixture (86.04M with phase-only counters). The totals
+below cover the instrumented intervals, including the cost of traversing the
+stable map. The two range measurements include iterator and batch membership work.
+
+| Preparation or reference work | Operations | Instructions |
+| --- | ---: | ---: |
+| Read existing primary rows | 256 gets | 21.23M |
+| Inspect old rows and derive their index keys | 256 rows | 3.45M |
+| Read old index entries and verify their owner | 257 gets | 23.10M |
+| Seek a child’s incoming-reference prefix with no matching entry | 255 ranges | 24.39M |
+| Traverse the parent's incoming-reference prefix and check removals | 1 range, 255 matching entries | 4.84M |
+| Remaining preparation, schema traversal, accounting and probe overhead | | 10.63M |
+
+The schema declares references in both directions. A separate installation
+removed only the reference annotation from KeyRow.owner and retained its index,
+values, and Numbered.target's enforced reference to KeyRow. Empty reverse seeks
+fell from 255 to zero. Reference validation fell from 30.65M to 5.58M
+instructions and the complete instrumented commit from 191.06M to 165.99M.
+The two builds admit different relationships. This control isolates the fixture
+cost and does not establish which relationships an application requires.
+
+Splitting the same population into 32 updates of eight deletes each, keeping
+the parent until the final update, cost 5.26M–7.31M commit instructions per
+update. All 32 commits summed to 198.64M instructions and all updates summed to
+436.61M cycles. This bounds per-call work while exposing intermediate states.
+
+A separate stock-engine layout probe stored 255 Nat64 values in one bounded
+list on a fresh Nat64-keyed entity without secondary indexes. It read back
+every value before deletion, then verified absence and zero cardinality.
+One delete took 473,836 commit instructions and 7,770,288 whole-update cycles,
+including the post-delete checks. This models small parent-owned values.
+Independently indexed variants, references to individual variants, transitions,
+and the byte sizes of actual application records were outside this probe.
+
+The current engine reuses one proven empty physical key interval while preparing
+a batch. The same PocketIC driver, rows, indexes and enforced references gave
+the following results without internal profiling counters.
+
+| Delete workload | Previous commit instructions | Current commit instructions | Current whole-update cycles |
+| --- | ---: | ---: | ---: |
+| 32 rows, absent target | 20,170,312 | 17,776,953 | 25,067,380 |
+| 31 children and parent | 21,931,688 | 19,477,172 | 26,772,388 |
+| 256 rows, absent target (experimental cap) | 178,153,232 | 155,985,933 | 163,695,215 |
+| 255 children and parent (experimental cap) | 189,647,568 | 165,761,779 | 173,475,160 |
+
+The normal build reproduced both 32-row results and refused both oversized
+batches intact. The expanded measurement Wasm grew by 78 uncompressed bytes.
+A native regression checks surviving references at the first key past the gap,
+beyond that key, and after a change in request order. Reference refusals preserve
+the backing bytes. Savings depend on how many requested prefixes share an empty
+interval in the physical index.
+
+### Installed descending ULID time listing
+
+`make m2-listing-costs` runs a read-only PocketIC query selecting primary keys in
+descending order. Of 23 rows, 16 IDs carry millisecond 100 and five carry
+millisecond 101. One ID on each side falls outside the requested interval
+`[100, 102)`. Both page boundaries fall inside millisecond 100. Each continuation
+travels through the caller as bytes before the next query.
+
+The driver runs the listing twice, projecting the ID once and fetching the full
+three-field entity once. Each run follows its own cursor and checks every ID.
+Both examine one primary-map entry per result and validate the row stored in
+that entry.
+
+| Page | Rows returned | Open instructions | ID projection instructions | Full row instructions | Engine output bytes (ID / full row) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8 | 170,919 | 249,074 | 244,582 | 128 / 200 |
+| 2 | 8 | 170,997 | 270,536 | 267,297 | 128 / 200 |
+| 3 | 5 | 170,997 | 195,990 | 192,332 | 80 / 125 |
+
+Open includes host setup. Query instructions cover cursor decoding through
+fetch. Across the three pages, ID projection used 1.6% more query instructions
+and produced 36% fewer logical output bytes. Both probes return the same IDs
+over Wire after the counters stop. These calls measure neither transport savings
+nor charged cycles.
+
+### Installed grouped Duration costs
+
+Run `make m2-duration-costs` to install the query-measurements Wasm in PocketIC.
+Each call opens the records store and groups TimeRow by zone, computing count,
+sum and average of the optional delay in one scan. All rows belong to one zone.
+Delay is the row ID in milliseconds except on every fourth row, where it is absent.
+
+| Rows examined and fetched | Store open instructions (including host setup) | Summary instructions | Whole update cycles | Same endpoint skipping database work (cycles) |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 167,639 | 126,253 | 7,324,660 | 7,028,702 |
+| 16 | 174,328 | 305,485 | 7,510,560 | 7,028,735 |
+| 96 | 193,773 | 1,457,445 | 8,682,446 | 7,028,702 |
+
+The update wrapper makes cycle charges observable. The instruction counters exclude
+request decoding and reply encoding. At 96 rows the result was 72 present delays,
+3,456 ms total and 48 ms average.
+
+The retained-job fixture groups 16 interleaved rows by timestamp and summarizes
+the required Duration field. Each group has eight rows. Their sums are 12 and
+20 ms, and both averages round to 2 ms. The same-Wasm upgrade occurs after
+the first checkpoint in the six-candidate run. Each resume reopens the database
+and job allocation. Run `make m2-jobs` for the installed regression.
+
+| Candidates per advance | Rows processed this call | Handler instructions | Whole update cycles |
+| ---: | ---: | ---: | ---: |
+| 32 | 16 | 1,047,766 | 8,138,446 |
+| 6 | 6 | 867,290 | 7,955,976 |
+| 6 | 6 (first resume after upgrade) | 1,990,144 | 9,079,175 |
+| 6 | 4 | 874,960 | 7,965,849 |
+
+The cycle totals cover advances only. Seeding, job creation and the upgrade are
+outside the measurements. The two schedules returned identical completed groups.
+
+The installed overflow case checkpoints a valid group and a second group holding
+`Duration::MAX`. Adding one millisecond to the second group refuses the entire
+summary with `ArithmeticOverflow`. Retrying the same sequence returns the same
+error, and both attempts preserve the full stable-memory snapshot. After
+cancellation and correction of the source row, a fresh job returns both groups
+and the cancelled handle is rejected. The corrected sum of `u64::MAX`
+milliseconds over two rows averages to exactly 2^63 milliseconds after rounding.
+
 ### SQLite reference checks
 
 Run `make m2-sqlite-reference` for native differential checks. The same suite
@@ -6350,6 +6693,9 @@ runs through `make m2-queries`. The qualification-only crate seeds an in-memory
 SQLite database and IC DB with the same rows. SQLite is bundled with the test
 crate and introduces no product or CLI dependency.
 
+- Compare grouped Duration counts, sums and rounded averages against SQLite integer
+  arithmetic. Check filtering by the completed average and ordering across tied,
+  zero and all-absent groups, including a half-millisecond tie above 2^53.
 - Page distinct ranks where lane equals rank and the row is visible. The native
   test reopens the database and round-trips the cursor between calls. In both
   directions a one-candidate budget examines all 25 rows exactly once. A

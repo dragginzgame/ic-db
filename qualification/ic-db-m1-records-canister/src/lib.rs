@@ -18,6 +18,10 @@ mod account_keys;
 mod aggregate_store;
 mod console;
 mod defaults;
+#[cfg(feature = "query-measurements")]
+mod delete_costs;
+#[cfg(feature = "query-measurements")]
+mod duration_costs;
 mod enum_collections;
 mod envelope;
 #[cfg(feature = "fault-injection")]

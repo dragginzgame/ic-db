@@ -221,13 +221,30 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
             .collect::<Vec<_>>()
     };
     assert_eq!(read(&db), vec![1, 2, 3, 4, 5, 6]);
-    for (op, value) in [
-        (ic_db::Comparison::Ge, false),
-        (ic_db::Comparison::Le, true),
+    let page = db
+        .query::<DateRow>()
+        .using_index("zone,value,id", &[true.into()])
+        .gt(DateRow::VALUE, Date::MAX.checked_sub_days(1).unwrap())
+        .lte(DateRow::VALUE, Date::MAX)
+        .order_desc(DateRow::ID)
+        .fetch()
+        .unwrap();
+    assert_eq!(page.rows, [rows[5].clone()]);
+    assert_eq!(page.examined, 1);
+
+    for (op, field, value) in [
+        (
+            ic_db::Comparison::Ge,
+            DateRow::ZONE,
+            IndexValue::from(false),
+        ),
+        (ic_db::Comparison::Le, DateRow::ZONE, true.into()),
+        (ic_db::Comparison::Ge, DateRow::VALUE, Date::MIN.into()),
+        (ic_db::Comparison::Le, DateRow::VALUE, Date::MAX.into()),
     ] {
         let count = db
             .query::<DateRow>()
-            .filter(DateRow::ZONE, op, value)
+            .filter(field, op, value)
             .work_limit(1)
             .count()
             .unwrap();

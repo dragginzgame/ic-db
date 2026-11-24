@@ -754,7 +754,15 @@ impl<M: Memory> Database<M> {
         let mut entities = BTreeMap::new();
         let mut required = BTreeSet::new();
         let mut deleted = Vec::new();
+        let mut index_runs = Vec::new();
         for mut mutation in batch.mutations {
+            let direction = deleted.last().and_then(|&(entity, key)| {
+                (entity == mutation.entity.id && matches!(mutation.kind, Kind::Delete))
+                    .then(|| mutation.key < key)
+            });
+            if direction.is_none() {
+                index_runs.clear();
+            }
             self.schema.admits(mutation.entity)?;
             let key = row_key(mutation.entity.id, mutation.key);
             if !targets.insert(key.clone()) {
@@ -823,8 +831,18 @@ impl<M: Memory> Database<M> {
                     return Err(Error::Corrupt);
                 }
                 let owner = info.key.encode();
-                for (key, _) in index_entries(mutation.entity, &info)? {
-                    if self.map.get(&key).as_deref() != Some(owner.as_slice()) {
+                for (slot, (key, _)) in index_entries(mutation.entity, &info)?
+                    .into_iter()
+                    .enumerate()
+                {
+                    let value = if let Some(descending) = direction
+                        && key.first() == Some(&3)
+                    {
+                        read_adjacent_index(&self.map, &mut index_runs, slot, &key, descending)
+                    } else {
+                        self.map.get(&key)
+                    };
+                    if value.as_deref() != Some(owner.as_slice()) {
                         return Err(Error::Corrupt);
                     }
 
@@ -867,6 +885,7 @@ impl<M: Memory> Database<M> {
                 }
             }
         }
+        drop(index_runs);
         if returning.is_some() {
             return Err(Error::Missing);
         }
@@ -908,9 +927,12 @@ impl<M: Memory> Database<M> {
             }
         }
         // Proven IC rollback boundary: no recoverable Result branch below this line.
-        for key in removes {
-            self.map.remove(&key);
-        }
+        let expected = removes.len() as u64;
+        assert_eq!(
+            self.map.remove_many(removes),
+            expected,
+            "prepared removal set changed"
+        );
         for (key, value) in writes {
             self.map.insert(key, value);
         }
@@ -937,6 +959,9 @@ impl<M: Memory> Database<M> {
             }
             validate_reference_target(&self.map, &self.schema, entity, id)?;
         }
+        // A lower-bound seek proves the gap before its first physical key is empty.
+        // Keep one such gap only for this immutable preparation pass.
+        let mut gap: Option<(StoreKey, Option<StoreKey>)> = None;
         for &(target, id) in deleted {
             for entity in self.schema.entities() {
                 for field in entity.fields {
@@ -953,15 +978,27 @@ impl<M: Memory> Database<M> {
                         prefix
                     };
                     let prefix = StoreKey::new(prefix)?;
+                    if let Some((start, next)) = &gap
+                        && start <= &prefix
+                        && next
+                            .as_ref()
+                            .is_none_or(|key| key > &prefix && !key.starts_with(&prefix))
+                    {
+                        continue;
+                    }
                     // Each skipped entry belongs to a distinct changed row in
                     // this range. At most MAX_BATCH skips plus one survivor.
-                    for (position, entry) in self
-                        .map
-                        .range(prefix.clone()..)
-                        .take_while(|entry| entry.key().starts_with(&prefix))
-                        .take(MAX_BATCH + 1)
-                        .enumerate()
-                    {
+                    let mut entries = self.map.range(prefix.clone()..);
+                    for position in 0..=MAX_BATCH {
+                        let entry = match entries.next() {
+                            Some(entry) if entry.key().starts_with(&prefix) => entry,
+                            boundary => {
+                                if position == 0 && deleted.len() > 1 {
+                                    gap = Some((prefix, boundary.map(|entry| entry.key().clone())));
+                                }
+                                break;
+                            }
+                        };
                         if removes.contains(entry.key()) {
                             if position == MAX_BATCH {
                                 return Err(Error::Corrupt);
@@ -985,6 +1022,39 @@ impl<M: Memory> Database<M> {
 
         Ok(())
     }
+}
+
+// Probe at most one neighboring entry per expected secondary key. A gap or different order
+// switches that slot to point reads for the rest of the same-entity delete run.
+// Every successful probe checks the full key; the caller checks its stored owner.
+fn read_adjacent_index<'a, M: Memory>(
+    map: &'a Map<M>,
+    runs: &mut Vec<Option<MapIter<'a, StoreKey, Vec<u8>, M>>>,
+    slot: usize,
+    key: &StoreKey,
+    descending: bool,
+) -> Option<Vec<u8>> {
+    if slot == runs.len() {
+        let entries = if descending {
+            map.range(..=key.clone())
+        } else {
+            map.range(key.clone()..)
+        };
+        runs.push(Some(entries));
+    }
+    let run = &mut runs[slot];
+    if let Some(entry) = run.as_mut().and_then(|entries| {
+        if descending {
+            entries.next_back()
+        } else {
+            entries.next()
+        }
+    }) && entry.key() == key
+    {
+        return Some(entry.value());
+    }
+    *run = None;
+    map.get(key)
 }
 
 // Physical key headers contain a namespace tag and fixed-width schema handles.

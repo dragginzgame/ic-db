@@ -308,7 +308,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    /// Retain an integer, Decimal or finite float sum job with synchronous sum's exact result shape.
+    /// Retain an integer, Decimal, Duration or finite float sum job with synchronous sum's exact result shape.
     /// Same expiry, capacity and query-binding contract as [`Self::start_count`].
     /// # Errors
     /// Refuses unsupported sum shapes, query admission, expiry or occupied capacity.
@@ -345,7 +345,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    /// Retain an exact finite float or integer/Decimal average. R declares a matching float or a Decimal field
+    /// Retain a Duration, finite float or integer/Decimal average. R declares a matching Duration, float or Decimal result
     /// with the source name and optionality. Decimal results declare scale 0–28.
     /// Shares count/sum's expiry, capacity and revision contract. Average versus
     /// sum and the result scale are bound to the job; they cannot change on resume.

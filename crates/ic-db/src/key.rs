@@ -85,23 +85,29 @@ pub(crate) fn operand_type(field: FieldType) -> FieldType {
 impl<'a> IndexValue<'a> {
     // Planner operands have passed admission, including the complete enum definition.
     pub(crate) fn discrete_successor(self) -> Option<Self> {
-        if let Self::UnitEnum {
-            definition,
-            ordinal,
-        } = self
-        {
-            let crate::TypeBody::Enum(variants) = &definition.body else {
-                return None;
-            };
-            let next = ordinal.checked_add(1)?;
-
-            return (usize::from(next) < variants.len()).then_some(Self::UnitEnum {
+        match self {
+            Self::Date(date) => date.checked_add_days(1).map(Self::Date),
+            Self::Timestamp(time) => Some(Self::Timestamp(Timestamp::from_millis(
+                time.as_millis().checked_add(1)?,
+            ))),
+            Self::Duration(duration) => Some(Self::Duration(Duration::from_millis(
+                duration.as_millis().checked_add(1)?,
+            ))),
+            Self::UnitEnum {
                 definition,
-                ordinal: next,
-            });
+                ordinal,
+            } => {
+                let crate::TypeBody::Enum(variants) = &definition.body else {
+                    return None;
+                };
+                let next = ordinal.checked_add(1)?;
+                (usize::from(next) < variants.len()).then_some(Self::UnitEnum {
+                    definition,
+                    ordinal: next,
+                })
+            }
+            _ => self.integer_successor(),
         }
-
-        self.integer_successor()
     }
 
     pub(crate) fn admit(self, field: FieldType, optional: bool) -> Result<(), Error> {
@@ -226,11 +232,7 @@ impl<'a> IndexValue<'a> {
                 bytes[0] ^= 0x80;
                 out.extend(bytes);
             }
-            Self::Int32(value) => {
-                let mut bytes = value.to_be_bytes();
-                bytes[0] ^= 0x80;
-                out.extend(bytes);
-            }
+            Self::Int32(value) => out.extend(ordered_i32(value)),
             Self::Int64(value) => {
                 let mut bytes = value.to_be_bytes();
                 bytes[0] ^= 0x80;
@@ -510,10 +512,18 @@ pub(crate) fn fixed_width(field: FieldType) -> Option<usize> {
     }
 }
 
+fn ordered_i32(value: i32) -> [u8; 4] {
+    (value ^ i32::MIN).to_be_bytes()
+}
+
 // Recognize proven extrema of present fixed-width keys when ranking index ranges.
 pub(crate) fn is_fixed_extreme(field: FieldType, bytes: &[u8], upper: bool) -> bool {
     match operand_type(field) {
         FieldType::Bool => bytes == [u8::from(upper)],
+        FieldType::Date => {
+            let date = if upper { Date::MAX } else { Date::MIN };
+            bytes == ordered_i32(date.as_days_since_epoch())
+        }
         FieldType::Named(link) => unit_enum_len((link.definition)())
             .is_some_and(|len| bytes == [if upper { (len - 1) as u8 } else { 0 }]),
         scalar => {

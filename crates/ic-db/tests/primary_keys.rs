@@ -359,6 +359,30 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     raw.remove(&physical_row(Ulid::MAX));
     drop(raw);
     let original = physical_row(Ulid::MAX);
+    let mut wrong_id = expected.clone();
+    wrong_id[0] = 0;
+    let mut truncated_payload = expected.clone();
+    truncated_payload.pop();
+    for invalid in [wrong_id, truncated_payload] {
+        let mut raw =
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        raw.insert(original.clone(), invalid);
+        drop(raw);
+        let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
+        let before = backing.borrow().clone();
+        let ids = db
+            .query::<KeyRow>()
+            .filter_ulid_time(KeyRow::ID, Ulid::MAX.timestamp()..Timestamp::MAX)
+            .select(|row| row.id)
+            .fetch();
+        assert!(matches!(ids, Err(Error::Corrupt)));
+        assert_eq!(*backing.borrow(), before);
+        drop(db);
+        let mut raw =
+            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        raw.remove(&original);
+    }
+
     let mut trailing = original.clone();
     trailing.push(0);
     for bad in [original[..20].to_vec(), trailing, physical_row(Ulid::MIN)] {
@@ -425,4 +449,89 @@ fn changing_primary_type_refuses_existing_data_intact() {
         db.get::<NumericIdentity>(u64::MAX).unwrap(),
         Some(NumericIdentity { id: u64::MAX })
     );
+}
+
+#[test]
+fn embedded_time_bounds_seek_the_ulid_primary_key() {
+    let fixture = ic_db::testing::Fixture::new("test.ulid.v1");
+    let mut db = fixture.create(schema(), [1; 16]).unwrap();
+    let rows = rows();
+    let mut batch = Batch::new();
+    for row in &rows {
+        batch.insert(row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    let all = db
+        .query::<KeyRow>()
+        .filter_ulid_time(KeyRow::ID, Timestamp::MIN..Timestamp::MAX)
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!((all.value, all.examined, all.fetched), (6, 0, 0));
+    let ts = Timestamp::from_millis;
+    for (start, end, expected) in [
+        (-10, 1, &rows[..4]),
+        (1, 2, &rows[4..5]),
+        ((1_i64 << 48) - 1, i64::MAX, &rows[5..]),
+        (i64::MIN, 0, &rows[..0]),
+        (1_i64 << 48, i64::MAX, &rows[..0]),
+        (2, 1, &rows[..0]),
+        (0, 0, &rows[..0]),
+    ] {
+        let page = db
+            .query::<KeyRow>()
+            .filter_ulid_time(KeyRow::ID, ts(start)..ts(end))
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows, expected);
+        assert_eq!(page.examined, expected.len());
+    }
+    assert!(matches!(
+        db.query::<KeyRow>()
+            .filter_ulid_time(KeyRow::VALUE, ts(-1)..ts(0))
+            .count(),
+        Err(Error::InvalidOperand)
+    ));
+
+    let day = rows[4].id.timestamp().utc_date().unwrap();
+    let window = day.utc_timestamp_range();
+    let expected: Vec<_> = rows[..5].iter().rev().map(|row| row.id).collect();
+    drop(db);
+    let mut cursor = None;
+    for (page_number, ids) in expected.chunks(2).enumerate() {
+        let db = fixture.open(schema()).unwrap();
+        let listing = |range| {
+            db.query::<KeyRow>()
+                .filter_ulid_time(KeyRow::ID, range)
+                .order_desc(KeyRow::ID)
+                .limit(2)
+        };
+        if let Some(after) = &cursor {
+            // Changing the included milliseconds changes the query even if the
+            // cursor's last ID still lies within the new interval.
+            assert!(matches!(
+                listing(ts(0)..ts(2)).after(after).fetch(),
+                Err(Error::InvalidCursor)
+            ));
+            assert!(matches!(
+                db.query::<KeyRow>()
+                    .filter_ulid_time(KeyRow::ID, window.clone())
+                    .order_asc(KeyRow::ID)
+                    .limit(2)
+                    .after(after)
+                    .fetch(),
+                Err(Error::InvalidCursor)
+            ));
+        }
+        let page = listing(window.clone())
+            .after_optional(cursor.as_ref())
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|row| row.id).collect::<Vec<_>>(), ids);
+        assert_eq!(page.examined, ids.len());
+        cursor = page
+            .next
+            .map(|c| ic_db::QueryCursor::from_bytes(&c.to_bytes()).unwrap());
+        assert_eq!(cursor.is_some(), (page_number + 1) * 2 < expected.len());
+    }
 }

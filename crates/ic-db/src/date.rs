@@ -1,7 +1,13 @@
 //! Bounded Gregorian date, adapted from frozen IcyDB 6d421e3.
 //! Serde carries the bounded day count since the Unix epoch.
 
-use std::fmt::{self, Debug, Display};
+use crate::Timestamp;
+use std::{
+    fmt::{self, Debug, Display},
+    ops::Range,
+};
+
+pub(crate) const SECONDS_PER_DAY: i64 = 86_400;
 
 /// A Gregorian calendar date, stored as days since the Unix epoch.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize)]
@@ -77,6 +83,14 @@ impl Date {
     #[must_use]
     pub const fn as_days_since_epoch(self) -> i32 {
         self.0
+    }
+
+    /// Midnight UTC at the start of this date through, but excluding, the next midnight.
+    /// Both timestamp bounds are representable even for [`Date::MAX`].
+    #[must_use]
+    pub fn utc_timestamp_range(self) -> Range<Timestamp> {
+        let start = i64::from(self.0) * SECONDS_PER_DAY;
+        Timestamp::from_secs(start)..Timestamp::from_secs(start + SECONDS_PER_DAY)
     }
 
     /// Fallible conversion from `i64` day-count representation.

@@ -102,6 +102,9 @@ fn canonical_text_exact_bytes_and_distinct_schema_identity() {
             1, 86, 62, 58, 181, 211, 214, 118, 76, 97, 239, 185, 147, 2, 189, 91
         ]
     );
+    assert_eq!(known.timestamp().as_millis(), 1_469_922_850_259);
+    assert_eq!(Ulid::MIN.timestamp(), Timestamp::EPOCH);
+    assert_eq!(Ulid::MAX.timestamp().as_millis(), (1_i64 << 48) - 1);
     assert_eq!(format!("{known:?}"), "\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"");
     assert_eq!(Ulid::MIN.to_string(), "00000000000000000000000000");
     assert_eq!(Ulid::MAX.to_string(), "7ZZZZZZZZZZZZZZZZZZZZZZZZZ");
@@ -347,4 +350,50 @@ fn row_byte_limit_admits_255_values_but_refuses_256() {
     bad[8..12].copy_from_slice(&256_u32.to_le_bytes());
     bad.extend([255; 16]);
     assert!(matches!(WideList::decode(&bad), Err(Error::Corrupt)));
+}
+
+#[test]
+fn full_ulid_time_counts_respect_field_presence() {
+    let fixture = ic_db::testing::Fixture::new("test.ulid.v1");
+    let mut db = fixture
+        .create(Schema::new(&[UlidRow::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    for (id, value) in values().into_iter().enumerate() {
+        batch
+            .insert(&UlidRow {
+                id: id as u64,
+                value,
+                maybe: (id != 1).then_some(value),
+                zone: true,
+            })
+            .unwrap();
+    }
+    db.commit(batch).unwrap();
+    let all_time = Timestamp::MIN..Timestamp::MAX;
+    let required = db
+        .query::<UlidRow>()
+        .filter_ulid_time(UlidRow::VALUE, all_time.clone())
+        .work_limit(1)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (required.value, required.examined, required.fetched),
+        (6, 0, 0)
+    );
+    let optional = db
+        .query::<UlidRow>()
+        .filter_ulid_time(UlidRow::MAYBE, all_time)
+        .count()
+        .unwrap();
+    assert_eq!(
+        (optional.value, optional.examined, optional.fetched),
+        (5, 5, 0)
+    );
+    let partial = db
+        .query::<UlidRow>()
+        .filter_ulid_time(UlidRow::MAYBE, Timestamp::EPOCH..Timestamp::from_millis(1))
+        .count()
+        .unwrap();
+    assert_eq!(partial.value, 2);
 }

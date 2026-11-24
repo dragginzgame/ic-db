@@ -271,6 +271,11 @@ m2-sort-costs: m2-sort-costs-artifact
 .PHONY: m2-listing-costs
 m2-listing-costs: m2-sort-costs-artifact m2-sqlite-reference
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test listing_costs ordered_listing_paths_match_sqlite_page_by_page -- --ignored --nocapture
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test listing_costs ulid_time_listing_resumes_inside_a_millisecond -- --ignored --nocapture
+
+.PHONY: m2-duration-costs
+m2-duration-costs: m2-sort-costs-artifact
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test duration_costs -- --ignored --nocapture
 
 .PHONY: m2-filter-costs
 m2-filter-costs: m2-sort-costs-artifact

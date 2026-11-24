@@ -875,6 +875,13 @@ The host owns that stream and any upgrade checkpoint via `last()` / `resume_afte
 Resetting state can repeat IDs, and issuance before a normally refused batch can
 leave gaps. The application supplies the generated ID when constructing its row.
 
+Use `.filter_ulid_time(Event::ID, date.utc_timestamp_range())` to list IDs
+whose embedded millisecond falls on a UTC day. Read an existing ID’s embedded
+time with `id.timestamp()`. Its `utc_date()` returns `None` beyond year 9999.
+A ULID primary key supplies
+the time ordering directly. To select by the time the database actually
+inserted a row, filter its managed creation timestamp instead.
+
 Entity fields can now declare literal defaults, for example
 `field(name = "count", value(item(prim = "Nat16")), default = 7)`.
 The first supported defaults are integers, Bool and bounded Text. Construct a
@@ -944,7 +951,11 @@ primary keys and mutual references. Composite primary keys remain separate work.
 `prim = "Date"` uses `ic_db::Date`, a Gregorian day from `0000-01-01` through
 `9999-12-31`. Use `Date::try_new(year, month, day)`, `Date::parse("2024-02-29")`
 or checked epoch-day construction. Four-byte storage and signed ordered keys
-preserve dates before 1970. Inspect `DateRow` with `db schema`.
+preserve dates before 1970. To query a Timestamp field by UTC calendar day,
+use `.filter_range(Event::CREATED_AT, date.utc_timestamp_range())`.
+The exclusive end keeps midnight out of the preceding day and allows an
+existing timestamp index to bound the search. Given a stored timestamp,
+`timestamp.utc_date()` returns its UTC day, or `None` outside years 0000–9999. Inspect `DateRow` with `db schema`.
 `prim = "Timestamp"` and `prim = "Duration"` use `ic_db::Timestamp` and
 `ic_db::Duration`. Both store exact eight-byte millisecond values: signed Unix
 milliseconds for timestamps, nonnegative milliseconds for durations. Use
@@ -952,8 +963,9 @@ milliseconds for timestamps, nonnegative milliseconds for durations. Use
 Timestamp sub-millisecond conversion floors before 1970; duration sub-millisecond
 conversion explicitly truncates. Value arithmetic saturates at the type boundary;
 text parsing refuses overflow. Inspect `TimeRow` with `db schema`. Managed time
-policies use the batch clock described above; Timestamp/Duration aggregate
-arithmetic remains separate work.
+policies use the batch clock described above. A Duration sum returns exact elapsed
+milliseconds and refuses overflow. A Duration average rounds once to the nearest
+millisecond, with ties to even. Both return a Duration.
 `value(item(prim = "Decimal", scale = 2))` stores exact decimal values at the
 declared scale (0–28). Parse `"1.00".parse::<ic_db::Decimal>()` or use
 `Decimal::try_new(mantissa, scale)`. Equivalent values such as 1.0 and 1.00 have

@@ -450,8 +450,20 @@ impl<'a> Predicate<'a> {
 
     // Endpoints of admitted present scalar values. Text and Blob have an empty minimum.
     fn at_extreme(&self, entity: &EntitySchema, value: IndexValue<'_>, upper: bool) -> bool {
+        use crate::{Date, Duration, Timestamp, Ulid};
+
         match value {
             IndexValue::Bool(b) => b == upper,
+            IndexValue::Date(d) => d == if upper { Date::MAX } else { Date::MIN },
+            IndexValue::Timestamp(t) => {
+                t == if upper {
+                    Timestamp::MAX
+                } else {
+                    Timestamp::MIN
+                }
+            }
+            IndexValue::Duration(d) => d == if upper { Duration::MAX } else { Duration::MIN },
+            IndexValue::Ulid(id) => id == if upper { Ulid::MAX } else { Ulid::MIN },
             IndexValue::UnitEnum { ordinal, .. } => entity
                 .index_field(self.field)
                 .is_some_and(|field| key::is_fixed_extreme(field.value, &[ordinal], upper)),
@@ -656,8 +668,7 @@ impl<'a> Request<'a> {
             if let Some(equality) = predicate.fixed_equality(entity) {
                 return Some(equality);
             }
-            // A mandatory lower and upper bound can isolate one value. Only
-            // integers and admitted unit enums have a proven successor here. Keep the original terms
+            // A mandatory lower and upper bound can isolate one value. Keep the original terms
             // for row evaluation and continuation identity.
             let QueryOperand::Literal(value) = predicate.operand else {
                 return None;
@@ -1034,6 +1045,32 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     #[must_use]
     pub fn filter_absent(self, field: &'a str) -> Self {
         self.filter(field, Comparison::Eq, IndexValue::Absent)
+    }
+
+    /// Match a present field within a Rust half-open range, including the start and excluding the end.
+    /// Uses the same two predicate terms and cursor identity as `gte(field, start).lt(field, end)`.
+    /// Empty and reversed ranges match no rows. Both bounds undergo ordinary operand admission.
+    #[must_use]
+    pub fn filter_range<T: Into<IndexValue<'a>>>(
+        self,
+        field: &'a str,
+        range: std::ops::Range<T>,
+    ) -> Self {
+        self.gte(field, range.start).lt(field, range.end)
+    }
+
+    /// Match present ULIDs whose embedded timestamp lies in the half-open time range.
+    /// Uses two ordinary key comparisons, including for empty or out-of-domain ranges.
+    /// The embedded time can differ from the row's managed creation time.
+    #[must_use]
+    pub fn filter_ulid_time(
+        self,
+        field: &'a str,
+        range: std::ops::Range<crate::Timestamp>,
+    ) -> Self {
+        let (first, last) =
+            crate::Ulid::time_bounds(range).unwrap_or((crate::Ulid::MAX, crate::Ulid::MIN));
+        self.filter_between(field, first, last)
     }
 
     /// Match a present field inside an inclusive range, ANDed with other filters.

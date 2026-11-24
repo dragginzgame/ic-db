@@ -19,6 +19,8 @@ pub enum Update {
         /// New body for the selected row.
         body: String,
     },
+    /// Upsert row 1 alone, or together with row 2, returning the persisted first row.
+    UpsertManaged(String, Option<String>),
 }
 
 /// Actions on a retained count.
@@ -111,6 +113,12 @@ pub type Snapshot = (
 /// Reads accepted by the application.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Query {
+    /// Look up a parent by primary ID.
+    ParentById(u64),
+    /// Look up a parent by its unique code.
+    ParentByCode(u64),
+    /// Count the selected parent's items within 512 candidates.
+    ParentCount(u64),
     /// Compare the selected schema with the independent model.
     Snapshot(bool, u64, u64),
     /// List items in one parent with a minimum score, after an optional cursor.
@@ -144,11 +152,17 @@ pub struct ItemPage {
     pub next: Option<Vec<u8>>,
     /// Candidates examined by this call.
     pub examined: u64,
+    /// Owner rows fetched during this page.
+    pub fetched: u64,
 }
 
 /// Query result and the work measured inside the handler.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum QueryReply {
+    /// Parent ID and code, or absence, with handler instructions.
+    Parent(Result<Option<(u64, u64)>, u8>, u64),
+    /// Count, examined candidates and fetched rows, with handler instructions.
+    Count(Result<(u64, u64, u64), u8>, u64),
     /// Complete model observation or refusal, and instructions.
     Snapshot(Result<Snapshot, u8>, u64),
     /// Bounded listing or refusal, and instructions.

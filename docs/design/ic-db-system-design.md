@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.7 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses Storage 0.78.9 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -1081,7 +1081,7 @@ for each type and operation specify delivered support and bounds.
 | Finite Float32/Float64 | Declared normalization, including signed zero | Versioned total order over the admitted finite domain | Same normalized equality | Sum, average, min/max; deterministic accumulation/rounding contract |
 | Bool, text, bytes | Exact base equality; text transforms are explicit | Declared comparator and bounded key bytes | Same equality and bounded retained key bytes | Min/max where ordered; no implicit numeric conversion |
 | ULID, principal, subaccount, account | Canonical identity equality | Explicit identity comparator/key contract | Same identity equality | Min/max where ordered |
-| Date, timestamp, duration | Exact typed units | Chronological/numeric unit order | Same typed equality | Min/max; duration arithmetic needs explicit range/result units |
+| Date, timestamp, duration | Exact typed units | Chronological/numeric unit order | Same typed equality | Min/max, Duration sum and average in milliseconds |
 | Enums | Variant name plus payload equality within the admitted type | Canonical name order, then admitted payload comparison | Same variant/payload equality | Min/max when payload ordering is admitted |
 | Optional values | Distinguish absence from zero/empty | Explicit absent ordering; contained type rules | One absent group/distinct value; contained type rules | Explicit absent/empty-input semantics for contained aggregate |
 | Nested records, tuples, composite keys | Component equality under stable field identities | Conditional lexicographic components and key-size bounds | Conditional canonical whole-value equality | Min/max when whole-value order is admitted |
@@ -2328,7 +2328,11 @@ limits apply to explicit dependent writes.
 Every enforced reference needs bounded target-existence and reverse-reference
 checks, normally through a maintained ordinary index. A target delete must account
 for references deleted/repointed in the same batch, then detect any surviving
-reference without an unbounded scan. A mapping's reference to an existing user
+reference without an unbounded scan. During read-only preparation a failed
+lower-bound lookup proves that no key lies between its search prefix and the
+first physical key returned (or the end of the map). Reuse that single interval
+only if the entire next prefix falls inside it. A boundary key matching the new
+prefix must still be examined. The proof expires before mutation. A mapping's reference to an existing user
 does not require every user to have a mapping; declare that inverse requirement
 separately if needed. Nested stored containers do not automatically gain enforced
 member references; qualify the explicitly supported reference locations.
@@ -2340,6 +2344,13 @@ index and necessary allocator change without external calls. After mutation
 starts, complete or trap the enclosing message through the proven rollback
 mechanism; never return a partial `BudgetExceeded`. Keep preparation internal to
 this operation, with no public prepare-now/commit-later handle.
+
+IC DB transfers the admitted, sorted set of distinct physical keys to Storage
+0.78.9's `remove_many`. Storage returns the actual removal count. A mismatch
+traps the enclosing message before IC DB publishes row and index writes. This
+keeps physical removal in Storage and final-state admission in IC DB. The
+released adapter removes each key individually. The [qualification handoff](../../qualification/README.md#experimental-sorted-bulk-removal)
+measures the leaf-level optimization for a future Storage engine.
 
 Preparation establishes structural bounds on encoded bytes, mutations, index
 fan-out and peak memory. Remaining commit failures must roll back. The
@@ -2515,7 +2526,7 @@ trapping safely on the same oversized operation is not successful continuation.
 
 ## 9. Delivery and deletion gates
 
-The M2 and M3 rows were reviewed on 2026-11-22. Other rows retain the 2026-11-17 review. Passing a selected
+M4 and M5 were reviewed on 2026-11-24. The M2 and M3 rows retain the 2026-11-22 review and M0 and M1 the 2026-11-17 review. Passing a selected
 workload establishes that contract and envelope, not every combination in the
 retained capability scope. Later detail explains the implementation and evidence.
 
@@ -2525,8 +2536,8 @@ retained capability scope. Later detail explains the implementation and evidence
 | M1 — Persistent records | Attribute schemas, owned codecs, broad stored types, indexes, final-state batches, references, defaults and managed timestamps; reopen/rollback and selected resource/growth comparisons | Full type-operation combinations, broader member indexes, nested references, composite primary keys and additional authoring policies |
 | M2 — Fluent queries | Bounded predicates, projection, proven ordered paths, bounded complete sorting with per-field directions, live pages, canonical and first-occurrence DISTINCT, grouping, counts/extrema/sums/averages and retained exact aggregation | [Bounded query closeout](#m2-bounded-query-closeout). Larger or cross-message sorting needs a consumer requirement. M4 tracks production workload acceptance and per-entity Wasm cost. |
 | M3 — Schema maintenance | Identified whole-database copy, validation, cutover, cancellation and retired cleanup; upgrade recovery, successive migrations and [byte-limited copy recovery](../../qualification/README.md#byte-limited-migration-recovery-0276-worktree) on maximum-size rows | Added entities start empty; source entities and keys must survive. Broader resource envelopes and long-term allocation policy. Supplier-specific slot reuse remains deferred |
-| M4 — Product qualification | Selected scalar/fan-out comparisons, entity growth and controlled fluent-shape/map composition; independent three-entity model with Canic-mounted writes, snapshot reads, sparse listings and retained item counts across upgrades, plus migration; Canic-owned typed adapter | Broader matched workloads and operational acceptance; tier-2 application findings remain separate |
-| M5 — Extensions | No blanket completion claim | Each extension needs its own contract and working journey; retained gaps above are not silently reclassified as optional features |
+| M4 — Product qualification | Completed the current mounted-host pass for mixed writes, upgrade, migration, retained counts under contention and [ordinary query calls](../../qualification/README.md#ordinary-query-calls-on-the-mounted-host). Matched legacy and Wasm growth evidence remains in the [comparison matrix](../../qualification/README.md#comparison-with-frozen-icydb). | Production workload acceptance remains open. The read-only fixture establishes handler instructions for the measured populations; individual query cycle charges are unavailable. Revisit when an application workload, an attributable charge, or a regression gives a concrete question. |
+| M5 — Extensions | Active. Primary-key upsert is the first selected application journey. The [write contract](#6-writes-commit-and-recovery) covers lazy creation, replacement and retry. A [native batch test](../../crates/ic-db/tests/write_contracts.rs) covers changing a reference and replacing its target in one commit, refusal on a missing target, and reverse-reference enforcement after reopen. The [mounted upsert test](../../qualification/README.md#managed-upsert-across-an-installed-upgrade) covers a committed reply, same-Wasm upgrade, identical replay and atomic unique conflict. | Select further extensions against a concrete caller requirement and observable acceptance case. Open M1–M4 boundaries remain with their respective milestones. |
 
 #### M2 bounded query closeout
 
@@ -3000,6 +3011,10 @@ copied. IC DB rejects invalid operands during admission and needs no additional
 comparison variant, negation executor or retained representation. Native oracles
 cover optional values, duplicate exclusions, both page directions, bounds and
 continuation through ordinary inequalities, including retained counts.
+
+`filter_range(field, start..end)` expresses a half-open interval using the same
+`Ge` and `Lt` terms as two explicit filters. This lets callers pass a UTC day
+as a timestamp range and resume either spelling with the same cursor.
 
 `filter_between(field, lower, upper)` is shorthand for `Ge` then `Le`, retaining
 both endpoints, the same cursor/job identity and two ordinary comparison terms.
@@ -3685,7 +3700,7 @@ inspect later rows after a match. The result occupies one logical byte. Output
 modifiers refuse under the scalar admission rules. Without an explicit index,
 a covered primary range takes precedence. An index equality prefix covering
 every predicate uses the same proof as count. When multiple indexes cover the same equalities, a complete unique key proves exhaustion on the matching entry. A one-candidate count can therefore finish regardless of index declaration or name order. For residual filters, a complete unique key bounds the scan to one owner, including when an ID inequality needs to be checked on that row. An exact primary-key lookup retains priority for a residual scan. Otherwise, existence and synchronous row count may use a mandatory leading equality
-prefix or a mandatory range on the first index field if it preserves the available primary-key restrictions. A presence test on the required primary key or an inclusive comparison at a proven physical domain extreme imposes no restriction to preserve. For a row scan the same holds for an ID membership interval spanning both proven domain extremes. Membership still filters every candidate. Terminals supporting individual ID probes preserve that access path. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. The same rule applies when the smallest and largest membership operands span the entire component and trailing keys require an interval scan. For required Booleans the encoded endpoints are 0 and 1. For required unit enums they are zero and the last ordinal in canonical variant-name order. An inclusive upper bound on the minimum or lower bound on the maximum fixes a unit enum or integer to that present value, including on optional fields. Integer bounds use the exact signedness and width of the field. For integers and unit enums, a strict bound outside the present domain proves an empty traversal. An inclusive bound covering the domain tests presence, so a count can use maintained cardinality on a required field and must exclude absence on an optional field. Two mandatory bounds can also isolate one integer or unit-enum variant when one or both are strict. The planner checks adjacency in the integer domain or the admitted canonical variant order, without wrapping at the maximum. Two mandatory strict bounds on consecutive values of the same field prove empty input for any selected traversal. An interval spanning those endpoints covers the full domain, even when the membership filter excludes interior values. An ordinary optional index starts with absence. A membership interval from absence to a proven greatest present value covers that index, while an interval starting at the first present variant skips absence. An admitted present-only index already excludes absent entries, so a full present range can serve as a fallback. A narrower range ranks ahead of it with equal coverage and fixed prefix. On Text and Blob, byte length equal to zero, at most zero, or less than one fixes the indexed value to the present empty string or blob. Collection length filters retain their existing row semantics. For Text and Blob, an empty prefix and an inclusive lower bound of empty both test presence. Neither narrows a required field. A strict upper bound of empty matches no row, including when the field is absent. A Boolean range admitting one present value fixes the component for ordering, DISTINCT and prefix selection. Inequality against a Boolean literal fixes its opposite when the field and its parent are required. An absent optional field also satisfies that inequality. Boolean bounds below false or above true exclude all rows. Inclusive bounds covering both values prove presence and can use maintained counts on required fields. An inclusive upper bound of empty fixes the field to its present empty value for prefix selection and contradiction checks. Membership on a complete physical key gets a point-probe preference only for terminals that can execute those probes. Field counts, grouping, DISTINCT reductions and bounded sorting rank their actual scan intervals. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
+prefix or a mandatory range on the first index field if it preserves the available primary-key restrictions. A presence test on the required primary key or an inclusive comparison at a proven physical domain extreme imposes no restriction to preserve. For a row scan the same holds for an ID membership interval spanning both proven domain extremes. Membership still filters every candidate. Terminals supporting individual ID probes preserve that access path. Both require complete index membership and a representable bound. At equal prefix length, aggregate scans prefer an index whose next component admits a mandatory encoded range bound, then fewer index fields and the logical name. An inclusive all-zero lower or all-ones upper endpoint on a required fixed-width component excludes no keys. It gives no range preference in automatic selection. The same rule applies when the smallest and largest membership operands span the entire component and trailing keys require an interval scan. For required Booleans the encoded endpoints are 0 and 1. For required unit enums they are zero and the last ordinal in canonical variant-name order. An inclusive upper bound on the minimum or lower bound on the maximum fixes a unit enum, integer, Date, Timestamp or Duration to that present value, including on optional fields. Integer bounds use the exact signedness and width of the field. For these discrete types, a strict comparison below the minimum or above the maximum proves an empty traversal. Date range ranking uses the encoded calendar endpoints for years 0000–9999. An inclusive bound covering the domain tests presence, so a count can use maintained cardinality on a required field and must exclude absence on an optional field. Two mandatory bounds can also isolate one integer, unit-enum variant, Date, Timestamp or Duration when one or both are strict. The planner checks adjacency in the admitted domain. Dates step by one calendar day and timestamps and durations by one millisecond. Each successor is checked at the maximum. Two mandatory strict bounds on consecutive values of the same field prove empty input for any selected traversal. An interval spanning those endpoints covers the full domain, even when the membership filter excludes interior values. An ordinary optional index starts with absence. A membership interval from absence to a proven greatest present value covers that index, while an interval starting at the first present variant skips absence. An admitted present-only index already excludes absent entries, so a full present range can serve as a fallback. A narrower range ranks ahead of it with equal coverage and fixed prefix. On Text and Blob, byte length equal to zero, at most zero, or less than one fixes the indexed value to the present empty string or blob. Collection length filters retain their existing row semantics. For Text and Blob, an empty prefix and an inclusive lower bound of empty both test presence. Neither narrows a required field. A strict upper bound of empty matches no row, including when the field is absent. A Boolean range admitting one present value fixes the component for ordering, DISTINCT and prefix selection. Inequality against a Boolean literal fixes its opposite when the field and its parent are required. An absent optional field also satisfies that inequality. Boolean bounds below false or above true exclude all rows. Inclusive bounds covering both values prove presence and can use maintained counts on required fields. An inclusive upper bound of empty fixes the field to its present empty value for prefix selection and contradiction checks. Membership on a complete physical key gets a point-probe preference only for terminals that can execute those probes. Field counts, grouping, DISTINCT reductions and bounded sorting rank their actual scan intervals. An index that proves predicates can still answer a scalar count from keys alone. For grouped counts and existence checks, predicate coverage by itself cannot avoid the owner read. Existence validates each visited owner. An ordinary count reads owners only when the selected keys leave a predicate to evaluate. Count must establish exhaustion within the candidate budget.
 This carries forward frozen IcyDB `6d421e3`’s separation of access bounds and
 residual predicates in `db/query/plan/planner/index_select/mod.rs`. An existence check on an index hit
 fetches and validates its owner. An empty prefix range returns false
@@ -4326,8 +4341,10 @@ not zero. Duration's sub-millisecond constructors explicitly truncate. Larger-un
 constructors and Rust arithmetic operators preserve IcyDB's saturation contract;
 timestamp/duration arithmetic computes in i128 before clamping. Thus MIN timestamp
 plus MAX duration reaches MAX timestamp exactly. Timestamp subtraction returns a
-nonnegative duration, clamping earlier-minus-later to zero. These value operations
-do not define aggregate overflow/rounding, which remains separately specified.
+nonnegative duration, clamping earlier-minus-later to zero. Aggregates accumulate present durations in a wide total. Sum must fit u64
+milliseconds or return ArithmeticOverflow. Average divides by the present count
+and rounds once to the nearest millisecond, with ties to even. Both return
+Duration and follow the existing empty-input and grouped-result rules.
 
 Preserve duration integer/suffix parsing with checked scaling and timestamp integer
 or strict RFC3339 parsing, including offsets and fractional flooring. Timestamp
@@ -4449,6 +4466,13 @@ across upgrades requires a checkpoint. The 79-bit seed allows collisions
 between independent streams; a restored heap snapshot can also replay stored
 generator state. These IDs are predictable. Native and Wasm checks exercise
 same-time ordering and a new stream after a version change.
+
+For reads, `filter_ulid_time` intersects a half-open timestamp interval with
+the unsigned 48-bit ULID time domain. Its inclusive key bounds cover every
+suffix in the first and last selected milliseconds. An empty interval uses
+contradictory ordinary bounds so field admission still runs. Frozen IcyDB
+`6d421e3` preserved the 16-byte key order in `icydb-core/src/types/ulid/mod.rs`.
+The current planner can seek those bounds on the primary key. If they span every ULID, both comparisons prove field presence. A required ULID then admits the stored row count, and an optional ULID still excludes absent values. A descending listing resumes at the full ULID, including its suffix. A native test reopens the store between pages and checks that changing the effective key bounds or sort direction invalidates the cursor.
 
 The explicitly owned `UlidGenerator` accepts a `Timestamp` and ten host-provided
 bytes for applications with their own issuance and recovery policy. Negative or greater-than-48-bit millisecond times refuse before any
@@ -5008,6 +5032,15 @@ M0 contract acceptance and implementation authority remain separate from these
 later delivery gates.
 
 ## 10. Measurement and qualification
+
+Aim for ordinary application queries to stay under 10 million instructions per call.
+Track 10 million charged cycles per call as a separate cost target wherever the charge
+can be measured. Exceeding either target should be rare on representative workloads
+and warrants investigating the access path, rows visited and call overhead. These are
+qualification targets; callers can still run more expensive bounded operations.
+For retained aggregates, report peak instructions and attributable cycles per update
+as well as the total cost to finish or invalidate the job. Label handler-only measurements
+and report unavailable cycle charges explicitly.
 
 The [0.22.3 application and growth measurements](../../qualification/README.md#application-workload-and-wasm-growth-on-storage-078)
 qualify one three-entity lifecycle on Storage 0.78.0. In the controlled fluent

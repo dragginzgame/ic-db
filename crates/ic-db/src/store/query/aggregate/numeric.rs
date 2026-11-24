@@ -1,4 +1,4 @@
-//! Exact integer, decimal and finite float totals, with rounding at completion.
+//! Exact integer, decimal, duration and finite float totals, with rounding at completion.
 
 use super::float_sum::{Binary32Sum, Binary64Sum};
 use super::{
@@ -13,12 +13,13 @@ use ethnum::{I256, U256};
 use ic_storage::Memory;
 
 impl<E: Entity, M: Memory> Query<'_, E, M> {
-    /// Sum one integer, Decimal or finite float field into a single-field result record with the same field
+    /// Sum one integer, Decimal, Duration or finite float field into a single-field result record with the same field
     /// name and optionality. Scalar newtype inputs use their declared primitive.
     /// The result may preserve the exact input newtype. A primitive integer result may widen within
     /// the same signed/unsigned family. Unsigned results may widen to U256.
     /// Decimal results preserve the source's declared scale; coefficients accumulate
     /// exactly in I256 and must fit i128 at completion. No rescaling or rounding.
+    /// Duration totals must fit the unsigned 64-bit millisecond result.
     /// Float32 and Float64 sum finite values exactly, rounding once to nearest with ties to even.
     /// Empty/all-absent input returns `None`; present zero returns a record.
     /// Signed accumulation uses I256, so cancelling prefixes do not cause narrow
@@ -39,7 +40,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    /// Sum one integer, Decimal or finite float operand per exact grouping record, retaining absent keys
+    /// Sum one integer, Decimal, Duration or finite float operand per exact grouping record, retaining absent keys
     /// and all-absent groups. R selects the same explicit result widening as sum.
     /// Group predicates use R's result type; e.g. Nat128 totals require u128 operands.
     /// Complete every group before filtering, ordering and output limits.
@@ -59,6 +60,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
     }
 
     /// Average present values into a single-field record with matching name and optionality.
+    /// Duration inputs produce Duration rounded to the nearest millisecond.
     /// Float inputs preserve their width. Integer and Decimal inputs produce Decimal at the
     /// declared result scale (0–28). A named result preserves the source newtype.
     /// Divide the exact total by the present count and round once, nearest with
@@ -238,6 +240,7 @@ impl NumericAggregate {
             _ => 0,
         };
         let total = match (operation, input, result_type) {
+            (_, FieldType::Duration, FieldType::Duration) => Total::Signed(I256::ZERO),
             (_, FieldType::Float32, FieldType::Float32) => Total::Float32(Box::default()),
             (_, FieldType::Float64, FieldType::Float64) => Total::Float64(Box::default()),
             (
@@ -296,6 +299,7 @@ impl NumericAggregate {
             }
             Total::Signed(total) => {
                 let value = match value {
+                    IndexValue::Duration(d) => i128::from(d.as_millis()),
                     IndexValue::Int8(n) => i128::from(n),
                     IndexValue::Int16(n) => i128::from(n),
                     IndexValue::Int32(n) => i128::from(n),
@@ -482,6 +486,17 @@ impl NumericAggregate {
                 let value = sum.finish(divisor)?;
                 output.float64(value)?;
                 IndexValue::Float64(value)
+            }
+            (Total::Signed(n), FieldType::Duration) => {
+                let millis = match operation {
+                    Operation::Sum => *n,
+                    Operation::Average => rounded_average(*n, self.count, 0, 0)?,
+                };
+                let value = crate::Duration::from_millis(
+                    millis.try_into().map_err(|_| Error::ArithmeticOverflow)?,
+                );
+                output.duration(value)?;
+                IndexValue::Duration(value)
             }
             (Total::Signed(n), FieldType::Int8) => encode!(int8, Int8, *n),
             (Total::Signed(n), FieldType::Int16) => encode!(int16, Int16, *n),

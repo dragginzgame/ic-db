@@ -670,6 +670,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             ids: rows,
             next,
             examined,
+            ..
         } = result.unwrap();
         assert!(examined <= 1);
         println!(
@@ -1461,6 +1462,78 @@ async fn retained_counts_by_parent_selectivity() {
     }
     let expected = items.iter().filter(|item| item.3 == 1).count() as u64;
     assert_eq!(expected, 415);
+    let read = async |request| {
+        let bytes = pic
+            .query_call(
+                canister,
+                canister,
+                "db_query",
+                application_request(242, &request),
+            )
+            .await
+            .unwrap();
+        application_reply::<QueryReply>(242, &bytes)
+    };
+    for (label, request, expected) in [
+        ("primary-hit", Query::ParentById(1), Some((1, 10))),
+        ("primary-miss", Query::ParentById(99), None),
+        ("unique-hit", Query::ParentByCode(10), Some((1, 10))),
+        ("unique-miss", Query::ParentByCode(99), None),
+    ] {
+        let QueryReply::Parent(row, work) = read(request).await else {
+            panic!("expected parent")
+        };
+        assert_eq!(row.unwrap(), expected);
+        println!("ordinary-read {label} instructions={work}");
+    }
+    for parent in [1, 2, 3] {
+        let QueryReply::Count(result, work) = read(Query::ParentCount(parent)).await else {
+            panic!("expected count")
+        };
+        let matches = items.iter().filter(|item| item.3 == parent).count() as u64;
+        assert_eq!(result.unwrap(), (matches, matches, 0));
+        println!("ordinary-read count parent={parent} matches={matches} instructions={work}");
+    }
+    for minimum in [0, 12] {
+        let mut cursor = None;
+        let mut found = Vec::new();
+        for page_number in 1..=2 {
+            let QueryReply::Items(result, work) = read(Query::Items {
+                target: false,
+                parent: 1,
+                minimum,
+                work: None,
+                after: cursor.take(),
+            })
+            .await
+            else {
+                panic!("expected listing")
+            };
+            let page = result.unwrap();
+            assert_eq!(page.fetched, page.examined);
+            assert!(page.examined <= 8 && page.ids.len() <= 2);
+            if minimum == 12 && page_number == 1 {
+                assert!(page.ids.is_empty());
+                assert_eq!(page.examined, 8);
+            }
+            println!(
+                "ordinary-read listing minimum={minimum} page={page_number} examined={} fetched={} returned={} instructions={work}",
+                page.examined,
+                page.fetched,
+                page.ids.len()
+            );
+            found.extend(page.ids);
+            cursor = page.next;
+            assert!(cursor.is_some());
+        }
+        let expected: Vec<_> = items
+            .iter()
+            .filter(|item| item.3 == 1 && item.4 >= minimum)
+            .take(if minimum == 0 { 4 } else { 2 })
+            .map(|item| item.2)
+            .collect();
+        assert_eq!(found, expected);
+    }
     let count = async |request| {
         let Reply::Count(reply, work) = update(Update::Count(request)).await else {
             panic!("expected count reply")
@@ -1535,6 +1608,64 @@ async fn retained_counts_by_parent_selectivity() {
                     "parent={parent} indexed={indexed} matches={matches} work_limit={work_limit} final_budget={final_budget} advances={advances} start_and_advance_instructions={total} peak_instructions={peak} start_and_advance_cycles={cycles} cleanup_instructions={cleanup}"
                 );
             }
+        }
+    }
+
+    // Give each plan the same number of advance opportunities before changing
+    // an item owned by parent 1. The selected parent (2) keeps all its matches.
+    let matches = items.iter().filter(|item| item.3 == 2).count();
+    for (indexed, budget) in [(false, 128_u16), (true, 48), (true, 128)] {
+        let candidates = if indexed { matches } else { items.len() };
+        let required = candidates.div_ceil(usize::from(budget));
+        for write_after in [0, 1, 2, 4] {
+            let before = pic.cycle_balance(canister).await;
+            let mut balance = before;
+            let mut job_cycles = 0;
+            let mut peak = 0;
+            let mut record = |phase: &str, instructions, previous, current| {
+                let cycles: u128 = previous - current;
+                job_cycles += cycles;
+                peak = peak.max(instructions);
+                println!(
+                    "count-call indexed={indexed} budget={budget} write_after={write_after} phase={phase} instructions={instructions} cycles={cycles}"
+                );
+            };
+            let (handle, work) = start(2, indexed).await;
+            let after_start = pic.cycle_balance(canister).await;
+            record("start", work, balance, after_start);
+            balance = after_start;
+            for step in 0..required.min(write_after) {
+                let (outcome, work) = advance(2, indexed, &handle, step as u64, budget).await;
+                let after = pic.cycle_balance(canister).await;
+                record("advance", work, balance, after);
+                balance = after;
+                if step + 1 == required {
+                    assert_eq!(outcome, CountOutcome::Complete(matches as u64));
+                } else {
+                    assert_eq!(outcome, CountOutcome::Running);
+                }
+            }
+            let before_write = balance;
+            write(vec![(1, 3, 1, 0, 1)]).await;
+            let after_write = pic.cycle_balance(canister).await;
+            balance = after_write;
+            let completed = required <= write_after;
+            if !completed {
+                let (outcome, work) =
+                    advance(2, indexed, &handle, write_after as u64, budget).await;
+                let after = pic.cycle_balance(canister).await;
+                record("invalidate", work, balance, after);
+                balance = after;
+                assert_eq!(outcome, CountOutcome::Invalidated);
+            }
+            let (reply, cleanup) = count(CountRequest::Cancel(handle)).await;
+            assert_eq!(reply, CountReply::Cancelled);
+            let end = pic.cycle_balance(canister).await;
+            record("cleanup", cleanup, balance, end);
+            assert_eq!(job_cycles, (before - before_write) + (after_write - end));
+            println!(
+                "count-contention indexed={indexed} budget={budget} write_after={write_after} completed={completed} job_cycles={job_cycles} peak_job_instructions={peak}"
+            );
         }
     }
 
@@ -1751,6 +1882,75 @@ async fn compare_returned_managed_row_with_read_after_commit() {
         }
         pic.drop().await;
     }
+}
+
+#[tokio::test]
+async fn managed_upsert_replays_across_upgrade_and_refuses_a_conflicting_batch() {
+    use ic_testkit::pocket_ic::Time;
+
+    let wasm =
+        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 10_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+
+    let upsert = async |body: &str, second: Option<&str>| {
+        let request = Update::UpsertManaged(body.into(), second.map(str::to_owned));
+        let bytes = pic
+            .update_call(
+                canister,
+                canister,
+                "db_write",
+                application_request(241, &request),
+            )
+            .await
+            .unwrap();
+        let Reply::Managed(row, _) = application_reply(241, &bytes) else {
+            panic!("expected managed row")
+        };
+        row
+    };
+    let clock = async |millis: i64| {
+        pic.set_time(Time::from_nanos_since_unix_epoch(millis as u64 * 1_000_000))
+            .await;
+        pic.tick().await;
+    };
+    let created = 2_000_000_000_000;
+    let updated = created + 1_000;
+    clock(created).await;
+    assert_eq!(
+        upsert("pending", None).await.unwrap(),
+        (1, "pending".into(), created, created)
+    );
+    clock(updated).await;
+    let first = (1, "confirmed".into(), created, updated);
+    assert_eq!(upsert("confirmed", Some("receipt")).await.unwrap(), first);
+
+    let saved = pic.get_stable_memory(canister).await;
+    clock(updated + 600_000).await;
+    ic_db_m0_rollback_driver::upgrade_stopped(&pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(upsert("confirmed", Some("receipt")).await.unwrap(), first);
+    assert!(pic.get_stable_memory(canister).await == saved);
+    assert_eq!(upsert("conflict", Some("conflict")).await, Err(4));
+    assert!(pic.get_stable_memory(canister).await == saved);
+
+    type State = (Vec<(u64, String, i64, i64)>, Vec<u64>, u64);
+    let rows = vec![first, (2, "receipt".into(), updated, updated)];
+    for (time, ids) in [(created, vec![]), (updated, vec![1, 2])] {
+        let bytes = pic
+            .query_call(canister, canister, "managed_rows", encode(83, &time))
+            .await
+            .unwrap();
+        let (stored, indexed, revision) = decode::<State>(83, &bytes);
+        assert_eq!(stored, rows);
+        assert_eq!(indexed, ids);
+        assert_eq!(revision, 2);
+    }
+    pic.drop().await;
 }
 
 #[tokio::test]

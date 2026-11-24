@@ -212,3 +212,64 @@ fn measured_filter_count((shape, counter): crate::transport::Measured<u8>) -> (u
     };
     (value, examined as u32, fetched as u32, counter() - start)
 }
+
+// measured_ulid_listing
+// Page ULID primary keys by descending embedded time and measure store open and query work.
+// guard  : validates the request frame for method 246.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::query(
+    runtime = ic_platform_runtime,
+    name = "measured_ulid_listing",
+    guard = crate::transport::admit::<246>,
+    decode = crate::transport::decode_measured::<_, 246>,
+    encode = crate::transport::encode::<_, 246>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_ulid_listing(
+    ((start_ms, end_ms, after, ids_only), counter): crate::transport::Measured<UlidListingRequest>,
+) -> UlidListingSample {
+    use crate::schema::KeyRow;
+    use ic_db::Timestamp;
+    let start = counter();
+    let host = runtime();
+    let db = open(&host);
+    let opened = counter();
+    let cursor = decode_cursor(after.as_deref()).unwrap();
+    let query = db
+        .query::<KeyRow>()
+        .filter_ulid_time(
+            KeyRow::ID,
+            Timestamp::from_millis(start_ms)..Timestamp::from_millis(end_ms),
+        )
+        .order_desc(KeyRow::ID)
+        .after_optional(cursor.as_ref())
+        .limit(8);
+    if ids_only {
+        let page = query.select(|row| row.id).fetch().unwrap();
+        ulid_sample(page, |id| id, opened - start, counter() - opened)
+    } else {
+        let page = query.fetch().unwrap();
+        ulid_sample(page, |row| row.id, opened - start, counter() - opened)
+    }
+}
+
+fn ulid_sample<T>(
+    page: ic_db::QueryPage<T>,
+    id: impl Fn(T) -> ic_db::Ulid,
+    open: u64,
+    query: u64,
+) -> UlidListingSample {
+    (
+        page.rows.into_iter().map(|r| id(r).to_bytes()).collect(),
+        page.next.map(|c| c.to_bytes()),
+        page.examined as u32,
+        page.fetched as u32,
+        page.output_bytes as u32,
+        open,
+        query,
+    )
+}
+
+type UlidListingRequest = (i64, i64, Option<Vec<u8>>, bool);
+type UlidListingSample = (Vec<[u8; 16]>, Option<Vec<u8>>, u32, u32, u32, u64, u64);

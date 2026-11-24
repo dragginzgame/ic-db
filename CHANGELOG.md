@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.30.2] - Unreleased
+
+### ➕ Added
+
+- Added `.filter_ulid_time(field, start..end)` for listing ULIDs by their embedded millisecond. ULID primary keys support this lookup directly. Read the embedded time with `id.timestamp()`. A full time range on a required ULID field uses the stored row count.
+
+- Added `.filter_range(field, start..end)` for half-open ranges. Pass `date.utc_timestamp_range()` to query a Timestamp field by UTC calendar day. Use `Timestamp::utc_date()` to find the UTC day containing a stored instant.
+
+- A range that fixes a Date to one day or a Timestamp or Duration to one millisecond can use the remaining fields of a compound index for ordering. Strict bounds between adjacent values can return an empty result without reading rows. Counts also recognize bounds at the minimum and maximum of these types. Full-domain counts on required fields use the stored row count, and optional-field counts exclude absent values.
+
+- Fluent sums and averages accept Duration fields and return Duration. Sums refuse overflow and averages round once to the nearest millisecond, with ties to even.
+
+### ⚡ Performance
+
+- Batched deletes can verify neighboring secondary-index entries with one traversal. Deleting 31 documents and their parent took 28.48M commit instructions, down from 33.53M for ascending IDs. Interleaved index values fell back to point reads. [Matched costs](qualification/README.md#installed-atomic-delete-costs)
+
+- Batched deletes reuse empty reverse-index searches across nearby keys. Deleting 31 indexed children and their parent took 19.48M commit instructions on PocketIC, down from 21.93M. [Batch costs](qualification/README.md#installed-atomic-delete-costs)
+
+### 📦 Dependencies
+
+- Raised the IC Wire minimum to 0.30.1 for the optional product integration and qualification transport. Both workspaces already resolved this version.
+
+- Adopted IC Storage 0.78.9 in IC DB and qualification. Commit passes its prepared key set to `remove_many` and checks the returned count inside the message rollback boundary. Storage 0.78.9 removes each key individually. [Storage release](https://github.com/dragginzgame/ic-storage/blob/v0.78.9/CHANGELOG.md)
+
+### 🎯 Qualification
+
+- Packaged the bulk-delete prototype and repeatable tests for the next Storage engine. Deleting 255 indexed children and their parent took 139.24M commit instructions versus 263.34M with individual removals. [Experiment and controls](qualification/README.md#experimental-sorted-bulk-removal)
+
+- Qualified atomic deletes with a one-way child-to-parent reference on PocketIC. Deleting 255 children and their parent fetched the parent once and scanned its incoming references once in the experimental 256-delete build. [Batch costs](qualification/README.md#installed-atomic-delete-costs)
+
+- Verified newest-first ULID time listings across page breaks within one millisecond, including cursor reuse after database reopen. ID projection and full-row fetch returned the same 21 IDs over three pages each, under 0.45M measured instructions per page including store open. Projection reduced logical output by 36% on this fixture. [Page costs](qualification/README.md#installed-descending-ulid-time-listing)
+
+- Verified that a retained Duration summary resumes across a same-Wasm upgrade and returns the same two groups as a single advance. A grouped sum that overflowed preserved the checkpoint on retry and allowed explicit cancellation. [Per-advance costs](qualification/README.md#installed-grouped-duration-costs)
+
+- Measured grouped Duration summaries on installed Wasm. Opening the records store and summarizing 96 rows used 1.65M instructions. The whole measurement update cost 8.68M cycles. [Installed costs](qualification/README.md#installed-grouped-duration-costs)
+
+- Checked filtering and ordering of grouped Duration summaries against SQLite, including millisecond ties above the exact integer range of binary64.
+
+- Qualified primary-key upsert when a batch moves a reference to a newly inserted target. A missing target refuses the batch, and reopening preserves the new reference and its deletion restriction. A mounted upsert batch also preserved its returned timestamps on replay after upgrade and refused a conflicting batch with stable bytes intact. [Installed results](qualification/README.md#managed-upsert-across-an-installed-upgrade)
+
+- Measured 11 ordinary mounted query calls covering primary and unique lookups, indexed counts, and filtered pages. All stayed below 4M handler instructions at the tested sizes. [Per-query costs](qualification/README.md#ordinary-query-calls-on-the-mounted-host)
+
+- Measured the cost of retained counts interrupted by a write to a different parent. For 96 matches, the index completed in one or two quiet advances depending on the work budget, and the primary scan needed four. All measured primary-scan advances stayed below 10M cycles. Every index advance exceeded 10M cycles, including those below 10M handler instructions. [Write schedules and costs](qualification/README.md#retained-count-under-writes-to-another-parent)
+
 ## [0.30.1] - 2026-11-24
 
 ### ➕ Added

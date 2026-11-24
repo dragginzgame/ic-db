@@ -327,6 +327,13 @@ fn apply_update(request: Update, time_ns: u64, counter: fn() -> u64) -> Reply {
 
             Reply::Managed(result, counter() - start)
         }
+        Update::UpsertManaged(first, second) => {
+            let start = counter();
+            let result = upsert_managed(first, second)
+                .map(crate::managed::view)
+                .map_err(refusal);
+            Reply::Managed(result, counter() - start)
+        }
         Update::Count(request) => {
             let start = counter();
             let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
@@ -354,6 +361,30 @@ fn replace_managed(returning: bool, body: String) -> Result<crate::schema::Manag
         db.commit(batch)?;
         db.get::<ManagedRow>(first.id)?.ok_or(Error::Missing)
     }
+}
+
+fn upsert_managed(
+    body: String,
+    second: Option<String>,
+) -> Result<crate::schema::ManagedRow, Error> {
+    use crate::schema::ManagedRow;
+    use ic_db::Timestamp;
+
+    let row = |id, body| ManagedRow {
+        id,
+        body,
+        created: Timestamp::EPOCH,
+        updated: Timestamp::EPOCH,
+    };
+    let mut db = crate::open(&runtime());
+    let first = row(1, body);
+    let Some(body) = second else {
+        return db.upsert(&first);
+    };
+    let mut batch = Batch::new();
+    batch.upsert(&first)?;
+    batch.upsert(&row(2, body))?;
+    db.commit_returning(batch, first.id())
 }
 
 fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
@@ -546,6 +577,28 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
     let start = counter();
 
     match request {
+        Query::ParentById(key) | Query::ParentByCode(key) => {
+            let row = open(&runtime(), false)
+                .and_then(|db| match request {
+                    Query::ParentById(_) => db.get::<Parent>(key),
+                    _ => db.get_unique(&ParentByCode { code: key }),
+                })
+                .map(|row| row.map(|p| (p.id, p.code)))
+                .map_err(refusal);
+            QueryReply::Parent(row, counter() - start)
+        }
+        Query::ParentCount(parent) => {
+            let count = open(&runtime(), false)
+                .and_then(|db| {
+                    db.query::<Item>()
+                        .eq(Item::PARENT, parent)
+                        .work_limit(512)
+                        .count()
+                })
+                .map(|result| (result.value, result.examined as u64, result.fetched as u64))
+                .map_err(refusal);
+            QueryReply::Count(count, counter() - start)
+        }
         Query::Snapshot(target, parent, minimum) => {
             let result = read(target, parent, minimum).map_err(refusal);
 
@@ -634,6 +687,7 @@ fn item_page<E: SelectColumns<Key = u64>>(
         ids: page.rows,
         next: page.next.map(|cursor| cursor.to_bytes()),
         examined: page.examined as u64,
+        fetched: page.fetched as u64,
     })
 }
 

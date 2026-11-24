@@ -57,19 +57,18 @@ impl UlidGenerator {
         timestamp: Timestamp,
         randomness: [u8; 10],
     ) -> Result<Ulid, UlidGenerationError> {
-        let millis = u64::try_from(timestamp.as_millis())
-            .ok()
-            .filter(|value| *value < (1_u64 << 48))
-            .ok_or(UlidGenerationError::InvalidTimestamp)?;
-        let previous = self.last.map(|id| ::ulid::Ulid::from_bytes(id.to_bytes()));
-        let id = if let Some(previous) = previous.filter(|id| millis <= id.timestamp_ms()) {
-            let next = previous
+        let millis = timestamp.as_millis();
+        if !(0..Ulid::MILLIS_END).contains(&millis) {
+            return Err(UlidGenerationError::InvalidTimestamp);
+        }
+        let id = if let Some(previous) = self.last.filter(|id| timestamp <= id.timestamp()) {
+            let next = ::ulid::Ulid::from_bytes(previous.to_bytes())
                 .increment()
                 .map_err(|_| UlidGenerationError::Exhausted)?;
 
             Ulid::from_bytes(next.to_bytes())
         } else {
-            Ulid::from_millis_and_suffix(millis, randomness)
+            Ulid::from_millis_and_suffix(millis as u64, randomness)
         };
         self.last = Some(id);
 

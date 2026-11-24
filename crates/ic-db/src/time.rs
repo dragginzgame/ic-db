@@ -6,7 +6,7 @@ use std::{
     ops::{Add, AddAssign, Sub, SubAssign},
 };
 
-use crate::Date;
+use crate::{Date, date::SECONDS_PER_DAY};
 
 /// Nonnegative millisecond duration. Constructors from larger units and arithmetic
 /// operators saturate; text parsing refuses overflow. No clock or timer is owned.
@@ -355,7 +355,7 @@ impl Timestamp {
         // Four-digit calendar years and a sub-day offset fit comfortably in i64
         // milliseconds. The fractional contribution is nonnegative, preserving
         // floor semantics even for instants before the Unix epoch.
-        let local_seconds = i64::from(date.as_days_since_epoch()) * 86_400
+        let local_seconds = i64::from(date.as_days_since_epoch()) * SECONDS_PER_DAY
             + i64::from(hour) * 3_600
             + i64::from(minute) * 60
             + i64::from(second);
@@ -390,6 +390,12 @@ impl Timestamp {
     #[must_use]
     pub const fn as_secs(self) -> i64 {
         self.0.div_euclid(Self::MILLIS_PER_SEC)
+    }
+
+    /// The UTC calendar day containing this instant, or `None` outside years 0000–9999.
+    #[must_use]
+    pub fn utc_date(self) -> Option<Date> {
+        Date::try_from_i64(self.0.div_euclid(SECONDS_PER_DAY * Self::MILLIS_PER_SEC))
     }
 
     fn from_wide_millis_saturating(millis: i128) -> Self {

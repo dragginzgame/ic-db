@@ -1,5 +1,6 @@
 //! Product retained jobs: real Wasm rollback, retry, upgrade and explicit expiry.
 
+mod wire_call;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -1064,5 +1065,160 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
             3
         );
     }
+    owned.drop().await;
+}
+
+#[tokio::test]
+async fn duration_groups_resume_with_exact_totals_across_upgrade() {
+    use wire_call::call;
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm.clone(), vec![], None)
+        .await;
+    let rows: Vec<_> = (0..16_u64)
+        .map(|id| {
+            (
+                id,
+                None::<u64>,
+                [1_u64, 2, 2, 3][id as usize % 4],
+                None::<i64>,
+                (id % 2) as i64,
+            )
+        })
+        .collect();
+    for chunk in rows.chunks(8) {
+        call::<Result<(), u8>>(pic, canister, "time_batch", 62, &(chunk, false))
+            .await
+            .unwrap();
+    }
+    for work in [32_u32, 6] {
+        let handle = call::<Result<Vec<u8>, String>>(
+            pic,
+            canister,
+            "job_start",
+            110,
+            &(23_u8, 0_i64, 100_i64, 0_u64),
+        )
+        .await
+        .unwrap();
+        let mut sequence = 0;
+        for examined in (0..16)
+            .step_by(work as usize)
+            .map(|start| (start + work).min(16))
+        {
+            let before = pic.cycle_balance(canister).await;
+            let (reply, instructions): (Result<Response, String>, u64) = call(
+                pic,
+                canister,
+                "job_advance_cost",
+                115,
+                &(&handle, 23_u8, sequence, work, 1_i64, 0_u64, false),
+            )
+            .await;
+            let cycles = before - pic.cycle_balance(canister).await;
+            let (next, _, seen, _, phase, result, _) = reply.unwrap();
+            assert_eq!(seen, u64::from(examined));
+            assert_eq!(next, sequence + 1);
+            sequence = next;
+            println!(
+                "duration-job,work={work},examined={seen},instructions={instructions},cycles={cycles}"
+            );
+            if examined == 16 {
+                // Both 1.5 ms and 2.5 ms round to 2 ms, with distinct group totals.
+                assert_eq!((phase, result.as_deref()), (1, Some("0:8:12:2,1:8:20:2")));
+            } else {
+                assert_eq!((phase, result), (0, None));
+                if sequence == 1 {
+                    ic_db_m0_rollback_driver::upgrade_stopped(
+                        pic,
+                        canister,
+                        wasm.clone(),
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+    }
+    owned.drop().await;
+}
+
+#[tokio::test]
+async fn duration_summary_overflow_preserves_checkpoint_and_allows_cancellation() {
+    use wire_call::call;
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+
+    let row = |id: u64, duration: u64, timestamp: i64| {
+        (id, None::<u64>, duration, None::<i64>, timestamp)
+    };
+    let rows = [row(1, 7, 0), row(2, u64::MAX, 1), row(3, 1, 1)];
+    let write = async |rows: &[_]| {
+        call::<Result<(), u8>>(pic, canister, "time_batch", 62, &(rows, false))
+            .await
+            .unwrap();
+    };
+    let start = async || {
+        call::<Result<Vec<u8>, String>>(
+            pic,
+            canister,
+            "job_start",
+            110,
+            &(23_u8, 0_i64, 100_i64, 0_u64),
+        )
+        .await
+        .unwrap()
+    };
+    let advance = async |handle: &[u8], sequence: u64, work: u32| {
+        call::<Result<Response, String>>(
+            pic,
+            canister,
+            "job_advance",
+            111,
+            &(handle, 23_u8, sequence, work, 1_i64, 0_u64, false),
+        )
+        .await
+    };
+    write(&rows).await;
+    let handle = start().await;
+    let first = advance(&handle, 0, 2).await.unwrap();
+    assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+    let saved = pic.get_stable_memory(canister).await;
+    for _ in 0..2 {
+        assert_eq!(
+            advance(&handle, 1, 8).await.unwrap_err(),
+            "ArithmeticOverflow"
+        );
+        assert_eq!(pic.get_stable_memory(canister).await, saved);
+    }
+
+    call::<Result<u64, String>>(
+        pic,
+        canister,
+        "job_control",
+        112,
+        &(0_u8, &handle, 2_i64, 1_u32),
+    )
+    .await
+    .unwrap();
+    // The repaired group sums to exactly MAX and its half-millisecond tie rounds up.
+    write(&[row(3, 0, 1)]).await;
+    let replacement = start().await;
+    assert_eq!(advance(&handle, 1, 8).await.unwrap_err(), "InvalidJob");
+    let done = advance(&replacement, 0, 8).await.unwrap();
+    assert_eq!((done.2, done.4), (3, 1));
+    assert_eq!(
+        done.5.as_deref(),
+        Some("0:1:7:7,1:2:18446744073709551615:9223372036854775808")
+    );
     owned.drop().await;
 }

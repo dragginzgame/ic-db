@@ -1328,6 +1328,39 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
 }
 
 #[test]
+fn empty_reverse_index_gaps_never_hide_surviving_references() {
+    let backing = VectorMemory::default();
+    let runtime = host(backing.clone());
+    let key = StableKey::parse("test.db.v1").unwrap();
+    let schema = Schema::new(&[Parent::SCHEMA, Child::SCHEMA]).unwrap();
+    let mut db = Database::create(runtime.open_memory(&key).unwrap(), schema, [4; 16]).unwrap();
+    let mut seed = Batch::new();
+    for id in 10..=14 {
+        seed.insert(&Parent { id }).unwrap();
+    }
+    for id in [12, 14] {
+        seed.insert(&Child { id, parent_id: id }).unwrap();
+    }
+    db.commit(seed).unwrap();
+    let before = backing.borrow().clone();
+    // Hit the boundary's own prefix, jump beyond it, or return to an earlier key.
+    for targets in [[10, 11, 12], [10, 11, 14], [13, 10, 12]] {
+        let mut batch = Batch::new();
+        for id in targets {
+            batch.delete::<Parent>(id).unwrap();
+        }
+        assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+        assert_eq!(*backing.borrow(), before);
+    }
+    let mut batch = Batch::new();
+    for id in [10, 11, 13] {
+        batch.delete::<Parent>(id).unwrap();
+    }
+    db.commit(batch).unwrap();
+    assert_eq!(db.cardinality::<Parent>().unwrap(), 2);
+}
+
+#[test]
 fn stored_key_inspection_validates_unselected_fields_before_mutating() {
     let row = InspectionRow {
         a_blob: vec![255; 1024],
@@ -3161,7 +3194,7 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     drop(db);
     let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
     raw.insert(row_key, original);
-    raw.insert(present, vec![0; 8]); // Valid owner bytes pointing at an unrelated row.
+    raw.insert(present.clone(), vec![0; 8]); // Valid owner bytes pointing at an unrelated row.
     drop(raw);
     let before = backing.borrow().clone();
     let mut db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
@@ -3169,6 +3202,24 @@ fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     batch.delete::<OptionalLink>(0).unwrap();
     assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
     assert_eq!(*backing.borrow(), before);
+    // Queue both rows: even the iterator-assisted check must reject a wrong
+    // owner, and its fallback must reject a missing secondary key.
+    for missing in [false, true] {
+        if missing {
+            drop(db);
+            let mut raw =
+                StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+            raw.remove(&present).unwrap();
+            drop(raw);
+            db = Database::open(runtime.open_memory(&key).unwrap(), contract()).unwrap();
+        }
+        let before = backing.borrow().clone();
+        let mut batch = Batch::new();
+        batch.delete::<OptionalLink>(0).unwrap();
+        batch.delete::<OptionalLink>(1).unwrap();
+        assert!(matches!(db.commit(batch), Err(Error::Corrupt)));
+        assert_eq!(*backing.borrow(), before);
+    }
 }
 
 #[test]

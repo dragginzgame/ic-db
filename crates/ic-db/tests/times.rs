@@ -1,7 +1,7 @@
 //! Exact millisecond values across storage, indexes, collections and reopen.
 
 use ic_db::design::prelude::*;
-use ic_db::{Batch, Database, Error, IndexValue};
+use ic_db::{AggregateJobs, Batch, Database, Error, IndexValue, JobOutcome};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
     SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
@@ -70,9 +70,11 @@ struct Deadlines {}
 struct Collections {}
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
     let mut host = MemoryRuntime::new(backing).unwrap();
-    let req =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
+    let req = SealedDeclarationSnapshot::new(vec![
+        MemoryRequest::new("test", "test.db.v1").unwrap(),
+        MemoryRequest::new("test", "test.jobs.v1").unwrap(),
+    ])
+    .unwrap();
     let grants =
         AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
     host.bootstrap(&req, &grants, &GenericAllocationPolicy)
@@ -337,4 +339,250 @@ fn current_timestamp_uses_unix_milliseconds() {
         .unwrap()
     };
     assert!((millis(before)..=millis(after)).contains(&actual));
+}
+
+/// Elapsed delay projected in milliseconds.
+#[record(fields(field(name = "delay", value(opt, item(prim = "Duration")))))]
+struct Delay {}
+
+/// Partition of elapsed-time observations.
+#[record(fields(field(name = "zone", value(item(prim = "Bool")))))]
+struct Zone {}
+
+/// Same field name and width as Delay, with different units.
+#[record(fields(field(name = "delay", value(opt, item(prim = "Nat64")))))]
+struct RawDelay {}
+
+#[test]
+fn duration_totals_round_once_and_survive_job_reopen() {
+    for (left, right, sum, average) in [
+        (0, 1, Some(1), 0),
+        (1, 2, Some(3), 2),
+        (u64::MAX - 1, u64::MAX, None, u64::MAX - 1),
+    ] {
+        let runtime = host(VectorMemory::default());
+        let slot = StableKey::parse("test.db.v1").unwrap();
+        let job_slot = StableKey::parse("test.jobs.v1").unwrap();
+        let schema = Schema::new(&[TimeRow::SCHEMA]).unwrap();
+        let mut db =
+            Database::create(runtime.open_memory(&slot).unwrap(), schema, [1; 16]).unwrap();
+        let mut jobs =
+            AggregateJobs::create(runtime.open_memory(&job_slot).unwrap(), [2; 16]).unwrap();
+        let mut batch = Batch::new();
+        for (row, delay) in rows().into_iter().zip([Some(left), None, Some(right)]) {
+            batch
+                .insert(&TimeRow {
+                    delay: delay.map(Duration::from_millis),
+                    ..row
+                })
+                .unwrap();
+        }
+        db.commit(batch).unwrap();
+        let query = || db.query::<TimeRow>();
+        let actual_sum = query()
+            .sum::<Delay>()
+            .map(|a| a.value.unwrap().delay.unwrap().as_millis());
+        match sum {
+            Some(value) => assert_eq!(actual_sum.unwrap(), value),
+            None => assert!(matches!(actual_sum, Err(Error::ArithmeticOverflow))),
+        }
+        let expected = Some(Duration::from_millis(average));
+        assert_eq!(
+            query().avg::<Delay>().unwrap().value.unwrap().delay,
+            expected
+        );
+
+        let groups = query().group_avg::<Zone, Delay>().unwrap().value;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].value.as_ref().unwrap().delay, expected);
+        assert!(matches!(
+            query().sum::<RawDelay>(),
+            Err(Error::InvalidQuery)
+        ));
+
+        let now = Timestamp::EPOCH;
+        let handle = query()
+            .start_avg::<Delay>(&mut jobs, now, Timestamp::from_millis(100))
+            .unwrap();
+        let first = query()
+            .work_limit(1)
+            .resume_avg::<Delay>(&mut jobs, &handle, 0, now)
+            .unwrap();
+        assert!(matches!(first.outcome, JobOutcome::Running));
+        drop(jobs);
+        let mut jobs = AggregateJobs::open(runtime.open_memory(&job_slot).unwrap()).unwrap();
+        let step = query()
+            .resume_avg::<Delay>(&mut jobs, &handle, first.sequence, now)
+            .unwrap();
+        let JobOutcome::Complete(value) = step.outcome else {
+            panic!("expected completed average")
+        };
+        assert_eq!(value.unwrap().delay, expected);
+    }
+}
+
+#[test]
+fn utc_calendar_day_uses_timestamp_index_bounds() {
+    let fixture = ic_db::testing::Fixture::new("test.day.v1");
+    let mut db = fixture
+        .create(Schema::new(&[TimeRow::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    for (date, start) in [
+        (Date::MIN, -62_167_219_200_000_i64),
+        (Date::parse("1969-12-31").unwrap(), -86_400_000),
+        (Date::parse("2024-02-29").unwrap(), 1_709_164_800_000),
+        (Date::MAX, 253_402_214_400_000),
+    ] {
+        let day = date.utc_timestamp_range();
+        let end = start + 86_400_000;
+        assert_eq!((day.start.as_millis(), day.end.as_millis()), (start, end));
+        let mut batch = Batch::new();
+        for (id, instant) in [Some(start - 1), Some(start), Some(end - 1), Some(end), None]
+            .into_iter()
+            .enumerate()
+        {
+            let row = TimeRow {
+                id: id as u64,
+                zone: true,
+                delay: None,
+                duration: Duration::ZERO,
+                timestamp: Timestamp::EPOCH,
+                maybe: instant.map(Timestamp::from_millis),
+            };
+            batch.upsert(&row).unwrap();
+        }
+        db.commit(batch).unwrap();
+        let page = db
+            .query::<TimeRow>()
+            .filter_range(TimeRow::MAYBE, day.clone())
+            .order_asc(TimeRow::MAYBE)
+            .work_limit(3)
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(page.examined, 2);
+        assert!(page.next.is_none());
+
+        let first = db
+            .query::<TimeRow>()
+            .gte(TimeRow::MAYBE, day.start)
+            .lt(TimeRow::MAYBE, day.end)
+            .order_asc(TimeRow::MAYBE)
+            .limit(1)
+            .fetch()
+            .unwrap();
+        assert_eq!(first.rows[0].id, 1);
+        let second = db
+            .query::<TimeRow>()
+            .filter_range(TimeRow::MAYBE, day)
+            .order_asc(TimeRow::MAYBE)
+            .limit(1)
+            .after(first.next.as_ref().unwrap())
+            .fetch()
+            .unwrap();
+        assert_eq!(second.rows[0].id, 2);
+    }
+}
+
+#[test]
+fn one_millisecond_ranges_fix_compound_order_and_open_gaps_skip_reads() {
+    let fixture = ic_db::testing::Fixture::new("test.tick.v1");
+    let mut db = fixture
+        .create(Schema::new(&[TimeRow::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    for row in rows() {
+        batch.insert(&row).unwrap();
+    }
+    db.commit(batch).unwrap();
+
+    for (field, index, low, high, expected) in [
+        (
+            TimeRow::TIMESTAMP,
+            "zone,timestamp,id",
+            Timestamp::EPOCH.into(),
+            Timestamp::from_millis(1).into(),
+            [6, 3],
+        ),
+        (
+            TimeRow::DURATION,
+            "zone,duration,id",
+            IndexValue::from(Duration::ZERO),
+            Duration::from_millis(1).into(),
+            [6, 1],
+        ),
+    ] {
+        let page = db
+            .query::<TimeRow>()
+            .using_index(index, &[true.into()])
+            .filter_range(field, low..high)
+            .order_desc(TimeRow::ID)
+            .fetch()
+            .unwrap();
+        assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), expected);
+        assert_eq!(page.examined, 2);
+        let empty = db
+            .query::<TimeRow>()
+            .gt(field, low)
+            .lt(field, high)
+            .work_limit(1)
+            .count()
+            .unwrap();
+        assert_eq!((empty.value, empty.examined, empty.fetched), (0, 0, 0));
+    }
+}
+
+#[test]
+fn time_extremes_count_required_rows_but_exclude_absent_optional_fields() {
+    use ic_db::Comparison::{Ge, Gt, Le, Lt};
+    let fixture = ic_db::testing::Fixture::new("test.time.v1");
+    let mut db = fixture
+        .create(Schema::new(&[TimeRow::SCHEMA]).unwrap(), [1; 16])
+        .unwrap();
+    let mut batch = Batch::new();
+    for row in rows() {
+        batch.insert(&row).unwrap();
+    }
+    db.commit(batch).unwrap();
+    for (required, optional, low, high) in [
+        (
+            TimeRow::TIMESTAMP,
+            TimeRow::MAYBE,
+            IndexValue::from(Timestamp::MIN),
+            Timestamp::MAX.into(),
+        ),
+        (
+            TimeRow::DURATION,
+            TimeRow::DELAY,
+            Duration::MIN.into(),
+            Duration::MAX.into(),
+        ),
+    ] {
+        for (op, bound) in [(Ge, low), (Le, high)] {
+            let all = db
+                .query::<TimeRow>()
+                .filter(required, op, bound)
+                .work_limit(1)
+                .count()
+                .unwrap();
+            assert_eq!((all.value, all.examined, all.fetched), (6, 0, 0));
+            assert_eq!(
+                db.query::<TimeRow>()
+                    .filter(optional, op, bound)
+                    .count()
+                    .unwrap()
+                    .value,
+                5
+            );
+        }
+        for (op, bound) in [(Lt, low), (Gt, high)] {
+            let none = db
+                .query::<TimeRow>()
+                .filter(optional, op, bound)
+                .work_limit(1)
+                .count()
+                .unwrap();
+            assert_eq!((none.value, none.examined, none.fetched), (0, 0, 0));
+        }
+    }
 }

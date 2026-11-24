@@ -1,0 +1,16 @@
+--- a/src/adapter/map.rs
++++ b/src/adapter/map.rs
+@@ -124,12 +124,7 @@
+     /// A caller relying on prior existence checks must trap on a count mismatch
+     /// in the same IC update to roll back its writes.
+     pub fn remove_many(&mut self, keys: BTreeSet<K>) -> u64 {
+-        let mut removed = 0;
+-        for key in keys {
+-            removed += u64::from(self.inner.remove(&key).is_some());
+-        }
+-
+-        removed
++        self.inner.remove_many(keys)
+     }
+ 
+     /// Delegates to upstream `BTreeMap::first_key_value` with the governed allocation.

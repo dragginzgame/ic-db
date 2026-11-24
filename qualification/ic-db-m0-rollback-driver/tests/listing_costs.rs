@@ -433,3 +433,74 @@ async fn measured_membership_and_empty_text_return_expected_counts() {
     .await;
     owned.drop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the query-measurements Wasm; run make m2-listing-costs"]
+async fn ulid_time_listing_resumes_inside_a_millisecond() {
+    use ic_db_m0_rollback_driver::LIMITS;
+    use ic_wire::{Direction, Encoding};
+    type Sample = (Vec<[u8; 16]>, Option<Vec<u8>>, u32, u32, u32, u64, u64);
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+
+    let rows: Vec<_> = [(99_u128, 1), (100, 16), (101, 5), (102, 1)]
+        .into_iter()
+        .flat_map(|(ms, count)| (0..count).map(move |suffix| ((ms << 80) | suffix).to_be_bytes()))
+        .enumerate()
+        .map(|(n, key)| (key, None::<u64>, n as u64))
+        .collect();
+    for chunk in rows.chunks(8) {
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "key_batch",
+            70,
+            &(
+                chunk,
+                Vec::<(u64, Option<[u8; 16]>)>::new(),
+                Vec::<[u8; 16]>::new(),
+                Vec::<u64>::new(),
+                false,
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let expected: Vec<_> = rows[1..rows.len() - 1].iter().rev().map(|r| r.0).collect();
+    for ids_only in [true, false] {
+        let mut cursor: Option<Vec<u8>> = None;
+        for ids in expected.chunks(8) {
+            let frame = |direction| Encoding::Frame {
+                method: 246,
+                direction,
+            };
+            let request = ic_wire::encode(
+                &(100_i64, 102_i64, cursor, ids_only),
+                frame(Direction::Request),
+                LIMITS,
+            )
+            .unwrap();
+            let reply = pic
+                .query_call(canister, canister, "measured_ulid_listing", request)
+                .await
+                .unwrap();
+            let (actual, next, examined, fetched, bytes, open, query): Sample =
+                ic_wire::decode(&reply, frame(Direction::Response), LIMITS).unwrap();
+            assert_eq!(actual, ids);
+            assert_eq!(examined as usize, ids.len());
+            assert_eq!(fetched, examined);
+            assert_eq!(bytes as usize, ids.len() * if ids_only { 16 } else { 25 });
+            assert_eq!(next.is_some(), ids.len() == 8);
+            println!(
+                "ulid-listing,ids_only={ids_only},bytes={bytes},rows={},examined={examined},fetched={fetched},open={open},query={query}",
+                actual.len()
+            );
+            cursor = next;
+        }
+    }
+    owned.drop().await;
+}

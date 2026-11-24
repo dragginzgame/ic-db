@@ -73,6 +73,21 @@ impl Ulid {
     pub const MIN: Self = Self([0; 16]);
     /// Maximum identifier; all 128 bits are valid data.
     pub const MAX: Self = Self([255; 16]);
+    const MILLIS_END: i64 = 1 << ::ulid::Ulid::TIME_BITS;
+
+    // Every suffix belongs to the encoded millisecond. Inclusive key bounds
+    // can represent the last tick through Ulid::MAX without wrapping.
+    pub(crate) fn time_bounds(range: std::ops::Range<crate::Timestamp>) -> Option<(Self, Self)> {
+        let start = range.start.as_millis().max(0);
+        let end = range.end.as_millis().min(Self::MILLIS_END);
+        (start < end).then(|| {
+            (
+                Self::from_millis_and_suffix(start as u64, [0; 10]),
+                Self::from_millis_and_suffix((end - 1) as u64, [255; 10]),
+            )
+        })
+    }
+
     fn from_millis_and_suffix(millis: u64, suffix: [u8; 10]) -> Self {
         let mut bytes = [0; 16];
         bytes[..6].copy_from_slice(&millis.to_be_bytes()[2..]);
@@ -91,6 +106,14 @@ impl Ulid {
     #[must_use]
     pub const fn from_u128(value: u128) -> Self {
         Self(value.to_be_bytes())
+    }
+
+    /// Read the logical Unix timestamp embedded in the first 48 bits.
+    /// A monotonic generator can retain the preceding timestamp when its clock moves backward.
+    #[must_use]
+    pub const fn timestamp(self) -> crate::Timestamp {
+        let millis = ::ulid::Ulid::from_bytes(self.0).timestamp_ms();
+        crate::Timestamp::from_millis(millis as i64)
     }
 
     /// Return the exact 16-byte representation.

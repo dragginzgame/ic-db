@@ -67,6 +67,7 @@ fn same_and_backward_times_increment_without_replacing_randomness() {
         (1000_u128 << 80) + 2
     );
     assert!(first < same && same < backward && backward < later);
+    assert_eq!(backward.timestamp(), Timestamp::from_millis(1000));
     assert_eq!(&later.to_bytes()[6..], &[7; 10]);
 }
 

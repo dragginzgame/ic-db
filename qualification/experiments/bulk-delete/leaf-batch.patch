@@ -1,0 +1,118 @@
+--- a/src/btreemap.rs
++++ b/src/btreemap.rs
+@@ -758,6 +758,20 @@
+             .map(V::from_bytes)
+     }
+ 
++    /// Remove the existing keys in the supplied set and return the number removed.
++    pub fn remove_many(&mut self, keys: std::collections::BTreeSet<K>) -> u64 {
++        let original_len = self.len();
++        let mut pending = keys.into_iter().peekable();
++        while let Some(key) = pending.next() {
++            if self.root_addr == NULL {
++                break;
++            }
++            let root = self.load_node(self.root_addr);
++            self.remove_run(root, &key, Some(&mut pending));
++        }
++        original_len - self.len()
++    }
++
+     /// Removes and returns the last element in the map. The key of this element is the maximum key that was in the map
+     pub fn pop_last(&mut self) -> Option<(K, V)> {
+         if self.root_addr == NULL {
+@@ -783,7 +797,16 @@
+     }
+ 
+     /// A helper method for recursively removing a key from the B-tree.
+-    fn remove_helper(&mut self, mut node: Node<K>, key: &K) -> Option<Vec<u8>> {
++    fn remove_helper(&mut self, node: Node<K>, key: &K) -> Option<Vec<u8>> {
++        self.remove_run(node, key, None)
++    }
++
++    fn remove_run(
++        &mut self,
++        mut node: Node<K>,
++        key: &K,
++        rest: Option<&mut std::iter::Peekable<std::collections::btree_set::IntoIter<K>>>,
++    ) -> Option<Vec<u8>> {
+         if node.address() != self.root_addr {
+             // We're guaranteed that whenever this method is called an entry can be
+             // removed from the node without it needing to be merged into a sibling.
+@@ -800,6 +823,22 @@
+                         // This is the simplest case. The key is removed from the leaf.
+                         let value = node.remove_entry(idx, self.memory()).1;
+                         self.length -= 1;
++                        // Keep a non-root leaf at or above minimum occupancy.
++                        // Stop at the first key outside this leaf; normal deletion owns rebalance.
++                        if let Some(rest) = rest {
++                            while node.entries_len() > 0
++                                && (node.address() == self.root_addr
++                                    || node.can_remove_entry_without_merging())
++                            {
++                                let Some(next) = rest.peek() else { break };
++                                let Ok(at) = node.search(next, self.memory()) else {
++                                    break;
++                                };
++                                node.remove_entry(at, self.memory());
++                                self.length -= 1;
++                                rest.next();
++                            }
++                        }
+ 
+                         if node.entries_len() == 0 {
+                             assert_eq!(
+@@ -945,7 +984,7 @@
+                         self.save_node(&mut new_child);
+ 
+                         // Recursively delete the key.
+-                        self.remove_helper(new_child, key)
++                        self.remove_run(new_child, key, rest)
+                     }
+                     Err(idx) => {
+                         // Case 3: The node is an internal node and the key does NOT exist in it.
+@@ -957,7 +996,7 @@
+                         if child.can_remove_entry_without_merging() {
+                             // The child has enough nodes. Recurse to delete the `key` from the
+                             // `child`.
+-                            return self.remove_helper(child, key);
++                            return self.remove_run(child, key, rest);
+                         }
+ 
+                         // An entry can't be removed from the child without merging.
+@@ -1025,7 +1064,7 @@
+                                 self.save_node(left_sibling);
+                                 self.save_node(&mut child);
+                                 self.save_node(&mut node);
+-                                return self.remove_helper(child, key);
++                                return self.remove_run(child, key, rest);
+                             }
+                         }
+ 
+@@ -1080,7 +1119,7 @@
+                                 self.save_node(right_sibling);
+                                 self.save_node(&mut child);
+                                 self.save_node(&mut node);
+-                                return self.remove_helper(child, key);
++                                return self.remove_run(child, key, rest);
+                             }
+                         }
+ 
+@@ -1111,7 +1150,7 @@
+                                 self.save_node(&mut node);
+                             }
+ 
+-                            return self.remove_helper(left_sibling, key);
++                            return self.remove_run(left_sibling, key, rest);
+                         }
+ 
+                         if let Some(right_sibling) = right_sibling {
+@@ -1140,7 +1179,7 @@
+                                 self.save_node(&mut node);
+                             }
+ 
+-                            return self.remove_helper(right_sibling, key);
++                            return self.remove_run(right_sibling, key, rest);
+                         }
+ 
+                         unreachable!("At least one of the siblings must exist.");

@@ -113,6 +113,47 @@ fn list_references_follow_final_batch_state_and_large_rows_reopen() {
     );
 }
 
+#[test]
+fn upsert_repoints_references_using_the_final_batch_state() {
+    let schema = Schema::new(&[Gallery::SCHEMA, Thumbnail::SCHEMA]).unwrap();
+    let fixture = Fixture::new("media.data.v1");
+    let mut db = fixture.create(schema.clone(), [1; 16]).unwrap();
+    let mut gallery = Gallery {
+        id: 9,
+        images: Some(vec![1]),
+    };
+    let mut batch = Batch::new();
+    batch.upsert(&gallery).unwrap();
+    let first = batch
+        .insert_input(Thumbnail::insert().id(1).payload(vec![1]))
+        .unwrap();
+    assert_eq!(db.commit_returning(batch, gallery.id()).unwrap(), gallery);
+
+    gallery.images = Some(vec![2]);
+    let mut batch = Batch::new();
+    batch.delete(first.id()).unwrap();
+    batch.upsert(&gallery).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+    assert_eq!(db.get::<Gallery>(9).unwrap().unwrap().images, Some(vec![1]));
+    assert_eq!(db.get(first.id()).unwrap(), Some(first.clone()));
+
+    let mut batch = Batch::new();
+    batch.delete(first.id()).unwrap();
+    batch.upsert(&gallery).unwrap();
+    let second = batch
+        .insert_input(Thumbnail::insert().id(2).payload(vec![2]))
+        .unwrap();
+    assert_eq!(db.commit_returning(batch, gallery.id()).unwrap(), gallery);
+    drop(db);
+    let mut db = fixture.open(schema).unwrap();
+    assert_eq!(db.get(gallery.id()).unwrap(), Some(gallery));
+    assert_eq!(db.get(first.id()).unwrap(), None);
+    assert_eq!(db.get(second.id()).unwrap(), Some(second.clone()));
+    let mut batch = Batch::new();
+    batch.delete(second.id()).unwrap();
+    assert!(matches!(db.commit(batch), Err(Error::ReferenceViolation)));
+}
+
 macro_rules! wide {
     ($($field:tt),*) => {
         #[entity(store = FixtureStore, pk(field = "id"), fields(

@@ -1,6 +1,6 @@
 //! Retained IcyDB millisecond, parsing and wide-arithmetic regressions.
 
-use ic_db::{Duration, TimeParseError, Timestamp};
+use ic_db::{Date, Duration, TimeParseError, Timestamp};
 
 #[test]
 fn duration_units_and_saturating_arithmetic_are_millisecond_native() {
@@ -51,6 +51,29 @@ fn timestamp_seconds_floor_before_the_epoch() {
     assert_eq!(Timestamp::from_millis(-1).as_secs(), -1);
     assert_eq!(Timestamp::from_millis(-1_000).as_secs(), -1);
     assert_eq!(Timestamp::from_millis(-1_001).as_secs(), -2);
+}
+
+#[test]
+fn utc_date_floors_at_midnight_and_checks_the_supported_calendar() {
+    let prior_day = Date::try_new(1969, 12, 31).unwrap();
+    assert_eq!(Timestamp::from_millis(-1).utc_date(), Some(prior_day));
+    assert_eq!(Timestamp::EPOCH.utc_date(), Some(Date::EPOCH));
+    let leap_day = Date::try_new(2024, 2, 29).unwrap();
+    let offset = Timestamp::parse_rfc3339("2024-03-01T00:30:00+01:00").unwrap();
+    assert_eq!(offset.utc_date(), Some(leap_day));
+    for date in [Date::MIN, prior_day, leap_day, Date::MAX] {
+        let range = date.utc_timestamp_range();
+        assert_eq!(range.start.utc_date(), Some(date));
+        assert_eq!(
+            (range.end - Duration::from_millis(1)).utc_date(),
+            Some(date)
+        );
+        assert_eq!(range.end.utc_date(), date.checked_add_days(1));
+    }
+    let before_calendar = Date::MIN.utc_timestamp_range().start - Duration::from_millis(1);
+    for outside in [Timestamp::MIN, before_calendar, Timestamp::MAX] {
+        assert_eq!(outside.utc_date(), None);
+    }
 }
 
 #[test]

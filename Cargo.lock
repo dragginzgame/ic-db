@@ -410,9 +410,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.5"
+version = "1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
+checksum = "fd9ae8fcb3ea71b0b26338b4ffb13006bb175de8fd07921089a906ce7e5e6945"
 dependencies = [
  "cfg-if",
 ]
@@ -1018,9 +1018,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.78.8"
+version = "0.78.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1dc2f3cf6f4d861a7584c5e856e50251c1cc081df43123817b0704793905574"
+checksum = "24ed2894958fb6aa13ee553556dec092ace9a6754cd7685547bac93af8c287e1"
 dependencies = [
  "ic-platform",
  "ic-platform-runtime",
@@ -1057,9 +1057,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.30.0"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bfe24cb5dd2d18765f59260fc93a9dca23d2514519d201c24a7cfe38f9f78ea"
+checksum = "c6441c035d58e523e4637544266c14226ced1aba019513586fa531b44069b07d"
 dependencies = [
  "bytemuck",
  "ic-platform-types",
@@ -1072,9 +1072,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire-derive"
-version = "0.30.0"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c751fa0116878f4a787bcbb39816a3fe0b934a24390d30a3535f76810ae1a8e"
+checksum = "6f5133757501356281f3e53ff09dfc3f652bc690f86d6fb05d52ec2a97f8072b"
 dependencies = [
  "proc-macro2",
  "quote",

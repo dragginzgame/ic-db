@@ -5,7 +5,7 @@ mod values;
 use super::{
     aggregate_store::open_jobs,
     faults, open, runtime,
-    schema::{Document, Entry},
+    schema::{Document, Entry, TimeRow},
 };
 use crate::handles::{Database, Query};
 use ic_db::design::prelude::*;
@@ -113,6 +113,13 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
             Timestamp::from_millis(now),
             Timestamp::from_millis(expires),
         ),
+        23 => db
+            .query::<TimeRow>()
+            .start_group_summary::<ObservationTime, Elapsed, Elapsed>(
+                &mut jobs,
+                Timestamp::from_millis(now),
+                Timestamp::from_millis(expires),
+            ),
         _ => Err(ic_db::Error::InvalidQuery),
     };
     faults::finish_job_write();
@@ -291,6 +298,35 @@ fn job_advance(
                 )
             })
         }),
+        23 => db
+            .query::<TimeRow>()
+            .work_limit(work as usize)
+            .resume_group_summary::<ObservationTime, Elapsed, Elapsed>(
+                &mut jobs,
+                &handle,
+                sequence,
+                Timestamp::from_millis(now),
+            )
+            .map(|step| {
+                progress(step, |page| {
+                    assert!(page.next.is_none());
+                    Some(
+                        page.rows
+                            .into_iter()
+                            .map(|group| {
+                                format!(
+                                    "{}:{}:{}:{}",
+                                    group.key.timestamp.as_millis(),
+                                    group.count,
+                                    group.sum.unwrap().duration.as_millis(),
+                                    group.average.unwrap().duration.as_millis()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                })
+            }),
         _ => Err(ic_db::Error::InvalidQuery),
     };
     let writes = faults::finish_job_write();
@@ -604,6 +640,14 @@ struct Category {}
 
 #[record(fields(field(name = "entry_id", value(item(prim = "Nat64")))))]
 struct EntryId {}
+
+/// Partition elapsed observations by their recorded timestamp.
+#[record(fields(field(name = "timestamp", value(item(prim = "Timestamp")))))]
+struct ObservationTime {}
+
+/// Millisecond duration used for both summary measures.
+#[record(fields(field(name = "duration", value(item(prim = "Duration")))))]
+struct Elapsed {}
 
 fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
     let query = db.query::<Entry>();
