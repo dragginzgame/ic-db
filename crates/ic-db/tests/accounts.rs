@@ -1,10 +1,13 @@
 //! Exact account/subaccount bytes and one identity for the default account.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -272,7 +275,7 @@ fn indexed_default_account_refusal_noop_and_final_state_exchange() {
         assert_eq!(db.get::<AccountRow>(row.id).unwrap(), Some(row));
     }
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = AccountRow::SCHEMA
         .indexes
         .iter()
@@ -339,7 +342,7 @@ fn collections_cannot_hide_duplicate_default_accounts_or_malformed_owners() {
         assert_eq!(count.value, expected);
     }
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut rk = vec![2];
     rk.extend(Collections::SCHEMA.id.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());
@@ -478,7 +481,7 @@ fn project_subject_is_checked_on_construction_and_retained_reads() {
     let mut key = vec![2];
     key.extend(ProjectProfile::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     assert!(raw.insert(key, row).is_some());
     drop(raw);
     let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();

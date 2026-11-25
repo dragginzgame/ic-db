@@ -1,10 +1,13 @@
 //! Reused executable metadata never stands in for current durable admission.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -102,9 +105,8 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
     let mut revision_key = vec![1];
     revision_key.extend(Entry::SCHEMA.id.to_be_bytes());
     for failure in 0..4 {
-        let mut raw: StableBTreeMap<Vec<u8>, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
-        let manifest = raw.get(&vec![0]).unwrap();
+        let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
+        let manifest = raw.get(&[0]).unwrap();
         let revision = raw.get(&revision_key).unwrap();
         match failure {
             0 => {
@@ -187,8 +189,7 @@ fn retained_schema_rechecks_each_allocation_and_each_open() {
         if failure == 0 {
             assert_eq!(*backing.borrow(), before);
         }
-        let mut raw: StableBTreeMap<Vec<u8>, Vec<u8>, _> =
-            StableBTreeMap::load(runtime.open_memory(&key).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
         raw.insert(vec![0], manifest);
         raw.insert(revision_key.clone(), revision);
     }

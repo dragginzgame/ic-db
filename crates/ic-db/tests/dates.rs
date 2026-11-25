@@ -1,10 +1,13 @@
 //! Independent Date bytes, calendar domain and stored/indexed identity boundaries.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -307,7 +310,7 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
         assert_eq!(db.get::<DateRow>(r.id).unwrap(), Some(r));
     }
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = DateRow::SCHEMA
         .indexes
         .iter()
@@ -365,7 +368,7 @@ fn collections_reject_duplicate_keys_before_materialization() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

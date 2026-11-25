@@ -154,14 +154,12 @@ impl DatabaseSession {
         self.read()?.get::<E>(key)
     }
 
-    /// Read up to 32 primary keys in input order, preserving duplicates and missing slots.
-    /// # Errors
-    /// Returns a borrow conflict or the original [`Database::get_many`] error.
+    /// Build a live bulk lookup in the entity's store. The read borrow starts at `fetch`.
     pub fn get_many<E: Entity>(
         &self,
         keys: &[impl Copy + Into<crate::Id<E>>],
-    ) -> Result<Vec<Option<E>>, Error> {
-        self.read()?.get_many::<E>(keys)
+    ) -> crate::GetMany<'static, E> {
+        crate::GetMany::from_session(self.0.clone(), keys)
     }
 
     /// Look up an owned row using a generated unique key, such as

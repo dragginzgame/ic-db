@@ -2,8 +2,9 @@
 //! Raw inspection is private qualification transport, never a product query lane.
 
 use super::{Batch, Entity, KEY, open, runtime};
+use crate::raw_map::RawMap;
 use ic_db::Error;
-use ic_storage::{StableKey, adapter::StableBTreeMap};
+use ic_storage::StableKey;
 use records_schema::EnvelopeRow;
 use std::ops::Bound;
 
@@ -180,9 +181,7 @@ fn envelope_listing(generation: u8) -> Vec<u64> {
 fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
     assert!(matches!(tag, 2 | 3));
     let host = runtime();
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
-    );
+    let raw = RawMap::load(host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap());
     let mut prefix = vec![tag];
     prefix.extend(EnvelopeRow::SCHEMA.id.to_be_bytes());
     let lower = match after {
@@ -198,7 +197,7 @@ fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
     raw.range((lower, Bound::Unbounded))
         .take_while(|entry| entry.key().starts_with(&prefix))
         .take(2)
-        .map(|entry| (entry.key().clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value()))
         .collect()
 }
 

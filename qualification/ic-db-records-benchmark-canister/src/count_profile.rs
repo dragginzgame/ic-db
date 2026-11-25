@@ -1,6 +1,7 @@
 //! Read-only cost decomposition for this fixed fixture, never an alternate executor.
 
 use super::{Entry, KEY, database, runtime, transport};
+use crate::raw_map::RawKey;
 use ic_db::{Comparison, Entity, Error};
 use ic_storage::{StableKey, adapter::StableBTreeMap};
 use std::ops::Bound;
@@ -69,7 +70,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
     // The driver checks their totals independently and verifies backing preservation.
     assert!((2..=4).contains(&mode));
     let host = runtime();
-    let map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
+    let map = StableBTreeMap::<RawKey, Vec<u8>, _>::load(
         host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap(),
     );
     let opened = ic_platform_runtime::raw::instruction_counter();
@@ -87,7 +88,10 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
     }
     *end.last_mut().unwrap() += 1;
     let mut count = 0;
-    for entry in map.range((Bound::Included(prefix), Bound::Excluded(end))) {
+    for entry in map.range((
+        Bound::Included(RawKey(prefix)),
+        Bound::Excluded(RawKey(end)),
+    )) {
         // Reading payloads is intentional: key-only iteration is a different cost.
         let bytes = entry.value();
         assert!(!bytes.is_empty());
@@ -96,7 +100,7 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
             let mut owner = vec![2];
             owner.extend(Entry::SCHEMA.id.to_be_bytes());
             owner.extend(bytes);
-            assert!(!map.get(&owner).unwrap().is_empty());
+            assert!(!map.get(&RawKey(owner)).unwrap().is_empty());
         }
         count += 1;
         assert!(count <= 512, "fixture-only raw traversal bound");

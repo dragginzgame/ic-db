@@ -16,10 +16,10 @@ pub use maintenance::{
     CopyStatus, CopyStep, Maintenance, RetiredSource, SchemaCopy, SchemaTransition,
 };
 pub use query::{
-    Aggregate, AggregateJobs, Column, Comparison, GroupCount, GroupCursor, GroupOrder, GroupPage,
-    GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome, JobStep,
-    Query, QueryCursor, QueryOperand, QueryPage, SelectColumns, SelectedQuery, Selection,
-    SortDirection, SummaryMeasure,
+    Aggregate, AggregateJobs, Column, Comparison, GetMany, GroupCount, GroupCursor, GroupOrder,
+    GroupPage, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle, JobOutcome,
+    JobStep, Query, QueryCursor, QueryOperand, QueryPage, SelectColumns, SelectedGetMany,
+    SelectedQuery, Selection, SortDirection, SummaryMeasure,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -503,37 +503,14 @@ impl<M: Memory> Database<M> {
             .try_one()
     }
 
-    /// Read up to 32 raw primary keys or entity-typed IDs, returning one slot per input position.
-    /// Each distinct key is looked up once. Missing keys yield `None`; repeats have independent output slots.
-    /// An empty slice needs an element type, e.g. `&[] as &[u64]` for a Nat64 key.
-    /// ```compile_fail
-    /// use ic_db::{Database, Entity, Id};
-    /// fn wrong<A: Entity, B: Entity<Key = A::Key>>(db: &Database, ids: &[Id<A>]) {
-    ///     let _ = db.get_many::<B>(ids);
-    /// }
-    /// ```
-    /// # Errors
-    /// Returns `Limit` for oversized input, or the same errors as [`Self::get`].
-    pub fn get_many<E: Entity>(
-        &self,
-        keys: &[impl Copy + Into<crate::Id<E>>],
-    ) -> Result<Vec<Option<E>>, Error> {
-        if keys.len() > 32 {
-            return Err(Error::Limit);
-        }
-        let entity = self.schema.admits(E::SCHEMA)?;
-
-        let keys: Vec<_> = keys.iter().map(|&key| key.into().key()).collect();
-        self.get_many_typed::<E>(entity, &keys)
-    }
-
-    // Share grouping and storage access across branded and raw inputs.
+    // Share grouping and storage reads across raw/branded keys and result shapes.
     #[inline(never)]
-    fn get_many_typed<E: Entity>(
+    fn get_many_typed<K: PrimaryKey, R>(
         &self,
         entity: &EntitySchema,
-        keys: &[E::Key],
-    ) -> Result<Vec<Option<E>>, Error> {
+        keys: &[K],
+        decode: impl Fn(&EntitySchema, K, &[u8]) -> Result<R, Error>,
+    ) -> Result<Vec<Option<R>>, Error> {
         let mut rows: Vec<_> = (0..keys.len()).map(|_| None).collect();
         let mut handled = 0_u32;
         for (i, &key) in keys.iter().enumerate() {
@@ -545,7 +522,7 @@ impl<M: Memory> Database<M> {
                 if other == key {
                     handled |= 1 << j;
                     if let Some(bytes) = &bytes {
-                        rows[j] = Some(decode_primary::<E>(bytes, key)?);
+                        rows[j] = Some(decode(entity, key, bytes)?);
                     }
                 }
             }

@@ -6,15 +6,17 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
-IC DB uses Storage 0.78.2 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
-Storage 0.78 may read malformed keys before invoking the DB codec. Writes reject keys over 512 bytes. Decoding an oversized stored key traps and preserves backing. The installed count witness preserved stable backing across an ordinary upgrade.
+In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a populated 0.78.9 backing intact. The previous release reopened the allocation and read the original value.
+
+Storage 0.80 records codec bounds in the map header. Raw DB probes use the physical 512-byte variable key bound and an unbounded byte value. Opening with different bounds refuses before writing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.30.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.30.2's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.268.0 endpoints. Both use Wire 0.30.1, as does the downstream schema inspection probe. The frozen IcyDB comparison
+with Canic 0.268.0 endpoints. Both use Wire 0.30.2, as does the downstream schema inspection probe. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -6527,7 +6529,7 @@ comparison reproduced 263,335,163 versus 139,241,210 commit instructions for
 255 children plus their parent in ascending ID order. Deleting alternating
 rows while retaining every neighbor used 450,434,789 versus 373,749,322.
 
-IC DB uses the released Storage 0.78.9 `remove_many` contract in its ordinary
+The IC DB 0.30.3 experiment used the released Storage 0.78.9 `remove_many` contract in its ordinary
 commit path. The adapter consumes the prepared set and performs one tree removal
 per key. Only the experimental build applies the leaf optimization. The 32-mutation
 production limit and stored formats are unchanged. The crates.io build committed
@@ -6539,7 +6541,7 @@ the same count, reopen, sparse-neighbor and trap/retry cases and rerun the
 point-versus-bulk cost comparison before adoption.
 
 Run the [native oracle](experiments/bulk-delete/run-native.sh) and the
-[installed comparison](experiments/bulk-delete/run-pocketic.sh) from this checkout.
+[installed comparison](experiments/bulk-delete/run-pocketic.sh) from the IC DB v0.30.3 checkout.
 Pass the local source directories for the exact versions shown. Prepare PocketIC
 with `make m0-setup` first. The scripts patch disposable copies and the installed
 comparison uses the qualification Cargo target cache.
@@ -6643,6 +6645,31 @@ A native regression checks surviving references at the first key past the gap,
 beyond that key, and after a change in request order. Reference refusals preserve
 the backing bytes. Savings depend on how many requested prefixes share an empty
 interval in the physical index.
+
+### Projected bulk primary-key reads
+
+The measurements below used Storage 0.78.9. Run `make m2-bulk-selection` to compare three paths on the same installed Document
+rows. Each returns the same ordered optional (score, ID) pairs. The probe measures
+IC instructions after store open through result construction, before reply encoding.
+
+| Input positions | Unselected note | Key distribution | Repeated projected first | Full-row bulk | Projected bulk |
+| ---: | --- | --- | ---: | ---: | ---: |
+| 1 | absent | distinct hits | 105,379 | 63,899 | 65,293 |
+| 8 | absent | distinct hits | 981,818 | 640,384 | 649,094 |
+| 32 | absent | distinct hits | 4,100,041 | 2,743,991 | 2,780,994 |
+| 32 | 64 bytes | distinct hits | 4,136,755 | 2,819,572 | 2,812,051 |
+| 32 | 64 bytes | repeated hits and misses | 3,975,182 | 1,623,520 | 1,625,186 |
+
+All 12 combinations of batch size, note width and key distribution matched the
+expected results. Both bulk paths read each distinct key once. Full-row reads
+cost slightly fewer instructions on the narrow hit-only rows. The three-way
+comparison covers this schema and these two selected fields.
+
+On Storage 0.80.0, all 12 input combinations passed the same oracle.
+For 32 distinct hits with a 64-byte note, repeated projected reads took
+3,571,279 instructions, full-row bulk reads took 2,109,495 and projected bulk
+reads took 2,122,429. With repeated hits and misses, the three paths took
+3,467,199, 1,231,384 and 1,242,390 instructions respectively.
 
 ### Installed descending ULID time listing
 

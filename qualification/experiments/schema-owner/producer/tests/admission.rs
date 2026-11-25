@@ -175,19 +175,28 @@ fn host_reopens_only_the_selected_canisters_allocations() {
     let keys = [42, 1, 42];
     assert!(
         db.get_many::<User>(&keys)
+            .fetch()
             .unwrap()
             .iter()
             .all(Option::is_none)
     );
+    assert_eq!(
+        db.get_many::<AuditEvent>(&keys)
+            .select(|row| row.revision)
+            .fetch()
+            .unwrap(),
+        [Some(Revision(10)), None, Some(Revision(10))]
+    );
     let revisions: Vec<_> = db
         .get_many::<AuditEvent>(&keys.map(ic_db::Id::<AuditEvent>::from_key))
+        .fetch()
         .unwrap()
         .into_iter()
         .map(|event| event.map(|event| event.revision))
         .collect();
     assert_eq!(revisions, [Some(Revision(10)), None, Some(Revision(10))]);
     assert!(matches!(
-        db.get_many::<AuditEvent>(&[42; 33]),
+        db.get_many::<AuditEvent>(&[42; 33]).fetch(),
         Err(ic_db::Error::Limit)
     ));
     assert_eq!(

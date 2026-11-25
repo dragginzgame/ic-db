@@ -1,10 +1,13 @@
 //! Exact millisecond values across storage, indexes, collections and reopen.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{AggregateJobs, Batch, Database, Error, IndexValue, JobOutcome};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -252,7 +255,7 @@ fn exact_indexes_final_state_swaps_and_reopen() {
     }
     assert_eq!(read(&db, "zone,duration,id"), vec![1, 6, 2, 3, 4, 5]);
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = TimeRow::SCHEMA
         .indexes
         .iter()
@@ -308,7 +311,7 @@ fn collection_order_and_unindexed_validation() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

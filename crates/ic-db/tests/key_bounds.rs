@@ -1,10 +1,13 @@
 //! Complete encoded-key admission, independent of row and field bounds.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -145,13 +148,13 @@ fn complete_keys_count_escaping_and_owner_before_any_mutation() {
     db.commit(batch).unwrap();
     assert_eq!(*backing.borrow(), before);
     drop(db);
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut prefix = vec![3];
     prefix.extend(TextKey::SCHEMA.id.to_be_bytes());
     let keys: Vec<_> = raw
         .range(prefix.clone()..)
         .take_while(|e| e.key().starts_with(&prefix))
-        .map(|e| e.key().clone())
+        .map(|e| e.key().0.clone())
         .collect();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].len(), 512);
@@ -238,7 +241,7 @@ fn no_op_cannot_admit_an_overlong_stored_after_image() {
         text: "x".repeat(494),
         padding: vec![],
     };
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(TextKey::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
@@ -280,7 +283,7 @@ fn selected_index_read_checks_unrelated_complete_key_bound() {
     // Keep the selected "a" entry valid. Only the unrelated "a,b" key now
     // exceeds 512 bytes (namespace 9 + a 3 + b 493 + owner 8).
     row.b.push('y');
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let key = [
         &[2][..],
         &Compound::SCHEMA.id.to_be_bytes(),

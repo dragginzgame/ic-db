@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.31.0] - Unreleased
+
+### ⚠️ Breaking
+
+- `get_many` now builds a lookup. Change `db.get_many::<E>(&keys)?` to `db.get_many::<E>(&keys).fetch()?`. To read selected fields, add `.select(|row| (row.id, row.name))` before `.fetch()`. Both forms preserve duplicate keys, missing rows and input order. [PocketIC comparison](qualification/README.md#projected-bulk-primary-key-reads)
+- IC Storage 0.80.0 requires fresh stable backing for its V1 allocation directory and B-tree. To retain existing data, export with the previous release and import into a fresh store.
+
+### 📦 Dependencies
+
+- Updated Platform Runtime to 0.23.27, Platform Types to 0.21.5, Wire to 0.30.2 and Toko Tooling to 0.46.4 across the applicable workspaces.
+
 ## [0.30.3] - 2026-11-24
 
 ### ➕ Added

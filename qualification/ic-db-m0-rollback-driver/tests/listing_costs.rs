@@ -504,3 +504,72 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
     }
     owned.drop().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the query-measurements Wasm; run make m2-bulk-selection"]
+async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    for width in [0, 64] {
+        let note = (width > 0).then(|| "x".repeat(width));
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "replace_document",
+            8,
+            &("template", note, true, None::<u64>, 1_i64, None::<i64>),
+        )
+        .await
+        .unwrap();
+        let rows: Vec<_> = (2..=32_u64)
+            .map(|id| {
+                (
+                    id,
+                    ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()),
+                    id as i64,
+                )
+            })
+            .collect();
+        for chunk in rows.chunks(8) {
+            call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
+                .await
+                .unwrap();
+        }
+        for count in [1, 8, 32] {
+            for mixed in [false, true] {
+                let keys: Vec<_> = (1..=count)
+                    .map(|id| match (mixed, id % 4) {
+                        (true, 0) => 1,
+                        (true, 1) => 99,
+                        _ => id,
+                    })
+                    .collect();
+                let expected: Vec<_> = keys
+                    .iter()
+                    .map(|&id| (id != 99).then_some((id as i64, id)))
+                    .collect();
+                let mut costs = Vec::new();
+                for path in 0..3_u8 {
+                    let (actual, instructions): (Vec<Option<(i64, u64)>>, u64) = call(
+                        pic,
+                        canister,
+                        "measured_bulk_selection",
+                        248,
+                        &(path, &keys),
+                    )
+                    .await;
+                    assert_eq!(actual, expected);
+                    costs.push(instructions);
+                }
+                println!(
+                    "bulk-selection,note={width},keys={count},mixed={mixed},instructions={costs:?}"
+                );
+            }
+        }
+    }
+    owned.drop().await;
+}

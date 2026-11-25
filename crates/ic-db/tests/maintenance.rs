@@ -1,10 +1,13 @@
 //! Durable source freezing, exact identity admission and pre-copy cancellation.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, Maintenance, QueryCursor, SchemaTransition};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -83,10 +86,10 @@ fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database {
 }
 
 fn entries(runtime: &MemoryRuntime<VectorMemory>) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
+    let raw = RawMap::load(runtime.open_memory(&key()).unwrap());
 
     raw.iter()
-        .map(|entry| (entry.key().clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value()))
         .collect()
 }
 
@@ -236,8 +239,7 @@ fn corrupt_source_rows_and_revisions_refuse_without_repair() {
         let runtime = host(memory.clone());
         let transition = identity("widen-value", 1, &[]);
         drop(create(&runtime).begin_maintenance(&transition).unwrap());
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&key()).unwrap());
         let mut stored_key = vec![tag];
         stored_key.extend(Source::SCHEMA.id.to_be_bytes());
         if tag == 2 {
@@ -390,8 +392,7 @@ fn malformed_or_future_maintenance_records_never_reopen_or_cancel() {
     same.copy_within(8..40, 40);
     cases.push(same);
     for bytes in cases {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key()).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&key()).unwrap());
         raw.insert(vec![0], bytes);
         drop(raw);
         let before = entries(&runtime);

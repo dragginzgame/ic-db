@@ -5,7 +5,7 @@ use ic_storage::{
 };
 
 #[test]
-fn oversized_stored_key_traps_and_preserves_backing() {
+fn incompatible_stored_key_bound_refuses_at_open_and_preserves_backing() {
     let backing = VectorMemory::default();
     let mut host = MemoryRuntime::new(backing.clone()).unwrap();
     let slot = StableKey::parse("test.keys.v1").unwrap();
@@ -20,16 +20,14 @@ fn oversized_stored_key_traps_and_preserves_backing() {
     raw.insert(vec![7; 513], vec![]);
     assert_eq!(raw.get(&vec![7; 513]), Some(Vec::new()));
     drop(raw);
-    let map = StableBTreeMap::<StoreKey, Vec<u8>, _>::load(host.open_memory(&slot).unwrap());
     let before = backing.borrow().clone();
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || map.get(&StoreKey::new(vec![7]).unwrap())
-        ))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StableBTreeMap::<StoreKey, Vec<u8>, _>::load(host.open_memory(&slot).unwrap())
+        }))
         .is_err()
     );
     assert_eq!(*backing.borrow(), before);
-    // The read trap is terminal for this runtime; do not continue database work.
 }
 
 #[test]

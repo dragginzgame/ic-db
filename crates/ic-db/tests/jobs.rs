@@ -1,5 +1,8 @@
 //! Exact retained aggregates: independent results, retries, invalidation and reclamation.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{AggregateJobs, Batch, Comparison, Database, Error, GroupOrder, JobHandle, JobOutcome};
 use ic_storage::{
@@ -1120,8 +1123,6 @@ fn retained_length_filter_binds_threshold_and_resumes_the_same_clause() {
 
 #[test]
 fn retained_index_count_preserves_checkpoint_on_invalid_owner() {
-    use ic_storage::adapter::StableBTreeMap;
-
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
     let (db, mut jobs) = create(&runtime, &[None; 5], 0);
@@ -1150,7 +1151,7 @@ fn retained_index_count_preserves_checkpoint_on_invalid_owner() {
         &4_u64.to_be_bytes(),
     ]
     .concat();
-    let raw = || StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let raw = || RawMap::load(runtime.open_memory(&key).unwrap());
     let saved = raw().remove(&row).unwrap();
     let reopen = || Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();
     let mut check_refusal = |expected_flag| {

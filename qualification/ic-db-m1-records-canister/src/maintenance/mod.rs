@@ -4,6 +4,7 @@
 mod jobs;
 mod listing;
 
+use crate::raw_map::RawMap;
 use crate::{
     Document, Entry, KEY, RecordsStore,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
@@ -137,15 +138,13 @@ fn maintenance_copy_entries(target: bool) -> CopyEntries {
     let key = StableKey::parse(key).unwrap();
     let schema = Schema::new(&[entry]).unwrap();
     let open = Database::open(host.open_memory(&key).unwrap(), schema).is_ok();
-    let raw = ic_storage::adapter::StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&key).unwrap(),
-    );
+    let raw = RawMap::load(host.open_memory(&key).unwrap());
 
     (
         open,
         raw.iter()
             .take(32)
-            .map(|entry| (entry.key().clone(), entry.value()))
+            .map(|entry| (entry.key().0.clone(), entry.value()))
             .collect(),
     )
 }

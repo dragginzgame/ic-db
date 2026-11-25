@@ -1,10 +1,13 @@
 //! Full-width U256 bytes, ordering, uniqueness and corruption boundaries.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -275,7 +278,7 @@ fn secondary_keys_order_the_full_domain_and_preserve_final_state_uniqueness() {
     ));
     assert_eq!(*backing.borrow(), before);
     // Inspect the physical ordered components independently of the typed reader.
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
     let index = BigNumbers::SCHEMA
         .indexes
         .iter()
@@ -341,7 +344,7 @@ fn collections_keep_high_bits_and_validate_unindexed_payloads() {
     b.replace(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
     let mut rk = vec![2];
     rk.extend(Collections::SCHEMA.id.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());

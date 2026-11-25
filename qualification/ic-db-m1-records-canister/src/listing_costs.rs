@@ -273,3 +273,50 @@ fn ulid_sample<T>(
 
 type UlidListingRequest = (i64, i64, Option<Vec<u8>>, bool);
 type UlidListingSample = (Vec<[u8; 16]>, Option<Vec<u8>>, u32, u32, u32, u64, u64);
+
+// measured_bulk_selection
+// Compare three primary lookup paths on the same stored rows and ordered keys.
+// guard  : validates the request frame for method 248.
+// limits : 64 KiB request, 64 KiB reply.
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime,
+    name = "measured_bulk_selection",
+    guard = crate::transport::admit::<248>,
+    decode = crate::transport::decode_measured::<_, 248>,
+    encode = crate::transport::encode::<_, 248>,
+    max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_bulk_selection(
+    ((path, keys), counter): crate::transport::Measured<(u8, Vec<u64>)>,
+) -> (Vec<Option<(i64, u64)>>, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let start = counter();
+    let rows = match path {
+        0 => keys
+            .iter()
+            .map(|&id| {
+                db.query::<Document>()
+                    .eq(Document::ID, id)
+                    .select(|r| (r.score, r.id))
+                    .first()
+                    .unwrap()
+            })
+            .collect(),
+        1 => db
+            .get_many::<Document>(&keys)
+            .fetch()
+            .unwrap()
+            .into_iter()
+            .map(|row| row.map(|r| (r.score, r.id)))
+            .collect(),
+        2 => db
+            .get_many::<Document>(&keys)
+            .select(|r| (r.score, r.id))
+            .fetch()
+            .unwrap(),
+        _ => panic!("unknown bulk selection path"),
+    };
+    (rows, counter() - start)
+}

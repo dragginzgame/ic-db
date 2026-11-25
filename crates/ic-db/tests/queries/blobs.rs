@@ -1,9 +1,10 @@
 //! Raw-byte ordering shares one contract across index, filter and aggregate paths.
 
 use super::{C, host};
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, GroupOrder, IndexValue};
-use ic_storage::{StableKey, VectorMemory, adapter::StableBTreeMap};
+use ic_storage::{StableKey, VectorMemory};
 
 ///
 /// Binary
@@ -976,8 +977,7 @@ fn malformed_blob_index_components_refuse_without_mutation() {
     valid.extend(1_u64.to_be_bytes());
     valid.extend(1_u64.to_be_bytes());
     for component in [vec![255, 0, 1], vec![255], vec![0, 255, 0]] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         assert!(raw.remove(&valid).is_some());
         let mut bad = prefix.clone();
         bad.extend(component);
@@ -991,8 +991,7 @@ fn malformed_blob_index_components_refuse_without_mutation() {
         ));
         assert_eq!(*backing.borrow(), before);
         drop(db);
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&bad);
         raw.insert(valid.clone(), 1_u64.to_be_bytes().to_vec());
     }

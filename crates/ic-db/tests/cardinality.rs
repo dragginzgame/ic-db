@@ -1,10 +1,13 @@
 //! Maintained counts share the batch rollback and copy-publication boundaries.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, SchemaCopy, SchemaTransition};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -148,9 +151,7 @@ fn metadata_refusal_is_before_persistent_mutation() {
         b.insert(&Row { id: 1, value: 1 }).unwrap();
         db.commit(b).unwrap();
         drop(db);
-        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-            h.open_memory(&key("test.source.v1")).unwrap(),
-        );
+        let mut raw = RawMap::load(h.open_memory(&key("test.source.v1")).unwrap());
         let mut k = vec![1];
         k.extend(Row::SCHEMA.id.to_be_bytes());
         match case {
@@ -203,9 +204,8 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     batch.insert(&Row { id: 1, value: 1 }).unwrap();
     db.commit(batch).unwrap();
     drop(db);
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap());
-    let mut manifest = raw.get(&vec![0]).unwrap();
+    let mut raw = RawMap::load(h.open_memory(&key("test.source.v1")).unwrap());
+    let mut manifest = raw.get(&[0]).unwrap();
     assert_eq!(&manifest[..8], b"ICDBMF02");
     manifest[..8].copy_from_slice(b"ICDBMF01");
     raw.insert(vec![0], manifest.clone());
@@ -217,8 +217,7 @@ fn old_format_refuses_intact_and_metadata_count_does_not_scan_rows() {
     ));
     assert_eq!(*m.borrow(), before);
     // Restore the test's current-format manifest, then damage only its row bytes.
-    let mut raw =
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(h.open_memory(&key("test.source.v1")).unwrap());
+    let mut raw = RawMap::load(h.open_memory(&key("test.source.v1")).unwrap());
     manifest[..8].copy_from_slice(b"ICDBMF02");
     raw.insert(vec![0], manifest);
     let mut row = vec![2];
@@ -296,9 +295,7 @@ fn copy_counts(damaged_state: Option<(u64, u64)>) {
     {}
     if let Some((revision, count)) = damaged_state {
         drop(copy);
-        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-            h.open_memory(&key("test.target.v1")).unwrap(),
-        );
+        let mut raw = RawMap::load(h.open_memory(&key("test.target.v1")).unwrap());
         let mut k = vec![1];
         k.extend(Wide::SCHEMA.id.to_be_bytes());
         raw.insert(k, [revision.to_le_bytes(), count.to_le_bytes()].concat());

@@ -1,10 +1,13 @@
 //! Scalar primary keys share ordering, references and corruption checks.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::fmt::Debug;
 
@@ -78,7 +81,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
         rows
     );
     drop(db);
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = E::SCHEMA.indexes.iter().find(|i| i.name == "rank").unwrap();
     let mut index_prefix = vec![3];
     index_prefix.extend(E::SCHEMA.id.to_be_bytes());
@@ -112,8 +115,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
     let mut long = owner.clone();
     long.push(0);
     for invalid in [owner[..owner.len() - 1].to_vec(), long] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(unique.clone(), invalid);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -132,7 +134,7 @@ fn exercise<E: Entity + Clone + PartialEq + Debug>(
         assert_eq!(*backing.borrow(), before);
         drop(db);
     }
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     raw.insert(unique, owner.clone());
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -541,8 +543,7 @@ fn malformed_owners<E: Entity>(row: &E, invalid: Vec<Vec<u8>>) {
     // Missing length, truncation, trailing bytes, oversized principal, and a
     // valid but wrong owner all fail at the storage boundary.
     for invalid in invalid {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(key.clone(), invalid);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();

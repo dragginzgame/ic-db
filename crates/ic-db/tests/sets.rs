@@ -1,10 +1,13 @@
 //! Canonical scalar sets: logical order, strict corruption refusal, shared limits.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::BTreeSet;
 
@@ -237,8 +240,7 @@ fn stored_duplicates_refuse_mutation_and_schema_changes_refuse_reopen() {
     for suffix in [[255, 255, 255, 255, 0, 1], [0, 0, 255, 255, 0, 1]] {
         let mut corrupt = row.encode().unwrap();
         corrupt[12..].copy_from_slice(&suffix);
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
         raw.insert(row_key.clone(), corrupt);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&key).unwrap(), schema()).unwrap();

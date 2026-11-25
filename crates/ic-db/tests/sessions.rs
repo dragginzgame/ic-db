@@ -126,6 +126,10 @@ fn session_queries_observe_execution_time_and_preserve_page_and_point_rules() {
         .query::<Friendship>()
         .eq(Friendship::OWNER, 11_u64)
         .eq(Friendship::PEER, 20_u64);
+    let bulk = db
+        .clone()
+        .get_many::<Friendship>(&[2, 99, 2])
+        .select(|row| row.owner);
     for (id, owner) in [(1, 10), (2, 11)] {
         writer
             .insert(&Friendship {
@@ -136,6 +140,7 @@ fn session_queries_observe_execution_time_and_preserve_page_and_point_rules() {
             })
             .unwrap();
     }
+    assert_eq!(bulk.fetch().unwrap(), [Some(11), None, Some(11)]);
     assert_eq!(q.work_limit(1).try_one().unwrap().unwrap().id, 2);
     let unique = |owner, peer| db.get_unique(&FriendshipByOwnerAndPeer { owner, peer });
     assert_eq!(unique(10, 20).unwrap().unwrap().id, 1);
@@ -238,6 +243,10 @@ fn query_execution_refuses_an_active_commit_and_recovers() {
         const NAME: &'static str = Payload::NAME;
         fn definition() -> &'static TypeSchema {
             if let Some(session) = DURING_ADMISSION.take() {
+                assert!(matches!(
+                    session.get_many::<Friendship>(&[1]).fetch(),
+                    Err(Error::BorrowConflict)
+                ));
                 assert!(matches!(
                     session.query::<Friendship>().fetch(),
                     Err(Error::BorrowConflict)

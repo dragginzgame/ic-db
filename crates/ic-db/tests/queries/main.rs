@@ -7,11 +7,14 @@ mod logging;
 mod metrics;
 mod sorting;
 
+#[path = "../support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Comparison as C, Database, Error, IndexValue, QueryCursor};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -417,7 +420,7 @@ fn batch_get_preserves_the_listing_order_and_missing_related_rows() {
         .fetch()
         .unwrap();
     assert!(page.next.is_some());
-    let related = db.get_many::<Other>(&ids(&page.rows)).unwrap();
+    let related = db.get_many::<Other>(&ids(&page.rows)).fetch().unwrap();
     assert_eq!(
         related
             .into_iter()
@@ -425,16 +428,63 @@ fn batch_get_preserves_the_listing_order_and_missing_related_rows() {
             .collect::<Vec<_>>(),
         [Some(8), None, Some(4)]
     );
-    let rows = db.get_many::<Entry>(&[5, 99, 2, 5]).unwrap();
+    let rows = db.get_many::<Entry>(&[5, 99, 2, 5]).fetch().unwrap();
     assert_eq!(
         rows.into_iter()
             .map(|row| row.map(|r| r.id))
             .collect::<Vec<_>>(),
         [Some(5), None, Some(2), Some(5)]
     );
-    assert!(db.get_many::<Entry>(&[] as &[u64]).unwrap().is_empty());
-    assert_eq!(db.get_many::<Entry>(&[1; 32]).unwrap().len(), 32);
-    assert!(matches!(db.get_many::<Entry>(&[1; 33]), Err(Error::Limit)));
+    let keys = [3, 99, 2, 3].map(ic_db::Id::<Entry>::from_key);
+    let selected = db
+        .get_many::<Entry>(&keys)
+        .select(|e| (e.maybe, e.id, e.category))
+        .fetch()
+        .unwrap();
+    assert_eq!(
+        selected,
+        [
+            Some((None, 3, 1)),
+            None,
+            Some((Some(2), 2, 0)),
+            Some((None, 3, 1))
+        ]
+    );
+    assert!(
+        db.get_many::<Entry>(&[] as &[u64])
+            .select(|e| e.id)
+            .fetch()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        db.get_many::<Entry>(&[] as &[u64])
+            .select(|e| (e.id, e.id))
+            .fetch(),
+        Err(Error::InvalidQuery)
+    ));
+    assert_eq!(
+        db.get_many::<Entry>(&[1; 32])
+            .select(|e| e.id)
+            .fetch()
+            .unwrap(),
+        [Some(1); 32]
+    );
+    assert!(matches!(
+        db.get_many::<Entry>(&[1; 33]).select(|e| e.id).fetch(),
+        Err(Error::Limit)
+    ));
+    assert!(
+        db.get_many::<Entry>(&[] as &[u64])
+            .fetch()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.get_many::<Entry>(&[1; 32]).fetch().unwrap().len(), 32);
+    assert!(matches!(
+        db.get_many::<Entry>(&[1; 33]).fetch(),
+        Err(Error::Limit)
+    ));
 }
 
 #[test]
@@ -478,15 +528,20 @@ fn batch_get_repeated_hits_and_misses_read_backing_once_per_key() {
     db.commit(batch).unwrap();
 
     reads.set(0);
-    db.get_many::<Other>(&[2, 9]).unwrap();
+    db.get_many::<Other>(&[2, 9]).fetch().unwrap();
     let two_reads = reads.replace(0);
     assert!(two_reads > 0);
     let ids = [2, 9, 2, 9].map(ic_db::Id::<Other>::from_key);
-    let rows = db.get_many::<Other>(&ids).unwrap();
+    let rows = db.get_many::<Other>(&ids).fetch().unwrap();
     assert_eq!(
         rows.into_iter()
             .map(|r| r.map(|o| o.id))
             .collect::<Vec<_>>(),
+        [Some(2), None, Some(2), None]
+    );
+    assert_eq!(reads.replace(0), two_reads);
+    assert_eq!(
+        db.get_many::<Other>(&ids).select(|e| e.id).fetch().unwrap(),
         [Some(2), None, Some(2), None]
     );
     assert_eq!(reads.get(), two_reads);
@@ -4392,7 +4447,7 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
     let db = create(&runtime, 6);
     drop(db);
     let slot = StableKey::parse("test.db.v1").unwrap();
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Entry::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
@@ -4406,6 +4461,10 @@ fn unselected_corruption_is_not_hidden_by_a_false_predicate() {
         Schema::new(&[Entry::SCHEMA, Other::SCHEMA]).unwrap(),
     )
     .unwrap();
+    assert!(matches!(
+        db.get_many::<Entry>(&[2, 1]).select(|e| e.id).fetch(),
+        Err(Error::Corrupt)
+    ));
     assert!(matches!(
         db.query::<Entry>()
             .eq("category", 1_u8)
@@ -5236,8 +5295,7 @@ fn presence_filters_validate_skipped_values_and_optional_tags() {
     let mut trailing = valid;
     trailing.push(0);
     for bytes in [bad_tag, trailing] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         let mut key = vec![2];
         key.extend(PresenceData::SCHEMA.id.to_be_bytes());
         key.extend(0_u64.to_be_bytes());
@@ -11383,7 +11441,7 @@ fn index_entry_counts_are_bounded_and_independent_of_owner_rows() {
     assert_eq!(conflicting.value, 0);
     drop(db);
     let key = StableKey::parse("test.db.v1").unwrap();
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
     let row_key = [
         &[2][..],
         &Entry::SCHEMA.id.to_be_bytes(),

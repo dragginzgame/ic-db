@@ -1,10 +1,13 @@
 //! Supplied ULID keys retain typed identity through shared storage and references.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -302,7 +305,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut expected = vec![255; 16];
     expected.push(0);
     expected.extend(6_u64.to_le_bytes());
@@ -331,8 +334,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     assert_eq!(raw.get(&full).unwrap(), vec![255; 16]);
     drop(raw);
     for owner in [vec![255; 15], vec![255; 17], vec![0; 16]] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(index.clone(), owner);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -354,7 +356,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
         assert_eq!(*backing.borrow(), before);
         drop(session);
     }
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     raw.insert(index, vec![255; 16]);
     raw.remove(&physical_row(Ulid::MAX));
     drop(raw);
@@ -364,8 +366,7 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
     let mut truncated_payload = expected.clone();
     truncated_payload.pop();
     for invalid in [wrong_id, truncated_payload] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(original.clone(), invalid);
         drop(raw);
         let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -378,23 +379,20 @@ fn physical_bytes_and_wrong_owner_refuse_without_mutation() {
         assert!(matches!(ids, Err(Error::Corrupt)));
         assert_eq!(*backing.borrow(), before);
         drop(db);
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&original);
     }
 
     let mut trailing = original.clone();
     trailing.push(0);
     for bad in [original[..20].to_vec(), trailing, physical_row(Ulid::MIN)] {
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(bad.clone(), expected.clone());
         drop(raw);
         let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
         assert!(matches!(db.page::<KeyRow>(None, 32), Err(Error::Corrupt)));
         drop(db);
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&bad);
     }
 }

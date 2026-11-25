@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses Storage 0.78.9 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -1190,7 +1190,7 @@ Specify the allocation, traversal and recovery guarantees IC DB needs. Qualify t
 
 #### Stable storage supplier
 
-IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 IC Storage's existing allocation reset is an investigated candidate for alternating reusable
 collection slots: a later target may use a fully retired slot after source
@@ -2346,11 +2346,11 @@ mechanism; never return a partial `BudgetExceeded`. Keep preparation internal to
 this operation, with no public prepare-now/commit-later handle.
 
 IC DB transfers the admitted, sorted set of distinct physical keys to Storage
-0.78.9's `remove_many`. Storage returns the actual removal count. A mismatch
+0.80.0's `remove_many`. Storage returns the actual removal count. A mismatch
 traps the enclosing message before IC DB publishes row and index writes. This
-keeps physical removal in Storage and final-state admission in IC DB. The
-released adapter removes each key individually. The [qualification handoff](../../qualification/README.md#experimental-sorted-bulk-removal)
-measures the leaf-level optimization for a future Storage engine.
+keeps physical removal in Storage and final-state admission in IC DB. Storage 0.80.0 groups up to 32 physical deletions per tree transaction.
+The enclosing canister message supplies rollback across those transactions. The
+[earlier qualification](../../qualification/README.md#experimental-sorted-bulk-removal) records the 0.78.9 adapter and prototype.
 
 Preparation establishes structural bounds on encoded bytes, mutations, index
 fan-out and peak memory. Remaining commit failures must roll back. The
@@ -3269,19 +3269,25 @@ physical key in the same iterator. Its entity prefix determines whether to
 return the last emitted ID as a continuation. The next value is decoded only
 if the caller resumes. This describes exhaustion at read time on a live traversal.
 
-Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys)`
+Use `get::<E>(key)` for a known primary key and `get_many::<E>(&keys).fetch()`
 for a page of related keys. The bulk call accepts a slice of raw keys or
 entity-typed IDs, like frozen IcyDB `6d421e3`’s `db/query/typed.rs` for typed IDs.
 Database, store session and canister session share
 this read path. The canister session selects the declared store once, and the
-store session holds one read borrow for the batch. The batch admits the entity once, reads up to 32
+builder owns its bounded key list. A session builder retains the attachment and takes one read borrow at `fetch`, observing commits since construction. The batch admits the entity once, reads up to 32
 positions and preserves input order, duplicates and missing slots. This carries
 the positional contract of frozen IcyDB `6d421e3`,
 `db/session/query/exact_key/mod.rs`, into the existing typed read path. The
 32-position bound matches an entity page. Each distinct key costs one map
 lookup, including misses. A 32-bit mask tracks filled positions, so only one
 stored row's bytes are held alongside the output. Each matching slot decodes
-its own value. Toko's asset/thumbnail flow at `2f45ba193` illustrates why
+its own value. The projected bulk read accepts the same generated columns
+as fluent `select`. Each hit validates the entire stored row and its physical
+primary key, then decodes the selected field spans in caller order. Frozen
+IcyDB's [exact-key reader](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/query/exact_key/mod.rs)
+also deduplicates stored reads and preserves caller positions. IC DB uses its
+existing 32-position and schema-declared row bounds and returns owned typed values.
+Toko's asset/thumbnail flow at `2f45ba193` illustrates why
 the order of the input page matters. A query's `filter_in` instead selects
 matching entities once in query order. When every alternative in one OR clause
 is a literal equality on the next traversal component, the shared scanner
@@ -4959,7 +4965,7 @@ and [assembly/membership tests](https://github.com/dragginzgame/icydb/blob/6d421
 inform the independent [native cases](../../crates/ic-db/tests/key_bounds.rs):
 512 accepted/513 refused, escaping, combined fields, wider primary keys, sparse
 omission, unchanged backing on refusal, no-op admission and successful retries.
-Storage 0.78 may read an oversized stored key before the DB codec traps. The corruption test checks that the backing remains intact.
+Storage 0.80 checks persisted key and value bounds at map open. The native mismatch test checks byte preservation on refusal.
 The Wasm maximum-batch witness audits every row/index byte independently, with
 512-byte keys, full 4 KiB rows, rollback, upgrade, no-ops and deletion.
 

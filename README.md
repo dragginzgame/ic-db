@@ -1,6 +1,6 @@
 # ic-db
 
-IC DB uses Storage 0.78.0 named stable-memory allocations and upstream stable collections. Storage owns its allocation directory codec. Version 0.78 rejects 0.77 backing. Existing data requires an export with the previous owner. IC DB owns its row, index and job codecs.
+IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 A fresh design workspace for a smaller embedded Internet Computer database.
 This repository explores replacing IcyDB's accumulated mechanisms with a system
@@ -143,9 +143,11 @@ When you have the generated key, `db.get_unique(&key)?` returns the same
 optional entity on a standalone database, a read guard or a mounted session.
 Use `try_one()` when a second match is an error and `first()` when the first
 match in order is sufficient. For known primary keys, `db.get::<E>(key)?`
-returns one optional row. To hydrate a page, `db.get_many::<E>(&keys)?`
+returns one optional row. To hydrate a page, `db.get_many::<E>(&keys).fetch()?`
 accepts raw keys or IDs collected with `row.id()` and returns one optional row
-per supplied position, up to 32 in one call.
+per supplied position, up to 32 in one call. To read only the fields you need,
+use `db.get_many::<Document>(&keys).select(|r| (r.title, r.score)).fetch()?`.
+It accepts the same keys and preserves missing and repeated positions.
 
 A complete unique-key lookup examines at most one candidate, including when
 `fetch_as::<R>()` selects only the fields in a result record. For a general

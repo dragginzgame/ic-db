@@ -26,6 +26,13 @@ impl<E, T> Column<E, T> {
             entity: PhantomData,
         }
     }
+    fn read_span(&self, bytes: &[u8], spans: &[(u16, u16)]) -> Result<T, Error> {
+        let (start, end) = spans[usize::from(self.position)];
+        let mut reader = Decoder::new(&bytes[usize::from(start)..usize::from(end)])?;
+        let value = (self.decode)(&mut reader)?;
+        reader.finish()?;
+        Ok(value)
+    }
 }
 
 /// Field handles supplied to a selection by an authored entity.
@@ -45,6 +52,8 @@ pub trait Selection<E>: sealed::Sealed {
     /// The value returned for each matching row.
     type Output;
     #[doc(hidden)]
+    fn decode_spans(&self, bytes: &[u8], spans: &[(u16, u16)]) -> Result<Self::Output, Error>;
+    #[doc(hidden)]
     fn positions(&self) -> impl AsRef<[u8]>;
     #[doc(hidden)]
     fn decode(&self, reader: &mut Decoder<'_>, order: &[usize]) -> Result<Self::Output, Error>;
@@ -53,6 +62,9 @@ pub trait Selection<E>: sealed::Sealed {
 impl<E, T> sealed::Sealed for Column<E, T> {}
 impl<E, T> Selection<E> for Column<E, T> {
     type Output = T;
+    fn decode_spans(&self, bytes: &[u8], spans: &[(u16, u16)]) -> Result<T, Error> {
+        self.read_span(bytes, spans)
+    }
     fn positions(&self) -> impl AsRef<[u8]> {
         [self.position]
     }
@@ -68,6 +80,9 @@ macro_rules! tuple_selection {
         impl<E, $($ty),+> sealed::Sealed for ($(Column<E, $ty>,)+) {}
         impl<E, $($ty),+> Selection<E> for ($(Column<E, $ty>,)+) {
             type Output = ($($ty,)+);
+            fn decode_spans(&self, bytes: &[u8], spans: &[(u16, u16)]) -> Result<Self::Output, Error> {
+                Ok(($(self.$index.read_span(bytes, spans)?,)+))
+            }
             fn positions(&self) -> impl AsRef<[u8]> { [$(self.$index.position),+] }
             fn decode(&self, reader: &mut Decoder<'_>, order: &[usize]) -> Result<Self::Output, Error> {
                 $(let mut $slot = None;)+

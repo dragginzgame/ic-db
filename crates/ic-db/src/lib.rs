@@ -127,10 +127,10 @@ pub use schema::{
 };
 pub use session::{DatabaseSession, InsertOutcome, QuerySession, UniqueKey};
 pub use store::{
-    Aggregate, Batch, Column, Comparison, CopyStatus, CopyStep, GroupCount, GroupCursor,
+    Aggregate, Batch, Column, Comparison, CopyStatus, CopyStep, GetMany, GroupCount, GroupCursor,
     GroupOrder, GroupPage, GroupSummaries, GroupSummary, GroupSummaryPage, GroupValue, JobHandle,
     JobOutcome, JobStep, Page, QueryCursor, QueryOperand, QueryPage, SchemaTransition,
-    SelectColumns, SelectedQuery, Selection, SortDirection, SummaryMeasure,
+    SelectColumns, SelectedGetMany, SelectedQuery, Selection, SortDirection, SummaryMeasure,
 };
 pub use store_key::MAX_INDEX_KEY_BYTES;
 pub use time::{Duration, TimeParseError, Timestamp};

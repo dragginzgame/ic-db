@@ -1,10 +1,13 @@
 //! Frozen IcyDB time-policy regressions on the single typed commit path.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -387,7 +390,7 @@ fn corrupt_managed_order_refuses_reads_and_noop_replacement_without_repair() {
     // Independent framing: u32 text length, five UTF-8 bytes, then born/changed i64.
     corrupt[9..17].copy_from_slice(&101_i64.to_le_bytes());
     assert!(matches!(Entry::decode(&corrupt), Err(Error::Corrupt)));
-    let mut map = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(memory());
+    let mut map = RawMap::load(memory());
     let mut key = vec![2];
     key.extend(Entry::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

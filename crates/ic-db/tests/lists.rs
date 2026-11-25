@@ -1,10 +1,13 @@
 //! Bounded ordered lists: independent count framing and shared row limits.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -453,7 +456,7 @@ fn persisted_list_changes_reopen_and_corruption_refuses_before_mutation() {
         Err(Error::IncompatibleSchema)
     ));
     assert_eq!(*backing.borrow(), before);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&key).unwrap());
     let mut row_key = vec![2];
     row_key.extend(ListRow::SCHEMA.id.to_be_bytes());
     row_key.extend(7_u64.to_be_bytes());

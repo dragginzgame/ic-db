@@ -10,6 +10,8 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
+#[path = "../../../crates/ic-db/tests/support/raw_map.rs"]
+pub mod raw_map;
 #[cfg(test)]
 mod tests;
 

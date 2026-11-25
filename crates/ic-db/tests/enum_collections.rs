@@ -1,10 +1,13 @@
 //! Enum order agrees across collections, row bytes and secondary keys.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -233,8 +236,7 @@ fn corrupt_collections_refuse_before_materialization_or_mutation() {
         let mut key = vec![2];
         key.extend(Row::SCHEMA.id.to_be_bytes());
         key.extend(1_u64.to_be_bytes());
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(key, bytes);
         drop(raw);
         let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -282,7 +284,7 @@ fn enum_keys_count_toward_the_shared_structured_budget() {
     let mut key = vec![2];
     key.extend(Nested::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     raw.insert(key, bytes);
     drop(raw);
     let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -371,8 +373,7 @@ fn wrapped_collection_keys_keep_numeric_order_on_typed_and_borrowed_reads() {
             let mut key = vec![2];
             key.extend(Ranked::SCHEMA.id.to_be_bytes());
             key.extend(1_u64.to_be_bytes());
-            let mut raw =
-                StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+            let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
             raw.insert(key, corrupt.to_vec());
             drop(raw);
             let mut db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();

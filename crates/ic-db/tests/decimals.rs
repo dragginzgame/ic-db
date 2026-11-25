@@ -1,10 +1,13 @@
 //! Exact decimal invariants, with independent widened-integer and byte oracles.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -325,7 +328,7 @@ fn uniqueness_reopen_and_key_integrity() {
     let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
     assert_eq!(read(&db), rows);
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = DecimalRow::SCHEMA
         .indexes
         .iter()
@@ -358,8 +361,7 @@ fn uniqueness_reopen_and_key_integrity() {
         bad.extend(component);
         bad.extend(6_u64.to_be_bytes());
         bad.extend(6_u64.to_be_bytes());
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.insert(bad.clone(), 6_u64.to_be_bytes().to_vec());
         drop(raw);
         let db = Database::open(runtime.open_memory(&slot).unwrap(), schema()).unwrap();
@@ -368,8 +370,7 @@ fn uniqueness_reopen_and_key_integrity() {
             Err(Error::Corrupt)
         ));
         drop(db);
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
         raw.remove(&bad);
     }
 }
@@ -401,7 +402,7 @@ fn collections_and_unindexed_scale_are_checked() {
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut key = vec![2];
     key.extend(Collections::SCHEMA.id.to_be_bytes());
     key.extend(1_u64.to_be_bytes());

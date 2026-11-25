@@ -1,5 +1,8 @@
 //! Independent target rows/indexes, resumable progress and bounded cancellation.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{
     AggregateJobs, Batch, CopyStatus, Database, Error, JobOutcome, Maintenance, RetiredSource,
@@ -7,7 +10,7 @@ use ic_db::{
 };
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 
 ///
@@ -210,10 +213,10 @@ fn transform(row: Source, inputs: &[u8]) -> Result<Target, Error> {
 }
 
 fn entries(host: &MemoryRuntime<VectorMemory>, name: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(host.open_memory(&key(name)).unwrap());
+    let raw = RawMap::load(host.open_memory(&key(name)).unwrap());
 
     raw.iter()
-        .map(|entry| (entry.key().clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value()))
         .collect()
 }
 
@@ -550,7 +553,7 @@ fn added_entity_requires_pristine_state_before_cutover() {
             .unwrap();
         assert!(copy.copy_unchanged::<Source>(1, 4096).unwrap().complete);
         drop(copy);
-        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(target_memory());
+        let mut raw = RawMap::load(target_memory());
         let mut metadata_key = vec![1];
         metadata_key.extend(Other::SCHEMA.id.to_be_bytes());
         assert_eq!(raw.get(&metadata_key), Some(vec![0; 16]));
@@ -741,10 +744,8 @@ fn malformed_and_future_copy_checkpoints_refuse_intact() {
         let memory = VectorMemory::default();
         let runtime = host(memory.clone());
         drop(begin(&runtime));
-        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-            runtime.open_memory(&key("copy.target.v1")).unwrap(),
-        );
-        let mut frame = raw.get(&vec![0]).unwrap();
+        let mut raw = RawMap::load(runtime.open_memory(&key("copy.target.v1")).unwrap());
+        let mut frame = raw.get(&[0]).unwrap();
         match case {
             0 => {
                 frame.pop();
@@ -788,9 +789,7 @@ fn copy_position_frames_accept_only_the_canonical_encoding() {
     drop(begin(&runtime));
     let lease = || runtime.open_memory(&key("copy.target.v1")).unwrap();
     let manifest = vec![0];
-    let mut header = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(lease())
-        .get(&manifest)
-        .unwrap();
+    let mut header = RawMap::load(lease()).get(&manifest).unwrap();
     assert!(header.ends_with(&[1, 0, 0, 0, 0])); // first entity, empty cursor
     header.truncate(header.len() - 5);
     for (position, valid) in [
@@ -801,7 +800,7 @@ fn copy_position_frames_accept_only_the_canonical_encoding() {
         (128, false),
     ] {
         let frame = [header.as_slice(), &[9, position], &[0; 4]].concat();
-        StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(lease()).insert(manifest.clone(), frame);
+        RawMap::load(lease()).insert(manifest.clone(), frame);
         let outcome = Database::open(lease(), target());
         assert!(
             matches!(
@@ -939,8 +938,7 @@ fn incomplete_or_inconsistent_collections_never_validate_or_publish() {
         } else {
             "copy.target.v1"
         };
-        let mut raw =
-            StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&key(name)).unwrap());
+        let mut raw = RawMap::load(runtime.open_memory(&key(name)).unwrap());
         let row = raw.keys().find(|key| key[0] == 2).unwrap();
         let index = raw.keys().find(|key| key[0] == 3);
         match case {
@@ -1210,13 +1208,11 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
     {}
     drop(copy);
     // Independently inspect the exact target encoding, including renamed fields.
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        runtime.open_memory(&key("copy.target.v1")).unwrap(),
-    );
+    let mut raw = RawMap::load(runtime.open_memory(&key("copy.target.v1")).unwrap());
     let rows: Vec<_> = raw
         .iter()
         .filter(|entry| entry.key()[0] == 2)
-        .map(|entry| (entry.key().clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value()))
         .collect();
     for (index, (_, bytes)) in rows.iter().enumerate() {
         // Stored field order is canonical by name: born, changed, id, value.
@@ -1243,9 +1239,7 @@ fn migration_preserves_managed_roles_and_resumes_normal_time_policy() {
     assert!(matches!(copy.validate_next(32), Err(Error::ManagedField)));
     assert_eq!(*memory.borrow(), before);
     drop(copy);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        runtime.open_memory(&key("copy.target.v1")).unwrap(),
-    );
+    let mut raw = RawMap::load(runtime.open_memory(&key("copy.target.v1")).unwrap());
     raw.insert(rows[1].0.clone(), rows[1].1.clone());
     drop(raw);
     let mut copy = SchemaCopy::resume(
@@ -1579,11 +1573,9 @@ fn missing_empty_entity_revision_and_unknown_copy_positions_refuse_intact() {
             copy.copy_next(2, 4096, widen_user).unwrap();
         }
         drop(copy);
-        let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-            runtime.open_memory(&key("copy.target.v1")).unwrap(),
-        );
+        let mut raw = RawMap::load(runtime.open_memory(&key("copy.target.v1")).unwrap());
         if malformed_position {
-            let mut frame = raw.get(&vec![0]).unwrap();
+            let mut frame = raw.get(&[0]).unwrap();
             let entity = frame.len() - 5;
             frame[entity] = 31; // valid envelope ordinal, outside this three-entity schema
             raw.insert(vec![0], frame);

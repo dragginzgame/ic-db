@@ -1,5 +1,6 @@
 //! Cross-chunk references during copy, validation, cancellation and publication.
 
+use crate::raw_map::RawMap;
 use crate::{
     faults,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
@@ -8,7 +9,7 @@ use crate::{
 };
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Error, SchemaTransition};
-use ic_storage::{StableKey, adapter::StableBTreeMap};
+use ic_storage::StableKey;
 use records_schema::OptionalLink;
 use std::ops::Bound;
 
@@ -79,14 +80,12 @@ fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage
     assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
     let host = runtime();
     let key = if target { COPY_TARGET } else { COPY_SOURCE };
-    let raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(
-        host.open_memory(&StableKey::parse(key).unwrap()).unwrap(),
-    );
+    let raw = RawMap::load(host.open_memory(&StableKey::parse(key).unwrap()).unwrap());
     let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
     let rows: Vec<_> = raw
         .range((lower, Bound::Unbounded))
         .take(16)
-        .map(|entry| (entry.key().clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value()))
         .collect();
     let next = (rows.len() == 16).then(|| rows.last().unwrap().0.clone());
 

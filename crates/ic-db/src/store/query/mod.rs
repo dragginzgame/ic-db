@@ -2,6 +2,8 @@
 
 mod aggregate;
 mod distinct;
+mod get_many;
+pub use get_many::{GetMany, SelectedGetMany};
 mod order;
 mod probe;
 mod range;

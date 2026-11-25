@@ -6,6 +6,9 @@
 mod count_profile;
 #[cfg(feature = "ranked-listing")]
 mod ranked_listing;
+#[cfg(feature = "count-profile")]
+#[path = "../../../crates/ic-db/tests/support/raw_map.rs"]
+pub mod raw_map;
 
 use ic_db_qualification_transport as transport;
 

@@ -1,10 +1,13 @@
 //! Finite domains, canonical zero, index order and stored corruption boundaries.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
 use ic_storage::{
     AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory, adapter::StableBTreeMap,
+    SealedDeclarationSnapshot, StableKey, VectorMemory,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -363,7 +366,7 @@ fn indexes_preserve_full_domain_zero_uniqueness_and_final_state_swaps() {
         assert_eq!(db.get::<FloatRow>(row.id).unwrap(), Some(row));
     }
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let index = FloatRow::SCHEMA
         .indexes
         .iter()
@@ -420,7 +423,7 @@ fn collection_keys_canonicalize_zero_and_inspection_checks_unindexed_payloads() 
     b.insert(&row).unwrap();
     db.commit(b).unwrap();
     drop(db);
-    let mut raw = StableBTreeMap::<Vec<u8>, Vec<u8>, _>::load(runtime.open_memory(&slot).unwrap());
+    let mut raw = RawMap::load(runtime.open_memory(&slot).unwrap());
     let mut rk = vec![2];
     rk.extend(Collections::SCHEMA.id.to_be_bytes());
     rk.extend(1_u64.to_be_bytes());
