@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.6 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.5 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -1192,7 +1192,7 @@ Specify the allocation, traversal and recovery guarantees IC DB needs. Qualify t
 
 #### Stable storage supplier
 
-IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.6 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.5 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 IC Storage's existing allocation reset is an investigated candidate for alternating reusable
 collection slots: a later target may use a fully retired slot after source
@@ -1352,7 +1352,7 @@ Positions 1–127 use tag 9 and the existing one-byte ordinal. Resume also check
 exact compiled schema. Original one-entity checkpoints remain supported. Ordinary open
 validates the envelope and refuses all these roles. Pre-copy `Maintenance::resume`
 cannot reopen them and therefore cannot bypass target cleanup. Resume compares
-both identities/roles and the supported executable before exposing operations.
+both identities/roles and the supported executable before exposing operations. The admitted copy handle carries only target progress. A retired-source handle admits its own allocation role before cleanup.
 
 `copy_next` reads only its durable continuation, prepares a bounded source page,
 invokes the versioned synchronous Rust function with fixed inputs, checks unchanged
@@ -1522,6 +1522,8 @@ checks the installed command and independent wrong-phase/upgrade behavior; this
 is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
+
+Storage checks each encoded map key against the 512-byte bound before binary search. Every in-bound byte string admits a `StoreKey`, whose derived order compares its bytes lexicographically. The borrowed comparator therefore needs no allocation or field decoding. Row and index readers still validate the selected entry. Frozen IcyDB `6d421e3` compares decoded index components in `db/index/key/codec/mod.rs`; IC DB already encodes their ordering in the physical key. [Installed bulk-read measurements](../../qualification/README.md#borrowed-key-comparison-on-storage-0806)
 
 Ordinary query cursors may expire across deployments. Within a deployment, a cursor resumes an admitted traversal after its query binding and physical position pass validation. The planner selects the access path. The cursor module binds that choice and the admitted query terms. Frozen IcyDB `6d421e3` also distinguishes continuation identity from the window and current position in `db/cursor/signature.rs`. IC DB includes its physical prefix in the binding because it resumes from a stored key.
 
@@ -2034,7 +2036,7 @@ algorithm version; resource budgets can change. Persist only this binding, captu
 expiry, phase, sequence, progress position/counters and exact count/accumulator.
 Do not serialize another query AST or expose a prepared-write handle. Sequence
 zero begins advancement; an older sequence reads the current saved state and a
-future sequence refuses. Mutation of cursor and accumulator is one record write
+future sequence refuses. After resume admission, only a running job at its current sequence executes a bounded chunk. Scalar and grouped jobs use the same scan and checkpoint path. Mutation of cursor and accumulator is one record write
 inside the enclosing message's rollback boundary. Decode/validate result output
 before persisting completion. Arithmetic/output refusal preserves the checkpoint.
 On the current job-store format, a successful retry or completed-page read at

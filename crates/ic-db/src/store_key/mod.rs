@@ -29,6 +29,10 @@ impl Deref for StoreKey {
 }
 
 impl ic_storage::adapter::Storable for StoreKey {
+    // Storage checks BOUND before comparing. Every in-bound byte string is a valid StoreKey.
+    const CMP_ENCODED: Option<fn(&Self, &[u8]) -> std::cmp::Ordering> =
+        Some(|key, stored| key.0.as_slice().cmp(stored));
+
     const BOUND: ic_storage::storable::Bound = ic_storage::storable::Bound::Bounded {
         max_size: MAX_INDEX_KEY_BYTES as u32,
         is_fixed_size: false,

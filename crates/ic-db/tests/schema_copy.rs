@@ -537,6 +537,44 @@ fn ownership_refuses_wrong_pairs_versions_and_existing_target_allocations() {
 }
 
 #[test]
+fn source_refuses_a_foreign_or_cancelled_target_checkpoint() {
+    let source_memory = VectorMemory::default();
+    let source_host = host(source_memory.clone());
+    drop(begin(&source_host));
+    let source_before = source_memory.borrow().clone();
+
+    for (incarnation, cancel) in [([3; 16], false), ([2; 16], true)] {
+        let target_memory = VectorMemory::default();
+        let target_host = host(target_memory.clone());
+        let mut copy = create(&target_host)
+            .begin_copy(
+                target_host.open_memory(&key("copy.target.v1")).unwrap(),
+                source(),
+                target(),
+                incarnation,
+            )
+            .unwrap();
+        if cancel {
+            assert!(copy.cancel_step(32).unwrap());
+        }
+        drop(copy);
+        let target_before = target_memory.borrow().clone();
+        assert!(matches!(
+            SchemaCopy::resume(
+                source_host.open_memory(&key("copy.source.v1")).unwrap(),
+                target_host.open_memory(&key("copy.target.v1")).unwrap(),
+                source(),
+                target(),
+                &transition(1)
+            ),
+            Err(Error::InvalidTransition)
+        ));
+        assert_eq!(*target_memory.borrow(), target_before);
+        assert_eq!(*source_memory.borrow(), source_before);
+    }
+}
+
+#[test]
 fn added_entity_requires_pristine_state_before_cutover() {
     for (revision, count) in [(1_u64, 0_u64), (0, 1)] {
         let runtime = host(VectorMemory::default());

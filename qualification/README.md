@@ -6,7 +6,7 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
-IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.6 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.5 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a populated 0.78.9 backing intact. The previous release reopened the allocation and read the original value.
 
@@ -7498,3 +7498,19 @@ Both comparison arms used crates.io Storage 0.80.3. Only the full-page continuat
 | Three pages, all 24 payloads of 1 KiB | 1,032,088 | 977,813 | 5.26% |
 
 At limit 32 the 24-row partial page had identical costs in all three fixtures. All 204 observations passed in each run (old probe upgraded to new, and new probe throughout). The uncompressed measurement Wasm grew from 1,268,102 to 1,268,234 bytes. The timings exclude database open and reply encoding. Charged cycles were unmeasured. Storage separately qualified the direct 0.80.2 to 0.80.3 format-compatible upgrade. [Storage qualification](https://github.com/dragginzgame/ic-storage/blob/63684b6609ca387756552462b2124cbad4535cf2/qualification/README.md#positioned-lookahead-against-published-0802)
+
+### Borrowed key comparison on Storage 0.80.6
+
+Three installed builds of the `m2-bulk-selection` fixture used the same 0.31.2 source directory, release profile and driver. The first used its tagged 0.80.5 lock. The second changed only the active Storage dependency to 0.80.6. The third also supplied `StoreKey::CMP_ENCODED`. Each ran all 15 inputs through repeated fluent lookups, whole-row bulk reads and projected bulk reads, checking output against the same positional oracle.
+
+Post-open instructions for 32 projected lookups with a 64-byte unselected note:
+
+| Keys | 0.80.5 | 0.80.6 | 0.80.6 with borrowed comparison | Reduction vs 0.80.5 |
+|---|---:|---:|---:|---:|
+| 32 hits | 721,659 | 721,683 | 704,969 | 2.31% |
+| Mixed hits and misses | 564,236 | 564,350 | 548,272 | 2.83% |
+| Scattered hits | 1,585,821 | 1,585,850 | 1,527,813 | 3.66% |
+| Scattered misses | 1,338,891 | 1,339,122 | 1,251,015 | 6.56% |
+| One hit repeated | 232,264 | 232,340 | 229,155 | 1.34% |
+
+All 45 final instruction counts fell relative to the tagged build. The uncompressed measurement Wasms were 1,270,541, 1,270,097 and 1,270,007 bytes respectively. Charged cycles were unmeasured.

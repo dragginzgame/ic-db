@@ -31,6 +31,24 @@ fn incompatible_stored_key_bound_refuses_at_open_and_preserves_backing() {
 }
 
 #[test]
+fn encoded_comparisons_match_owned_key_order() {
+    let keys = [
+        vec![],
+        vec![0],
+        vec![0, 255],
+        vec![1],
+        vec![255; MAX_INDEX_KEY_BYTES],
+    ]
+    .map(|bytes| StoreKey::new(bytes).unwrap());
+    let compare = <StoreKey as ic_storage::adapter::Storable>::CMP_ENCODED.unwrap();
+    for probe in &keys {
+        for stored in &keys {
+            assert_eq!(compare(probe, stored), probe.cmp(stored));
+        }
+    }
+}
+
+#[test]
 fn complete_key_boundary_accepts_512_and_refuses_513() {
     let bytes = vec![7; 512];
     let key = StoreKey::new(bytes.clone()).unwrap();

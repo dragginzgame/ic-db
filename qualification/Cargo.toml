@@ -34,7 +34,7 @@ ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }
 ic-db-qualification-transport = { path = "ic-db-qualification-transport" }
 ic-host-artifacts = "0.80.6"
 ic-platform-runtime = { version = "0.23.27", default-features = false }
-ic-storage = "0.80.3"
+ic-storage = "0.80.6"
 ic-testkit = { version = "0.110.3", default-features = false }
 ic-wire = "0.30.2"
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }

@@ -879,7 +879,7 @@ dependencies = [
  "ic-db-macros",
  "ic-platform-runtime 0.23.27",
  "ic-platform-types 0.21.5",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "ic-wire 0.30.2",
  "memchr",
  "serde",
@@ -904,7 +904,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "toko-tooling",
 ]
 
@@ -916,7 +916,7 @@ dependencies = [
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "icydb",
  "rusqlite",
  "toko-tooling",
@@ -945,7 +945,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "toko-tooling",
 ]
 
@@ -955,7 +955,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "toko-tooling",
 ]
 
@@ -965,7 +965,7 @@ version = "0.0.0"
 dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "ic-wire 0.30.2",
  "toko-tooling",
 ]
@@ -997,7 +997,7 @@ dependencies = [
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "ic-wire 0.30.2",
  "toko-tooling",
 ]
@@ -1039,7 +1039,7 @@ dependencies = [
  "ic-db",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "toko-tooling",
 ]
 
@@ -1059,7 +1059,7 @@ name = "ic-db-schema-owner-producer"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "toko-tooling",
 ]
 
@@ -1068,7 +1068,7 @@ name = "ic-db-sqlite-reference"
 version = "0.0.0"
 dependencies = [
  "ic-db",
- "ic-storage 0.80.5",
+ "ic-storage 0.80.6",
  "rusqlite",
  "toko-tooling",
 ]
@@ -1197,9 +1197,9 @@ dependencies = [
 
 [[package]]
 name = "ic-storage"
-version = "0.80.5"
+version = "0.80.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11aee4fedb54854705e7e8d61be370bbacaac0f645ef0a2d7228585302468e47"
+checksum = "598e7b4093383b82777ed0a592841f8788bd737eae4c149a2dc3d7188deaccae"
 dependencies = [
  "ic-platform-runtime 0.23.27",
  "serde",

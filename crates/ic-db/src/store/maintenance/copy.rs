@@ -26,8 +26,14 @@ pub(super) struct Identity {
     source: [u8; 16],
     target: [u8; 16],
 }
-pub(super) enum Phase {
+#[derive(Clone, Copy)]
+pub(super) enum AllocationRole<Progress> {
     Source,
+    Target(Progress),
+    Retired,
+}
+
+pub(super) enum TargetProgress {
     Copying(u8, Option<QueryCursor>),
     Copied,
     Cancelling,
@@ -35,33 +41,39 @@ pub(super) enum Phase {
     ValidatingSource(Option<StoreKey>),
     ValidatingTarget(Option<StoreKey>),
     Ready,
-    Retired,
 }
 impl Identity {
-    fn encode(&self, phase: &Phase) -> Result<Vec<u8>, Error> {
+    fn encode(&self, role: AllocationRole<&TargetProgress>) -> Result<Vec<u8>, Error> {
         let mut writer = Encoder::new();
         writer.bytes(&self.transition.freeze(self.source)?)?;
         writer.bytes(&self.target)?;
-        writer.nat8(match phase {
-            Phase::Source => 0,
-            Phase::Copying(0, _) => 1,
-            Phase::Copying(_, _) => 9,
-            Phase::Copied => 2,
-            Phase::Cancelling => 3,
-            Phase::Cancelled => 4,
-            Phase::ValidatingSource(_) => 5,
-            Phase::ValidatingTarget(_) => 6,
-            Phase::Ready => 7,
-            Phase::Retired => 8,
-        })?;
-        if let Phase::Copying(entity, cursor) = phase {
-            if *entity != 0 {
-                writer.nat8(*entity)?;
-            }
-            writer.bytes(&cursor.as_ref().map_or_else(Vec::new, QueryCursor::to_bytes))?;
-        }
-        if let Phase::ValidatingSource(cursor) | Phase::ValidatingTarget(cursor) = phase {
-            writer.bytes(cursor.as_ref().map_or(&[], |key| &key[..]))?;
+        match role {
+            AllocationRole::Source => writer.nat8(0)?,
+            AllocationRole::Retired => writer.nat8(8)?,
+            AllocationRole::Target(phase) => match phase {
+                TargetProgress::Copying(entity, cursor) => {
+                    if *entity == 0 {
+                        writer.nat8(1)?;
+                    } else {
+                        writer.nat8(9)?;
+                        writer.nat8(*entity)?;
+                    }
+                    writer.bytes(&cursor.as_ref().map_or_else(Vec::new, QueryCursor::to_bytes))?;
+                }
+                TargetProgress::Copied => writer.nat8(2)?,
+                TargetProgress::Cancelling => writer.nat8(3)?,
+                TargetProgress::Cancelled => writer.nat8(4)?,
+                TargetProgress::ValidatingSource(cursor)
+                | TargetProgress::ValidatingTarget(cursor) => {
+                    writer.nat8(if matches!(phase, TargetProgress::ValidatingSource(_)) {
+                        5
+                    } else {
+                        6
+                    })?;
+                    writer.bytes(cursor.as_ref().map_or(&[], |key| &key[..]))?;
+                }
+                TargetProgress::Ready => writer.nat8(7)?,
+            },
         }
         let mut bytes = MAGIC.to_vec();
         bytes.extend(writer.finish());
@@ -70,7 +82,7 @@ impl Identity {
     }
 }
 
-pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
+pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, AllocationRole<TargetProgress>), Error> {
     if !bytes.starts_with(MAGIC) || bytes.len() > MAX_FRAME {
         return Err(Error::InvalidTransition);
     }
@@ -83,8 +95,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
     if target == [0; 16] || target == source {
         return Err(Error::Corrupt);
     }
-    let phase = match reader.nat8()? {
-        0 => Phase::Source,
+    let role = match reader.nat8()? {
+        0 => AllocationRole::Source,
         tag @ (1 | 9) => {
             let entity = if tag == 1 {
                 0
@@ -98,18 +110,18 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
             };
             let cursor = reader.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?;
 
-            Phase::Copying(
+            AllocationRole::Target(TargetProgress::Copying(
                 entity,
                 if cursor.is_empty() {
                     None
                 } else {
                     Some(QueryCursor::from_bytes(cursor)?)
                 },
-            )
+            ))
         }
-        2 => Phase::Copied,
-        3 => Phase::Cancelling,
-        4 => Phase::Cancelled,
+        2 => AllocationRole::Target(TargetProgress::Copied),
+        3 => AllocationRole::Target(TargetProgress::Cancelling),
+        4 => AllocationRole::Target(TargetProgress::Cancelled),
         tag @ (5 | 6) => {
             let bytes = reader.blob_ref(crate::MAX_INDEX_KEY_BYTES)?;
             let cursor = if bytes.is_empty() {
@@ -118,14 +130,14 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
                 Some(StoreKey::new(bytes.to_vec())?)
             };
 
-            if tag == 5 {
-                Phase::ValidatingSource(cursor)
+            AllocationRole::Target(if tag == 5 {
+                TargetProgress::ValidatingSource(cursor)
             } else {
-                Phase::ValidatingTarget(cursor)
-            }
+                TargetProgress::ValidatingTarget(cursor)
+            })
         }
-        7 => Phase::Ready,
-        8 => Phase::Retired,
+        7 => AllocationRole::Target(TargetProgress::Ready),
+        8 => AllocationRole::Retired,
         _ => return Err(Error::IncompatibleSchema),
     };
     reader.finish()?;
@@ -136,7 +148,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, Phase), Error> {
             source,
             target,
         },
-        phase,
+        role,
     ))
 }
 
@@ -201,7 +213,7 @@ pub struct SchemaCopy<M: Memory> {
     source_schema: Schema,
     target: Database<M>,
     identity: Identity,
-    phase: Phase,
+    phase: TargetProgress,
 }
 
 impl<M: Memory> Maintenance<M> {
@@ -232,9 +244,9 @@ impl<M: Memory> Maintenance<M> {
             source: self.incarnation,
             target: incarnation,
         };
-        let source_gate = identity.encode(&Phase::Source)?;
-        let phase = Phase::Copying(0, None);
-        let target_gate = identity.encode(&phase)?;
+        let source_gate = identity.encode(AllocationRole::Source)?;
+        let phase = TargetProgress::Copying(0, None);
+        let target_gate = identity.encode(AllocationRole::Target(&phase))?;
         let metadata: Vec<_> = target
             .entities()
             .iter()
@@ -287,15 +299,18 @@ impl<M: Memory> SchemaCopy<M> {
         }
         let target = Map::load(target_memory);
         let (identity, role) = decode(&source.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
-        let (target_identity, phase) = decode(&target.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
-        if !matches!(role, Phase::Source)
-            || matches!(phase, Phase::Source | Phase::Cancelled | Phase::Retired)
+        let (target_identity, target_role) =
+            decode(&target.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
+        let (AllocationRole::Source, AllocationRole::Target(phase)) = (role, target_role) else {
+            return Err(Error::InvalidTransition);
+        };
+        if matches!(phase, TargetProgress::Cancelled)
             || identity != target_identity
             || identity.transition != *expected
         {
             return Err(Error::InvalidTransition);
         }
-        if matches!(&phase, Phase::Copying(entity, _) if usize::from(*entity) >= source_schema.entities().len())
+        if matches!(&phase, TargetProgress::Copying(entity, _) if usize::from(*entity) >= source_schema.entities().len())
         {
             return Err(Error::Corrupt);
         }
@@ -321,18 +336,15 @@ impl<M: Memory> SchemaCopy<M> {
     #[must_use]
     pub fn status(&self) -> CopyStatus {
         match &self.phase {
-            Phase::Copying(entity, _) => {
+            TargetProgress::Copying(entity, _) => {
                 CopyStatus::Copying(self.source_schema.entities()[usize::from(*entity)].name)
             }
-            Phase::Copied | Phase::ValidatingSource(_) | Phase::ValidatingTarget(_) => {
-                CopyStatus::Validating
-            }
-            Phase::Ready => CopyStatus::ReadyToPublish,
-            Phase::Cancelling => CopyStatus::Cancelling,
-            Phase::Cancelled => CopyStatus::Cancelled,
-            Phase::Source | Phase::Retired => {
-                unreachable!("source-side checkpoint on a target copy handle")
-            }
+            TargetProgress::Copied
+            | TargetProgress::ValidatingSource(_)
+            | TargetProgress::ValidatingTarget(_) => CopyStatus::Validating,
+            TargetProgress::Ready => CopyStatus::ReadyToPublish,
+            TargetProgress::Cancelling => CopyStatus::Cancelling,
+            TargetProgress::Cancelled => CopyStatus::Cancelled,
         }
     }
 
@@ -386,8 +398,8 @@ impl<M: Memory> SchemaCopy<M> {
         self.source_schema.admits(S::SCHEMA)?;
         self.target.schema.admits(T::SCHEMA)?;
         let (entity, cursor) = match &self.phase {
-            Phase::Copying(entity, cursor) => (*entity, cursor.as_ref()),
-            Phase::Copied => {
+            TargetProgress::Copying(entity, cursor) => (*entity, cursor.as_ref()),
+            TargetProgress::Copied => {
                 return Ok(CopyStep {
                     rows: 0,
                     complete: true,
@@ -406,15 +418,15 @@ impl<M: Memory> SchemaCopy<M> {
         let rows = page.rows.len();
         let phase = if page.next.is_none() {
             if usize::from(entity) + 1 == self.source_schema.entities().len() {
-                Phase::Copied
+                TargetProgress::Copied
             } else {
-                Phase::Copying(entity + 1, None)
+                TargetProgress::Copying(entity + 1, None)
             }
         } else {
-            Phase::Copying(entity, page.next)
+            TargetProgress::Copying(entity, page.next)
         };
-        let complete = matches!(phase, Phase::Copied);
-        let checkpoint = self.identity.encode(&phase)?;
+        let complete = matches!(phase, TargetProgress::Copied);
+        let checkpoint = self.identity.encode(AllocationRole::Target(&phase))?;
         let mut batch = Batch::new();
         for row in page.rows {
             let key = row.key().into_row_key();
@@ -449,15 +461,15 @@ impl<M: Memory> SchemaCopy<M> {
     /// Supplier mutation failures trap and roll back the entire IC message.
     pub fn cancel_step(&mut self, limit: usize) -> Result<bool, Error> {
         let (keys, complete) = cleanup_keys(&self.target.map, limit)?;
-        if matches!(self.phase, Phase::Cancelled) {
+        if matches!(self.phase, TargetProgress::Cancelled) {
             return Ok(true);
         }
         let phase = if complete {
-            Phase::Cancelled
+            TargetProgress::Cancelled
         } else {
-            Phase::Cancelling
+            TargetProgress::Cancelling
         };
-        let checkpoint = self.identity.encode(&phase)?;
+        let checkpoint = self.identity.encode(AllocationRole::Target(&phase))?;
         let live = live_manifest(self.identity.transition.source, self.identity.source);
         for key in &keys {
             self.target.map.remove(key);
@@ -488,8 +500,8 @@ impl<M: Memory> SchemaCopy<M> {
             return Err(Error::Limit);
         }
         let phase = match &self.phase {
-            Phase::Copied | Phase::ValidatingSource(_) => {
-                let cursor = if let Phase::ValidatingSource(cursor) = &self.phase {
+            TargetProgress::Copied | TargetProgress::ValidatingSource(_) => {
+                let cursor = if let TargetProgress::ValidatingSource(cursor) = &self.phase {
                     cursor.as_ref()
                 } else {
                     None
@@ -503,11 +515,11 @@ impl<M: Memory> SchemaCopy<M> {
                 )?;
 
                 match next {
-                    Some(key) => Phase::ValidatingSource(Some(key)),
-                    None => Phase::ValidatingTarget(None),
+                    Some(key) => TargetProgress::ValidatingSource(Some(key)),
+                    None => TargetProgress::ValidatingTarget(None),
                 }
             }
-            Phase::ValidatingTarget(cursor) => {
+            TargetProgress::ValidatingTarget(cursor) => {
                 let next = validate_page(
                     &self.target.map,
                     &self.target.schema,
@@ -517,15 +529,15 @@ impl<M: Memory> SchemaCopy<M> {
                 )?;
 
                 match next {
-                    Some(key) => Phase::ValidatingTarget(Some(key)),
-                    None => Phase::Ready,
+                    Some(key) => TargetProgress::ValidatingTarget(Some(key)),
+                    None => TargetProgress::Ready,
                 }
             }
-            Phase::Ready => return Ok(true),
+            TargetProgress::Ready => return Ok(true),
             _ => return Err(Error::InvalidTransition),
         };
-        let checkpoint = self.identity.encode(&phase)?;
-        let complete = matches!(phase, Phase::Ready);
+        let checkpoint = self.identity.encode(AllocationRole::Target(&phase))?;
+        let complete = matches!(phase, TargetProgress::Ready);
         self.target.map.insert(manifest_key(), checkpoint);
         self.phase = phase;
 
@@ -541,10 +553,10 @@ impl<M: Memory> SchemaCopy<M> {
     /// # Panics
     /// Mutation failures or a later enclosing-message trap roll back both manifests.
     pub fn publish(mut self) -> Result<Database<M>, Error> {
-        if !matches!(self.phase, Phase::Ready) {
+        if !matches!(self.phase, TargetProgress::Ready) {
             return Err(Error::InvalidTransition);
         }
-        let retired = self.identity.encode(&Phase::Retired)?;
+        let retired = self.identity.encode(AllocationRole::Retired)?;
         let live = live_manifest(self.identity.transition.target, self.identity.target);
         self.source.map.insert(manifest_key(), retired);
         self.target.map.insert(manifest_key(), live);
@@ -577,8 +589,8 @@ impl<M: Memory> RetiredSource<M> {
             return Err(Error::Corrupt);
         }
         let map = Map::load(memory);
-        let (identity, phase) = decode(&map.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
-        if !matches!(phase, Phase::Retired)
+        let (identity, role) = decode(&map.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
+        if !matches!(role, AllocationRole::Retired)
             || identity.transition != *expected
             || identity.source != source_incarnation
             || identity.target != target_incarnation

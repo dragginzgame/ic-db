@@ -1306,6 +1306,20 @@ fn same_code_reopen_retains_exact_signed_sum_and_absence() {
             )
             .unwrap();
         assert!(matches!(step.outcome, JobOutcome::Running));
+        let replay = db
+            .query::<Row>()
+            .resume_sum::<Amount>(
+                &mut jobs,
+                &JobHandle::from_bytes(&handle).unwrap(),
+                0,
+                time(3),
+            )
+            .unwrap();
+        assert!(matches!(replay.outcome, JobOutcome::Running));
+        assert_eq!(
+            (replay.sequence, replay.examined, replay.input_bytes),
+            (step.sequence, step.examined, step.input_bytes)
+        );
     }
     let host = host(backing);
     let db = Database::open(
@@ -1319,15 +1333,17 @@ fn same_code_reopen_retains_exact_signed_sum_and_absence() {
             .unwrap(),
     )
     .unwrap();
+    let handle = JobHandle::from_bytes(&handle).unwrap();
+    assert!(matches!(
+        db.query::<Row>()
+            .resume_sum::<Amount>(&mut jobs, &handle, 1, time(2)),
+        Err(Error::TimestampRegression)
+    ));
     let step = db
         .query::<Row>()
-        .resume_sum::<Amount>(
-            &mut jobs,
-            &JobHandle::from_bytes(&handle).unwrap(),
-            1,
-            time(2),
-        )
+        .resume_sum::<Amount>(&mut jobs, &handle, 1, time(3))
         .unwrap();
+    assert_eq!((step.sequence, step.examined), (2, 4));
     let JobOutcome::Complete(Some(value)) = step.outcome else {
         panic!("missing complete sum")
     };

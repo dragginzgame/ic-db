@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.31.3] - Unreleased
+
+### ⚡ Performance
+
+- Adopt IC Storage 0.80.6 and compare B-tree search keys directly with stored bytes. The installed 32-key projected lookup used 2.31% fewer instructions for hits and 6.56% fewer for scattered misses. [Bulk-read measurements](qualification/README.md#borrowed-key-comparison-on-storage-0806)
+
+### 🔄 Changed
+
+- Schema copy tracks target progress separately from source and retired allocation roles. Existing checkpoints reopen with the same ownership checks. [IC DB #34](https://github.com/dragginzgame/ic-db/issues/34)
+- Retained aggregates validate resume eligibility before invoking the shared bounded scan. Replaying an older sequence can advance the observed time without scanning another row. [IC DB #35](https://github.com/dragginzgame/ic-db/issues/35)
+
 ## [0.31.2] - 2026-11-25
 
 ### 🔄 Changed

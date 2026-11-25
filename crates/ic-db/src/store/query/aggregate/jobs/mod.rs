@@ -11,7 +11,7 @@ pub use pages::{GroupCursor, GroupPage};
 pub use storage::AggregateJobs;
 
 use super::{
-    super::{Database, Plan, Query, QueryCursor, Request, execute_inner},
+    super::{Database, Map, Plan, Query, QueryCursor, Request, execute_inner},
     Accumulator, Reducer,
     numeric::Operation,
     scalar_output,
@@ -561,44 +561,8 @@ fn prepare<M: Memory>(
             record.phase = JobOutcome::Invalidated;
             record.sequence += 1;
         } else if sequence == record.sequence {
-            let cursor = if record.cursor.is_empty() {
-                None
-            } else {
-                let cursor = QueryCursor::from_bytes(&record.cursor)?;
-                plan.validate_cursor(entity, &cursor)?;
-
-                Some(cursor)
-            };
-            let request = Request {
-                cursor: cursor.as_ref(),
-                work: request
-                    .work
-                    .min((MAX_CANDIDATES - record.examined) as usize),
-                ..request
-            };
-            let mut bytes = 0;
-            let page = execute_inner(
-                &db.map,
-                entity,
-                &request,
-                plan,
-                super::super::range::bounds(entity, &request, plan)?,
-                Some(&mut accumulator),
-                Some(&mut bytes),
-            )?;
-            record.examined += page.examined as u64;
-            record.input_bytes += bytes as u64;
-            record.cursor = page
-                .next
-                .as_ref()
-                .map_or_else(Vec::new, QueryCursor::to_bytes);
-            record.phase = if page.next.is_none() {
-                JobOutcome::Complete(())
-            } else {
-                JobOutcome::Running
-            };
+            execute_chunk(&db.map, entity, request, plan, &mut accumulator, record)?;
             record.sequence += 1;
-            (record.count, record.state) = accumulator.checkpoint()?;
         }
     }
     // Every advance or phase transition increments the sequence. A later
@@ -607,4 +571,53 @@ fn prepare<M: Memory>(
     record.observed = now;
 
     Ok(changed)
+}
+
+fn execute_chunk<M: Memory>(
+    map: &Map<M>,
+    entity: &EntitySchema,
+    request: Request<'_>,
+    plan: &Plan<'_>,
+    accumulator: &mut Accumulator<'_>,
+    record: &mut Record,
+) -> Result<(), Error> {
+    let cursor = if record.cursor.is_empty() {
+        None
+    } else {
+        let cursor = QueryCursor::from_bytes(&record.cursor)?;
+        plan.validate_cursor(entity, &cursor)?;
+
+        Some(cursor)
+    };
+    let request = Request {
+        cursor: cursor.as_ref(),
+        work: request
+            .work
+            .min((MAX_CANDIDATES - record.examined) as usize),
+        ..request
+    };
+    let mut bytes = 0;
+    let page = execute_inner(
+        map,
+        entity,
+        &request,
+        plan,
+        super::super::range::bounds(entity, &request, plan)?,
+        Some(accumulator),
+        Some(&mut bytes),
+    )?;
+    record.examined += page.examined as u64;
+    record.input_bytes += bytes as u64;
+    record.cursor = page
+        .next
+        .as_ref()
+        .map_or_else(Vec::new, QueryCursor::to_bytes);
+    record.phase = if page.next.is_none() {
+        JobOutcome::Complete(())
+    } else {
+        JobOutcome::Running
+    };
+    (record.count, record.state) = accumulator.checkpoint()?;
+
+    Ok(())
 }
