@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.31.2] - Unreleased
+
+### 🔄 Changed
+
+- Batch preparation validates final-state constraints through an immutable database borrow before handing removals and writes to the stable map. [IC DB #31](https://github.com/dragginzgame/ic-db/issues/31)
+- The schema macro selects the Rust type and durable codec methods for each fixed-width integer from a single mapping. [IC DB #32](https://github.com/dragginzgame/ic-db/issues/32)
+- The local console shares measured request and reply framing for count, inspection and migration commands. [IC DB #33](https://github.com/dragginzgame/ic-db/issues/33)
+
 ## [0.31.1] - 2026-11-25
 
 ### ⚡ Performance

@@ -68,21 +68,12 @@ impl Literal {
             (digits, negative)
         };
         let magnitude = digits.parse::<u128>().map_err(|_| fail())?;
-        let (signed, bits) = match kind {
-            Kind::Nat8 => (false, 8),
-            Kind::Nat16 => (false, 16),
-            Kind::Nat32 => (false, 32),
-            Kind::Nat64 => (false, 64),
-            Kind::Nat128 => (false, 128),
-            Kind::Int8 => (true, 8),
-            Kind::Int16 => (true, 16),
-            Kind::Int32 => (true, 32),
-            Kind::Int64 => (true, 64),
-            Kind::Int128 => (true, 128),
-            _ => return Err(fail()),
+        let Kind::Integer(integer) = kind else {
+            return Err(fail());
         };
+        let bits = integer.bits;
 
-        if signed {
+        if integer.signed {
             let boundary = 1_u128 << (bits - 1);
             if magnitude > boundary - u128::from(!negative) {
                 return Err(fail());

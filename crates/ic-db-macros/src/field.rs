@@ -5,17 +5,42 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Lit, Meta};
 
+pub(super) struct Integer {
+    schema: &'static str,
+    rust: &'static str,
+    codec: &'static str,
+    pub(super) signed: bool,
+    pub(super) bits: u32,
+}
+
+macro_rules! integer {
+    ($schema:ident, $rust:ty, $codec:ident) => {
+        Integer {
+            schema: stringify!($schema),
+            rust: stringify!($rust),
+            codec: stringify!($codec),
+            signed: <$rust>::MIN != 0,
+            bits: <$rust>::BITS,
+        }
+    };
+}
+
+const INTEGERS: &[Integer] = &[
+    integer!(Nat8, u8, nat8),
+    integer!(Nat16, u16, nat16),
+    integer!(Nat32, u32, nat32),
+    integer!(Nat64, u64, nat64),
+    integer!(Nat128, u128, nat128),
+    integer!(Int8, i8, int8),
+    integer!(Int16, i16, int16),
+    integer!(Int32, i32, int32),
+    integer!(Int64, i64, int64),
+    integer!(Int128, i128, int128),
+];
+
 pub(super) enum Kind {
+    Integer(&'static Integer),
     Named(syn::Path, bool),
-    Nat8,
-    Nat16,
-    Nat32,
-    Int8,
-    Int16,
-    Int32,
-    Nat64,
-    Int64,
-    Nat128,
     Float32,
     Float64,
     Subaccount,
@@ -26,7 +51,6 @@ pub(super) enum Kind {
     Duration,
     Decimal(u32),
     Timestamp,
-    Int128,
     Bool,
     Principal,
     Text(u32),
@@ -177,11 +201,7 @@ impl Field {
         self.many.is_none()
             && matches!(
                 self.kind,
-                Kind::Nat8
-                    | Kind::Nat16
-                    | Kind::Nat32
-                    | Kind::Nat64
-                    | Kind::Nat128
+                Kind::Integer(_)
                     | Kind::Float32
                     | Kind::Float64
                     | Kind::Subaccount
@@ -192,11 +212,6 @@ impl Field {
                     | Kind::Decimal(_)
                     | Kind::Duration
                     | Kind::Timestamp
-                    | Kind::Int8
-                    | Kind::Int16
-                    | Kind::Int32
-                    | Kind::Int64
-                    | Kind::Int128
                     | Kind::Principal
                     | Kind::Bool
                     | Kind::Text(_)
@@ -262,15 +277,10 @@ impl Field {
                     quote!(#path)
                 }
             }
-            Kind::Nat8 => quote!(u8),
-            Kind::Nat16 => quote!(u16),
-            Kind::Nat32 => quote!(u32),
-            Kind::Int8 => quote!(i8),
-            Kind::Int16 => quote!(i16),
-            Kind::Int32 => quote!(i32),
-            Kind::Nat64 => quote!(u64),
-            Kind::Int64 => quote!(i64),
-            Kind::Nat128 => quote!(u128),
+            Kind::Integer(integer) => {
+                let name = quote::format_ident!("{}", integer.rust);
+                quote!(#name)
+            }
             Kind::Float32 => quote!(::ic_db::Float32),
             Kind::Float64 => quote!(::ic_db::Float64),
             Kind::Subaccount => quote!(::ic_db::Subaccount),
@@ -281,7 +291,6 @@ impl Field {
             Kind::Decimal(_) => quote!(::ic_db::Decimal),
             Kind::Duration => quote!(::ic_db::Duration),
             Kind::Timestamp => quote!(::ic_db::Timestamp),
-            Kind::Int128 => quote!(i128),
             Kind::Bool => quote!(bool),
             Kind::Principal => quote!(::ic_db::Principal),
             Kind::Text(_) => quote!(::std::string::String),
@@ -330,15 +339,10 @@ impl Field {
             Kind::Named(path, _) => {
                 quote!(::ic_db::FieldType::Named(::ic_db::TypeLink { name: <#path as ::ic_db::Value>::NAME, definition: <#path as ::ic_db::Value>::definition }))
             }
-            Kind::Nat8 => quote!(::ic_db::FieldType::Nat8),
-            Kind::Nat16 => quote!(::ic_db::FieldType::Nat16),
-            Kind::Nat32 => quote!(::ic_db::FieldType::Nat32),
-            Kind::Int8 => quote!(::ic_db::FieldType::Int8),
-            Kind::Int16 => quote!(::ic_db::FieldType::Int16),
-            Kind::Int32 => quote!(::ic_db::FieldType::Int32),
-            Kind::Nat64 => quote!(::ic_db::FieldType::Nat64),
-            Kind::Int64 => quote!(::ic_db::FieldType::Int64),
-            Kind::Nat128 => quote!(::ic_db::FieldType::Nat128),
+            Kind::Integer(integer) => {
+                let name = quote::format_ident!("{}", integer.schema);
+                quote!(::ic_db::FieldType::#name)
+            }
             Kind::Float32 => quote!(::ic_db::FieldType::Float32),
             Kind::Float64 => quote!(::ic_db::FieldType::Float64),
             Kind::Subaccount => quote!(::ic_db::FieldType::Subaccount),
@@ -349,7 +353,6 @@ impl Field {
             Kind::Decimal(scale) => quote!(::ic_db::FieldType::Decimal { scale: #scale }),
             Kind::Duration => quote!(::ic_db::FieldType::Duration),
             Kind::Timestamp => quote!(::ic_db::FieldType::Timestamp),
-            Kind::Int128 => quote!(::ic_db::FieldType::Int128),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
             Kind::Principal => quote!(::ic_db::FieldType::Principal),
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
@@ -401,14 +404,10 @@ impl Field {
                     quote!(writer.named::<#path>(value)?)
                 }
             }
-            Kind::Nat8 => quote!(writer.nat8(*value)?),
-            Kind::Nat16 => quote!(writer.nat16(*value)?),
-            Kind::Nat32 => quote!(writer.nat32(*value)?),
-            Kind::Int8 => quote!(writer.int8(*value)?),
-            Kind::Int16 => quote!(writer.int16(*value)?),
-            Kind::Int32 => quote!(writer.int32(*value)?),
-            Kind::Nat64 => quote!(writer.nat64(*value)?),
-            Kind::Nat128 => quote!(writer.nat128(*value)?),
+            Kind::Integer(integer) => {
+                let name = quote::format_ident!("{}", integer.codec);
+                quote!(writer.#name(*value)?)
+            }
             Kind::Float32 => quote!(writer.float32(*value)?),
             Kind::Float64 => quote!(writer.float64(*value)?),
             Kind::Subaccount => quote!(writer.subaccount(*value)?),
@@ -419,8 +418,6 @@ impl Field {
             Kind::Decimal(scale) => quote!(writer.decimal(*value, #scale)?),
             Kind::Duration => quote!(writer.duration(*value)?),
             Kind::Timestamp => quote!(writer.timestamp(*value)?),
-            Kind::Int64 => quote!(writer.int64(*value)?),
-            Kind::Int128 => quote!(writer.int128(*value)?),
             Kind::Bool => quote!(writer.boolean(*value)?),
             Kind::Principal => quote!(writer.principal(value)?),
             Kind::Text(max) => {
@@ -461,14 +458,10 @@ impl Field {
                     quote!(reader.named::<#path>())
                 }
             }
-            Kind::Nat8 => quote!(reader.nat8()),
-            Kind::Nat16 => quote!(reader.nat16()),
-            Kind::Nat32 => quote!(reader.nat32()),
-            Kind::Int8 => quote!(reader.int8()),
-            Kind::Int16 => quote!(reader.int16()),
-            Kind::Int32 => quote!(reader.int32()),
-            Kind::Nat64 => quote!(reader.nat64()),
-            Kind::Nat128 => quote!(reader.nat128()),
+            Kind::Integer(integer) => {
+                let name = quote::format_ident!("{}", integer.codec);
+                quote!(reader.#name())
+            }
             Kind::Float32 => quote!(reader.float32()),
             Kind::Float64 => quote!(reader.float64()),
             Kind::Subaccount => quote!(reader.subaccount()),
@@ -479,8 +472,6 @@ impl Field {
             Kind::Decimal(scale) => quote!(reader.decimal(#scale)),
             Kind::Duration => quote!(reader.duration()),
             Kind::Timestamp => quote!(reader.timestamp()),
-            Kind::Int64 => quote!(reader.int64()),
-            Kind::Int128 => quote!(reader.int128()),
             Kind::Bool => quote!(reader.boolean()),
             Kind::Principal => quote!(reader.principal()),
             Kind::Text(max) => quote!(reader.text(#max as usize)),
@@ -627,16 +618,14 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         ));
     }
 
+    if max.is_none()
+        && let Some(integer) = INTEGERS
+            .iter()
+            .find(|kind| Some(kind.schema) == prim.as_deref())
+    {
+        return Ok(Kind::Integer(integer));
+    }
     match (prim.as_deref(), max) {
-        (Some("Nat8"), None) => Ok(Kind::Nat8),
-        (Some("Nat16"), None) => Ok(Kind::Nat16),
-        (Some("Nat32"), None) => Ok(Kind::Nat32),
-        (Some("Int8"), None) => Ok(Kind::Int8),
-        (Some("Int16"), None) => Ok(Kind::Int16),
-        (Some("Int32"), None) => Ok(Kind::Int32),
-        (Some("Nat64"), None) => Ok(Kind::Nat64),
-        (Some("Int64"), None) => Ok(Kind::Int64),
-        (Some("Nat128"), None) => Ok(Kind::Nat128),
         (Some("Float32"), None) => Ok(Kind::Float32),
         (Some("Float64"), None) => Ok(Kind::Float64),
         (Some("Subaccount"), None) => Ok(Kind::Subaccount),
@@ -646,7 +635,6 @@ fn parse_item(meta: &Meta) -> syn::Result<Kind> {
         (Some("Date"), None) => Ok(Kind::Date),
         (Some("Duration"), None) => Ok(Kind::Duration),
         (Some("Timestamp"), None) => Ok(Kind::Timestamp),
-        (Some("Int128"), None) => Ok(Kind::Int128),
         (Some("Bool"), None) => Ok(Kind::Bool),
         (Some("Principal"), None) => Ok(Kind::Principal),
         (Some("Text"), Some(max)) => Ok(Kind::Text(max)),
@@ -664,16 +652,7 @@ impl Kind {
     fn primary_key(&self) -> bool {
         matches!(
             self,
-            Self::Nat8
-                | Self::Nat16
-                | Self::Nat32
-                | Self::Nat64
-                | Self::Nat128
-                | Self::Int8
-                | Self::Int16
-                | Self::Int32
-                | Self::Int64
-                | Self::Int128
+            Self::Integer(_)
                 | Self::U256
                 | Self::Ulid
                 | Self::Principal

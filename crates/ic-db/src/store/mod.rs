@@ -196,6 +196,10 @@ struct Mutation {
     key: RowKey,
     kind: Kind,
 }
+struct PreparedBatch {
+    removes: BTreeSet<StoreKey>,
+    writes: BTreeMap<StoreKey, Vec<u8>>,
+}
 struct ReturningRow<'a> {
     entity: u32,
     key: RowKey,
@@ -755,9 +759,36 @@ impl<M: Memory> Database<M> {
     fn commit_batch(
         &mut self,
         batch: Batch,
-        mut returning: Option<ReturningRow<'_>>,
+        returning: Option<ReturningRow<'_>>,
         conflict_target: Option<(&EntitySchema, &[u8])>,
     ) -> Result<bool, Error> {
+        let Some(prepared) = self.prepare_batch(batch, returning, conflict_target)? else {
+            return Ok(false);
+        };
+        self.apply_batch(prepared);
+        Ok(true)
+    }
+
+    // Supplier failures during stable writes trap and roll back the IC message.
+    fn apply_batch(&mut self, prepared: PreparedBatch) {
+        let PreparedBatch { removes, writes } = prepared;
+        let expected = removes.len() as u64;
+        assert_eq!(
+            self.map.remove_many(removes),
+            expected,
+            "prepared removal set changed"
+        );
+        for (key, value) in writes {
+            self.map.insert(key, value);
+        }
+    }
+
+    fn prepare_batch(
+        &self,
+        batch: Batch,
+        mut returning: Option<ReturningRow<'_>>,
+        conflict_target: Option<(&EntitySchema, &[u8])>,
+    ) -> Result<Option<PreparedBatch>, Error> {
         let mut targets = BTreeSet::new();
         let mut removes = BTreeSet::new();
         let mut writes = BTreeMap::new();
@@ -922,7 +953,7 @@ impl<M: Memory> Database<M> {
         if skip_insert {
             // No candidate row will be published to satisfy its own references.
             self.validate_references(&required, &deleted, &removes, &BTreeMap::new())?;
-            return Ok(false);
+            return Ok(None);
         }
         self.validate_references(&required, &deleted, &removes, &writes)?;
         for (entity, (mut state, changed, delta)) in entities {
@@ -939,18 +970,7 @@ impl<M: Memory> Database<M> {
                 writes.insert(entity_state_key(entity), state.encode());
             }
         }
-        // Proven IC rollback boundary: no recoverable Result branch below this line.
-        let expected = removes.len() as u64;
-        assert_eq!(
-            self.map.remove_many(removes),
-            expected,
-            "prepared removal set changed"
-        );
-        for (key, value) in writes {
-            self.map.insert(key, value);
-        }
-
-        Ok(true)
+        Ok(Some(PreparedBatch { removes, writes }))
     }
 
     // Reuse the prepared final rows and ordinary index changes. No durable

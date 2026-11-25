@@ -291,6 +291,8 @@ second schema authority or host endpoints. Review individual attributes against
 their retained responsibility; this is not blanket source compatibility with
 IcyDB's existing options or generated artifacts.
 
+For fixed-width integers, the schema macro selects the Rust type, runtime field type and existing codec methods from one entry per kind. The runtime owns the durable bytes. This follows the separation between primitive conversion and outer framing in frozen IcyDB `6d421e3`, `db/data/structural_field/primitive.rs`.
+
 Like frozen IcyDB `6d421e3` (`icydb-model-macros/src/node/schema_reference.rs`),
 each entity exposes an uppercase associated constant for every authored field.
 Application Rust uses `User::ID` and `User::NAME` across the existing fluent
@@ -2263,7 +2265,7 @@ Primary-key upsert chooses insert or replace from the stored row read during bat
 Insert, upsert, replace/update and delete lower into one concrete prepared batch of row
 and derived-index changes. Read required current rows once, validate types and
 constraints, calculate changes, then commit. Distinct user commands retain their
-semantics; they do not each get a staging/validation engine.
+semantics. Preparation borrows the database immutably. Application consumes the prepared removals and writes, with no recoverable error after mutation begins. Frozen IcyDB `6d421e3`, `db/commit/prepare/mod.rs`, separates preparation from application for its commit markers. IC DB prepares in memory and relies on IC message rollback.
 
 A changed row retains each index entry whose complete key and owner stay identical.
 Preparation still admits all new keys and checks the stored owner of every old
@@ -2702,7 +2704,7 @@ replace any tenant/row checks required inside an application's typed handler.
 
 ### Application inspection
 
-Canic owns the inspection protocol, verified client and installed endpoint tests. Applications decide which callers can inspect a catalogue, selected schema and maintained count. IC DB supplies the schema and admission facts and qualifies bounded fluent listing semantics. The local `db` console operates on the fixture.
+Canic owns the inspection protocol, verified client and installed endpoint tests. Applications decide which callers can inspect a catalogue, selected schema and maintained count. IC DB supplies the schema and admission facts and qualifies bounded fluent listing semantics. The local `db` console operates on the fixture. Its count, schema and migration commands share typed request/reply framing over measured PocketIC calls. Command handlers interpret application errors and format results. Frozen IcyDB `6d421e3`, `icydb-cli/src/shell/call.rs`, also separates invocation from rendering. IC DB supplies its own fixture methods and Wire limits.
 
 ### Current engine delivery and qualification
 

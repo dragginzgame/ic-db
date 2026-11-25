@@ -467,6 +467,12 @@ fn conditional_insert_ignores_only_the_selected_unique_conflict() {
         insert(input(2, 6, "repeat").parent(Some(Ulid::MIN))),
         Err(Error::ReferenceViolation)
     ));
+    let candidate = Ulid::MIN;
+    assert!(matches!(
+        insert(input(2, 6, "self").id(candidate).parent(Some(candidate))),
+        Err(Error::ReferenceViolation)
+    ));
+    assert_eq!(db.get::<Discovery>(candidate).unwrap(), None);
     assert_eq!(
         db.read().unwrap().revision::<Discovery>().unwrap(),
         revision

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Local product-record console.
 
+mod commands;
 mod terminal;
 #[cfg(test)]
 mod tests;
@@ -13,7 +14,6 @@ use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
 
 use std::{
-    cell::RefCell,
     io::{self, BufRead, IsTerminal, Write},
     time::Instant,
 };
@@ -47,32 +47,68 @@ fn charged_cycles(before: u128, after: u128) -> String {
     }
 }
 
-async fn measured_call(
-    pic: &pocket_ic::nonblocking::PocketIc,
+struct FixtureCalls<'a> {
+    pic: &'a pocket_ic::nonblocking::PocketIc,
     canister: pocket_ic::CanisterId,
-    kind: CallKind,
-    method: &str,
-    payload: Vec<u8>,
-) -> (Result<Vec<u8>, pocket_ic::RejectResponse>, String) {
-    let before = pic.cycle_balance(canister).await;
-    let started = Instant::now();
-    let result = match kind {
-        CallKind::Query => pic.query_call(canister, canister, method, payload).await,
-        CallKind::Update => pic.update_call(canister, canister, method, payload).await,
-    };
-    let elapsed = started.elapsed();
-    let after = pic.cycle_balance(canister).await;
-    let kind = match kind {
-        CallKind::Query => "query",
-        CallKind::Update => "update",
-    };
-    let statistics = format!(
-        "{kind} call ({method}): {:.2} sec, {}",
-        elapsed.as_secs_f64(),
-        charged_cycles(before, after)
-    );
+    statistics: Vec<String>,
+}
 
-    (result, statistics)
+impl FixtureCalls<'_> {
+    async fn invoke(
+        &mut self,
+        kind: CallKind,
+        method: &str,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, pocket_ic::RejectResponse> {
+        let before = self.pic.cycle_balance(self.canister).await;
+        let started = Instant::now();
+        let result = match kind {
+            CallKind::Query => {
+                self.pic
+                    .query_call(self.canister, self.canister, method, payload)
+                    .await
+            }
+            CallKind::Update => {
+                self.pic
+                    .update_call(self.canister, self.canister, method, payload)
+                    .await
+            }
+        };
+        let elapsed = started.elapsed();
+        let after = self.pic.cycle_balance(self.canister).await;
+        let kind = match kind {
+            CallKind::Query => "query",
+            CallKind::Update => "update",
+        };
+        let statistics = format!(
+            "{kind} call ({method}): {:.2} sec, {}",
+            elapsed.as_secs_f64(),
+            charged_cycles(before, after)
+        );
+
+        self.statistics.push(statistics);
+        result
+    }
+
+    async fn framed<T: serde::de::DeserializeOwned>(
+        &mut self,
+        kind: CallKind,
+        method: &str,
+        id: u64,
+        request: &(impl serde::Serialize + ?Sized),
+    ) -> Result<T, String> {
+        let frame = |direction| Encoding::Frame {
+            method: id,
+            direction,
+        };
+        let payload = ic_wire::encode(request, frame(Direction::Request), LIMITS)
+            .map_err(|e| e.to_string())?;
+        let reply = self
+            .invoke(kind, method, payload)
+            .await
+            .map_err(|e| format!("{e:?}"))?;
+        ic_wire::decode(&reply, frame(Direction::Response), LIMITS).map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Parser)]
@@ -754,94 +790,16 @@ async fn session(
             command,
             Command::Schema { json: true, .. } | Command::Entities { json: true }
         );
-        let statistics = RefCell::new(Vec::new());
-        let invoke = async |kind, method: &str, payload| {
-            let (result, line) = measured_call(pic, canister, kind, method, payload).await;
-            statistics.borrow_mut().push(line);
-
-            result
+        let mut calls = FixtureCalls {
+            pic,
+            canister,
+            statistics: Vec::new(),
         };
         let outcome = async {
         match command {
             Command::Help => help(),
             Command::Quit => {}
-            Command::MigrationDemo => {
-                let step = async |action: u8| -> Result<(bool, Vec<Vec<String>>), String> {
-                    let reply = invoke(
-                        CallKind::Update,
-                        "migration_demo",
-                        ic_wire::encode(
-                            &action,
-                            Encoding::Frame {
-                                method: 142,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
-                    )
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
-
-                    ic_wire::decode(
-                        &reply,
-                        Encoding::Frame {
-                            method: 142,
-                            direction: Direction::Response,
-                        },
-                        LIMITS,
-                    )
-                    .map_err(|e| e.to_string())?
-                };
-                let (_, rows) = step(0).await?;
-                println!(
-                    "\nItem — source\n{}",
-                    bordered_table(&["id", "amount"], &rows)
-                );
-                println!("\nMigration: console-item-label v1");
-                for (action, phase) in [
-                    (1, "Freeze"),
-                    (2, "Copy"),
-                    (3, "Validate"),
-                    (4, "Publish"),
-                    (5, "Cleanup"),
-                ] {
-                    // Fixture-size bound only; product checkpoints own progress.
-                    for call in 1..=32 {
-                        let (complete, rows) = step(action).await?;
-                        println!(
-                            "{phase} {call}: {}",
-                            if complete { "complete" } else { "in progress" }
-                        );
-                        if action == 2 {
-                            println!("{}", bordered_table(&["Copied rows"], &rows));
-                            if call == 1 {
-                                ic_db_cli::host::upgrade_stopped(
-                                    pic,
-                                    canister,
-                                    wasm.clone(),
-                                    vec![],
-                                    None,
-                                )
-                                .await
-                                .map_err(|e| format!("{e:?}"))?;
-                                println!("Upgrade: complete");
-                            }
-                        }
-                        if complete {
-                            break;
-                        }
-                        if call == 32 {
-                            return Err(format!("{phase} exceeded the fixture's 32-call bound"));
-                        }
-                    }
-                }
-                let (_, rows) = step(6).await?;
-                println!(
-                    "\nItem — target (label index)\n{}",
-                    bordered_table(&["id", "amount", "label"], &rows)
-                );
-            }
+            Command::MigrationDemo => commands::migration(&mut calls, &wasm).await?,
             Command::Aggregate {
                 entity,
                 select,
@@ -867,7 +825,7 @@ async fn session(
                     filters.into_filters()?,
                     (order.order_by, order.desc),
                 );
-                let reply = invoke(
+                let reply = calls.invoke(
                     CallKind::Update,
                     "aggregate_start",
                     ic_wire::encode(
@@ -899,7 +857,7 @@ async fn session(
                     // At most six rows per entity and two groups. A finite host bound
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
-                        let reply = invoke(CallKind::Update, "aggregate_resume",
+                        let reply = calls.invoke(CallKind::Update, "aggregate_resume",
                             ic_wire::encode(&(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after), Encoding::Frame { method: 121, direction: Direction::Request }, LIMITS).map_err(|e| e.to_string())?)
                             .await.map_err(|e| format!("{e:?}"))?;
                         type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
@@ -926,7 +884,7 @@ async fn session(
                 // Cleanup also runs after an output/resource refusal. No automatic
                 // restart, lost cursor, or client-side aggregation is hidden here.
                 let cleanup = async {
-                    let reply = invoke(
+                    let reply = calls.invoke(
                         CallKind::Update,
                         "aggregate_cancel",
                         ic_wire::encode(
@@ -962,121 +920,10 @@ async fn session(
                     }
                 }
             }
-            Command::Count { entity } => {
-                let reply = invoke(
-                    CallKind::Query,
-                    "cardinality",
-                    ic_wire::encode(
-                        &entity,
-                        Encoding::Frame {
-                            method: 148,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .map_err(|e| e.to_string())?,
-                )
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-                let count = ic_wire::decode::<Result<u64, String>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 148,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .map_err(|e| e.to_string())??;
-                println!(
-                    "{}",
-                    bordered_table(&["count"], &[vec![count.to_string()]])
-                );
-            }
-            Command::Schema { .. } | Command::Entities { .. } | Command::Status => {
-                let entity_summary = matches!(command, Command::Entities { .. });
-                let (id, selected, json) = match command {
-                    Command::Schema { entity, json } => (2, entity, json),
-                    Command::Entities { json } => (2, None, json),
-                    _ => (1, None, false),
-                };
-                let endpoint = if id == 2 { "schema" } else { "inspect" };
-                let request = if id == 2 {
-                    ic_wire::encode(
-                        &selected,
-                        Encoding::Frame {
-                            method: id,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                } else {
-                    ic_wire::encode(
-                        &(),
-                        Encoding::Frame {
-                            method: id,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                }
-                .map_err(|e| e.to_string())?;
-                let reply = invoke(CallKind::Query, endpoint, request)
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
-
-                if id == 2 {
-                    let (status, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
-                        ic_wire::decode(
-                            &reply,
-                            Encoding::Frame {
-                                method: id,
-                                direction: Direction::Response,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?;
-                    if entities.is_empty()
-                        && let Some(name) = selected
-                    {
-                        return Err(format!(
-                            "Unknown entity '{}'. Use db entities to list entities.",
-                            escape(&name)
-                        ));
-                    }
-
-                    if entity_summary {
-                        let mut summaries: Vec<_> = entities.into_iter()
-                            .map(|entity| (entity.0, entity.3.len())).collect();
-                        summaries.sort_by(|a, b| a.0.cmp(&b.0));
-
-                        if json {
-                            let rows: Vec<_> = summaries.into_iter()
-                                .map(|(name, columns)| serde_json::json!({"name": name, "columns": columns})).collect();
-                            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
-                        } else {
-                            let rows: Vec<_> = summaries.into_iter()
-                                .map(|(name, columns)| vec![name, columns.to_string()]).collect();
-                            println!("{}", bordered_table(&["Entity", "Columns"], &rows));
-                        }
-                    } else if json {
-                        print_schema_json(status.0, &entities, &types)?;
-                    } else {
-                        print_schema(entities, types);
-                    }
-                } else {
-                    print_status(
-                        ic_wire::decode(
-                            &reply,
-                            Encoding::Frame {
-                                method: id,
-                                direction: Direction::Response,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
-                    );
-                }
-            }
+            Command::Count { entity } => commands::count(&mut calls, &entity).await?,
+            Command::Schema { entity, json } => commands::schema(&mut calls, entity, false, json).await?,
+            Command::Entities { json } => commands::schema(&mut calls, None, true, json).await?,
+            Command::Status => print_status(calls.framed(CallKind::Query, "inspect", 1, &()).await?),
             Command::Query {
                 entity,
                 filters,
@@ -1093,7 +940,7 @@ async fn session(
                 group_max,
                 group_order,
             } => {
-                let reply = invoke(
+                let reply = calls.invoke(
                     CallKind::Query,
                     "query",
                     ic_wire::encode(
@@ -1158,7 +1005,7 @@ async fn session(
 
         Ok(())
         }.await;
-        for line in statistics.into_inner() {
+        for line in calls.statistics {
             if json || outcome.is_err() {
                 eprintln!("{line}");
             } else {
