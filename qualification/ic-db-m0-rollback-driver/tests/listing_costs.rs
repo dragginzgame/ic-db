@@ -417,6 +417,30 @@ async fn measured_membership_and_empty_text_return_expected_counts() {
     )
     .await;
 
+    for (profile, width) in [("inline-blob", 8), ("external-blob", 1024)] {
+        let payload = ic_wire::ByteBuf::from(vec![7; width]);
+        call::<Result<(), u8>>(
+            pic,
+            canister,
+            "replace_binary_object",
+            14,
+            &((payload, None::<ic_wire::ByteBuf>), false),
+        )
+        .await
+        .unwrap();
+        measure(
+            profile,
+            &[
+                (4, "range-count", 1),
+                (5, "validated", 1),
+                (6, "point-hit", 1),
+                (7, "point-miss", 0),
+                (8, "point-threshold-two", 0),
+            ],
+        )
+        .await;
+    }
+
     // Put the only matching ID at the end of a category containing seven
     // nonmembers (1, 4, 7, 8, 9, 10, 11). Keep the probe list identical.
     for id in [1_u64, 2, 6, 7, 8, 9, 10, 11, 12] {
@@ -514,6 +538,16 @@ async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
+    let measure = async |keys: &[u64], expected: &[Option<(i64, u64)>]| {
+        let mut costs = Vec::new();
+        for path in 0..3_u8 {
+            let (actual, instructions): (Vec<Option<(i64, u64)>>, u64) =
+                call(pic, canister, "measured_bulk_selection", 248, &(path, keys)).await;
+            assert_eq!(actual, expected);
+            costs.push(instructions);
+        }
+        costs
+    };
     for width in [0, 64] {
         let note = (width > 0).then(|| "x".repeat(width));
         call::<Result<(), u8>>(
@@ -552,23 +586,105 @@ async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
                     .iter()
                     .map(|&id| (id != 99).then_some((id as i64, id)))
                     .collect();
-                let mut costs = Vec::new();
-                for path in 0..3_u8 {
-                    let (actual, instructions): (Vec<Option<(i64, u64)>>, u64) = call(
-                        pic,
-                        canister,
-                        "measured_bulk_selection",
-                        248,
-                        &(path, &keys),
-                    )
-                    .await;
-                    assert_eq!(actual, expected);
-                    costs.push(instructions);
-                }
+                let costs = measure(&keys, &expected).await;
                 println!(
                     "bulk-selection,note={width},keys={count},mixed={mixed},instructions={costs:?}"
                 );
             }
+        }
+    }
+    // Interleave missing odd keys with hits in separate B-tree leaves.
+    let rows: Vec<_> = (34..=544_u64)
+        .step_by(2)
+        .map(|id| {
+            (
+                id,
+                ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()),
+                id as i64,
+            )
+        })
+        .collect();
+    for chunk in rows.chunks(8) {
+        call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
+            .await
+            .unwrap();
+    }
+    for (label, keys) in [
+        (
+            "scattered-hits",
+            (0..32).rev().map(|i| 34 + 16 * i).collect::<Vec<u64>>(),
+        ),
+        (
+            "scattered-misses",
+            (0..32).rev().map(|i| 35 + 16 * i).collect(),
+        ),
+        ("one-repeated-hit", vec![34; 32]),
+    ] {
+        let expected: Vec<_> = keys
+            .iter()
+            .map(|&id| (id % 2 == 0).then_some((id as i64, id)))
+            .collect();
+        let costs = measure(&keys, &expected).await;
+        println!("bulk-selection,note=64,keys=32,distribution={label},instructions={costs:?}");
+    }
+    owned.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires page-measurement Wasm and PocketIC"]
+async fn primary_page_lookahead() {
+    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let predecessor = std::env::var_os("IC_DB_PAGE_PREDECESSOR")
+        .map(|path| std::fs::read(path).unwrap())
+        .unwrap_or_else(|| wasm.clone());
+    let owned = instance().await.unwrap();
+    let pic = &owned;
+    for shape in 0..3_u8 {
+        let id = pic.create_canister().await;
+        pic.add_cycles(id, 3_000_000_000_000).await;
+        pic.install_canister(id, predecessor.clone(), vec![], None)
+            .await;
+        call::<()>(pic, id, "seed_primary_pages", 250, &shape).await;
+        for phase in ["fresh", "reopened"] {
+            if phase == "reopened" {
+                ic_db_m0_rollback_driver::upgrade_stopped(pic, id, wasm.clone(), vec![], None)
+                    .await
+                    .unwrap();
+            }
+            let before = pic.get_stable_memory(id).await;
+            for limit in [1_u8, 8, 16, 32] {
+                let mut after = None;
+                loop {
+                    let (rows, next, open, work): (
+                        Vec<(u64, ic_wire::ByteBuf)>,
+                        Option<u64>,
+                        u64,
+                        u64,
+                    ) = call(pic, id, "measured_primary_page", 251, &(after, limit)).await;
+                    let first = after.unwrap_or(0) + 1;
+                    let last = (first + u64::from(limit) - 1).min(24);
+                    assert_eq!(rows.len() as u64, (first..=last).count() as u64);
+                    for ((key, payload), expected) in rows.iter().zip(first..=last) {
+                        assert_eq!(*key, expected);
+                        let size = if shape == 1 || (shape == 2 && matches!(expected, 9 | 17)) {
+                            1024
+                        } else {
+                            8
+                        };
+                        assert_eq!(payload.as_ref(), vec![expected as u8; size].as_slice());
+                    }
+                    assert_eq!(next, (last < 24).then_some(last));
+                    println!(
+                        "primary,{phase},{shape},{limit},{first},{},{open},{work}",
+                        rows.len()
+                    );
+                    if first > 24 {
+                        break;
+                    }
+                    after = Some(next.unwrap_or(24)); // Also probe an explicitly exhausted cursor.
+                }
+            }
+            assert_eq!(pic.get_stable_memory(id).await, before);
         }
     }
     owned.drop().await;

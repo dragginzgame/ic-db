@@ -31,6 +31,7 @@ help:
 	  'make m0-maintenance              Run interrupted schema-maintenance probe' \
 	  'make m1-records                 Check generated records natively and in Wasm' \
 	  'make m2-queries                 Check bounded fluent query pages' \
+	  'make m2-primary-pages           Measure primary pages and verify continuations' \
 	  'make m2-bulk-selection          Compare projected bulk primary-key reads' \
 	  'make m2-sqlite-reference        Check native fluent results against SQLite' \
 	  'make m2-jobs                    Check retained aggregates and rollback' \
@@ -268,6 +269,10 @@ m2-sort-costs-artifact:
 m2-sort-costs: m2-sort-costs-artifact
 	IC_DB_QUERY_COSTS=1 IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting sorting_reads_complete_input -- --nocapture
 	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test sorting unique_decimal_order_matches_sqlite -- --ignored --nocapture
+
+.PHONY: m2-primary-pages
+m2-primary-pages: m2-sort-costs-artifact
+	IC_DB_M1_RECORDS_WASM="$(CURDIR)/qualification/target/evidence/m2/sort-costs.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test listing_costs primary_page_lookahead -- --exact --ignored --nocapture
 
 .PHONY: m2-bulk-selection
 m2-bulk-selection: m2-sort-costs-artifact

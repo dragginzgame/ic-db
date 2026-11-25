@@ -7,9 +7,9 @@ mod numeric;
 use super::distinct::DistinctKeys;
 use super::probe::{MemberProbe, probe_members};
 use super::{
-    Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan, Query,
-    QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
-    copy_projection, execute, projection_size,
+    Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan,
+    PlanOutput, Query, QueryPage, admit_ordered_fields, admit_output, admit_projection,
+    comparison_key, copy_projection, execute, projection_size,
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema,
@@ -498,7 +498,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
         observe!(query, {
-            let mut plan = self.aggregate_plan(None, false)?;
+            let mut plan = self.count_plan(None)?;
             self.select_aggregate_row_path(&mut plan, Some(MemberProbe::Exists))?;
             if let Some(result) = probe_members(
                 &self.db,
@@ -579,7 +579,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if self.request.is_plain_count() {
             return self.entity_count();
         }
-        let mut plan = self.aggregate_plan(None, false)?;
+        let mut plan = self.count_plan(None)?;
         if stop == 0 {
             return Ok(Aggregate {
                 value: 0,
@@ -683,7 +683,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.bytes < 8 {
                 return Err(Error::RowTooLarge);
             }
-            let plan = self.aggregate_plan(None, false)?;
+            let plan = self.count_plan(None)?;
 
             self.count_keys(&plan, u64::MAX)
         })
@@ -694,14 +694,18 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         let mut examined = 0;
         if let Some(range) = bounds {
             let db = self.db.read()?;
-            let entries = db.map.range((range.0.as_ref(), range.1.as_ref()));
-            for _ in entries {
-                if examined == self.request.work {
-                    return Err(Error::Limit);
-                }
-                examined += 1;
-                if examined as u64 == stop {
-                    break;
+            if let Some(key) = super::range::exact_key(&range) {
+                examined = usize::from(db.map.contains_key(key));
+            } else {
+                let keys = db.map.keys_range((range.0.as_ref(), range.1.as_ref()));
+                for _ in keys {
+                    if examined == self.request.work {
+                        return Err(Error::Limit);
+                    }
+                    examined += 1;
+                    if examined as u64 == stop {
+                        break;
+                    }
                 }
             }
         }
@@ -740,7 +744,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             if self.request.bytes < 8 {
                 return Err(Error::RowTooLarge);
             }
-            let mut plan = self.aggregate_plan(Some(K::definition()), false)?;
+            let mut plan = self.count_plan(Some(K::definition()))?;
             self.select_aggregate_row_path(&mut plan, None)?;
             let projected = plan.projection.ok_or(Error::InvalidQuery)?;
             let fixed = super::distinct::fixed_fields(E::SCHEMA, &self.request, &plan);
@@ -765,7 +769,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         if self.request.bytes < 8 {
             return Err(Error::RowTooLarge);
         }
-        let mut plan = self.aggregate_plan(None, false)?;
+        let mut plan = self.count_plan(None)?;
         let probe = field.is_none().then_some(MemberProbe::CountValidated);
         self.select_aggregate_row_path(&mut plan, probe)?;
         if let Some(probe) = probe
@@ -928,13 +932,24 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok((groups, page))
     }
 
+    fn count_plan(&self, output: Option<&TypeSchema>) -> Result<Plan<'static>, Error> {
+        self.request
+            .aggregate_plan(&self.db, E::SCHEMA, output, PlanOutput::ImmediateCount)
+    }
+
     fn aggregate_plan(
         &self,
         output: Option<&TypeSchema>,
         group_output: bool,
     ) -> Result<Plan<'static>, Error> {
-        self.request
-            .aggregate_plan(&self.db, E::SCHEMA, output, group_output)
+        self.request.aggregate_plan(
+            &self.db,
+            E::SCHEMA,
+            output,
+            PlanOutput::Aggregate {
+                grouped: group_output,
+            },
+        )
     }
 }
 
@@ -981,7 +996,7 @@ impl super::Request<'_> {
         source: &super::QuerySource<'_, M>,
         entity: &'static EntitySchema,
         output: Option<&TypeSchema>,
-        group_output: bool,
+        kind: PlanOutput,
     ) -> Result<Plan<'static>, Error> {
         if self.cursor.is_some()
             || self.distinct
@@ -998,9 +1013,7 @@ impl super::Request<'_> {
             db.schema.fingerprint(),
             db.incarnation,
             output.map(super::Projection::Record),
-            super::PlanOutput::Aggregate {
-                grouped: group_output,
-            },
+            kind,
         )?;
         if let Some(mask) = plan.projection {
             admit_ordered_fields(entity, mask)?;

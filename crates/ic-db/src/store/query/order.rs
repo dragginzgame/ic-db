@@ -55,7 +55,7 @@ pub(super) fn select<'a>(
     // admission. Only an explicit index needs order admission at this stage.
     if request.order.is_none()
         && request.index.is_none()
-        && matches!(output, super::PlanOutput::Aggregate { .. })
+        && !matches!(output, super::PlanOutput::Rows)
     {
         return Ok(Path::Primary);
     }

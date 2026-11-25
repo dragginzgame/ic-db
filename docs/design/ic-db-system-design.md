@@ -1,6 +1,6 @@
 # IC DB system design
 
-IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 Status reviewed 2026-11-17: delivered engine scope includes the 0.19 maintained-count
 hard cut and the 0.18 migration, sorting and comparison increments. Version
@@ -1190,7 +1190,7 @@ Specify the allocation, traversal and recovery guarantees IC DB needs. Qualify t
 
 #### Stable storage supplier
 
-IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 IC Storage's existing allocation reset is an investigated candidate for alternating reusable
 collection slots: a later target may use a fully retired slot after source
@@ -1520,6 +1520,16 @@ checks the installed command and independent wrong-phase/upgrade behavior; this
 is an executable example of the selected contract, not another migration engine.
 
 ## 5. Reads and query semantics
+
+Ordinary query cursors may expire across deployments. Within a deployment, a cursor resumes an admitted traversal after its query binding and physical position pass validation. The planner selects the access path. The cursor module binds that choice and the admitted query terms. Frozen IcyDB `6d421e3` also distinguishes continuation identity from the window and current position in `db/cursor/signature.rs`. IC DB includes its physical prefix in the binding because it resumes from a stored key.
+
+A full primary-key page checks whether the next key belongs to the entity. Storage 0.80.3 advances the positioned iterator without loading an external value. The last returned row remains the continuation. Frozen IcyDB `6d421e3`, `db/executor/pipeline/contracts/execution/inputs.rs`, also discards lookahead after deciding continuation. The primary page needs only the namespace because it has no residual predicate. [Installed page measurements](../../qualification/README.md#primary-page-lookahead-on-storage-0803)
+
+Storage 0.80.0 range entries own their buffered key and value. The shared scanner consumes that entry, then applies IC DB's physical-key, row and index validation to the transferred bytes. Continuation uses the same ordered key as before. Frozen IcyDB `6d421e3`, `db/session/tests/cardinality_tiebreak/seek_intersection.rs`, checks ordered continuation against the remaining results after each token. The installed listing probes qualify that invariant here. [Matched instruction and allocation measurements](../../qualification/README.md#query-reads-and-b-tree-sizing-on-storage-0800)
+
+Single-result terminals finish query admission before deciding whether they need a cursor binding. A cursorless `first()` or `try_one()` returns an optional row and skips the binding hash. A resumed `first()` checks the incoming binding and physical position. Paged reads and retained jobs continue to bind their query shape. [Single-result measurements](../../qualification/README.md#cursorless-single-result-queries-on-storage-0800)
+
+Synchronous count, existence and threshold plans reject incoming cursors and return a scalar. They skip the cursor binding hash after query admission. The plain entity count still reads its maintained metadata directly. A count proven by a bounded key range uses Storage’s key-only iterator, which skips external row payloads. If the final bounds are the same inclusive key, a covered count checks physical presence once. The validated path reads each required row. Frozen IcyDB `6d421e3` also requires an authoritative presence check for a requested primary key in `db/query/plan/covering/mod.rs`. [Exact-key count measurements](../../qualification/README.md#exact-key-counts-on-storage-0802) [Installed range-count comparison](../../qualification/README.md#key-only-range-counts-on-storage-0801) A retained count binds the request so an advance can verify the original query. [Count and existence measurements](../../qualification/README.md#synchronous-count-and-existence-planning-on-storage-0800)
 
 In application collections, `Id<E>` delegates hashing and ordering to the primary key, as in IcyDB `5538760`, `types/identity/id.rs`. These operations require traits on the key alone.
 Fluent predicates accept an owned or borrowed `Id<E>` wherever they accept
@@ -3257,7 +3267,7 @@ an exact index range in either filter order. At most one owner qualifies, so
 any admitted output order holds. Frozen IcyDB `6d421e3` uses the same reasoning
 for exact primary-key reads in `db/query/plan/covering/mod.rs`. The scanner validates the owner and
 checks residual predicates. Sparse indexes require present values in every
-optional component. A primary-key equality keeps its primary seek. Existing
+optional component. After predicate and continuation bounds are intersected, identical inclusive endpoints identify one physical key. Row traversal then uses Storage’s exact lookup and runs the ordinary owner, row and predicate checks on a hit. [Exact-key measurements](../../qualification/README.md#exact-key-fluent-reads-on-storage-0801) Existing
 cursors continue on their admitted traversal. Partial keys and OR alternatives
 alone do not prove uniqueness. The literal comparison methods `eq`, `ne`, `lt`, `lte`, `gt` and `gte` follow frozen
 IcyDB `6d421e3`'s `db/query/expr/filter/mod.rs` spellings and construct the same
@@ -3278,10 +3288,12 @@ builder owns its bounded key list. A session builder retains the attachment and 
 positions and preserves input order, duplicates and missing slots. This carries
 the positional contract of frozen IcyDB `6d421e3`,
 `db/session/query/exact_key/mod.rs`, into the existing typed read path. The
-32-position bound matches an entity page. Each distinct key costs one map
-lookup, including misses. A 32-bit mask tracks filled positions, so only one
-stored row's bytes are held alongside the output. Each matching slot decodes
-its own value. The projected bulk read accepts the same generated columns
+32-position bound matches an entity page. A request for one distinct key uses a point lookup. For multiple distinct keys,
+IC DB groups the complete physical keys in sorted order with a 32-bit input-position
+mask per key. Storage shares routing reads and visits each hit or miss once.
+IC DB decodes each hit directly into its caller slots and returns the first decode
+error to the visitor, which stops traversal. Only one stored value is passed to
+IC DB at a time. The projected bulk read accepts the same generated columns
 as fluent `select`. Each hit validates the entire stored row and its physical
 primary key, then decodes the selected field spans in caller order. Frozen
 IcyDB's [exact-key reader](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/session/query/exact_key/mod.rs)

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.31.1] - Unreleased
+
+### ⚡ Performance
+
+- Primary-key pages use Storage 0.80.3 to check for a continuation without loading the next row’s external value. [Installed pagination measurements](qualification/README.md#primary-page-lookahead-on-storage-0803)
+- Counts and thresholds proven by one exact physical key use a single presence check. [Measured hit and miss costs](qualification/README.md#exact-key-counts-on-storage-0802)
+- Bulk primary-key reads now share B-tree routing through IC Storage 0.80.2. Whole-row and projected results retain caller order, duplicates and missing slots. [Bulk-read measurements](qualification/README.md#bulk-primary-key-reads-on-storage-0802)
+- Fluent reads whose final bounds identify one physical key use a direct Storage lookup. [Exact-key measurements](qualification/README.md#exact-key-fluent-reads-on-storage-0801)
+- Range counts and early thresholds use IC Storage 0.80.1’s bounded key iterator to skip external values. Existing 0.80.0 stores reopen directly. [Installed count measurements](qualification/README.md#key-only-range-counts-on-storage-0801)
+- Cursorless single-result reads and synchronous count plans skip the cursor binding hash. Range scans consume Storage’s owned entry buffers. [Single-result measurements](qualification/README.md#cursorless-single-result-queries-on-storage-0800) · [Count measurements](qualification/README.md#synchronous-count-and-existence-planning-on-storage-0800)
+
+### 🔄 Changed
+
+- Query planning now delegates cursor binding and position validation to the cursor module. A deployment may invalidate an earlier query cursor. [IC DB #30](https://github.com/dragginzgame/ic-db/issues/30)
+- Mounted endpoint qualification uses Canic 0.270.0. Both workspaces and the tooling snapshot use Toko Tooling 0.46.5. `make deps-list` now defaults to the product workspace. Add `DEPENDENCY_MANIFEST=qualification/Cargo.toml` to include qualification packages.
+
 ## [0.31.0] - 2026-11-25
 
 ### ⚠️ Breaking

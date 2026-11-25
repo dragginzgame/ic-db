@@ -27,6 +27,7 @@ const MANIFEST: &[u8] = b"ICDBMF02";
 const MAX_BATCH: usize = 32;
 const MAX_BATCH_BYTES: usize = 128 * 1024;
 type Map<M> = StableBTreeMap<StoreKey, Vec<u8>, M>;
+type BulkRowVisitor<'a> = dyn FnMut(usize, &[u8]) -> Result<(), Error> + 'a;
 
 // Share supplier advancement and physical-key decoding without buffering a page
 // or moving the typed row/key consistency check out of the public terminal.
@@ -44,7 +45,7 @@ fn next_primary<M: Memory>(
     }
     let id = RowKey::decode(&entry.key()[ENTITY_PREFIX_BYTES..], key_type)?;
 
-    Ok(Some((id, entry.value())))
+    Ok(Some((id, entry.into_value())))
 }
 
 fn decode_primary<E: Entity>(bytes: &[u8], key: E::Key) -> Result<E, Error> {
@@ -86,9 +87,10 @@ fn next_index<M: Memory>(
     if !entry.key().starts_with(prefix) {
         return Ok(None);
     }
-    let (id, bytes) = read_index_owner(map, entity, key_type, &entry.value())?;
+    let (key, owner) = entry.into_pair();
+    let (id, bytes) = read_index_owner(map, entity, key_type, &owner)?;
 
-    Ok(Some((entry.key().clone(), id, bytes)))
+    Ok(Some((key, id, bytes)))
 }
 
 #[inline(never)]
@@ -512,23 +514,57 @@ impl<M: Memory> Database<M> {
         decode: impl Fn(&EntitySchema, K, &[u8]) -> Result<R, Error>,
     ) -> Result<Vec<Option<R>>, Error> {
         let mut rows: Vec<_> = (0..keys.len()).map(|_| None).collect();
-        let mut handled = 0_u32;
-        for (i, &key) in keys.iter().enumerate() {
-            if handled & (1 << i) != 0 {
-                continue;
+        let Some((&first, rest)) = keys.split_first() else {
+            return Ok(rows);
+        };
+        if rest.iter().all(|&key| key == first) {
+            if let Some(bytes) = self.map.get(&row_key(entity.id, first.into_row_key())) {
+                for slot in &mut rows {
+                    *slot = Some(decode(entity, first, &bytes)?);
+                }
             }
-            let bytes = self.map.get(&row_key(entity.id, key.into_row_key()));
-            for (j, &other) in keys.iter().enumerate().skip(i) {
-                if other == key {
-                    handled |= 1 << j;
-                    if let Some(bytes) = &bytes {
-                        rows[j] = Some(decode(entity, key, bytes)?);
-                    }
+            return Ok(rows);
+        }
+
+        let mut probes = keys
+            .iter()
+            .map(|key| row_key(entity.id, key.into_row_key()));
+        self.visit_bulk_rows(&mut probes, &mut |slot, bytes| {
+            rows[slot] = Some(decode(entity, keys[slot], bytes)?);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    // Share routing and positional bookkeeping across entity and projection types.
+    fn visit_bulk_rows(
+        &self,
+        keys: &mut dyn ExactSizeIterator<Item = StoreKey>,
+        visit: &mut BulkRowVisitor<'_>,
+    ) -> Result<(), Error> {
+        let mut probes = Vec::with_capacity(keys.len());
+        let mut masks = Vec::with_capacity(keys.len());
+        for (slot, key) in keys.enumerate() {
+            let bit = 1_u32 << slot;
+            match probes.binary_search(&key) {
+                Ok(i) => masks[i] |= bit,
+                Err(i) => {
+                    probes.insert(i, key);
+                    masks.insert(i, bit);
                 }
             }
         }
-
-        Ok(rows)
+        let mut masks = masks.into_iter();
+        self.map.try_visit_sorted_keys(&probes, |_, bytes| {
+            let mut slots = masks.next().expect("one visit per distinct key");
+            if let Some(bytes) = bytes {
+                while slots != 0 {
+                    visit(slots.trailing_zeros() as usize, &bytes)?;
+                    slots &= slots - 1;
+                }
+            }
+            Ok(())
+        })
     }
 
     // Keep traversal separate from the static type's admission call. Passing
@@ -589,8 +625,8 @@ impl<M: Memory> Database<M> {
         // Look ahead only on a full page. The next row is decoded on its own page.
         let more = rows.len() == limit
             && entries
-                .next()
-                .is_some_and(|entry| entry.key().starts_with(&prefix));
+                .next_key()
+                .is_some_and(|key| key.starts_with(&prefix));
         Ok(Page {
             next_after: if more { last } else { None },
             rows,

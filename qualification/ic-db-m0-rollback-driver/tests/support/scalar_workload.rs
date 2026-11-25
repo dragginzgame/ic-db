@@ -717,13 +717,9 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
                 };
                 for &mode in modes {
                     let (result, opening, work) = profile_count(mode, category).await;
-                    let expected_result = if mode == 0 && expected_rows.len() >= 512 {
-                        None
-                    } else {
-                        Some(expected)
-                    };
                     assert_eq!(
-                        result, expected_result,
+                        result,
+                        Some(expected),
                         "profile mode {mode}, {phase}, {category:?}"
                     );
                     assert_eq!(pic.get_stable_memory(canister).await, backing);
@@ -741,9 +737,21 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
                     .iter()
                     .filter(|row| (1..upper).contains(&row.0))
                     .count();
-                let expected = (matches < 512).then_some(matches as u64);
-                for (mode, path) in [(7, "automatic"), (8, "validated")] {
+
+                for (mode, path) in [
+                    (7, "automatic"),
+                    (8, "validated"),
+                    (12, "threshold7"),
+                    (13, "threshold8"),
+                    (14, "budget31"),
+                ] {
                     let (result, opening, work) = profile_count(mode, Some(upper)).await;
+                    let expected = match mode {
+                        12 if matches >= 8 => None,
+                        12 | 13 => Some(u64::from(matches >= 8)),
+                        14 if matches > 31 => None,
+                        _ => Some(matches as u64),
+                    };
                     assert_eq!(result, expected, "{path}, {phase}, id < {upper}");
                     assert_eq!(pic.get_stable_memory(canister).await, backing);
                     eprintln!(

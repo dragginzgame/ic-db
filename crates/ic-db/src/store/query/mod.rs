@@ -1,6 +1,9 @@
 //! Bounded fluent traversal. Typed result construction stays outside shared execution.
 
 mod aggregate;
+mod cursor;
+pub use cursor::QueryCursor;
+use cursor::Resume;
 mod distinct;
 mod get_many;
 pub use get_many::{GetMany, SelectedGetMany};
@@ -26,7 +29,6 @@ use crate::{
     codec::Decoder, key, named_schema::TypeGraph, primary::RowKey,
 };
 use ic_storage::Memory;
-use sha2::{Digest, Sha256};
 use std::{
     cell::{Ref, RefCell},
     marker::PhantomData,
@@ -262,100 +264,6 @@ fn contains_component(actual: &[u8], needle: &[u8]) -> bool {
     }
 
     memchr::memmem::find(&raw(actual), &raw(needle)).is_some()
-}
-
-/// A bounded logical position, bound to database, schema, query and direction.
-/// It is not an authorization token or a snapshot. Callers may choose positions;
-/// the database revalidates all claims and retains no trusted progress counters.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QueryCursor {
-    binding: [u8; 32],
-    position: Vec<u8>,
-    resume: Resume,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Resume {
-    After = 0,
-    Retry = 1,
-    AfterUnemittedClass = 2,
-}
-impl QueryCursor {
-    pub(crate) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
-
-    /// Encode the bounded continuation for an application's transport.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![1, self.resume as u8];
-        bytes.extend(self.binding);
-        bytes.extend(&self.position);
-
-        bytes
-    }
-
-    /// Decode framing; execution additionally checks query identity and key shape.
-    /// # Errors
-    /// Refuses unsupported versions, flags and oversized or incomplete frames.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if !(35..=Self::MAX_ENCODED_BYTES).contains(&bytes.len()) || bytes[0] != 1 {
-            return Err(Error::InvalidCursor);
-        }
-
-        Ok(Self {
-            binding: bytes[2..34].try_into().map_err(|_| Error::InvalidCursor)?,
-            position: bytes[34..].to_vec(),
-            resume: match bytes[1] {
-                0 => Resume::After,
-                1 => Resume::Retry,
-                2 => Resume::AfterUnemittedClass,
-                _ => return Err(Error::InvalidCursor),
-            },
-        })
-    }
-}
-
-impl serde::Serialize for QueryCursor {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(&self.to_bytes())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for QueryCursor {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Frame;
-
-        impl<'de> serde::de::Visitor<'de> for Frame {
-            type Value = QueryCursor;
-
-            fn expecting(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                fmt.write_str("a bounded IC DB query cursor frame")
-            }
-
-            fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<QueryCursor, E> {
-                QueryCursor::from_bytes(bytes).map_err(E::custom)
-            }
-
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<QueryCursor, A::Error> {
-                let size = seq.size_hint().unwrap_or(0);
-                if size > QueryCursor::MAX_ENCODED_BYTES {
-                    return Err(serde::de::Error::custom(Error::InvalidCursor));
-                }
-                let mut frame = Vec::with_capacity(size);
-                while let Some(byte) = seq.next_element()? {
-                    if frame.len() == QueryCursor::MAX_ENCODED_BYTES {
-                        return Err(serde::de::Error::custom(Error::InvalidCursor));
-                    }
-                    frame.push(byte);
-                }
-                QueryCursor::from_bytes(&frame).map_err(serde::de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_bytes(Frame)
-    }
 }
 
 /// A bounded page. Empty rows do not mean completion when `next` is present.
@@ -1684,6 +1592,7 @@ fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u32, size: usize) -
 enum PlanOutput {
     Rows,
     Aggregate { grouped: bool },
+    ImmediateCount,
 }
 
 struct Plan<'a> {
@@ -1925,176 +1834,15 @@ impl<'a> Plan<'a> {
                 _ => {}
             }
         }
-        let mut hash = Sha256::new();
-        hash.update(b"ic-db:query:v1\0");
-        hash.update(schema);
-        hash.update(incarnation);
-        hash.update([u8::from(request.descending)]);
-        hash.update((plan.prefix.len() as u32).to_le_bytes());
-        hash.update(&plan.prefix);
-        for term in &plan.terms {
-            hash.update([term.position as u8, term.comparison as u8]);
-
-            match &term.operand {
-                TermOperand::Nested {
-                    member,
-                    literal,
-                    absent,
-                } => {
-                    hash.update((u32::MAX - 2).to_le_bytes());
-                    hash.update([member.position() as u8, u8::from(*absent)]);
-                    // The binding already records absence separately from the scalar payload.
-                    let literal = &literal[usize::from(
-                        entity.fields[term.position].optional || member.field().optional,
-                    )..];
-                    hash.update((literal.len() as u32).to_le_bytes());
-                    hash.update(literal);
-                }
-                TermOperand::Literal { bytes, .. }
-                | TermOperand::Member {
-                    needle: MemberNeedle::Literal(bytes),
-                    ..
-                } => {
-                    hash.update((bytes.len() as u32).to_le_bytes());
-                    hash.update(bytes);
-                }
-                TermOperand::Length { member, threshold } => {
-                    if let Some(member) = member {
-                        hash.update((u32::MAX - 3).to_le_bytes());
-                        hash.update([member.position() as u8]);
-                    } else {
-                        hash.update((u32::MAX - 1).to_le_bytes());
-                    }
-                    hash.update(threshold.to_le_bytes());
-                }
-                TermOperand::Field {
-                    right,
-                    left_member: None,
-                    right_member: None,
-                }
-                | TermOperand::Member {
-                    needle: MemberNeedle::Field(right, None),
-                    ..
-                } => {
-                    // Outside the bounded literal length domain.
-                    hash.update(u32::MAX.to_le_bytes());
-                    hash.update([*right as u8]);
-                }
-                TermOperand::Member {
-                    needle: MemberNeedle::Field(right, Some(member)),
-                    ..
-                } => {
-                    hash.update((u32::MAX - 4).to_le_bytes());
-                    hash.update([u8::MAX, *right as u8, member.position() as u8]);
-                }
-                TermOperand::Field {
-                    right,
-                    left_member,
-                    right_member,
-                } => {
-                    hash.update((u32::MAX - 4).to_le_bytes());
-                    let slot = |member: &Option<crate::member::RecordMember>| {
-                        member.map_or(u8::MAX, |m| m.position() as u8)
-                    };
-                    hash.update([slot(left_member), *right as u8, slot(right_member)]);
-                }
-            }
+        // Immediate counts and cursorless single-result reads have no continuation.
+        if matches!(output, PlanOutput::ImmediateCount)
+            || (request.single_result_probe.is_some() && request.cursor.is_none())
+        {
+            return Ok(plan);
         }
-        // Keep existing conjunction identities unchanged. A bounded clause mask
-        // distinguishes OR grouping without persisting another predicate model.
-        let clauses = plan
-            .terms
-            .iter()
-            .enumerate()
-            .fold(0_u8, |mask, (i, term)| mask | (u8::from(term.or_next) << i));
-        if clauses != 0 {
-            hash.update(b"or-clauses\0");
-            hash.update([clauses]);
-        }
-        if let Some(order) = &request.order {
-            hash.update(b"order\0");
-            hash.update([order.len() as u8]);
-            for name in order {
-                // Field names were admitted by order selection above.
-                if let Some(position) = entity.field_position(name) {
-                    hash.update([position as u8]);
-                } else {
-                    // A top-level position is at most 31. Frame each admitted nested path.
-                    hash.update([u8::MAX, name.len() as u8]);
-                    hash.update(name.as_bytes());
-                }
-            }
-        }
-        if request.order_descending != 0 {
-            hash.update(b"order-directions\0");
-            hash.update([request.order_descending]);
-        }
-        // Preserve existing entity-result cursors. Projected shapes add a
-        // domain-separated suffix; output Rust names do not change semantics.
-        if let Some(mask) = plan.projection {
-            hash.update(b"projection\0");
-            hash.update(mask.to_le_bytes());
-            if let Some(Projection::Columns(columns)) = projection {
-                hash.update(b"columns\0");
-                hash.update(columns);
-            }
-        }
-        if request.distinct {
-            hash.update(b"distinct\0");
-        }
-        plan.binding = hash.finalize().into();
-        if let Some(cursor) = request.cursor {
-            if cursor.binding != plan.binding {
-                return Err(Error::InvalidCursor);
-            }
-            plan.validate_position(entity, cursor)
-                .map_err(|_| Error::InvalidCursor)?;
-        }
+        plan.bind_cursor(entity, request, schema, incarnation, projection)?;
 
         Ok(plan)
-    }
-
-    fn validate_position(&self, entity: &EntitySchema, cursor: &QueryCursor) -> Result<(), Error> {
-        if cursor.resume == Resume::AfterUnemittedClass
-            && !matches!(self.distinct, distinct::Strategy::Adjacent(_))
-        {
-            return Err(Error::InvalidCursor);
-        }
-        let bytes = cursor.position.as_slice();
-        if bytes.len() > crate::MAX_INDEX_KEY_BYTES || !bytes.starts_with(&self.prefix) {
-            return Err(Error::InvalidCursor);
-        }
-        if let Some(index) = self.index {
-            let mut remaining = bytes
-                .get(INDEX_PREFIX_BYTES..)
-                .ok_or(Error::InvalidCursor)?;
-            for name in index.fields {
-                consume_index_component(entity, index, name, &mut remaining)?;
-            }
-            if !index.unique {
-                key::consume(&mut remaining, entity.key_type()?)?;
-            }
-            if !remaining.is_empty() {
-                return Err(Error::InvalidCursor);
-            }
-        } else {
-            RowKey::decode(
-                bytes
-                    .get(ENTITY_PREFIX_BYTES..)
-                    .ok_or(Error::InvalidCursor)?,
-                entity.key_type()?,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn cursor(&self, position: &[u8], resume: Resume) -> QueryCursor {
-        QueryCursor {
-            binding: self.binding,
-            position: position.to_vec(),
-            resume,
-        }
     }
 }
 
@@ -2181,7 +1929,7 @@ fn execute_inner<M: Memory>(
         return Ok(page);
     };
     let terminal = range::terminal_key(&bounds, plan.descending);
-    let mut entries = map.range((bounds.0.as_ref(), bounds.1.as_ref()));
+    let mut next_entry = range::entries(map, &bounds, plan.descending);
     let mut collected = if let distinct::Strategy::Complete { key_fields } = plan.distinct {
         Some(distinct::Collection::new(
             plan.projection.ok_or(Error::InvalidQuery)?,
@@ -2212,30 +1960,21 @@ fn execute_inner<M: Memory>(
         };
     // Inspection overwrites every declared field's span, including absent fields.
     let mut spans = [(0_u16, 0_u16); crate::schema::MAX_FIELDS];
-    let mut next_entry = || {
-        if plan.descending {
-            entries.next_back()
-        } else {
-            entries.next()
-        }
-    };
-    while let Some(entry) = next_entry() {
+    while let Some((stored_key, stored_value)) = next_entry() {
         // An exhausted iterator proves completion even at the candidate budget.
-        // Refuse another entry before inspecting its key, value or owner.
+        // Refuse another candidate before inspecting its row or fetching an owner.
         if page.examined == request.work {
             return Err(Error::Limit);
         }
         page.examined += 1;
-        let stored_key = entry.key();
         let mut read_bytes = stored_key.len();
         let (owner, bytes) = if plan.index.is_some() {
-            let owner_bytes = entry.value();
-            read_bytes += owner_bytes.len();
-            read_index_owner(map, entity.id, primary_type, &owner_bytes)?
+            read_bytes += stored_value.len();
+            read_index_owner(map, entity.id, primary_type, &stored_value)?
         } else {
             (
                 RowKey::decode(&stored_key[ENTITY_PREFIX_BYTES..], primary_type)?,
-                entry.value(),
+                stored_value,
             )
         };
         if let Some(used) = input_bytes.as_deref_mut() {
@@ -2258,7 +1997,7 @@ fn execute_inner<M: Memory>(
                 entity,
                 &entity.row_info(&values, &bytes, &spans)?,
                 owner,
-                stored_key,
+                &stored_key,
             )?;
         } else if RowKey::from_index(values[plan.primary])? != owner {
             return Err(Error::Corrupt);
@@ -2389,7 +2128,7 @@ fn execute_inner<M: Memory>(
 
             true
         };
-        let boundary = distinct::boundary(entity, plan.index, plan.distinct, stored_key)?;
+        let boundary = distinct::boundary(entity, plan.index, plan.distinct, &stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {
             accumulator.push(entity, &values, &bytes, &spans, &mut component)?;
@@ -2416,7 +2155,7 @@ fn execute_inner<M: Memory>(
                 return Err(Error::RowTooLarge);
             }
             if size > request.bytes - page.output_bytes {
-                page.next = Some(plan.cursor(stored_key, Resume::Retry));
+                page.next = Some(plan.cursor(&stored_key, Resume::Retry));
 
                 return Ok(page);
             }
@@ -2441,7 +2180,7 @@ fn execute_inner<M: Memory>(
                 .as_deref()
                 .is_some_and(|used| *used > STEP_INPUT_BYTES - candidate_bytes)
         {
-            if terminal == Some(stored_key) {
+            if terminal == Some(&stored_key) {
                 break;
             }
             if request.single_result_probe.is_some()
@@ -2464,7 +2203,7 @@ fn execute_inner<M: Memory>(
             } else {
                 Resume::After
             };
-            page.next = Some(plan.cursor(stored_key, resume));
+            page.next = Some(plan.cursor(&stored_key, resume));
 
             return Ok(page);
         }

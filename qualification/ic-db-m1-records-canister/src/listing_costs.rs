@@ -208,6 +208,32 @@ fn measured_filter_count((shape, counter): crate::transport::Measured<u8>) -> (u
                 .unwrap();
             (a.value, a.examined, a.fetched)
         }
+        4 | 5 => {
+            use crate::schema::BinaryObject;
+            let q = db.query::<BinaryObject>().gte(BinaryObject::ID, 1_u64);
+            let a = if shape == 4 {
+                q.count()
+            } else {
+                q.count_validated()
+            }
+            .unwrap();
+            (a.value, a.examined, a.fetched)
+        }
+        6..=8 => {
+            use crate::schema::BinaryObject;
+            let id = if shape == 7 { 2_u64 } else { 1_u64 };
+            let q = db
+                .query::<BinaryObject>()
+                .eq(BinaryObject::ID, id)
+                .work_limit(1);
+            if shape == 8 {
+                let a = q.has_at_least(2).unwrap();
+                (u64::from(a.value), a.examined, a.fetched)
+            } else {
+                let a = q.count().unwrap();
+                (a.value, a.examined, a.fetched)
+            }
+        }
         _ => panic!("unknown filter shape"),
     };
     (value, examined as u32, fetched as u32, counter() - start)
@@ -319,4 +345,66 @@ fn measured_bulk_selection(
         _ => panic!("unknown bulk selection path"),
     };
     (rows, counter() - start)
+}
+
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime, name = "seed_primary_pages",
+    guard = crate::transport::admit::<250>, decode = crate::transport::decode::<_, 250>,
+    encode = crate::transport::encode::<_, 250>, max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn seed_primary_pages(shape: u8) {
+    use crate::schema::BinaryObject;
+    let host = runtime();
+    let mut db = open(&host);
+    for id in 1..=24 {
+        let size = match shape {
+            0 => 8,
+            1 => 1024,
+            2 if matches!(id, 9 | 17) => 1024,
+            2 => 8,
+            _ => panic!("unknown shape"),
+        };
+        let row = BinaryObject {
+            id,
+            payload: vec![id as u8; size],
+            optional: None,
+        };
+        let mut batch = ic_db::Batch::new();
+        if id == 1 {
+            batch.replace(&row).unwrap();
+        } else {
+            batch.insert(&row).unwrap();
+        }
+        db.commit(batch).unwrap();
+    }
+}
+
+type PrimaryPageSample = (Vec<(u64, ic_wire::ByteBuf)>, Option<u64>, u64, u64);
+#[ic_platform_runtime::update(
+    runtime = ic_platform_runtime, name = "measured_primary_page",
+    guard = crate::transport::admit::<251>, decode = crate::transport::decode_measured::<_, 251>,
+    encode = crate::transport::encode::<_, 251>, max_bytes = 65_536,
+    on_error = crate::transport::endpoint_error
+)]
+fn measured_primary_page(
+    ((after, limit), counter): crate::transport::Measured<(Option<u64>, u8)>,
+) -> PrimaryPageSample {
+    let start = counter();
+    let host = runtime();
+    let db = open(&host);
+    let opened = counter();
+    let page = db
+        .page::<crate::schema::BinaryObject>(after, usize::from(limit))
+        .unwrap();
+    let end = counter();
+    (
+        page.rows
+            .into_iter()
+            .map(|r| (r.id, r.payload.into()))
+            .collect(),
+        page.next_after,
+        opened - start,
+        end - opened,
+    )
 }

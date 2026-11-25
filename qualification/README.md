@@ -6,7 +6,7 @@ on this workspace. Published suppliers and exact
 resolved versions are recorded in [Cargo.lock](Cargo.lock). The comparison fixture
 also consumes IcyDB at an immutable Git revision; it is not an IC DB dependency.
 
-IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a populated 0.78.9 backing intact. The previous release reopened the allocation and read the original value.
 
@@ -16,7 +16,7 @@ Package directories match their Cargo package names. Qualification callers use
 Wire 0.30.2's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.268.0 endpoints. Both use Wire 0.30.2, as does the downstream schema inspection probe. The frozen IcyDB comparison
+with Canic 0.270.0 endpoints. Both use Wire 0.30.2, as does the downstream schema inspection probe. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -49,7 +49,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.268.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.270.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -6671,6 +6671,132 @@ For 32 distinct hits with a 64-byte note, repeated projected reads took
 reads took 2,122,429. With repeated hits and misses, the three paths took
 3,467,199, 1,231,384 and 1,242,390 instructions respectively.
 
+### Query reads and B-tree sizing on Storage 0.80.0
+
+On IC DB 0.31.0 (`ba9accc`), the fluent scanner borrowed the value of each owned Storage range entry. Storage decoded that borrow into a new byte vector. Consuming the entry transfers the existing buffer to IC DB. The typed primary and index page readers can consume their entries too. The following matched PocketIC runs used `make m2-bulk-selection m2-listing-costs` on both variants with the same locks, toolchain and 1,024-byte node target.
+
+| Workload | Before, instructions | After, instructions | Reduction |
+| --- | ---: | ---: | ---: |
+| Ordered listing, 440 results over 23 calls, including open per call | 86,109,664 | 85,606,326 | 0.58% |
+| Descending ULID range, 21 IDs over three pages, after open | 699,738 | 689,792 | 1.42% |
+| Same range, full rows, after open | 690,162 | 678,642 | 1.67% |
+| 32 separate fluent projected firsts, distinct hits, 64-byte note, after open | 3,571,279 | 3,550,553 | 0.58% |
+| Projected bulk lookup for those same 32 keys, after open | 2,122,429 | 2,122,429 | 0% |
+
+The uncompressed query-measurement canister grew from 1,254,093 to 1,254,342 bytes. The probes checked positional bulk results and misses, ordered pages against SQLite, and both ULID projections across continuation boundaries. Charged cycles were unmeasured.
+
+A second comparison varied only `BTreeMapOptions::node_target_bytes` at fresh database creation with the consuming reader. Storage's allocation unit stayed at 256 bytes. Stable extent is for the seeded 130-row fixture. Write totals cover the first insert, three replacements and delete, including open per operation. The 440-result listing uses the later 530-row population.
+
+| Node target, bytes | Seeded stable bytes | Five writes, instructions | First listing page, instructions | All 23 pages, instructions |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,024 (default) | 393,216 | 7,836,301 | 3,541,941 | 85,606,326 |
+| 512 | 327,680 | 7,518,782 | 3,450,711 | 85,915,228 |
+| 256 | 327,680 | 7,423,750 | 3,447,958 | 86,165,128 |
+
+Smaller reservations saved one 64 KiB stable page and reduced write instructions on this fixture. The supplier default had the lowest complete listing cost. IC DB retains that default across store creation and migration.
+
+### Cursorless single-result queries on Storage 0.80.0
+
+The matched baseline includes the consuming range reader above and the default node target. In `make m2-bulk-selection`, each fluent lookup filters on one primary key and calls projected `first()`. Both runs measure after open through result construction. Removing the SHA-256 cursor binding from cursorless single-result admission saves 15,530 instructions per lookup for this shape, including a miss.
+
+| 64-byte unselected note | Before, instructions | After, instructions |
+| --- | ---: | ---: |
+| One projected first, hit | 111,922 | 96,392 |
+| One projected first, miss | 98,695 | 83,165 |
+| 32 projected firsts, distinct hits | 3,550,553 | 3,053,593 |
+| 32 projected firsts, repeated hits and misses | 3,450,543 | 2,953,583 |
+| One projected bulk read, 32 distinct hits | 2,122,429 | 2,122,429 |
+
+The same branch applies to cursorless `try_one()`; the table measures `first()`. All 12 bulk fixture combinations passed. In `make m2-listing-costs`, all 440 results matched SQLite across 23 pages. Page admission added seven instructions per call (161 total). The uncompressed query-measurement Wasm grew 40 bytes, from 1,254,342 to 1,254,382. Charged cycles were unmeasured.
+
+A separate discarded experiment stored up to 32 key bytes inline in IC DB's in-memory map key. Projected bulk reads of 32 distinct hits fell to 2,061,325 instructions, but three full-row ULID pages rose from 678,642 to 707,668 instructions after open, and the fixture Wasm grew by 10,292 bytes. Both experiments used Storage 0.80.0's existing durable key encoding.
+
+### Synchronous count and existence planning on Storage 0.80.0
+
+Run `make m2-filter-costs` to compare synchronous count and existence calls on an installed records canister. Both builds included the cursorless single-result change above. Only the second build skips the cursor binding hash for synchronous count plans. The figures cover handler instructions from before database open through the result. Each before/after pair returned the same value and had the same examined-entry and row-fetch counts. The fixture checked stable-memory bytes before and after each set of reads.
+
+| Filter and terminal | Before | After | Reduction |
+| --- | ---: | ---: | ---: |
+| Membership count, early hit | 477,676 | 454,416 | 4.9% |
+| Membership existence, early hit | 429,100 | 405,840 | 5.4% |
+| Empty-title count | 311,984 | 297,065 | 4.8% |
+| Validated count over six rows | 343,479 | 328,583 | 4.3% |
+| Membership count, late hit | 481,012 | 457,752 | 4.8% |
+| Membership existence, late hit | 584,516 | 561,256 | 4.0% |
+
+The uncompressed query-measurement Wasm grew from 1,254,382 to 1,254,468 bytes (+86). In the paginated control, the complete 440-result listing matched SQLite over 23 calls and cost 85,607,085 instructions, up 598 across all pages. Charged cycles were unmeasured.
+
+### Key-only range counts on Storage 0.80.1
+
+Both installed builds use published Storage 0.80.1, the default B-tree sizing, and synchronous count admission above. The baseline advances ordinary entries and the candidate uses `keys_range` in IC DB's key-count loop. Row-validated counts keep reading rows. Run `make m2-count-profile` and `make m2-filter-costs`. The threshold and budget arms come from [Storage's consumer qualification](https://github.com/dragginzgame/ic-storage/blob/497fe5c/qualification/README.md#ic-db-count-and-threshold-comparison).
+
+| Workload | Entry range, instructions | Key range, instructions |
+| --- | ---: | ---: |
+| 511 matching primary keys, after upgrade | 3,548,602 | 3,192,010 |
+| Same range, threshold of eight with eight work units | 155,358 | 149,714 |
+| Same range, validated count | 6,150,141 | 6,150,141 |
+| One row with an 8-byte blob, including open | 272,742 | 271,243 |
+| One row with a 1,024-byte blob, including open | 298,865 | 271,745 |
+
+The first three measurements exclude the 553,279 instructions for opening the 512-row fixture in both builds. All 180 primary-range observations agreed on counts, threshold outcomes and work-limit refusals. At 512 matches the ordinary and validated counts succeeded with 512 units. The 31-unit count refused and the eight-hit threshold refused at seven units. The driver checked backing preservation. Count-profile Wasm grew from 400,830 to 400,837 uncompressed bytes. Charged cycles were unmeasured.
+
+### Experimental bulk reads on Storage 0.80.1
+
+A disposable build compared ordinary `get_many` with Storage's test-support-only `visit_sorted_keys` on the same installed Document fixture. Both builds enabled the same Storage feature. The prototype grouped encoded keys by input-position mask, visited the sorted distinct keys, and decoded each hit into its original slots. Both builds used point lookup for one input. All 12 cases passed the positional oracle. The measured interval includes grouping and result construction after database open.
+
+| Projected bulk read, 64-byte note | Point lookup instructions | Shared traversal instructions |
+| --- | ---: | ---: |
+| 8 distinct consecutive hits | 510,079 | 241,304 |
+| 32 distinct consecutive hits | 2,122,557 | 773,541 |
+| 32 positions with repeated hits and misses | 1,242,458 | 584,014 |
+
+The query-measurement module grew from 1,255,482 to 1,264,514 uncompressed bytes, including IC DB grouping code. This experiment measured clustered and mixed probes. At 0.80.1 IC DB's product bulk path used point reads. [Upstream results and request for a supported fallible visitor](https://github.com/dragginzgame/ic-storage/issues/12#issuecomment-7163588376)
+
+### Exact-key fluent reads on Storage 0.80.1
+
+When the final lower and upper physical bounds are both inclusive and equal, the shared scanner uses one map lookup. Other ranges retain their directional iterator. The two installed release builds below used the same source directory, toolchain, Storage 0.80.1 and query-measurement features. Reproduce the workloads with `make m2-bulk-selection m2-filter-costs m2-listing-costs`.
+
+| Workload | Range iterator, instructions | Exact-key lookup, instructions |
+| --- | ---: | ---: |
+| Projected first, one hit | 96,413 | 90,287 |
+| Projected first, one miss | 83,186 | 76,971 |
+| 32 projected firsts, distinct hits | 3,054,265 | 2,776,834 |
+| One projected bulk read, same 32 hits | 2,122,557 | 2,122,557 |
+| Indexed membership existence, late hit | 561,321 | 520,410 |
+| Ordered listing, 440 results over 23 pages | 85,568,284 | 85,587,546 |
+
+The projected reads use the Document fixture with a 64-byte unselected note and measure after store open. Existence and listing include open. The late hit examined five probes and fetched one owner in both builds. Both listings matched SQLite on every page. The uncompressed canister grew by 391 bytes, from 1,255,429 to 1,255,820. Charged cycles were unmeasured.
+
+### Bulk primary-key reads on Storage 0.80.2
+
+IC DB uses the published fallible sorted-key visitor with default Storage features. The point-read control and production candidate used identical lockfiles, compiler, feature selection and `make m2-bulk-selection` fixture. Instructions cover work after database open through construction of the ordered result. They include encoding, grouping, traversal and row decoding. Each result was checked against the expected input positions and misses on all three paths: repeated projected first, whole-row bulk and projected bulk.
+
+| Projected read, 64-byte unselected note | Point reads | Production | Reduction |
+| --- | ---: | ---: | ---: |
+| 8 consecutive hits | 509,373 | 235,071 | 53.9% |
+| 32 consecutive hits | 2,122,557 | 719,622 | 66.1% |
+| 32 positions with repeats and misses | 1,242,458 | 562,933 | 54.7% |
+| 32 scattered hits in reverse input order | 3,139,663 | 1,577,386 | 49.8% |
+| 32 scattered misses in reverse input order | 2,931,693 | 1,324,949 | 54.8% |
+| 32 copies of one hit | 233,308 | 231,819 | 0.6% |
+
+The scattered workload added 256 even keys to the original 32-row population. The uncompressed measurement canister grew from 1,255,557 to 1,260,234 bytes (+4,677). All 15 input combinations passed. IC DB peak heap and charged cycles were unmeasured. [Storage visitor contract](https://github.com/dragginzgame/ic-storage/blob/e7c46dc/crates/ic-storage/src/adapter/map.rs#L176)
+
+### Exact-key counts on Storage 0.80.2
+
+When every remaining predicate is proven by the physical key and the final bounds are the same inclusive key, IC DB counts it with a single Storage presence check. `make m2-filter-costs` compares this with opening a key-only iterator at the same bounds. Both installed builds used the same Storage version, fixtures and feature selection. Each exact probe has a one-candidate work limit. Handler instructions include database open.
+
+| Query | Key-only iterator | Point presence check |
+| --- | ---: | ---: |
+| Exact ID, hit, 8-byte blob | 260,599 | 240,264 |
+| Exact ID, miss, 8-byte blob fixture | 261,814 | 257,395 |
+| Exact ID, hit, 1,024-byte blob | 261,069 | 240,734 |
+| Exact ID, miss, 1,024-byte blob fixture | 261,744 | 257,325 |
+| At least two matches for one existing ID, 1,024-byte blob | 260,295 | 240,584 |
+| Open-ended range containing the same row | 271,858 | 271,883 |
+
+All 16 filter cases returned the same values and examined/fetched counts. Each hit examined one key, each miss examined zero, and neither fetched a row. The eight-byte and 1,024-byte fixtures preserved their stable bytes. The uncompressed measurement Wasm grew from 1,260,663 to 1,260,918 bytes (+255). Charged cycles were unmeasured.
+
 ### Installed descending ULID time listing
 
 `make m2-listing-costs` runs a read-only PocketIC query selecting primary keys in
@@ -7357,3 +7483,18 @@ read returns the remaining document, ID 4, and finishes enumeration. A further
 upgrade preserves that result and the discarded target still refuses ordinary
 access. This covers cancellation before publication with the source frozen
 throughout copying and cleanup.
+
+### Primary page lookahead on Storage 0.80.3
+
+Run `make m2-primary-pages` to install the measurement canister in PocketIC. The driver follows the primary page token over 24 binary objects and checks every ID, payload byte, terminal token and the stable memory image. It repeats after upgrade. Set `IC_DB_PAGE_PREDECESSOR` to a previously built measurement Wasm to seed and read with that build before upgrading.
+
+Both comparison arms used crates.io Storage 0.80.3. Only the full-page continuation probe changed from reading the next entry to reading its key. The table gives post-open IC instructions on freshly installed canisters with a page limit of eight.
+
+| Workload | Entry probe | Key probe | Reduction |
+|---|---:|---:|---:|
+| First page, 8-byte payloads | 118,288 | 117,627 | 0.56% |
+| First page, 1 KiB payloads | 359,802 | 333,103 | 7.42% |
+| First page, 8-byte payloads followed by a 1 KiB successor | 143,903 | 117,469 | 18.37% |
+| Three pages, all 24 payloads of 1 KiB | 1,032,088 | 977,813 | 5.26% |
+
+At limit 32 the 24-row partial page had identical costs in all three fixtures. All 204 observations passed in each run (old probe upgraded to new, and new probe throughout). The uncompressed measurement Wasm grew from 1,268,102 to 1,268,234 bytes. The timings exclude database open and reply encoding. Charged cycles were unmeasured. Storage separately qualified the direct 0.80.2 to 0.80.3 format-compatible upgrade. [Storage qualification](https://github.com/dragginzgame/ic-storage/blob/63684b6609ca387756552462b2124cbad4535cf2/qualification/README.md#positioned-lookahead-against-published-0802)

@@ -21,15 +21,20 @@ use std::ops::Bound;
 )]
 fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) {
     let start = ic_platform_runtime::raw::instruction_counter();
-    if matches!(mode, 0 | 1 | 5..=11) {
+    if matches!(mode, 0 | 1 | 5..=14) {
         let db = database();
         let opened = ic_platform_runtime::raw::instruction_counter();
         let mut query = db.query::<Entry>();
-        // Mode 11 exercises the application default. The comparison arms admit 512 candidates.
+        // Mode 11 keeps the application default. Threshold and refusal probes use smaller budgets.
         if mode != 11 {
-            query = query.work_limit(512);
+            query = query.work_limit(match mode {
+                12 => 7,
+                13 => 8,
+                14 => 31,
+                _ => 512,
+            });
         }
-        if matches!(mode, 7 | 8) {
+        if matches!(mode, 7 | 8 | 12..=14) {
             query = query.filter("id", Comparison::Ge, 1_u64).filter(
                 "id",
                 Comparison::Lt,
@@ -47,9 +52,21 @@ fn count_profile((mode, operand): (u8, Option<u64>)) -> (Option<u64>, u64, u64) 
         if matches!(mode, 9 | 10) {
             query = query.filter("amount", Comparison::Ge, 0_u64);
         }
+        if matches!(mode, 12 | 13) {
+            let result = match query.has_at_least(8) {
+                Ok(answer) => Some(u64::from(answer.value)),
+                Err(Error::Limit) => None,
+                Err(error) => panic!("unexpected threshold error: {error:?}"),
+            };
+            return (
+                result,
+                opened - start,
+                ic_platform_runtime::raw::instruction_counter() - opened,
+            );
+        }
         let count = match mode {
             5 => query.count_index_entries(),
-            6 | 7 | 9 | 11 => query.count(),
+            6 | 7 | 9 | 11 | 14 => query.count(),
             _ => query.count_validated(),
         };
         let result = match count {

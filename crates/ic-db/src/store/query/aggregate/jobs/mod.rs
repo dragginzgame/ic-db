@@ -565,10 +565,7 @@ fn prepare<M: Memory>(
                 None
             } else {
                 let cursor = QueryCursor::from_bytes(&record.cursor)?;
-                if cursor.binding != plan.binding {
-                    return Err(Error::Corrupt);
-                }
-                plan.validate_position(entity, &cursor)?;
+                plan.validate_cursor(entity, &cursor)?;
 
                 Some(cursor)
             };

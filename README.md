@@ -1,6 +1,6 @@
 # ic-db
 
-IC DB uses IC Storage 0.80.0 named allocations and its V1 directory and B-tree. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
+IC DB uses IC Storage 0.80.3 named allocations and its V1 directory and B-tree. Stores created with 0.80.0 through 0.80.2 reopen directly. Existing 0.78 and 0.79 backing requires export with the previous release and import into fresh storage. IC DB owns the row, index and job codecs.
 
 A fresh design workspace for a smaller embedded Internet Computer database.
 This repository explores replacing IcyDB's accumulated mechanisms with a system

@@ -7,6 +7,44 @@ use std::{cmp::Ordering, ops::Bound};
 
 pub(super) type Bounds = (Bound<StoreKey>, Bound<StoreKey>);
 
+// Check the final physical bounds, including any cursor and predicate tightening.
+pub(super) fn exact_key(bounds: &Bounds) -> Option<&StoreKey> {
+    match bounds {
+        (Bound::Included(low), Bound::Included(high)) if low == high => Some(low),
+        _ => None,
+    }
+}
+
+// A closed range containing one physical key needs no iterator seek or lookahead.
+pub(super) fn entries<'a, M: ic_storage::Memory>(
+    map: &'a super::Map<M>,
+    bounds: &'a Bounds,
+    descending: bool,
+) -> impl FnMut() -> Option<(StoreKey, Vec<u8>)> + 'a {
+    enum Scan<P, R> {
+        Point(P),
+        Range(R),
+    }
+    let mut scan = match exact_key(bounds) {
+        Some(key) => Scan::Point(Some(key)),
+        None => Scan::Range(map.range((bounds.0.as_ref(), bounds.1.as_ref()))),
+    };
+    move || match &mut scan {
+        Scan::Point(key) => {
+            let key = key.take()?;
+            map.get(key).map(|bytes| (key.clone(), bytes))
+        }
+        Scan::Range(entries) => {
+            let entry = if descending {
+                entries.next_back()
+            } else {
+                entries.next()
+            }?;
+            Some(entry.into_pair())
+        }
+    }
+}
+
 // Only an inclusive endpoint can be observed as the final physical map key.
 pub(super) fn terminal_key(bounds: &Bounds, descending: bool) -> Option<&StoreKey> {
     match if descending { &bounds.0 } else { &bounds.1 } {

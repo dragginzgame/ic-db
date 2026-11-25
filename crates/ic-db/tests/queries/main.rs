@@ -375,6 +375,11 @@ fn projected_single_matches_share_page_and_cardinality_bounds() {
             .id,
         4
     );
+    // A projected cursor cannot resume a whole-entity single-result query.
+    assert!(matches!(
+        category().after(&cursor).first(),
+        Err(Error::InvalidCursor)
+    ));
     assert!(matches!(
         category().after(&cursor).try_one_as::<Summary>(),
         Err(Error::InvalidQuery)
