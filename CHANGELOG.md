@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.31.1] - Unreleased
+## [0.31.1] - 2026-11-25
 
 ### ⚡ Performance
 
