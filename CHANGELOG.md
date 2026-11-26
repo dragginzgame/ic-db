@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0] - Unreleased
+
+### 🔄 Changed
+
+- Host loggers now receive IC Logging 0.26 severity values. Use `ic_db::logging::Level` in callbacks passed to `initialize_with_logger` so the callback matches the database's logging version.
+- The optional metrics feature uses IC Metrics 0.30.23. The product and qualification lockfiles select IC Platform Protocol 0.3.11.
+
 ## [0.31.3] - 2026-11-25
 
 ### ⚡ Performance
