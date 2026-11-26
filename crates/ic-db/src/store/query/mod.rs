@@ -1960,6 +1960,7 @@ fn execute_inner<M: Memory>(
         };
     // Inspection overwrites every declared field's span, including absent fields.
     let mut spans = [(0_u16, 0_u16); crate::schema::MAX_FIELDS];
+    let mut index_info = None;
     while let Some((stored_key, stored_value)) = next_entry() {
         // An exhausted iterator proves completion even at the candidate budget.
         // Refuse another candidate before inspecting its row or fetching an owner.
@@ -1992,14 +1993,13 @@ fn execute_inner<M: Memory>(
             &mut values,
             needs_spans.then_some(&mut spans),
         )?;
+        let row_key = RowKey::from_index(values[plan.primary])?;
         if plan.index.is_some() {
-            validate_index_entry(
-                entity,
-                &entity.row_info(&values, &bytes, &spans)?,
-                owner,
-                &stored_key,
-            )?;
-        } else if RowKey::from_index(values[plan.primary])? != owner {
+            let info = index_info.get_or_insert_with(|| crate::__private::RowInfo::new(row_key));
+            info.key = row_key;
+            entity.fill_index_info(&values, &bytes, &spans, info)?;
+            validate_index_entry(entity, info, owner, &stored_key)?;
+        } else if row_key != owner {
             return Err(Error::Corrupt);
         }
         let read = |position: usize, member: Option<crate::member::RecordMember>| {

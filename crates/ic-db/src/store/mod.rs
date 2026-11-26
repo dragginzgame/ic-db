@@ -675,7 +675,11 @@ impl<M: Memory> Database<M> {
                 break;
             };
             let row = E::decode(&bytes)?;
-            validate_index_entry(entity, &row.__row_info(), id, &key)?;
+            let info = row.__row_info();
+            visit_index_components(entity, &info, |idx, components| {
+                check_component_framing(entity, idx, components)
+            })?;
+            validate_index_entry(entity, &info, id, &key)?;
             rows.push(row);
         }
 
@@ -1212,15 +1216,25 @@ fn visit_index_components(
 
             return Err(Error::Corrupt);
         };
-        let mut remaining = values.as_slice();
-        for name in index.fields {
-            let field = entity.index_field(name).ok_or(Error::Corrupt)?;
-            key::consume_component(&mut remaining, field, index.present_only, Error::Corrupt)?;
-        }
-        if !remaining.is_empty() {
-            return Err(Error::Corrupt);
-        }
         visit(index, values)?;
+    }
+
+    Ok(())
+}
+
+// Generated RowInfo can be supplied by an Entity implementation. Check its
+// component bytes before admitting them as physical index keys.
+fn check_component_framing(
+    entity: &EntitySchema,
+    index: &crate::IndexSchema,
+    mut remaining: &[u8],
+) -> Result<(), Error> {
+    for name in index.fields {
+        let field = entity.index_field(name).ok_or(Error::Corrupt)?;
+        key::consume_component(&mut remaining, field, index.present_only, Error::Corrupt)?;
+    }
+    if !remaining.is_empty() {
+        return Err(Error::Corrupt);
     }
 
     Ok(())
@@ -1229,6 +1243,7 @@ fn visit_index_components(
 fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey, bool)>, Error> {
     let mut entries = Vec::new();
     visit_index_components(entity, info, |index, values| {
+        check_component_framing(entity, index, values)?;
         let mut key = index_prefix(entity.id, index.id);
         key.extend_from_slice(values);
         if !index.unique {
@@ -1251,7 +1266,9 @@ fn index_entries(entity: &EntitySchema, info: &RowInfo) -> Result<Vec<(StoreKey,
 }
 
 // A visited entry must agree with its owner in namespace, components and suffix.
-// Unrelated entries retain their framing and size checks without building physical keys.
+// Stored-row inspection has decoded the typed components and encoded them with
+// the canonical key writer. Generated RowInfo callers must check framing first.
+// All indexes still obey the physical size limit, including unrelated entries.
 fn validate_index_entry(
     entity: &EntitySchema,
     info: &RowInfo,

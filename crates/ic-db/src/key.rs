@@ -338,15 +338,26 @@ pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
 #[doc(hidden)]
 #[must_use]
 pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Option<Vec<u8>> {
-    if present_only && values.iter().any(|(value, _)| *value == IndexValue::Absent) {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    for &(value, optional) in values {
-        value.append_component(optional, &mut bytes);
-    }
+    let mut bytes = None;
+    encode_index_into(values, present_only, &mut bytes);
 
-    Some(bytes)
+    bytes
+}
+
+pub(crate) fn encode_index_into(
+    values: &[(IndexValue<'_>, bool)],
+    present_only: bool,
+    slot: &mut Option<Vec<u8>>,
+) {
+    if present_only && values.iter().any(|(value, _)| *value == IndexValue::Absent) {
+        *slot = None;
+        return;
+    }
+    let bytes = slot.get_or_insert_with(Vec::new);
+    bytes.clear();
+    for &(value, optional) in values {
+        value.append_component(optional, bytes);
+    }
 }
 
 // The entity macro can name a record field across crates, but its declaration

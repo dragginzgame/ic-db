@@ -273,7 +273,14 @@ impl EntitySchema {
         let mut spans = [(0, 0); MAX_FIELDS];
         self.inspect_fields(bytes, self.key_fields(), &mut values, Some(&mut spans))?;
 
-        self.row_info(&values, bytes, &spans)
+        let key = RowKey::from_index(
+            values[self
+                .field_position(self.primary_key)
+                .ok_or(Error::Corrupt)?],
+        )?;
+        let mut info = RowInfo::new(key);
+        self.fill_index_info(&values, bytes, &spans, &mut info)?;
+        Ok(info)
     }
 
     pub(crate) fn key_fields(&self) -> u32 {
@@ -329,44 +336,41 @@ impl EntitySchema {
         Ok(())
     }
 
-    pub(crate) fn row_info<'a>(
+    // A scan retains the index buffers across owners of the same schema.
+    pub(crate) fn fill_index_info<'a>(
         &self,
         keys: &[IndexValue<'a>; MAX_FIELDS],
         bytes: &'a [u8],
         spans: &[(u16, u16); MAX_FIELDS],
-    ) -> Result<RowInfo, Error> {
-        let position = |name: &str| self.field_position(name).ok_or(Error::Corrupt);
-        let indexes = self
-            .indexes
-            .iter()
-            .map(|index| {
-                let mut components = [(IndexValue::Absent, false); 4];
-                for (slot, name) in components.iter_mut().zip(index.fields) {
-                    *slot = if let Some(position) = self.field_position(name) {
-                        (keys[position], self.fields[position].optional)
-                    } else {
-                        let (parent, member) = self.record_member(name).ok_or(Error::Corrupt)?;
-                        let (start, end) = spans[parent];
-                        let optional = self.fields[parent].optional;
-                        (
-                            member.read(&bytes[usize::from(start)..usize::from(end)], optional)?,
-                            optional || member.field().optional,
-                        )
-                    };
-                    if slot.0 == IndexValue::Absent && !slot.1 {
-                        return Err(Error::Corrupt);
-                    }
+        info: &mut RowInfo,
+    ) -> Result<(), Error> {
+        info.indexes.resize_with(self.indexes.len(), || None);
+        for (encoded, index) in info.indexes.iter_mut().zip(self.indexes) {
+            let mut components = [(IndexValue::Absent, false); 4];
+            for (slot, name) in components.iter_mut().zip(index.fields) {
+                *slot = if let Some(position) = self.field_position(name) {
+                    (keys[position], self.fields[position].optional)
+                } else {
+                    let (parent, member) = self.record_member(name).ok_or(Error::Corrupt)?;
+                    let (start, end) = spans[parent];
+                    let optional = self.fields[parent].optional;
+                    (
+                        member.read(&bytes[usize::from(start)..usize::from(end)], optional)?,
+                        optional || member.field().optional,
+                    )
+                };
+                if slot.0 == IndexValue::Absent && !slot.1 {
+                    return Err(Error::Corrupt);
                 }
+            }
 
-                Ok(key::encode_index(
-                    &components[..index.fields.len()],
-                    index.present_only,
-                ))
-            })
-            .collect::<Result<_, Error>>()?;
-        let key = RowKey::from_index(keys[position(self.primary_key)?])?;
-
-        let mut list_links = Vec::new();
+            key::encode_index_into(
+                &components[..index.fields.len()],
+                index.present_only,
+                encoded,
+            );
+        }
+        info.list_links.clear();
         for (field, &(start, end)) in self.fields.iter().zip(spans) {
             if let (Some(reference), FieldType::List { item, max_items }) =
                 (field.reference, field.value)
@@ -378,7 +382,7 @@ impl EntitySchema {
                         return Err(Error::Corrupt);
                     }
                     for _ in 0..count {
-                        list_links.push((
+                        info.list_links.push((
                             reference.index,
                             RowKey::from_index(IndexValue::read(&mut reader, *item)?)?,
                         ));
@@ -387,11 +391,7 @@ impl EntitySchema {
                 reader.finish()?;
             }
         }
-        Ok(RowInfo {
-            key,
-            indexes,
-            list_links,
-        })
+        Ok(())
     }
 }
 

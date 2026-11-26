@@ -427,6 +427,15 @@ pub mod __private {
         /// None means the row is outside an explicitly present-only unique index.
         pub indexes: Vec<Option<Vec<u8>>>,
     }
+    impl RowInfo {
+        pub(crate) fn new(key: RowKey) -> Self {
+            Self {
+                key,
+                indexes: Vec::new(),
+                list_links: Vec::new(),
+            }
+        }
+    }
 }
 
 /// Join two generated field-name constants for a scalar record member.

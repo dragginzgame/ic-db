@@ -1610,8 +1610,11 @@ a divergent key. [Verifier](https://github.com/dragginzgame/icydb-legacy/blob/6d
 · [Regression cases](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3/crates/icydb-core/src/db/session/tests/derived_integrity.rs#L274).
 
 IC DB compares the visited entry’s namespace, encoded components and owner suffix
-directly. Writes and reads share component framing checks. Reads still derive
-the component bytes of other indexes on the row and enforce the 512-byte
+directly. Stored-row inspection validates the fields before the canonical key
+encoder derives their components. The owner check compares those bytes with the
+visited entry. Entity-supplied index bytes undergo a separate framing check.
+A scan reuses its index buffers for successive owners within one page.
+Reads still derive the component bytes of other indexes on the row and enforce the 512-byte
 complete-key limit, including the suffix on non-unique indexes. Only writes
 and maintenance operations that need physical keys assemble the full keys.
 An ordinary query checks membership for the visited entry; verifying the

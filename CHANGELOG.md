@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0] - Unreleased
+
+### 🔄 Changed
+
+- The optional schema inspection feature implements IC Wire 0.31 traits. Applications that share IC DB types in Wire schemas should use IC Wire 0.31.1. The fixture CLI and qualification clients also use 0.31.1.
+
+### ⚡ Performance
+
+- Secondary-index scans compare each visited entry with components derived from its validated owner row without parsing those components twice. Reusing index-key buffers across each page brought the installed 23-page listing to 6.6% fewer instructions than 0.32.0. [Listing measurements](qualification/README.md#indexed-scans-of-validated-owners)
+
+### 🧪 Testing
+
+- The mixed-lifecycle qualification canister and its driver use Canic 0.273.0’s `endpoints` feature for mounted inspection, query and write endpoints.
+
 ## [0.32.0] - 2026-11-26
 
 ### 🔄 Changed

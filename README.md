@@ -998,7 +998,7 @@ disabled, including when the declarations carry the `wire` marker. Its build
 script can use just `ic-db/build`. Include Serde as a direct dependency wherever
 the marked declarations compile, including build dependencies for a shared schema. Ordinary
 application DTOs derive `ic_wire::typescript::Wire` with IC Wire’s `derive`
-feature. The host can enable `api-manifest` for offline inspection.
+feature. For DTOs encoded with ordinary Serde, use `#[wire(fixed)]` so the generated client reads the same layout. IC DB supplies this attribute for marked schema declarations. The host can enable `api-manifest` for offline inspection.
 
 ```rust
 use ic_db::design::prelude::*;
@@ -1007,6 +1007,7 @@ use ic_db::design::prelude::*;
 struct Action {}
 
 #[derive(serde::Serialize, serde::Deserialize, ic_wire::typescript::Wire)]
+#[wire(fixed)]
 struct UserAdminRequest {
     user_id: Ulid,
     action: Action,

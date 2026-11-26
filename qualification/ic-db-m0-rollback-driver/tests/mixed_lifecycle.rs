@@ -158,6 +158,14 @@ fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
     .unwrap()
 }
 
+// Exercise the current Wire client against Canic 0.273's Wire 0.30 endpoint.
+const APPLICATION_LIMITS: ic_wire::Limits = ic_wire::Limits {
+    bytes: canic::db::RPC_LIMITS.bytes,
+    allocation: canic::db::RPC_LIMITS.allocation,
+    nodes: canic::db::RPC_LIMITS.nodes,
+    depth: canic::db::RPC_LIMITS.depth,
+};
+
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
     ic_wire::encode(
         value,
@@ -165,7 +173,7 @@ fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
             method,
             direction: ic_wire::Direction::Request,
         },
-        canic::db::RPC_LIMITS,
+        APPLICATION_LIMITS,
     )
     .unwrap()
 }
@@ -177,7 +185,7 @@ fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
             method,
             direction: ic_wire::Direction::Response,
         },
-        canic::db::RPC_LIMITS,
+        APPLICATION_LIMITS,
     )
     .unwrap()
 }

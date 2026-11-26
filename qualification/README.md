@@ -13,16 +13,46 @@ In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a p
 Storage 0.80 records codec bounds in the map header. Raw DB probes use the physical 512-byte variable key bound and an unbounded byte value. Opening with different bounds refuses before writing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. Qualification callers use
-Wire 0.30.2's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
+Wire 0.31.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.270.0 endpoints. Both use Wire 0.30.2, as does the downstream schema inspection probe. The frozen IcyDB comparison
+with Canic 0.273.0 endpoints. Canic uses Wire 0.30.2 internally. The downstream schema inspection probe uses Wire 0.31.1. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
 as users and mappings in existing fixtures do not prescribe product entities or
 establish application compatibility. The private Toko GitHub repository is a
 separate tier-2 coverage target; the obsolete local checkout is not evidence.
+
+## Indexed scans of validated owners
+
+Toko's Weighted Review ranks scored tokens within each type and merges their
+fractional ranks across a collection. Its published 4,096-token result measures
+the entire handler. The following IC DB experiment isolates indexed listing
+costs. [Toko's handler measurements](https://github.com/dragginzgame/toko-new/issues/43)
+
+Matched runs of `make m2-listing-costs` used the same compiler, release profile,
+Canic 0.271.0 qualification lock and seeded Document fixture. The baseline used
+the 0.32.0 engine. All runs checked the ordered results against SQLite.
+
+| Installed query | Baseline instructions | With repeated parsing removed | With index buffers also reused |
+| --- | ---: | ---: | ---: |
+| Indexed top 20, 87 candidates | 10,526,583 | 9,976,221 | 9,668,449 |
+| Indexed listing, 440 results across 23 pages | 81,565,529 | 78,219,075 | 76,173,530 |
+| Primary scan and sort, top 20 | 2,316,545 | 2,316,545 | 2,331,382 |
+
+The uncompressed measurement Wasm sizes were 1,268,893, 1,272,311 and
+1,271,864 bytes respectively. Compared with baseline, the final fixture’s
+individual writes ranged from 72 fewer to 3,709 more instructions.
+
+A separate qualification build metered each Platform `stable64_read` with
+performance counter 0. It subtracted an adjacent back-to-back counter sample
+per read. The indexed top 20 made 726 reads, charged approximately 367,161
+instructions (3.8% of the uninstrumented total). The 23-page listing made 5,798
+reads, charged approximately 11,008,801 instructions (14.5%). These samples
+cover the handler from open through result construction. They isolate the raw
+read call and its immediate wrapper, excluding B-tree routing and other guest
+work. Toko's token layout and ranking code are outside this fixture.
 
 ## Application Wire schemas
 
@@ -49,7 +79,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.270.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.273.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -3815,7 +3845,7 @@ Two `make m2-named-growth` runs used the same compiled v1 format, locked release
 | 1 entity, 64 variants sharing a named scalar payload | 279,924 | 244,015 |
 | 1 entity, 64 variants with distinct named scalar payloads | 910,502 | 506,082 |
 
-In the last case the whole cold call went from 8,471,787 to 8,067,761 cycles. Uncompressed Wasm grew from 374,047 to 374,115 bytes. The result applies to scalar-heavy schemas; deeply recursive record graphs still need dependency propagation. Both runs checked rows, writes, filtered queries and upgrades on PocketIC. The artifacts are under `qualification/target/evidence/schema-finite-control` and `schema-finite-final`; select an output location with `NAMED_GROWTH_DIR`.
+In the last case the whole cold call went from 8,471,787 to 8,067,761 cycles. Uncompressed Wasm grew from 374,047 to 374,115 bytes. The result applies to scalar-heavy schemas; deeply recursive record graphs still need dependency propagation. All runs checked rows, writes, filtered queries and upgrades on PocketIC. The artifacts are under `qualification/target/evidence/schema-finite-control` and `schema-finite-final`; select an output location with `NAMED_GROWTH_DIR`.
 
 ### Retained schema handles on compiled schema v1
 

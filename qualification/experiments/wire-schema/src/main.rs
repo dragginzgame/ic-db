@@ -8,7 +8,7 @@ use ic_wire::{Encoding, Limits};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "inspection", derive(Wire))]
+#[cfg_attr(feature = "inspection", derive(Wire), wire(fixed))]
 struct UserAdminRequest {
     user_id: Ulid,
     action: Action,
@@ -108,11 +108,13 @@ mod tests {
     };
 
     #[derive(Serialize, Deserialize, Wire)]
+    #[wire(fixed)]
     struct PageRequest {
         after: Option<ic_db::QueryCursor>,
     }
 
     #[derive(Serialize, Deserialize, Wire)]
+    #[wire(fixed)]
     struct PageReply {
         id: u8,
         next: Option<ic_db::QueryCursor>,
@@ -374,6 +376,8 @@ mod tests {
             ValidatedRegistry::from_type::<User>("User", SchemaLimits::default()).unwrap();
         let metadata: serde_json::Value =
             serde_json::from_str(&registry.metadata_json().unwrap()).unwrap();
+        assert_eq!(metadata["User"]["k"], "record");
+        assert_eq!(metadata["User"]["fields"][0]["value"]["k"], "record");
         let fields = &metadata["User"]["fields"];
         assert_eq!(fields[0]["name"], "profile");
         assert_eq!(fields[1]["name"], "id");
