@@ -164,7 +164,16 @@ fn exact_value_text_hash_and_order() {
     .into_iter()
     .flat_map(|m| [0, 1, 2, 18, 28].map(|s| d(m, s)))
     .collect();
-    let key = |v: Decimal| ic_db::__private::encode_index(&[(v.into(), false)], false).unwrap();
+    let key = |v: Decimal| {
+        ic_db::__private::encode_index(
+            &[ic_db::__private::IndexComponent {
+                value: v.into(),
+                optional: false,
+            }],
+            false,
+        )
+        .unwrap()
+    };
     for &a in &values {
         for &b in &values {
             let wide = |v: Decimal| {

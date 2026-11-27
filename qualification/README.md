@@ -16,8 +16,13 @@ Package directories match their Cargo package names. Qualification callers use
 Wire 0.31.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.275.0 endpoints `canic_db_inspect`, `canic_db_query` and `canic_db_write`. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
+with Canic 0.276.0 endpoints `canic_db_inspect`, `canic_db_query` and `canic_db_write`. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
+
+With the named-struct worktree as the 0.275.0 control, the 0.276.0 adoption
+and shared protocol cleanup reduced the mixed-lifecycle fixture from 1,338,573
+to 1,328,095 uncompressed Wasm bytes. The code section went from 1,275,254 to
+1,264,826 bytes. Both runs passed the eight installed lifecycle tests.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
 as users and mappings in existing fixtures do not prescribe product entities or
@@ -79,7 +84,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.275.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.276.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -5648,6 +5653,69 @@ recoverable database/runtime error into a trap. It adds no product testing hook,
 allocator or execution-budget machinery. Claims apply to this selected shape and
 supplier version, not all combinations of references, types, heap sizes and tree
 histories. Normal measurement/console builds do not enable this feature.
+
+#### Maintenance cleanup against 0.35.0
+
+The same fault-enabled capacity driver and canister instrumentation ran against
+the 0.35.0 runtime (`4c2cd5a`) and the maintenance cleanup with Storage 0.80.6.
+The first copy used an 8,191-byte allowance. The first validation page visited
+32 physical entries. Charged cycles cover the entire update. The repeated
+cancellation counter surrounds just the second successful call on the same
+handle after cancelling an empty-row target.
+
+| Operation | Baseline instructions | Revised instructions | Baseline cycles | Revised cycles |
+| --- | ---: | ---: | ---: | ---: |
+| First single-row copy | 3,505,686 | 3,483,656 | 10,535,453 | 10,513,423 |
+| First validation page | 10,366,622 | 10,414,194 | 17,718,440 | 17,766,046 |
+| Repeat completed cancellation | 11,917 | 303 | — | — |
+| Most expensive copy chunk | 238,339,989 | 238,288,142 | — | — |
+| Most expensive validation chunk | 133,349,501 | 133,528,516 | — | — |
+| Most expensive retired-source cleanup chunk | 8,429,968 | 8,513,773 | — | — |
+
+The maintenance fixture shrank from 1,348,640 to 1,347,551 uncompressed Wasm
+bytes and from 1,284,431 to 1,283,311 code-section bytes. The two successive
+migrations finished at 3,866,624 and 6,291,456 stable bytes on both builds.
+Run `make m3-maintenance` to exercise the updated driver.
+
+Across 12 installed `make m2-query-growth` variants, total Wasm and code sections
+each grew by 149–154 bytes. The 8-to-32 entity slopes held at 2,640 bytes per
+entity for direct reads, 3,439 for one fluent shape and 4,393 for eight shapes
+(rounded). Across 53 warm fluent calls the change ranged from −2,304 to +1,182
+work instructions and −3,120 to +1,500 whole-call cycles. On the 32-entity
+eight-shape host, mode 10 used 207,331 → 205,962 warm work instructions and
+7,432,725 → 7,429,605 cycles. The matching cold call used 202,998 work
+instructions on both builds and 8,190,970 → 8,191,179 cycles.
+
+A second matched run replaced the positional index components with named
+`value` and `optional` fields in the runtime and generated code. Against the
+maintenance-cleanup worktree, all 12 query hosts had identical total Wasm and
+code-section byte counts. Work instructions and charged cycles matched on all
+53 warm fluent queries, 12 cold calls, 24 inserts and 12 read/replace journeys.
+The 32-entity eight-shape host measured 498,761 total bytes and 471,842 code
+bytes, with the same 4,393-byte growth per added entity. The migration-capacity
+fixture also changed how it constructs its source and target allocations. Its
+first copy and first validation page each used 40 more handler instructions.
+
+#### Query and retained-job hard cuts (0.36.0 worktree)
+
+A temporary native trace compared the old and revised filtered-path selectors
+across the 160 query tests. All 1,896 decisions agreed on the selected index,
+encoded prefix, fixed component count, direction and coverage result.
+
+Against the named-component fixture, `make m2-query-growth` measured six fewer
+uncompressed Wasm bytes and six fewer code bytes on each of eight fluent hosts.
+The four direct hosts matched their baseline sizes. The eight-shape 8-to-32
+entity slope held at 4,393 bytes per added entity. Work instructions and charged
+cycles changed by 0 to +180 across 53 warm queries and 12 cold calls. The 24
+insert and 12 read/replace measurements matched their controls.
+
+Against the Canic 0.276.0 mixed-history control, the installed fixture grew
+from 1,328,095 to 1,328,763 Wasm bytes and from 1,264,826 to 1,265,491 code
+bytes for the complete batch. Advancing the same retained count checkpoint
+used 834,422 → 834,441 handler instructions warm and 966,890 → 966,909 after
+upgrade. The corresponding update charges were 7,924,594 → 7,924,613 and
+8,057,482 → 8,057,501 cycles. The driver checked the handle and checkpoint
+backing on its matched warm and post-upgrade runs.
 
 #### Byte-limited migration recovery (0.27.6 worktree)
 

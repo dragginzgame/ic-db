@@ -1,11 +1,11 @@
 //! Broad matched queries over deterministic tuples, with no product-code oracle.
 
 mod artifact;
+mod wire_frame;
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
-use serde::{Serialize, de::DeserializeOwned};
+use ic_db_m0_rollback_driver::instance;
 use std::{collections::BTreeMap, fmt::Write};
+use wire_frame::{request as encode, response as decode};
 
 type Row = (u64, u64, u64);
 #[derive(Debug, PartialEq, Eq)]
@@ -26,30 +26,6 @@ struct Case {
     expected: Answer,
     legacy_refuses: bool,
 }
-fn encode<T: Serialize>(id: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
-        value,
-        Encoding::Frame {
-            method: id,
-            direction: Direction::Request,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
-fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
-        bytes,
-        Encoding::Frame {
-            method: id,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
 fn answer(id: u64, bytes: &[u8]) -> (Answer, u64) {
     match id {
         3 => {

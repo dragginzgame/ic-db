@@ -227,13 +227,13 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.275.0"
+version = "0.276.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6d8c3142f5559b8c1b4d9f4580eed117cf15fcbebb85896aa467b9c660ddddb"
+checksum = "9ea1039306d5e498cdf11d979abe8498cad6bfe08b978c893eb4878d41db83cd"
 dependencies = [
  "canic-macros",
  "ic-blob-storage",
- "ic-db 0.33.1",
+ "ic-db 0.34.2",
  "ic-entropy 0.7.0",
  "ic-jobs",
  "ic-logging",
@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "canic-macros"
-version = "0.275.0"
+version = "0.276.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fac0b0b7433d320548d3999f89b814be9d3e9a8a46bf71de1ed584142bf59b5"
+checksum = "a8b234c384c6021651df47b0496dfe09138d863675259971f0fc234ee73f6f53"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -919,13 +919,13 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.33.1"
+version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bd8d6b7a3b033f738154c5be68eb43c947ef4e14c9c6f5b54def211be144d8a"
+checksum = "798fadd99805cf466fe17a382c035782f8f3a002248a6c47ae86095445e37039"
 dependencies = [
  "ethnum",
  "getrandom 0.4.3",
- "ic-db-macros 0.33.1",
+ "ic-db-macros 0.34.2",
  "ic-logging",
  "ic-metrics",
  "ic-platform-runtime 0.23.27",
@@ -1080,9 +1080,9 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.33.1"
+version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "020d7db23ffe19c4ddfe3ec5967af38b88010dbd39daace27e1cf60194aa47c8"
+checksum = "e5d6643a01b5425a4d512bc41245e62e62e12ed305145de5f15f96d8c2a8f85a"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -3055,11 +3055,11 @@ single-path traversal bounds apply; there is no two-range seek or union plan.
 Sparse scan/index pages and retained counts through reopen use the same explicit
 comparison identity. This is native qualification, not new Wasm performance evidence.
 
-The fluent `filter_between_fields("price", "floor", "ceiling")` compares three
-fields on each row. Its two inclusive comparisons must both succeed.
-`filter_not_between_fields` uses a strict comparison on each side in one OR
-clause. If one bound is absent the other comparison can still match. Both
-methods lower to the same comparisons as frozen IcyDB’s
+Two `filter_fields` calls compare a field against inclusive row bounds, using
+`Ge` for the lower field and `Le` for the upper field. For a strict outside range,
+one `filter_any` clause uses `Lt` and `Gt` with `QueryOperand::Field` bounds.
+If one bound is absent the other alternative can still match. These comparisons
+retain the semantics of frozen IcyDB’s
 [`FieldRef` range builders](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/crates/icydb-core/src/db/query/builder/field/mod.rs#L199).
 IC DB’s existing field-comparison admission, work limits and cursor binding
 apply to these two terms.

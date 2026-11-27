@@ -158,6 +158,16 @@ impl CountInput<'_> {
     }
 }
 
+///
+/// ResumePoint
+/// Caller-supplied retry sequence and message time for a scalar job advance.
+///
+#[derive(Clone, Copy)]
+struct ResumePoint {
+    sequence: u64,
+    now: Timestamp,
+}
+
 impl<E: Entity, M: Memory> Query<'_, E, M> {
     /// Retain an exact count job without scanning input. Expiry must be after the
     /// host-captured `now` and at most one hour later. No write freeze is acquired.
@@ -297,24 +307,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         input: CountInput<'_>,
     ) -> Result<JobStep<u64>, Error> {
         let plan = self.aggregate_plan(input.projection(), false)?;
-        let mut record = jobs.load(handle)?;
-        let (mut reducer, expected) = self.retained_count_state(&plan, input)?;
-        let bytes = self.request.bytes;
-        let changed = prepare(
-            &*self.db.read()?,
-            E::SCHEMA,
-            self.request,
+        self.advance_scalar(
+            jobs,
+            handle,
+            ResumePoint { sequence, now },
             &plan,
-            Accumulator::Scalar(&mut reducer),
-            &mut record,
-            expected,
-            sequence,
-            now,
-        )?;
-
-        record.finish_and_save(jobs, handle, changed, bytes, || {
-            Ok((reducer.finish(false)?.into_count()?, 8))
-        })
+            |query, plan| query.retained_count_state(plan, input),
+            |reducer, _| Ok((reducer.finish(false)?.into_count()?, 8)),
+        )
     }
 
     /// Retain an integer, Decimal, Duration or finite float sum job with synchronous sum's exact result shape.
@@ -436,25 +436,45 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
         admitted: (Plan<'_>, Reducer),
     ) -> Result<JobStep<Option<R>>, Error> {
-        let (plan, mut reducer) = admitted;
+        let (plan, reducer) = admitted;
+        self.advance_scalar(
+            jobs,
+            handle,
+            ResumePoint { sequence, now },
+            &plan,
+            |_, plan| {
+                let expected = binding(plan, &reducer)?;
+                Ok((reducer, expected))
+            },
+            scalar_output,
+        )
+    }
+
+    fn advance_scalar<T>(
+        self,
+        jobs: &mut AggregateJobs<M>,
+        handle: &JobHandle,
+        point: ResumePoint,
+        plan: &Plan<'_>,
+        state: impl FnOnce(&Self, &Plan<'_>) -> Result<(Reducer, [u8; 32]), Error>,
+        finish: fn(Reducer, usize) -> Result<(T, usize), Error>,
+    ) -> Result<JobStep<T>, Error> {
         let mut record = jobs.load(handle)?;
-        let expected = binding(&plan, &reducer)?;
+        let (mut reducer, expected) = state(&self, plan)?;
         let limit = self.request.bytes;
         let changed = prepare(
             &*self.db.read()?,
             E::SCHEMA,
             self.request,
-            &plan,
+            plan,
             Accumulator::Scalar(&mut reducer),
             &mut record,
             expected,
-            sequence,
-            now,
+            point.sequence,
+            point.now,
         )?;
 
-        record.finish_and_save(jobs, handle, changed, limit, || {
-            scalar_output(reducer, limit)
-        })
+        record.finish_and_save(jobs, handle, changed, limit, || finish(reducer, limit))
     }
 }
 fn field_binding(binding: [u8; 32], field: Option<&str>) -> [u8; 32] {

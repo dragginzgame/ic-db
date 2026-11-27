@@ -1,10 +1,14 @@
-use super::{Error, Registry};
+use super::{Error, Registry, StoreDeclaration};
 use crate::{EntitySchema, FieldSchema, FieldType, IndexSchema, ReferenceSchema};
 
 const STORE: &str = "host::schema::Data";
 fn registry_fixture() -> Registry {
     Registry {
-        stores: vec![(STORE, "host::schema::App", "test.data.v1")],
+        stores: vec![StoreDeclaration {
+            path: STORE,
+            canister: "host::schema::App",
+            key: "test.data.v1",
+        }],
         canisters: vec!["host::schema::App"],
         ..Registry::default()
     }

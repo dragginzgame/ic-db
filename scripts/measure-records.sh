@@ -85,8 +85,6 @@ esac
 export IC_DB_COMPARISON_WORKLOAD="$workload"
 mkdir -p "$evidence"
 if [[ "$test_name" == query_matrix ]]; then
-    # Preserve the driver even while this new benchmark is still untracked.
-    cp qualification/ic-db-m0-rollback-driver/tests/query_matrix.rs "$evidence/query-matrix.rs"
     cp qualification/Cargo.lock "$evidence/Cargo.lock"
 fi
 rustc -Vv > "$evidence/compiler.txt"

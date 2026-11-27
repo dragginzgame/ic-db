@@ -58,17 +58,26 @@ pub enum SortDirection {
 
 /// An explicit sort field. A bare field name defaults to ascending order.
 #[derive(Clone, Copy)]
-pub struct OrderTerm<'a>(&'a str, SortDirection);
+pub struct OrderTerm<'a> {
+    field: &'a str,
+    direction: SortDirection,
+}
 
 impl<'a, T: AsRef<str> + ?Sized> From<&'a T> for OrderTerm<'a> {
     fn from(field: &'a T) -> Self {
-        Self(field.as_ref(), SortDirection::Ascending)
+        Self {
+            field: field.as_ref(),
+            direction: SortDirection::Ascending,
+        }
     }
 }
 
 impl<'a, T: AsRef<str> + ?Sized> From<(&'a T, SortDirection)> for OrderTerm<'a> {
     fn from((field, direction): (&'a T, SortDirection)) -> Self {
-        Self(field.as_ref(), direction)
+        Self {
+            field: field.as_ref(),
+            direction,
+        }
     }
 }
 
@@ -649,17 +658,8 @@ impl<'a> Request<'a> {
                 let QueryOperand::Literal(literal) = predicate.operand else {
                     return false;
                 };
-                match predicate.comparison {
-                    Comparison::Eq
-                    | Comparison::Ne
-                    | Comparison::Lt
-                    | Comparison::Le
-                    | Comparison::Gt
-                    | Comparison::Ge => {
-                        predicate.comparison.accepts_fixed_values(value, literal) == Some(false)
-                    }
-                    _ => false,
-                }
+                predicate.comparison.is_relational()
+                    && predicate.comparison.accepts_fixed_values(value, literal) == Some(false)
             })
         })
     }
@@ -742,11 +742,16 @@ impl<'a> Request<'a> {
 
             return;
         }
-        fields.push(OrderTerm(field, direction));
+        fields.push(OrderTerm { field, direction });
     }
 
     fn primary_descending(&self, entity: &EntitySchema) -> bool {
-        matches!(self.order.as_deref().and_then(|order| order.last()), Some(OrderTerm(name, SortDirection::Descending)) if *name == entity.primary_key)
+        self.order
+            .as_deref()
+            .and_then(|order| order.last())
+            .is_some_and(|term| {
+                term.field == entity.primary_key && term.direction == SortDirection::Descending
+            })
     }
 }
 
@@ -1059,28 +1064,6 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.filter_any(&[
             (field, Comparison::Lt, lower.into()),
             (field, Comparison::Gt, upper.into()),
-        ])
-    }
-
-    /// Match `lower <= field && field <= upper` using three top-level fields of the row.
-    /// Both comparisons require present values of compatible types. Equal endpoints
-    /// are inclusive. Uses the same two comparison terms and continuation as the
-    /// equivalent chained `filter_fields` calls.
-    #[must_use]
-    pub fn filter_between_fields(self, field: &'a str, lower: &'a str, upper: &'a str) -> Self {
-        self.filter_fields(field, Comparison::Ge, lower)
-            .filter_fields(field, Comparison::Le, upper)
-    }
-
-    /// Match `field < lower || field > upper` using fields of the same row.
-    /// A missing bound makes only its own comparison false. A missing tested field
-    /// never matches. Uses one OR clause and the same two comparison terms and
-    /// continuation as the equivalent `filter_any` call.
-    #[must_use]
-    pub fn filter_not_between_fields(self, field: &'a str, lower: &'a str, upper: &'a str) -> Self {
-        self.filter_any(&[
-            (field, Comparison::Lt, QueryOperand::Field(lower)),
-            (field, Comparison::Gt, QueryOperand::Field(upper)),
         ])
     }
 

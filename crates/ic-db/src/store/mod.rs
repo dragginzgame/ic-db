@@ -356,6 +356,32 @@ pub struct Database<M: Memory> {
     incarnation: [u8; 16],
 }
 
+fn initialize_map<M: Memory>(
+    memory: RuntimeMemory<M>,
+    schema: &Schema,
+    manifest: Vec<u8>,
+) -> Result<Map<M>, Error> {
+    if memory.size() != 0 {
+        return Err(Error::Exists);
+    }
+    let mut map = Map::create(memory);
+    map.insert(manifest_key(), manifest);
+    for entity in schema.entities() {
+        map.insert(entity_state_key(entity.id), EntityState::default().encode());
+    }
+
+    Ok(map)
+}
+
+fn load_manifest<M: Memory>(memory: RuntimeMemory<M>) -> Result<(Map<M>, Vec<u8>), Error> {
+    if memory.size() == 0 {
+        return Err(Error::Corrupt);
+    }
+    let map = Map::load(memory);
+    let manifest = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
+    Ok((map, manifest))
+}
+
 impl<M: Memory> Database<M> {
     /// Create in a proven empty governed allocation. Never resets existing data.
     /// # Errors
@@ -370,17 +396,8 @@ impl<M: Memory> Database<M> {
         if incarnation == [0; 16] {
             return Err(Error::InvalidSchema);
         }
-        if memory.size() != 0 {
-            return Err(Error::Exists);
-        }
-        let mut map = Map::create(memory);
-        map.insert(
-            manifest_key(),
-            live_manifest(schema.fingerprint, incarnation),
-        );
-        for entity in schema.entities() {
-            map.insert(entity_state_key(entity.id), EntityState::default().encode());
-        }
+        let manifest = live_manifest(schema.fingerprint, incarnation);
+        let map = initialize_map(memory, &schema, manifest)?;
 
         Ok(Self {
             map,
@@ -397,11 +414,7 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier corruption, including overlong stored keys, traps without repair.
     pub fn open(memory: RuntimeMemory<M>, schema: Schema) -> Result<Self, Error> {
-        if memory.size() == 0 {
-            return Err(Error::Corrupt);
-        }
-        let map = Map::load(memory);
-        let manifest = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
+        let (map, manifest) = load_manifest(memory)?;
         if maintenance::admits_gate(&manifest)? {
             return Err(Error::Maintenance);
         }

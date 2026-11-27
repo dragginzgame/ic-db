@@ -2,12 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Wire method for the mounted mixed-history query endpoint.
+pub const QUERY: u64 = 242;
+/// Wire method for the mounted mixed-history write endpoint.
+pub const WRITE: u64 = 241;
+
 /// Entity, operation, key and two operands in a fixture batch.
 pub type Command = (u8, u8, u64, u64, u64);
 
 /// Authorized actions on the Canic update mount.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Update {
+pub enum WriteRequest {
     /// Commit the commands to the selected schema.
     Batch(bool, Vec<Command>),
     /// Manage one bounded count.
@@ -88,7 +93,7 @@ pub enum CountReply {
 
 /// Result from the application update mount.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Reply {
+pub enum WriteReply {
     /// Batch outcome and instructions inside its handler.
     Batch(Result<(), u8>, u64),
     /// Retained job outcome or refusal, and instructions inside its handler.
@@ -97,22 +102,33 @@ pub enum Reply {
     Managed(Result<(u64, String, i64, i64), u8>, u64),
 }
 
-/// Complete model observation: rows by entity, counts, revisions, filtered IDs,
-/// grouped counts and IDs in score order.
-pub type Snapshot = (
-    Vec<(u64, u64)>,
-    Vec<(u64, u64, u128)>,
-    Vec<(u64, u64)>,
-    [u64; 3],
-    [u64; 3],
-    Vec<u64>,
-    Vec<(u64, u64)>,
-    Vec<u64>,
-);
+///
+/// Snapshot
+/// Observations compared with the independent mixed-history model.
+///
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Parent IDs and codes.
+    pub parents: Vec<(u64, u64)>,
+    /// Item IDs, parent IDs and scores.
+    pub items: Vec<(u64, u64, u128)>,
+    /// Link IDs and referenced item IDs.
+    pub links: Vec<(u64, u64)>,
+    /// Parent, item and link cardinalities.
+    pub counts: [u64; 3],
+    /// Parent, item and link revisions.
+    pub revisions: [u64; 3],
+    /// Item IDs matching the parent and minimum score.
+    pub filtered_ids: Vec<u64>,
+    /// Item counts by parent ID.
+    pub group_counts: Vec<(u64, u64)>,
+    /// Item IDs ordered by score, then ID.
+    pub score_ordered_ids: Vec<u64>,
+}
 
 /// Reads accepted by the application.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Query {
+pub enum QueryRequest {
     /// Look up a parent by primary ID.
     ParentById(u64),
     /// Look up a parent by its unique code.

@@ -1,9 +1,8 @@
 //! Validate typed ownership and emit the target roster for each canister.
 
-use super::{Error, Registry};
+use super::{Error, Registry, StoreDeclaration};
 use std::fmt::Write;
 
-type StoreDeclaration = (&'static str, &'static str, &'static str);
 type Owners = (Vec<&'static str>, Vec<StoreDeclaration>);
 
 impl Registry {
@@ -22,30 +21,35 @@ impl Registry {
             .stores
             .iter()
             .copied()
-            .filter(|(path, _, _)| path.starts_with(subtree))
+            .filter(|store| store.path.starts_with(subtree))
             .collect();
-        stores.sort_unstable_by_key(|&(path, owner, key)| (owner, key, path));
-        for &(path, owner, key) in &stores {
-            if !canisters.contains(&owner) {
+        stores.sort_unstable_by_key(|store| (store.canister, store.key, store.path));
+        for store in &stores {
+            if !canisters.contains(&store.canister) {
                 return Err(Error::Ownership(format!(
-                    "{path} names missing canister {owner}"
+                    "{} names missing canister {}",
+                    store.path, store.canister
                 )));
             }
-            ic_storage::StableKey::parse(key).map_err(|e| {
-                Error::Ownership(format!("{path} has invalid stable key {key}: {e}"))
+            ic_storage::StableKey::parse(store.key).map_err(|e| {
+                Error::Ownership(format!(
+                    "{} has invalid stable key {}: {e}",
+                    store.path, store.key
+                ))
             })?;
         }
-        for pair in stores.windows(2) {
-            let (left, owner, key) = pair[0];
-            let (right, other, next) = pair[1];
-            if owner == other && key == next {
+        for (left, right) in stores.iter().zip(stores.iter().skip(1)) {
+            if left.canister == right.canister && left.key == right.key {
                 return Err(Error::Ownership(format!(
-                    "{left} and {right} both declare {key} in {owner}"
+                    "{} and {} both declare {} in {}",
+                    left.path, right.path, left.key, left.canister
                 )));
             }
         }
-        for &(entity, owner, _) in &self.nodes {
-            if entity.starts_with(subtree) && !stores.iter().any(|s| s.0 == owner) {
+        for declaration in &self.nodes {
+            let entity = declaration.path;
+            let owner = declaration.store;
+            if entity.starts_with(subtree) && !stores.iter().any(|s| s.path == owner) {
                 return Err(Error::Ownership(format!(
                     "{entity} names missing store {owner}"
                 )));
@@ -79,12 +83,20 @@ impl Registry {
             )
         };
         let (canisters, stores) = self.ownership(&subtree)?;
+        if let Some(first) = stores.first() {
+            self.prepare(source, target)
+                .map_err(|e| Error::Ownership(format!("{}: {e}", first.path)))?;
+        }
         let mut assembly = String::new();
         for canister in canisters {
             include(canister.strip_prefix(&subtree).unwrap());
             let mut entries = String::new();
             let canister_path = qualified(canister);
-            for (slot, &(store, _, key)) in stores.iter().filter(|s| s.1 == canister).enumerate() {
+            for (slot, declaration) in stores.iter().filter(|s| s.canister == canister).enumerate()
+            {
+                let StoreDeclaration {
+                    path: store, key, ..
+                } = *declaration;
                 include(store.strip_prefix(&subtree).unwrap());
                 let store_path = qualified(store);
                 let code = self

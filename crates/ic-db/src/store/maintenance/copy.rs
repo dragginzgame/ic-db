@@ -8,8 +8,8 @@ use crate::{
     schema::MAX_ENTITIES,
     store::Database,
     store::{
-        EntityState, Map, collect_references, entity_state_key, index_entries, live_manifest,
-        manifest_key, read_entity_state, read_index_owner, row_key, validate_index_entry,
+        Map, collect_references, entity_state_key, index_entries, live_manifest, manifest_key,
+        read_entity_state, read_index_owner, row_key, validate_index_entry,
         validate_reference_target,
     },
     store_key::StoreKey,
@@ -209,7 +209,7 @@ pub enum CopyStatus {
 /// Both allocations remain closed to ordinary access. Dropping preserves progress.
 /// Publication requires completed validation. Allocation reuse remains unsupported.
 pub struct SchemaCopy<M: Memory> {
-    source: Maintenance<M>,
+    source: Map<M>,
     source_schema: Schema,
     target: Database<M>,
     identity: Identity,
@@ -240,30 +240,18 @@ impl<M: Memory> Maintenance<M> {
             return Err(Error::InvalidTransition);
         }
         let identity = Identity {
-            transition: self.transition.clone(),
+            transition: self.transition,
             source: self.incarnation,
             target: incarnation,
         };
         let source_gate = identity.encode(AllocationRole::Source)?;
         let phase = TargetProgress::Copying(0, None);
         let target_gate = identity.encode(AllocationRole::Target(&phase))?;
-        let metadata: Vec<_> = target
-            .entities()
-            .iter()
-            .map(|entity| entity_state_key(entity.id))
-            .collect();
-        if memory.size() != 0 {
-            return Err(Error::Exists);
-        }
-        let mut map = Map::create(memory);
-        map.insert(manifest_key(), target_gate);
-        for key in metadata {
-            map.insert(key, EntityState::default().encode());
-        }
+        let map = crate::store::initialize_map(memory, &target, target_gate)?;
         self.map.insert(manifest_key(), source_gate);
 
         Ok(SchemaCopy {
-            source: self,
+            source: self.map,
             source_schema: source,
             target: Database {
                 map,
@@ -290,17 +278,10 @@ impl<M: Memory> SchemaCopy<M> {
         expected: &SchemaTransition,
     ) -> Result<Self, Error> {
         admit(&source_schema, &target_schema, expected)?;
-        if source_memory.size() == 0 {
-            return Err(Error::Corrupt);
-        }
-        let source = Map::load(source_memory);
-        if target_memory.size() == 0 {
-            return Err(Error::Corrupt);
-        }
-        let target = Map::load(target_memory);
-        let (identity, role) = decode(&source.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
-        let (target_identity, target_role) =
-            decode(&target.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
+        let (source, source_manifest) = crate::store::load_manifest(source_memory)?;
+        let (target, target_manifest) = crate::store::load_manifest(target_memory)?;
+        let (identity, role) = decode(&source_manifest)?;
+        let (target_identity, target_role) = decode(&target_manifest)?;
         let (AllocationRole::Source, AllocationRole::Target(phase)) = (role, target_role) else {
             return Err(Error::InvalidTransition);
         };
@@ -316,11 +297,7 @@ impl<M: Memory> SchemaCopy<M> {
         }
 
         Ok(Self {
-            source: Maintenance {
-                map: source,
-                transition: expected.clone(),
-                incarnation: identity.source,
-            },
+            source,
             source_schema,
             target: Database {
                 map: target,
@@ -412,9 +389,13 @@ impl<M: Memory> SchemaCopy<M> {
         {
             return Err(Error::InvalidTransition);
         }
-        let page = self
-            .source
-            .source_page::<S>(&self.source_schema, cursor, limit, bytes)?;
+        let page = self.identity.transition.read_page::<S, _>(
+            &self.source,
+            self.identity.source,
+            cursor,
+            limit,
+            bytes,
+        )?;
         let rows = page.rows.len();
         let phase = if page.next.is_none() {
             if usize::from(entity) + 1 == self.source_schema.entities().len() {
@@ -460,23 +441,25 @@ impl<M: Memory> SchemaCopy<M> {
     /// # Panics
     /// Supplier mutation failures trap and roll back the entire IC message.
     pub fn cancel_step(&mut self, limit: usize) -> Result<bool, Error> {
-        let (keys, complete) = cleanup_keys(&self.target.map, limit)?;
+        validate_limit(limit)?;
         if matches!(self.phase, TargetProgress::Cancelled) {
             return Ok(true);
         }
+        let (keys, complete) = cleanup_keys(&self.target.map, limit);
         let phase = if complete {
             TargetProgress::Cancelled
         } else {
             TargetProgress::Cancelling
         };
         let checkpoint = self.identity.encode(AllocationRole::Target(&phase))?;
-        let live = live_manifest(self.identity.transition.source, self.identity.source);
+        let live =
+            complete.then(|| live_manifest(self.identity.transition.source, self.identity.source));
         for key in &keys {
             self.target.map.remove(key);
         }
         self.target.map.insert(manifest_key(), checkpoint);
-        if complete {
-            self.source.map.insert(manifest_key(), live);
+        if let Some(live) = live {
+            self.source.insert(manifest_key(), live);
         }
         self.phase = phase;
 
@@ -496,9 +479,7 @@ impl<M: Memory> SchemaCopy<M> {
     /// # Panics
     /// Supplier failures trap; an IC trap rolls back checkpoint advancement.
     pub fn validate_next(&mut self, limit: usize) -> Result<bool, Error> {
-        if !(1..=32).contains(&limit) {
-            return Err(Error::Limit);
-        }
+        validate_limit(limit)?;
         let phase = match &self.phase {
             TargetProgress::Copied | TargetProgress::ValidatingSource(_) => {
                 let cursor = if let TargetProgress::ValidatingSource(cursor) = &self.phase {
@@ -507,7 +488,7 @@ impl<M: Memory> SchemaCopy<M> {
                     None
                 };
                 let next = validate_page(
-                    &self.source.map,
+                    &self.source,
                     &self.source_schema,
                     (&self.target.map, &self.target.schema),
                     cursor,
@@ -523,7 +504,7 @@ impl<M: Memory> SchemaCopy<M> {
                 let next = validate_page(
                     &self.target.map,
                     &self.target.schema,
-                    (&self.source.map, &self.source_schema),
+                    (&self.source, &self.source_schema),
                     cursor.as_ref(),
                     limit,
                 )?;
@@ -558,7 +539,7 @@ impl<M: Memory> SchemaCopy<M> {
         }
         let retired = self.identity.encode(AllocationRole::Retired)?;
         let live = live_manifest(self.identity.transition.target, self.identity.target);
-        self.source.map.insert(manifest_key(), retired);
+        self.source.insert(manifest_key(), retired);
         self.target.map.insert(manifest_key(), live);
 
         Ok(self.target)
@@ -585,11 +566,8 @@ impl<M: Memory> RetiredSource<M> {
         source_incarnation: [u8; 16],
         target_incarnation: [u8; 16],
     ) -> Result<Self, Error> {
-        if memory.size() == 0 {
-            return Err(Error::Corrupt);
-        }
-        let map = Map::load(memory);
-        let (identity, role) = decode(&map.get(&manifest_key()).ok_or(Error::Corrupt)?)?;
+        let (map, manifest) = crate::store::load_manifest(memory)?;
+        let (identity, role) = decode(&manifest)?;
         if !matches!(role, AllocationRole::Retired)
             || identity.transition != *expected
             || identity.source != source_incarnation
@@ -610,7 +588,8 @@ impl<M: Memory> RetiredSource<M> {
     /// # Panics
     /// Supplier mutation failures trap; the IC rolls back the whole cleanup chunk.
     pub fn cleanup_step(&mut self, limit: usize) -> Result<bool, Error> {
-        let (keys, complete) = cleanup_keys(&self.map, limit)?;
+        validate_limit(limit)?;
+        let (keys, complete) = cleanup_keys(&self.map, limit);
         for key in &keys {
             self.map.remove(key);
         }
@@ -619,12 +598,16 @@ impl<M: Memory> RetiredSource<M> {
     }
 }
 
-// Cancellation and retired cleanup share bounded selection, keeping their
-// different authority changes at the caller. Values are not decoded for deletion.
-fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> Result<(Vec<StoreKey>, bool), Error> {
+fn validate_limit(limit: usize) -> Result<(), Error> {
     if !(1..=32).contains(&limit) {
         return Err(Error::Limit);
     }
+    Ok(())
+}
+
+// Cancellation and retired cleanup share bounded selection, keeping their
+// different authority changes at the caller. Values are not decoded for deletion.
+fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> (Vec<StoreKey>, bool) {
     let manifest = manifest_key();
     let mut keys: Vec<_> = map
         .keys()
@@ -636,7 +619,7 @@ fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> Result<(Vec<StoreKey>,
         keys.pop();
     }
 
-    Ok((keys, complete))
+    (keys, complete)
 }
 
 // Validate the physical collection in both directions. Forward row checks find
@@ -648,6 +631,7 @@ fn validate_page<M: Memory>(
     after: Option<&StoreKey>,
     limit: usize,
 ) -> Result<Option<StoreKey>, Error> {
+    let (peer_map, peer_schema) = peer;
     // Check every declared entity for missing metadata and equal counts for this
     // key-preserving copy; target counts were rebuilt by atomic private inserts.
     // Frozen allocations cannot change mid-pass.
@@ -655,8 +639,8 @@ fn validate_page<M: Memory>(
         for entity in schema.entities() {
             let state = read_entity_state(map, entity.id)?;
 
-            if peer.1.entity_by_id(entity.id).is_some() {
-                if state.count != read_entity_state(peer.0, entity.id)?.count {
+            if peer_schema.entity_by_id(entity.id).is_some() {
+                if state.count != read_entity_state(peer_map, entity.id)?.count {
                     return Err(Error::Corrupt);
                 }
             } else if state.count != 0 || state.revision != 0 {
@@ -666,11 +650,10 @@ fn validate_page<M: Memory>(
         }
     }
     let lower = after.map_or(Bound::Unbounded, |key| Bound::Excluded(key.clone()));
-    let mut last = None;
-    let mut examined = 0;
-    for entry in map.range((lower, Bound::Unbounded)).take(limit) {
+    let manifest = manifest_key();
+    for (index, entry) in map.range((lower, Bound::Unbounded)).take(limit).enumerate() {
         let key = entry.key();
-        if *key != manifest_key() {
+        if *key != manifest {
             let bytes = entry.value();
             let id = u32::from_be_bytes(
                 key.get(1..crate::store::ENTITY_PREFIX_BYTES)
@@ -687,20 +670,20 @@ fn validate_page<M: Memory>(
                     }
                 }
                 Some(2) => {
-                    let peer_entity = peer.1.entity_by_id(id).ok_or(Error::Corrupt)?;
+                    let peer_entity = peer_schema.entity_by_id(id).ok_or(Error::Corrupt)?;
                     let info = entity.inspect_row(&bytes)?;
                     let owner = info.key;
                     if *key != row_key(entity.id, owner) {
                         return Err(Error::Corrupt);
                     }
                     if entity.has_managed() {
-                        let other = peer.0.get(key).ok_or(Error::Corrupt)?;
+                        let other = peer_map.get(key).ok_or(Error::Corrupt)?;
                         if crate::managed::values(entity, &bytes)?
                             != crate::managed::values(peer_entity, &other)?
                         {
                             return Err(Error::ManagedField);
                         }
-                    } else if !peer.0.contains_key(key) {
+                    } else if !peer_map.contains_key(key) {
                         return Err(Error::Corrupt);
                     }
                     for (index, _) in index_entries(entity, &info)? {
@@ -723,9 +706,10 @@ fn validate_page<M: Memory>(
                 _ => return Err(Error::Corrupt),
             }
         }
-        last = Some(key.clone());
-        examined += 1;
+        if index + 1 == limit {
+            return Ok(Some(entry.into_key()));
+        }
     }
 
-    Ok(if examined == limit { last } else { None })
+    Ok(None)
 }

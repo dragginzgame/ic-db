@@ -332,10 +332,22 @@ pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
     }
 }
 
+///
+/// IndexComponent
+/// A scalar and the optionality declared for its position in an ordered index.
+///
+#[derive(Clone, Copy)]
+pub struct IndexComponent<'a> {
+    /// Scalar extracted from this row.
+    pub value: IndexValue<'a>,
+    /// Whether this position uses the optional-component encoding.
+    pub optional: bool,
+}
+
 /// Shared generated/stored-row membership and component encoding.
 #[doc(hidden)]
 #[must_use]
-pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Option<Vec<u8>> {
+pub fn encode_index(values: &[IndexComponent<'_>], present_only: bool) -> Option<Vec<u8>> {
     let mut bytes = None;
     encode_index_into(values, present_only, &mut bytes);
 
@@ -343,18 +355,22 @@ pub fn encode_index(values: &[(IndexValue<'_>, bool)], present_only: bool) -> Op
 }
 
 pub(crate) fn encode_index_into(
-    values: &[(IndexValue<'_>, bool)],
+    values: &[IndexComponent<'_>],
     present_only: bool,
     slot: &mut Option<Vec<u8>>,
 ) {
-    if present_only && values.iter().any(|(value, _)| *value == IndexValue::Absent) {
+    if present_only
+        && values
+            .iter()
+            .any(|component| component.value == IndexValue::Absent)
+    {
         *slot = None;
         return;
     }
     let bytes = slot.get_or_insert_with(Vec::new);
     bytes.clear();
-    for &(value, optional) in values {
-        value.append_component(optional, bytes);
+    for component in values {
+        component.value.append_component(component.optional, bytes);
     }
 }
 

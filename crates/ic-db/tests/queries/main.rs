@@ -762,23 +762,21 @@ fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
 }
 
 #[test]
-fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
+fn field_range_clauses_compare_row_bounds_and_resume() {
     use ic_db::QueryOperand::Field;
 
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
     let inside = || {
         db.query::<Entry>()
-            .filter_between_fields("id", "maybe", "amount")
+            .filter_fields("id", C::Ge, "maybe")
+            .filter_fields("id", C::Le, "amount")
     };
     let expected = [1, 2, 4, 5, 7, 8];
     assert_eq!(ids(&inside().fetch().unwrap().rows), expected);
     let first = inside().limit(2).fetch().unwrap();
     assert_eq!(ids(&first.rows), expected[..2]);
-    let rest = db
-        .query::<Entry>()
-        .filter_fields("id", C::Ge, "maybe")
-        .filter_fields("id", C::Le, "amount")
+    let rest = inside()
         .after(first.next.as_ref().unwrap())
         .fetch()
         .unwrap();
@@ -786,24 +784,24 @@ fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
 
     // id < amount holds even on rows 3 and 6, where the other bound is absent.
     let outside = || {
-        db.query::<Entry>()
-            .filter_not_between_fields("id", "amount", "maybe")
-    };
-    assert_eq!(outside().count().unwrap().value, 8);
-    let first = outside().limit(2).fetch().unwrap();
-    let rest = db
-        .query::<Entry>()
-        .filter_any(&[
+        db.query::<Entry>().filter_any(&[
             ("id", C::Lt, Field("amount")),
             ("id", C::Gt, Field("maybe")),
         ])
+    };
+    assert_eq!(outside().count().unwrap().value, 8);
+    let first = outside().limit(2).fetch().unwrap();
+    let rest = outside()
         .after(first.next.as_ref().unwrap())
         .fetch()
         .unwrap();
     assert_eq!(ids(&rest.rows), [3, 4, 5, 6, 7, 8]);
     assert_eq!(
         db.query::<Entry>()
-            .filter_not_between_fields("maybe", "amount", "id")
+            .filter_any(&[
+                ("maybe", C::Lt, Field("amount")),
+                ("maybe", C::Gt, Field("id"))
+            ])
             .count()
             .unwrap()
             .value,
@@ -811,7 +809,8 @@ fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
     );
     assert_eq!(
         db.query::<Entry>()
-            .filter_between_fields("id", "amount", "maybe")
+            .filter_fields("id", C::Ge, "amount")
+            .filter_fields("id", C::Le, "maybe")
             .count()
             .unwrap()
             .value,
@@ -819,7 +818,7 @@ fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
     );
     assert_eq!(
         db.query::<Entry>()
-            .filter_not_between_fields("id", "id", "id")
+            .filter_any(&[("id", C::Lt, Field("id")), ("id", C::Gt, Field("id"))])
             .count()
             .unwrap()
             .value,
@@ -828,20 +827,24 @@ fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
     // Only the upper comparison can match here. Absent upper bounds exclude rows 3 and 6.
     let above_ceiling = db
         .query::<Entry>()
-        .filter_not_between_fields("amount", "id", "maybe")
+        .filter_any(&[
+            ("amount", C::Lt, Field("id")),
+            ("amount", C::Gt, Field("maybe")),
+        ])
         .fetch()
         .unwrap();
     assert_eq!(ids(&above_ceiling.rows), expected);
     for bound in ["category", "missing"] {
         assert!(matches!(
             db.query::<Entry>()
-                .filter_between_fields("id", bound, "id")
+                .filter_fields("id", C::Ge, bound)
+                .filter_fields("id", C::Le, "id")
                 .fetch(),
             Err(Error::InvalidQuery)
         ));
         assert!(matches!(
             db.query::<Entry>()
-                .filter_not_between_fields("id", "amount", bound)
+                .filter_any(&[("id", C::Lt, Field("amount")), ("id", C::Gt, Field(bound))])
                 .fetch(),
             Err(Error::InvalidQuery)
         ));

@@ -255,7 +255,16 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
     }
     for pair in values().windows(2) {
         assert!(pair[0] < pair[1]);
-        let key = |v: Date| ic_db::__private::encode_index(&[(v.into(), false)], false).unwrap();
+        let key = |v: Date| {
+            ic_db::__private::encode_index(
+                &[ic_db::__private::IndexComponent {
+                    value: v.into(),
+                    optional: false,
+                }],
+                false,
+            )
+            .unwrap()
+        };
         assert_eq!(
             key(pair[0]),
             ((pair[0].as_days_since_epoch() as u32) ^ 0x80000000).to_be_bytes()

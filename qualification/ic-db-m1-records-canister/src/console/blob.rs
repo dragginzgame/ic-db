@@ -1,7 +1,11 @@
 //! Fixed Blob result shapes for the local console; the engine owns all query work.
 
 use super::{Page, display, display_groups, display_scalar, extremum, hex};
-use crate::{handles::Query, schema::BinaryObject, transport::PayloadFilters};
+use crate::{
+    handles::Query,
+    schema::BinaryObject,
+    transport::{EntityFilters, PayloadFilters},
+};
 use ic_db::design::prelude::*;
 use ic_db::{Comparison, Error};
 
@@ -21,13 +25,11 @@ pub(super) struct Payload {}
 #[record(fields(field(name = "optional", value(opt, item(prim = "Blob", max_bytes = 32)))))]
 pub(super) struct Optional {}
 
-pub(super) fn query(
-    db: &crate::handles::Database,
-    minimum: Option<u64>,
-    category: Option<u64>,
-    entry_id: Option<u64>,
-) -> Result<Query<'_, BinaryObject>, String> {
-    if minimum.is_some() || category.is_some() || entry_id.is_some() {
+pub(super) fn query<'a>(
+    db: &'a crate::handles::Database,
+    filters: &EntityFilters,
+) -> Result<Query<'a, BinaryObject>, String> {
+    if filters.minimum.is_some() || filters.category.is_some() || filters.entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to BinaryObject".into());
     }
 

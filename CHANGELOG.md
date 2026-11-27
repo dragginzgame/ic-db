@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.36.0] - Unreleased
+
+### ⚠️ Breaking
+
+- Replace `filter_between_fields` with two `filter_fields` calls using `Ge` and `Le`. Replace `filter_not_between_fields` with one `filter_any` clause using `Lt` and `Gt` with field operands. The CLI range flags retain their behavior.
+- Ordinary and retained CLI fixture requests use `EntityFilters`. Ordinary results expose their columns, rows and cursor in `ConsolePage.page`, and completed retained results carry the same `DisplayPage`.
+- CLI fixture clients now construct `IndexView`, `TypeView` and `TypeMemberView` with named fields. The console keeps its existing table and JSON output.
+
+### 🔄 Changed
+
+- Schema generation checks duplicate declaration paths once across all stores. Schema copy uses a single transition identity, and repeating cancellation on a completed handle skips the stable map scan.
+
+### 🎯 Qualification
+
+- The mixed-history fixture uses Canic 0.276.0 for its mounted inspection, query and write endpoints. The canister and PocketIC driver share the application protocol’s method IDs.
+
 ## [0.35.0] - 2026-11-27
 
 ### ⚠️ Breaking

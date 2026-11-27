@@ -159,11 +159,7 @@ impl<M: Memory> Maintenance<M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary database admission.
     pub fn resume(memory: RuntimeMemory<M>, expected: &SchemaTransition) -> Result<Self, Error> {
-        if memory.size() == 0 {
-            return Err(Error::Corrupt);
-        }
-        let map = Map::load(memory);
-        let bytes = map.get(&manifest_key()).ok_or(Error::Corrupt)?;
+        let (map, bytes) = super::load_manifest(memory)?;
         let (transition, incarnation) = decode(&bytes)?;
         if transition != *expected {
             return Err(Error::InvalidTransition);
@@ -211,22 +207,8 @@ impl<M: Memory> Maintenance<M> {
             return Err(Error::IncompatibleSchema);
         }
         source.admits(E::SCHEMA)?;
-        let revision = read_revision(&self.map, E::SCHEMA.id)?;
-        let mut hash = Sha256::new();
-        hash.update(b"ic-db:maintenance-source:v1\0");
-        hash.update(self.transition.freeze(self.incarnation)?);
-        hash.update(revision.to_le_bytes());
-
-        query::source_page(
-            &self.map,
-            E::SCHEMA,
-            hash.finalize().into(),
-            self.incarnation,
-            after,
-            limit,
-            bytes,
-        )?
-        .decode_entities()
+        self.transition
+            .read_page(&self.map, self.incarnation, after, limit, bytes)
     }
 
     /// Cancel before target allocation/copy and restore the original live manifest.
@@ -237,6 +219,34 @@ impl<M: Memory> Maintenance<M> {
     pub fn cancel(mut self) {
         let bytes = live_manifest(self.transition.source, self.incarnation);
         self.map.insert(manifest_key(), bytes);
+    }
+}
+
+impl SchemaTransition {
+    fn read_page<E: Entity, M: Memory>(
+        &self,
+        map: &Map<M>,
+        incarnation: [u8; 16],
+        after: Option<&QueryCursor>,
+        limit: usize,
+        bytes: usize,
+    ) -> Result<QueryPage<E>, Error> {
+        let revision = read_revision(map, E::SCHEMA.id)?;
+        let mut hash = Sha256::new();
+        hash.update(b"ic-db:maintenance-source:v1\0");
+        hash.update(self.freeze(incarnation)?);
+        hash.update(revision.to_le_bytes());
+
+        query::source_page(
+            map,
+            E::SCHEMA,
+            hash.finalize().into(),
+            incarnation,
+            after,
+            limit,
+            bytes,
+        )?
+        .decode_entities()
     }
 }
 

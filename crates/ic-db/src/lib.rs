@@ -415,7 +415,7 @@ pub mod __private {
     pub use crate::checked_principal::CheckedPrincipal;
     pub use crate::checked_text::CheckedText;
     pub use crate::codec::{Decoder, Encoder, MAX_ROW_BYTES};
-    pub use crate::key::{MemberOperand, MemberPresence, encode_index};
+    pub use crate::key::{IndexComponent, MemberOperand, MemberPresence, encode_index};
     pub use crate::managed::validate_order as validate_managed_order;
     pub use crate::primary::RowKey;
     pub use crate::schema::{check_schema_member, handle};

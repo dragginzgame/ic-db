@@ -320,6 +320,7 @@ async fn product_records_and_message_boundary() {
         )
         .await
         .unwrap();
+    // Decode positionally so this independent wire check catches changes to fixture field order.
     type FieldView = (String, String, bool, String, Option<(String, String)>);
     type IndexView = (String, Vec<String>, bool, bool);
     type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);

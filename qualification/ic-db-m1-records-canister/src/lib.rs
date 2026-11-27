@@ -62,7 +62,9 @@ use schema::{
     BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, RecordsStore,
     WideNumbers,
 };
-use transport::{EntityView, FieldView, SchemaResponse, Status};
+use transport::{
+    EntityView, FieldView, IndexView, SchemaResponse, Status, TypeMemberView, TypeView,
+};
 
 // initialize
 // Initialize the fixture’s stable state at installation.
@@ -264,13 +266,11 @@ fn schema(selected: Option<String>) -> SchemaResponse {
             let indexes = entity
                 .indexes
                 .iter()
-                .map(|index| {
-                    (
-                        index.name.into(),
-                        index.fields.iter().map(|name| (*name).into()).collect(),
-                        index.unique,
-                        index.present_only,
-                    )
+                .map(|index| IndexView {
+                    name: index.name.into(),
+                    fields: index.fields.iter().map(|name| (*name).into()).collect(),
+                    unique: index.unique,
+                    present_only: index.present_only,
                 })
                 .collect();
 
@@ -290,12 +290,12 @@ fn schema(selected: Option<String>) -> SchemaResponse {
             let (kind, members) = match &definition.body {
                 ic_db::TypeBody::Checked(rule) => (
                     "Newtype",
-                    vec![(
-                        "value".into(),
-                        type_view(rule.primitive()).0,
-                        false,
-                        format!("{rule:?}"),
-                    )],
+                    vec![TypeMemberView {
+                        name: "value".into(),
+                        kind: type_view(rule.primitive()).0,
+                        optional: false,
+                        info: format!("{rule:?}"),
+                    }],
                 ),
                 ic_db::TypeBody::Wrapped(value) => {
                     let label = if matches!(value, FieldType::List { .. }) {
@@ -305,7 +305,15 @@ fn schema(selected: Option<String>) -> SchemaResponse {
                     };
                     let (kind, info) = type_view(*value);
 
-                    (label, vec![("value".into(), kind, false, info)])
+                    (
+                        label,
+                        vec![TypeMemberView {
+                            name: "value".into(),
+                            kind,
+                            optional: false,
+                            info,
+                        }],
+                    )
                 }
                 ic_db::TypeBody::Map {
                     key,
@@ -318,13 +326,21 @@ fn schema(selected: Option<String>) -> SchemaResponse {
                     (
                         "Map",
                         vec![
-                            (
-                                "key".into(),
-                                key_type,
-                                false,
-                                joined_info(format!("map max {max_items} entries"), &key_info),
-                            ),
-                            ("value".into(), value_type, value.optional, value_info),
+                            TypeMemberView {
+                                name: "key".into(),
+                                kind: key_type,
+                                optional: false,
+                                info: joined_info(
+                                    format!("map max {max_items} entries"),
+                                    &key_info,
+                                ),
+                            },
+                            TypeMemberView {
+                                name: "value".into(),
+                                kind: value_type,
+                                optional: value.optional,
+                                info: value_info,
+                            },
                         ],
                     )
                 }
@@ -333,12 +349,12 @@ fn schema(selected: Option<String>) -> SchemaResponse {
 
                     (
                         "Set",
-                        vec![(
-                            "element".into(),
+                        vec![TypeMemberView {
+                            name: "element".into(),
                             kind,
-                            false,
-                            joined_info(format!("max {max_items} items"), &info),
-                        )],
+                            optional: false,
+                            info: joined_info(format!("max {max_items} items"), &info),
+                        }],
                     )
                 }
                 ic_db::TypeBody::Record(fields) => (
@@ -348,7 +364,12 @@ fn schema(selected: Option<String>) -> SchemaResponse {
                         .map(|f| {
                             let (kind, info) = type_view(f.value);
 
-                            (f.name.into(), kind, f.optional, info)
+                            TypeMemberView {
+                                name: f.name.into(),
+                                kind,
+                                optional: f.optional,
+                                info,
+                            }
                         })
                         .collect(),
                 ),
@@ -362,18 +383,22 @@ fn schema(selected: Option<String>) -> SchemaResponse {
                                 |p| type_view(p.value),
                             );
 
-                            (
-                                v.name.into(),
+                            TypeMemberView {
+                                name: v.name.into(),
                                 kind,
-                                v.payload.is_some_and(|p| p.optional),
+                                optional: v.payload.is_some_and(|p| p.optional),
                                 info,
-                            )
+                            }
                         })
                         .collect(),
                 ),
             };
 
-            (definition.name.into(), kind.into(), members)
+            TypeView {
+                name: definition.name.into(),
+                kind: kind.into(),
+                members,
+            }
         })
         .collect();
 
@@ -2867,6 +2892,11 @@ type Backing = faults::FaultMemory;
 type Backing = DefaultMemoryImpl;
 
 const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
+
+#[cfg(any(feature = "retained-console", feature = "mixed-lifecycle"))]
+fn message_time(time_ns: u64) -> ic_db::Timestamp {
+    ic_db::Timestamp::EPOCH + ic_db::Duration::from_nanos_truncating(time_ns)
+}
 
 fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
     // Host custody survives calls; Database handles and leases remain local.

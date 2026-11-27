@@ -6,9 +6,9 @@ use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 use ic_db_qualification_transport::{PayloadFilters, RetainedSelection as Selection, RowFilters};
 use wire_call::call;
 
-use ic_db_qualification_transport::{RetainedOutput, RetainedPhase, RetainedProgress as Step};
+use ic_db_qualification_transport::{DisplayPage, RetainedPhase, RetainedProgress as Step};
 
-fn completed(step: &Step) -> &RetainedOutput {
+fn completed(step: &Step) -> &DisplayPage {
     let RetainedPhase::Complete(output) = &step.phase else {
         panic!("expected completed output, got {:?}", step.phase);
     };
@@ -41,7 +41,7 @@ async fn distinct_keys_page_past_32_after_upgrade() {
     let count = Selection {
         entity: "Entry".into(),
         select: "distinct-count:amount".into(),
-        entity_filters: (None, None, None),
+        entity_filters: Default::default(),
         limit: 32,
         group_bounds: (None, None),
         group_order: None,
@@ -90,7 +90,7 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         let selection = Selection {
             entity: "Entry".into(),
             select: "distinct:amount".into(),
-            entity_filters: (None, None, None),
+            entity_filters: Default::default(),
             limit: 32,
             group_bounds: (None, None),
             group_order: order.map(str::to_owned),
@@ -144,15 +144,15 @@ async fn distinct_keys_page_past_32_after_upgrade() {
             eprintln!(
                 "retained DISTINCT start={} rows={} charged_cycles={charged}",
                 output.len(),
-                completed(&step).1.len()
+                completed(&step).rows.len()
             );
             output.extend(
                 completed(&step)
-                    .1
+                    .rows
                     .iter()
                     .map(|row| row[0].parse::<u64>().unwrap()),
             );
-            cursor = completed(&step).2.clone();
+            cursor = completed(&step).next.clone();
             if output.len() == 33 {
                 upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                     .await
@@ -194,7 +194,7 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
     let selection = Selection {
         entity: "Entry".into(),
         select: "distinct:amount".into(),
-        entity_filters: (None, None, None),
+        entity_filters: Default::default(),
         limit: 32,
         group_bounds: (None, None),
         group_order: None,
@@ -264,13 +264,13 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
         let first = resume(sequence, None).await;
         assert_eq!((first.phase.label(), first.examined), ("Complete", 6));
         assert_eq!(first.sequence, sequence + u64::from(!was_complete));
-        assert_eq!(completed(&first).1, [["11"], ["20"], ["31"]]);
-        let cursor = completed(&first).2.clone().unwrap();
+        assert_eq!(completed(&first).rows, [["11"], ["20"], ["31"]]);
+        let cursor = completed(&first).next.clone().unwrap();
         assert_eq!(cursor[0], 3);
         let second = resume(first.sequence, Some(cursor)).await;
         assert_eq!(second.sequence, first.sequence);
-        assert_eq!(completed(&second).1, [["40"], ["51"], ["60"]]);
-        assert!(completed(&second).2.is_none());
+        assert_eq!(completed(&second).rows, [["40"], ["51"], ["60"]]);
+        assert!(completed(&second).next.is_none());
     }
     owned.drop().await;
 }
@@ -287,7 +287,7 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
     let selection = Selection {
         entity: "Entry".into(),
         select: "distinct:amount".into(),
-        entity_filters: (None, None, None),
+        entity_filters: Default::default(),
         limit: 32,
         group_bounds: (None, None),
         group_order: Some("first".into()),
@@ -333,8 +333,8 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
         let scan_cycles = before_scan - pic.cycle_balance(canister).await;
         assert_eq!(first.phase.label(), "Complete");
         assert_eq!(first.examined, keys);
-        assert_eq!(completed(&first).1, [["1"]]);
-        assert!(completed(&first).2.is_some());
+        assert_eq!(completed(&first).rows, [["1"]]);
+        assert!(completed(&first).next.is_some());
         let before = pic.cycle_balance(canister).await;
         let second = call::<Result<Step, String>>(
             pic,
@@ -348,7 +348,7 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
                 1_u32,
                 4096_u32,
                 1_u32,
-                completed(&first).2.clone(),
+                completed(&first).next.clone(),
             ),
         )
         .await
@@ -356,8 +356,8 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
         let charged = before - pic.cycle_balance(canister).await;
         assert_eq!(second.phase.label(), "Complete");
         assert_eq!((second.sequence, second.examined), (first.sequence, keys));
-        assert_eq!(completed(&second).1, [["2"]]);
-        assert!(completed(&second).2.is_some());
+        assert_eq!(completed(&second).rows, [["2"]]);
+        assert!(completed(&second).next.is_some());
         println!("distinct-scan-and-first-page,keys={keys},charged_cycles={scan_cycles}");
         println!("completed-distinct,keys={keys},page_size=1,offset=1,charged_cycles={charged}");
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -402,7 +402,7 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
         let selection = Selection {
             entity: "Entry".into(),
             select: select.into(),
-            entity_filters: (None, None, None),
+            entity_filters: Default::default(),
             limit: 32,
             group_bounds: (None, None),
             group_order: None,
@@ -440,8 +440,8 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
                 assert_eq!((step.phase.label(), step.examined), ("Running", 128));
             } else {
                 assert_eq!((step.phase.label(), step.examined), ("Complete", 256));
-                assert_eq!(completed(&step).1, expected);
-                assert!(completed(&step).2.is_none());
+                assert_eq!(completed(&step).rows, expected);
+                assert!(completed(&step).next.is_none());
             }
         }
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -500,7 +500,7 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
         Selection {
             entity: "Document".into(),
             select: "count".into(),
-            entity_filters: (None, None, None),
+            entity_filters: Default::default(),
             limit: 32,
             group_bounds: (None, None),
             group_order: None,
@@ -560,7 +560,7 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
     let complete = resume(&original, &handle, second.sequence).await.unwrap();
     assert_eq!((complete.phase.label(), complete.examined), ("Complete", 6));
     // Empty needle in row 1, a suffix in 3, and two occurrences in 5 count once each.
-    assert_eq!(completed(&complete).1, [vec!["3"]]);
+    assert_eq!(completed(&complete).rows, [vec!["3"]]);
 
     let handle = start().await;
     let first = resume(&original, &handle, 0).await.unwrap();
@@ -668,7 +668,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             let selection = Selection {
                 entity: "DecimalRow".into(),
                 select,
-                entity_filters: (None, None, None),
+                entity_filters: Default::default(),
                 limit: 32,
                 group_bounds: (None, None),
                 group_order: None,
@@ -806,7 +806,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 (
                     complete.phase.label(),
                     complete.examined,
-                    completed(&complete).2.clone()
+                    completed(&complete).next.clone()
                 ),
                 ("Complete", 4, None)
             );
@@ -818,7 +818,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                     .unwrap_or_default()
             };
             assert_eq!(
-                completed(&complete).1,
+                completed(&complete).rows,
                 expected_rows,
                 "case {index}, grouped={grouped}"
             );
@@ -917,7 +917,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             let selection = Selection {
                 entity: "BinaryObject".into(),
                 select: selector.into(),
-                entity_filters: (None, None, None),
+                entity_filters: Default::default(),
                 limit: 32,
                 group_bounds: (None, None),
                 group_order: None,
@@ -933,7 +933,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 (first.sequence, first.phase.label(), first.examined),
                 (1, "Complete", 1)
             );
-            assert_eq!(completed(&first).1, expected);
+            assert_eq!(completed(&first).rows, expected);
             jobs.push((selection, handle, expected));
         }
         let before = pic.get_stable_memory(canister).await;
@@ -952,8 +952,8 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             }
             let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
             assert_eq!((complete.phase.label(), complete.examined), ("Complete", 1));
-            assert_eq!(completed(&complete).1, expected, "{}", selection.select);
-            assert!(completed(&complete).2.is_none());
+            assert_eq!(completed(&complete).rows, expected, "{}", selection.select);
+            assert!(completed(&complete).next.is_none());
             call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
                 .await
                 .unwrap();
@@ -1032,7 +1032,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         let selection = Selection {
             entity: "BinaryObject".into(),
             select: "count".into(),
-            entity_filters: (None, None, None),
+            entity_filters: Default::default(),
             limit: 32,
             group_bounds: (None, None),
             group_order: None,
@@ -1055,10 +1055,13 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         let first = advance(&selection, &handle, 0, 4096).await.unwrap();
         if empty_range {
             assert_eq!((first.phase.label(), first.examined), ("Complete", 0));
-            assert_eq!(completed(&first).1, vec![vec!["0"]]);
+            assert_eq!(completed(&first).rows, vec![vec!["0"]]);
         } else {
             assert_eq!((first.phase.label(), first.examined), ("Complete", 1));
-            assert_eq!(completed(&first).1, [vec![if matches { "1" } else { "0" }]]);
+            assert_eq!(
+                completed(&first).rows,
+                [vec![if matches { "1" } else { "0" }]]
+            );
         }
         upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
@@ -1109,7 +1112,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             ("Complete", u64::from(!empty_range))
         );
         assert_eq!(
-            completed(&complete).1,
+            completed(&complete).rows,
             vec![vec![if matches { "1" } else { "0" }]]
         );
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -1119,7 +1122,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
     let selection = Selection {
         entity: "BinaryObject".into(),
         select: "max:payload".into(),
-        entity_filters: (None, None, None),
+        entity_filters: Default::default(),
         limit: 32,
         group_bounds: (None, None),
         group_order: None,

@@ -346,20 +346,27 @@ impl EntitySchema {
     ) -> Result<(), Error> {
         info.indexes.resize_with(self.indexes.len(), || None);
         for (encoded, index) in info.indexes.iter_mut().zip(self.indexes) {
-            let mut components = [(IndexValue::Absent, false); 4];
+            let mut components = [key::IndexComponent {
+                value: IndexValue::Absent,
+                optional: false,
+            }; 4];
             for (slot, name) in components.iter_mut().zip(index.fields) {
                 *slot = if let Some(position) = self.field_position(name) {
-                    (keys[position], self.fields[position].optional)
+                    key::IndexComponent {
+                        value: keys[position],
+                        optional: self.fields[position].optional,
+                    }
                 } else {
                     let (parent, member) = self.record_member(name).ok_or(Error::Corrupt)?;
                     let (start, end) = spans[parent];
                     let optional = self.fields[parent].optional;
-                    (
-                        member.read(&bytes[usize::from(start)..usize::from(end)], optional)?,
-                        optional || member.field().optional,
-                    )
+                    key::IndexComponent {
+                        value: member
+                            .read(&bytes[usize::from(start)..usize::from(end)], optional)?,
+                        optional: optional || member.field().optional,
+                    }
                 };
-                if slot.0 == IndexValue::Absent && !slot.1 {
+                if slot.value == IndexValue::Absent && !slot.optional {
                     return Err(Error::Corrupt);
                 }
             }

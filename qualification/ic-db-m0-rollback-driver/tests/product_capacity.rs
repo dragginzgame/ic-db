@@ -1,6 +1,7 @@
 //! Real migration growth refusal with unchanged backing and independent bytes.
 
 mod envelope_support;
+mod wire_call;
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
@@ -105,7 +106,12 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     }
     // The byte budget can stop a chunk before the row limit. The second row
     // must still be available when the next message resumes after an upgrade.
+    let before_copy = pic.cycle_balance(canister).await;
     let (result, _, _, first_cost) = decode(call(4, 0, 32, 8191, false, 0).await.unwrap());
+    println!(
+        "first copy charged cycles={}",
+        before_copy - pic.cycle_balance(canister).await
+    );
     let first = result.unwrap();
     assert_eq!(first, (1, false));
     let before = pic.get_stable_memory(canister).await;
@@ -197,8 +203,15 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     let copied_bytes = pic.get_stable_memory(canister).await.len();
     let mut validated = false;
     let mut max_validation_instructions = 0;
-    for _ in 0..48 {
+    for page in 0..48 {
+        let before = pic.cycle_balance(canister).await;
         let (result, _, _, instructions) = decode(call(5, 0, 32, 131072, false, 0).await.unwrap());
+        if page == 0 {
+            println!(
+                "first validation page instructions={instructions} charged cycles={}",
+                before - pic.cycle_balance(canister).await
+            );
+        }
         max_validation_instructions = max_validation_instructions.max(instructions);
         if result.unwrap().1 {
             validated = true;
@@ -323,4 +336,30 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
         "migration envelope maximum measured instructions: copy={max_copy_instructions} validation={max_validation_instructions} cleanup={max_cleanup_instructions}"
     );
     owned.drop().await;
+}
+
+#[tokio::test]
+async fn completed_cancellation_cost_on_the_same_handle() {
+    let dir = std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").unwrap());
+    let wasm = std::fs::read(dir.join("maintenance-faults.wasm")).unwrap();
+    let pic = instance().await.unwrap();
+    let canister = pic.create_canister().await;
+    pic.add_cycles(canister, 3_000_000_000_000).await;
+    pic.install_canister(canister, wasm, vec![], None).await;
+    for op in [0u8, 2, 3, 8] {
+        let response: Reply = wire_call::call(
+            &pic,
+            canister,
+            "migration_capacity",
+            140,
+            &((false, op), 0u16, 32u8, 131072u32, false, 0u64),
+        )
+        .await;
+        let (inner, done) = response.0.unwrap();
+        if op == 8 {
+            assert!(done);
+            println!("repeat completed cancellation instructions={inner}");
+        }
+    }
+    pic.drop().await;
 }

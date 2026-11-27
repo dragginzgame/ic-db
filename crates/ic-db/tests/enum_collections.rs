@@ -170,7 +170,13 @@ fn order_and_transitive_identity_are_shared() {
     assert_eq!(State::definition(), Reordered::definition());
     for (value, ordinal) in [(State::Archived, 0), (State::Draft, 1), (State::Ready, 2)] {
         assert_eq!(
-            ic_db::__private::encode_index(&[((&value).into(), false)], false),
+            ic_db::__private::encode_index(
+                &[ic_db::__private::IndexComponent {
+                    value: (&value).into(),
+                    optional: false
+                }],
+                false
+            ),
             Some(vec![ordinal])
         );
     }

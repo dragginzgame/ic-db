@@ -34,13 +34,14 @@ fn migration_capacity(
 ) -> (Result<(u64, bool), u8>, u64, u64, u64) {
     let start = counter();
     faults::arm(stop_after, deny_growth, false);
-    let result = control(second, operation, first, limit, bytes).map_err(|error| match error {
-        Failure::Database(Error::Limit) => 1,
-        Failure::Database(Error::RowTooLarge) => 2,
-        Failure::Database(Error::Exists) => 3,
-        Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
-        Failure::Runtime => 4,
-    });
+    let result =
+        control(second, operation, first, limit, bytes, counter).map_err(|error| match error {
+            Failure::Database(Error::Limit) => 1,
+            Failure::Database(Error::RowTooLarge) => 2,
+            Failure::Database(Error::Exists) => 3,
+            Failure::Database(error) => panic!("unexpected capacity refusal: {error:?}"),
+            Failure::Runtime => 4,
+        });
     let (writes, grows) = faults::finish();
 
     (result, writes, grows, counter() - start)
@@ -108,49 +109,78 @@ impl From<Error> for Failure {
     }
 }
 
+///
+/// CopyAllocation
+/// The schema, stable memory key and database incarnation of one fixture allocation.
+///
+struct CopyAllocation {
+    schema: Schema,
+    key: &'static str,
+    incarnation: [u8; 16],
+}
+
+///
+/// CopyJourney
+/// The selected pair of allocations and the transformation binding them.
+///
+struct CopyJourney {
+    source: CopyAllocation,
+    target: CopyAllocation,
+    name: &'static str,
+}
+
 fn control(
     second: bool,
     operation: u8,
     first: u16,
     limit: u8,
     bytes: u32,
+    counter: fn() -> u64,
 ) -> Result<(u64, bool), Failure> {
-    let indexed = Schema::new(&[EnvelopeRow::SCHEMA])?;
-    let (source, target, source_key, target_key, source_id, target_id, name) = if second {
-        assert!(operation >= 2);
-        (
-            indexed,
-            Schema::new(&[EnvelopeRow::SCHEMA, records_schema::Entry::SCHEMA])?,
-            COPY_TARGET,
-            COPY_NEXT,
-            11,
-            12,
-            "add-empty-entry",
-        )
-    } else {
-        (
-            Schema::new(&[Source::SCHEMA])?,
-            indexed,
-            COPY_SOURCE,
-            COPY_TARGET,
-            10,
-            11,
-            "build-eight-indexes",
-        )
+    let indexed = CopyAllocation {
+        schema: Schema::new(&[EnvelopeRow::SCHEMA])?,
+        key: COPY_TARGET,
+        incarnation: [11; 16],
     };
-    let transition = SchemaTransition::new(&source, &target, name, 1, &[])?;
+    let CopyJourney {
+        source,
+        target,
+        name,
+    } = if second {
+        assert!(operation >= 2);
+        CopyJourney {
+            source: indexed,
+            target: CopyAllocation {
+                schema: Schema::new(&[EnvelopeRow::SCHEMA, records_schema::Entry::SCHEMA])?,
+                key: COPY_NEXT,
+                incarnation: [12; 16],
+            },
+            name: "add-empty-entry",
+        }
+    } else {
+        CopyJourney {
+            source: CopyAllocation {
+                schema: Schema::new(&[Source::SCHEMA])?,
+                key: COPY_SOURCE,
+                incarnation: [10; 16],
+            },
+            target: indexed,
+            name: "build-eight-indexes",
+        }
+    };
+    let transition = SchemaTransition::new(&source.schema, &target.schema, name, 1, &[])?;
     let host = runtime();
     let source_memory = host
-        .open_memory(&StableKey::parse(source_key).unwrap())
+        .open_memory(&StableKey::parse(source.key).unwrap())
         .map_err(|_| Failure::Runtime)?;
     if operation == 0 {
-        Database::create(source_memory, source, [source_id; 16])?;
+        Database::create(source_memory, source.schema, source.incarnation)?;
 
         return Ok((0, false));
     }
     if operation == 1 {
         assert!(matches!(first, 1 | 33 | 65 | 97));
-        let mut db = Database::open(source_memory, source)?;
+        let mut db = Database::open(source_memory, source.schema)?;
         let mut batch = Batch::new();
         for id in u64::from(first)..u64::from(first) + 32 {
             let text = "\0".repeat(60);
@@ -168,30 +198,40 @@ fn control(
         return Ok((32, false));
     }
     if operation == 2 {
-        Database::open(source_memory, source)?.begin_maintenance(&transition)?;
+        Database::open(source_memory, source.schema)?.begin_maintenance(&transition)?;
 
         return Ok((0, false));
     }
     if operation == 7 {
-        let mut retired =
-            RetiredSource::resume(source_memory, &transition, [source_id; 16], [target_id; 16])?;
+        let mut retired = RetiredSource::resume(
+            source_memory,
+            &transition,
+            source.incarnation,
+            target.incarnation,
+        )?;
 
         return Ok((0, retired.cleanup_step(usize::from(limit))?));
     }
     let target_memory = host
-        .open_memory(&StableKey::parse(target_key).unwrap())
+        .open_memory(&StableKey::parse(target.key).unwrap())
         .map_err(|_| Failure::Runtime)?;
     if operation == 3 {
         Maintenance::resume(source_memory, &transition)?.begin_copy(
             target_memory,
-            source,
-            target,
-            [target_id; 16],
+            source.schema,
+            target.schema,
+            target.incarnation,
         )?;
 
         return Ok((0, false));
     }
-    let mut copy = SchemaCopy::resume(source_memory, target_memory, source, target, &transition)?;
+    let mut copy = SchemaCopy::resume(
+        source_memory,
+        target_memory,
+        source.schema,
+        target.schema,
+        &transition,
+    )?;
 
     match operation {
         4 if second => {
@@ -222,6 +262,13 @@ fn control(
             copy.publish()?;
 
             Ok((0, true))
+        }
+        8 => {
+            assert!(copy.cancel_step(usize::from(limit))?);
+            assert!(matches!(copy.cancel_step(0), Err(Error::Limit)));
+            let start = counter();
+            let done = copy.cancel_step(usize::from(limit))?;
+            Ok((counter() - start, done))
         }
         _ => panic!("unsupported capacity control"),
     }

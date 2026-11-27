@@ -141,7 +141,12 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     .unwrap();
                 let step = wire_frame::response::<Result<Progress, String>>(121, &reply).unwrap();
                 sequence = step.sequence;
-                if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
+                if let RetainedPhase::Complete(ic_db_qualification_transport::DisplayPage {
+                    rows: page_rows,
+                    next,
+                    ..
+                }) = step.phase
+                {
                     assert_eq!(page_rows, expected_rows);
                     assert!(next.is_none());
                     complete = true;
@@ -300,7 +305,12 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
             .unwrap();
         let step = wire_frame::response::<Result<Progress, String>>(121, &reply).unwrap();
         sequence = step.sequence;
-        if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
+        if let RetainedPhase::Complete(ic_db_qualification_transport::DisplayPage {
+            rows: page_rows,
+            next,
+            ..
+        }) = step.phase
+        {
             cursor = next;
             assert_eq!(page_rows.len(), 1);
             rows.extend(page_rows);

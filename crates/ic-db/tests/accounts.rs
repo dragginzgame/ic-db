@@ -89,7 +89,14 @@ fn accounts() -> Vec<Account> {
 }
 
 fn key(value: IndexValue<'_>) -> Vec<u8> {
-    ic_db::__private::encode_index(&[(value, false)], false).unwrap()
+    ic_db::__private::encode_index(
+        &[ic_db::__private::IndexComponent {
+            value,
+            optional: false,
+        }],
+        false,
+    )
+    .unwrap()
 }
 
 #[test]

@@ -11,8 +11,8 @@ use ic_db::{
     SelectColumns,
 };
 use ic_db_qualification_transport::mixed::{
-    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
-    Reply, Snapshot, Update,
+    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, QueryReply,
+    QueryRequest, Snapshot, WriteReply, WriteRequest,
 };
 use ic_storage::{RuntimeMemory, StableKey};
 
@@ -41,21 +41,25 @@ fn mixed_migrate((operation, counter): crate::transport::Measured<u8>) -> (u64, 
 mod endpoints {
     // Mount the fixture’s inspection, reads and updates through Canic.
     canic::mount_db_endpoints! {
-        protocol = crate::mixed_lifecycle::protocol,
+        protocol = ic_db_qualification_transport::mixed,
         authorize = crate::mixed_lifecycle::endpoints::authorize,
         inspect = crate::mixed_lifecycle::inspect,
         query = crate::mixed_lifecycle::endpoints::query,
         write = crate::mixed_lifecycle::endpoints::apply_update,
     }
 
-    fn query(_: ic_db::Principal, request: super::Query) -> super::QueryReply {
+    fn query(_: ic_db::Principal, request: super::QueryRequest) -> super::QueryReply {
         super::query(
             request,
             crate::transport::instruction_meter().expect("installed Canic endpoint"),
         )
     }
 
-    fn apply_update(_: ic_db::Principal, request: super::Update, time_ns: u64) -> super::Reply {
+    fn apply_update(
+        _: ic_db::Principal,
+        request: super::WriteRequest,
+        time_ns: u64,
+    ) -> super::WriteReply {
         super::apply_update(
             request,
             time_ns,
@@ -276,16 +280,6 @@ fn write(target: bool, commands: Vec<Command>) -> Result<(), Error> {
 
     db.commit(batch)
 }
-// Application-owned protocol for this installed workload. Canic owns the guards,
-// framed entrypoints and reply encoding. Only the fixture's own principal is admitted.
-mod protocol {
-    pub(super) const QUERY: u64 = 242;
-    pub(super) const WRITE: u64 = 241;
-    pub(super) type QueryRequest = super::Query;
-    pub(super) type QueryReply = super::QueryReply;
-    pub(super) type WriteRequest = super::Update;
-    pub(super) type WriteReply = super::Reply;
-}
 
 // Inspect the source store declared by this host, including while it is frozen.
 fn inspect(_: ic_db::Principal, (): ()) -> canic::db::inspection::Response {
@@ -311,34 +305,34 @@ fn inspect(_: ic_db::Principal, (): ()) -> canic::db::inspection::Response {
 }
 
 // Commit a batch or operate on a retained count.
-fn apply_update(request: Update, time_ns: u64, counter: fn() -> u64) -> Reply {
+fn apply_update(request: WriteRequest, time_ns: u64, counter: fn() -> u64) -> WriteReply {
     match request {
-        Update::Batch(target, commands) => {
+        WriteRequest::Batch(target, commands) => {
             let start = counter();
             let result = write(target, commands).map_err(refusal);
 
-            Reply::Batch(result, counter() - start)
+            WriteReply::Batch(result, counter() - start)
         }
-        Update::ReplaceManaged { returning, body } => {
+        WriteRequest::ReplaceManaged { returning, body } => {
             let start = counter();
             let result = replace_managed(returning, body)
                 .map(crate::managed::view)
                 .map_err(refusal);
 
-            Reply::Managed(result, counter() - start)
+            WriteReply::Managed(result, counter() - start)
         }
-        Update::UpsertManaged(first, second) => {
+        WriteRequest::UpsertManaged(first, second) => {
             let start = counter();
             let result = upsert_managed(first, second)
                 .map(crate::managed::view)
                 .map_err(refusal);
-            Reply::Managed(result, counter() - start)
+            WriteReply::Managed(result, counter() - start)
         }
-        Update::Count(request) => {
+        WriteRequest::Count(request) => {
             let start = counter();
             let result = count(request, time_ns).map_err(|error| format!("{error:?}"));
 
-            Reply::Count(result, counter() - start)
+            WriteReply::Count(result, counter() - start)
         }
     }
 }
@@ -388,7 +382,7 @@ fn upsert_managed(
 }
 
 fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
-    let now_ms = (time_ns / 1_000_000) as i64;
+    let now = crate::message_time(time_ns);
     let host = runtime();
     let mut jobs = AggregateJobs::open(memory(&host, 2))?;
 
@@ -397,9 +391,9 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
             let db = open(&host, target)?;
 
             if target {
-                run_count(db.query::<TargetItem>(), &mut jobs, action, now_ms)
+                run_count(db.query::<TargetItem>(), &mut jobs, action, now)
             } else {
-                run_count(db.query::<Item>(), &mut jobs, action, now_ms)
+                run_count(db.query::<Item>(), &mut jobs, action, now)
             }
         }
         CountRequest::ForParent {
@@ -414,15 +408,14 @@ fn count(request: CountRequest, time_ns: u64) -> Result<CountReply, Error> {
                     query.using_index("parent,id", &[parent.into()]),
                     &mut jobs,
                     action,
-                    now_ms,
+                    now,
                 )
             } else {
-                run_count(query, &mut jobs, action, now_ms)
+                run_count(query, &mut jobs, action, now)
             }
         }
         CountRequest::CleanupExpired(limit) => {
-            let removed =
-                jobs.cleanup_expired(Timestamp::from_millis(now_ms), usize::from(limit))?;
+            let removed = jobs.cleanup_expired(now, usize::from(limit))?;
             Ok(CountReply::Removed(removed as u64))
         }
         CountRequest::Cancel(bytes) => {
@@ -437,12 +430,11 @@ fn run_count<E: Entity>(
     query: crate::handles::Query<'_, E>,
     jobs: &mut AggregateJobs,
     action: CountAction,
-    now_ms: i64,
+    now: Timestamp,
 ) -> Result<CountReply, Error> {
     match action {
         CountAction::Start | CountAction::StartGrouped => {
-            let now = Timestamp::from_millis(now_ms);
-            let expires = Timestamp::from_millis(now_ms + 3_600_000);
+            let expires = now + ic_db::Duration::from_millis(3_600_000);
             let handle = if matches!(action, CountAction::StartGrouped) {
                 query.start_group_count::<ParentKey>(jobs, now, expires)?
             } else {
@@ -453,12 +445,9 @@ fn run_count<E: Entity>(
         }
         CountAction::Resume(bytes, sequence, work) => {
             let handle = JobHandle::from_bytes(&bytes)?;
-            let step = query.work_limit(usize::from(work)).resume_count(
-                jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now_ms),
-            )?;
+            let step = query
+                .work_limit(usize::from(work))
+                .resume_count(jobs, &handle, sequence, now)?;
             let outcome = match step.outcome {
                 JobOutcome::Running => CountOutcome::Running,
                 JobOutcome::Complete(value) => CountOutcome::Complete(value),
@@ -472,12 +461,7 @@ fn run_count<E: Entity>(
             let handle = JobHandle::from_bytes(&bytes)?;
             let step = query
                 .work_limit(usize::from(work))
-                .resume_group_count::<ParentKey>(
-                    jobs,
-                    &handle,
-                    sequence,
-                    Timestamp::from_millis(now_ms),
-                )?;
+                .resume_group_count::<ParentKey>(jobs, &handle, sequence, now)?;
             let outcome = match step.outcome {
                 JobOutcome::Running => CountOutcome::Running,
                 JobOutcome::Complete(page) => CountOutcome::Groups(
@@ -530,64 +514,61 @@ fn read(target: bool, parent: u64, minimum: u64) -> Result<Snapshot, Error> {
                 .into_iter()
                 .map(|row| (row.key.parent, row.count))
                 .collect();
-            (
-                rows.rows
+            Snapshot {
+                parents: parents
+                    .rows
+                    .into_iter()
+                    .map(|row| (row.id, row.code))
+                    .collect(),
+                items: rows
+                    .rows
                     .into_iter()
                     .map(|row| (row.id, row.parent, u128::from(row.score)))
                     .collect(),
-                db.cardinality::<$ty>()?,
-                db.revision::<$ty>()?,
-                indexed.rows.into_iter().map(|row| row.id).collect(),
-                groups,
-                ordered.rows.into_iter().map(|row| row.id).collect(),
-            )
+                links: links
+                    .rows
+                    .into_iter()
+                    .map(|row| (row.id, row.item))
+                    .collect(),
+                counts: [
+                    db.cardinality::<Parent>()?,
+                    db.cardinality::<$ty>()?,
+                    db.cardinality::<Link>()?,
+                ],
+                revisions: [
+                    db.revision::<Parent>()?,
+                    db.revision::<$ty>()?,
+                    db.revision::<Link>()?,
+                ],
+                filtered_ids: indexed.rows.into_iter().map(|row| row.id).collect(),
+                group_counts: groups,
+                score_ordered_ids: ordered.rows.into_iter().map(|row| row.id).collect(),
+            }
         }};
     }
-    let (items, count, revision, indexed, groups, ordered) = if target {
+
+    Ok(if target {
         items!(TargetItem, u128::from(minimum))
     } else {
         items!(Item, minimum)
-    };
-
-    Ok((
-        parents
-            .rows
-            .into_iter()
-            .map(|row| (row.id, row.code))
-            .collect(),
-        items,
-        links
-            .rows
-            .into_iter()
-            .map(|row| (row.id, row.item))
-            .collect(),
-        [
-            db.cardinality::<Parent>()?,
-            count,
-            db.cardinality::<Link>()?,
-        ],
-        [db.revision::<Parent>()?, revision, db.revision::<Link>()?],
-        indexed,
-        groups,
-        ordered,
-    ))
+    })
 }
 // Read a full fixture snapshot or one bounded item page.
-fn query(request: Query, counter: fn() -> u64) -> QueryReply {
+fn query(request: QueryRequest, counter: fn() -> u64) -> QueryReply {
     let start = counter();
 
     match request {
-        Query::ParentById(key) | Query::ParentByCode(key) => {
+        QueryRequest::ParentById(key) | QueryRequest::ParentByCode(key) => {
             let row = open(&runtime(), false)
                 .and_then(|db| match request {
-                    Query::ParentById(_) => db.get::<Parent>(key),
+                    QueryRequest::ParentById(_) => db.get::<Parent>(key),
                     _ => db.get_unique(&ParentByCode { code: key }),
                 })
                 .map(|row| row.map(|p| (p.id, p.code)))
                 .map_err(refusal);
             QueryReply::Parent(row, counter() - start)
         }
-        Query::ParentCount(parent) => {
+        QueryRequest::ParentCount(parent) => {
             let count = open(&runtime(), false)
                 .and_then(|db| {
                     db.query::<Item>()
@@ -599,12 +580,12 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
                 .map_err(refusal);
             QueryReply::Count(count, counter() - start)
         }
-        Query::Snapshot(target, parent, minimum) => {
+        QueryRequest::Snapshot(target, parent, minimum) => {
             let result = read(target, parent, minimum).map_err(refusal);
 
             QueryReply::Snapshot(result, counter() - start)
         }
-        Query::Items {
+        QueryRequest::Items {
             target,
             parent,
             minimum,
@@ -638,7 +619,7 @@ fn query(request: Query, counter: fn() -> u64) -> QueryReply {
 
             QueryReply::Items(result, counter() - start)
         }
-        Query::RankedItems { minimum, after } => {
+        QueryRequest::RankedItems { minimum, after } => {
             let result = open(&runtime(), false)
                 .and_then(|db| {
                     let ranked = db

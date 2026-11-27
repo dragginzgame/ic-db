@@ -9,8 +9,9 @@ mod tests;
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_cli::host::{LIMITS, instance};
 use ic_db_cli::{
-    ConsolePage, EntityView, FieldView, PayloadFilters, QueryOptions, QueryRequest, RetainedPhase,
-    RetainedProgress, RowFilters, Status, TypeView, lowercase_hex,
+    ConsolePage, DisplayPage, EntityFilters, EntityView, FieldView, IndexView, PayloadFilters,
+    QueryOptions, QueryRequest, RetainedPhase, RetainedProgress, RowFilters, Status,
+    TypeMemberView, TypeView, lowercase_hex,
 };
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
@@ -230,7 +231,7 @@ enum Command {
         #[command(flatten)]
         filters: FilterArgs,
         #[command(flatten)]
-        entity_filters: EntityFilterArgs,
+        entity_filters: EntityFilters,
         /// Maximum completed groups across all pages, not an input-row limit.
         #[arg(long, default_value_t=32, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
@@ -262,7 +263,7 @@ enum Command {
         #[arg(long, default_value_t=3, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
         #[command(flatten)]
-        entity_filters: EntityFilterArgs,
+        entity_filters: EntityFilters,
         #[command(flatten)]
         order: OrderArgs,
         #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
@@ -319,19 +320,6 @@ struct GroupBounds {
     /// Both bounds are inclusive and apply before ordering or output limits.
     #[arg(long, allow_hyphen_values = true)]
     group_max: Option<String>,
-}
-
-#[derive(clap::Args, Debug)]
-struct EntityFilterArgs {
-    /// Entry.amount >= VALUE.
-    #[arg(long = "min")]
-    minimum: Option<u64>,
-    /// Entry.category == VALUE.
-    #[arg(long)]
-    category: Option<u64>,
-    /// Document.entry_id == VALUE.
-    #[arg(long)]
-    entry_id: Option<u64>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -508,27 +496,9 @@ fn print_schema_json(
                         },
                     )
                     .collect();
-                let indexes: Vec<_> = indexes
-                    .iter()
-                    .map(|(name, fields, unique, present_only)| {
-                        json!({"name": name, "fields": fields, "unique": unique,
-                    "present_only": present_only})
-                    })
-                    .collect();
-
                 json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
             },
         )
-        .collect();
-    let types: Vec<_> = types
-        .iter()
-        .map(|(name, kind, members)| {
-            let members: Vec<_> = members.iter().map(|(name, kind, optional, info)| {
-            json!({"name": name, "type": kind, "optional": optional, "info": info})
-        }).collect();
-
-            json!({"name": name, "kind": kind, "members": members})
-        })
         .collect();
     let document = json!({
         "source": "local_fixture",
@@ -609,19 +579,26 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
         } else {
             let rows: Vec<Vec<String>> = indexes
                 .into_iter()
-                .map(|(name, fields, unique, present_only)| {
-                    vec![
-                        name,
-                        fields.join(", "),
-                        if unique { "Yes" } else { "No" }.into(),
-                        if present_only {
-                            "All optional keys present"
-                        } else {
-                            "All rows"
-                        }
-                        .into(),
-                    ]
-                })
+                .map(
+                    |IndexView {
+                         name,
+                         fields,
+                         unique,
+                         present_only,
+                     }| {
+                        vec![
+                            name,
+                            fields.join(", "),
+                            if unique { "Yes" } else { "No" }.into(),
+                            if present_only {
+                                "All optional keys present"
+                            } else {
+                                "All rows"
+                            }
+                            .into(),
+                        ]
+                    },
+                )
                 .collect();
             println!(
                 "\nIndexes\n{}\n",
@@ -632,18 +609,30 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             );
         }
     }
-    for (name, kind, members) in types {
+    for TypeView {
+        name,
+        kind,
+        members,
+    } in types
+    {
         println!("{}: {}", escape(&kind), escape(&name));
         let rows: Vec<Vec<String>> = members
             .into_iter()
-            .map(|(name, ty, optional, info)| {
-                vec![
-                    name,
-                    ty,
-                    if optional { "Yes" } else { "No" }.into(),
-                    if info.is_empty() { "-".into() } else { info },
-                ]
-            })
+            .map(
+                |TypeMemberView {
+                     name,
+                     kind: ty,
+                     optional,
+                     info,
+                 }| {
+                    vec![
+                        name,
+                        ty,
+                        if optional { "Yes" } else { "No" }.into(),
+                        if info.is_empty() { "-".into() } else { info },
+                    ]
+                },
+            )
             .collect();
         println!(
             "{}\n",
@@ -823,7 +812,7 @@ async fn session(
                 entity,
                 select,
                 filters,
-                entity_filters: EntityFilterArgs { minimum, category, entry_id },
+                entity_filters,
                 limit,
                 group_bounds: GroupBounds { group_min, group_max },
                 group_order,
@@ -834,7 +823,7 @@ async fn session(
                 let selection = ic_db_cli::RetainedSelection {
                     entity,
                     select,
-                    entity_filters: (minimum, category, entry_id),
+                    entity_filters,
                     limit,
                     group_bounds: (group_min, group_max),
                     group_order,
@@ -857,7 +846,7 @@ async fn session(
 
                         match phase {
                             RetainedPhase::Running => {},
-                            RetainedPhase::Complete((columns, rows, next)) => {
+                            RetainedPhase::Complete(DisplayPage { columns, rows, next }) => {
                                 println!("{}", bordered_table(&columns, &rows));
                                 if next.is_none() { return Ok(()); }
                                 request.after = next;
@@ -890,7 +879,7 @@ async fn session(
                 filters,
                 after,
                 limit,
-                entity_filters: EntityFilterArgs { minimum, category, entry_id },
+                entity_filters,
                 order: OrderArgs { order_by, desc },
                 work,
                 select,
@@ -899,13 +888,13 @@ async fn session(
                 group_order,
             } => {
                 let request = QueryRequest {
-                    entity, cursor: after.map(|cursor| cursor.to_bytes()), limit, minimum, category, entry_id,
+                    entity, cursor: after.map(|cursor| cursor.to_bytes()), limit, entity_filters,
                     order: order_by, descending: desc, work, bytes: FIXTURE_OUTPUT_BYTES, select,
                     options: QueryOptions { distinct, group_bounds: (group_min, group_max), group_order, filters: filters.into_filters()? },
                 };
                 let result: Result<ConsolePage, String> =
                     calls.framed(CallKind::Query, "query", 3, &request).await?;
-                let ConsolePage { columns, rows, next, examined, fetched, output_bytes: bytes } = result?;
+                let ConsolePage { page: DisplayPage { columns, rows, next }, examined, fetched, output_bytes: bytes } = result?;
                 let count = rows.len();
                 println!("\n{}\n{}", request.entity, bordered_table(&columns, &rows));
                 let noun = if count == 1 { "row" } else { "rows" };

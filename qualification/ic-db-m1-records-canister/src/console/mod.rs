@@ -14,7 +14,9 @@ use crate::{
     queries::{IdOnly, Summary},
     runtime,
     schema::{DecimalRow, Document, Entry},
-    transport::{ConsolePage as Page, QueryOptions, QueryRequest, RowFilters},
+    transport::{
+        ConsolePage as Page, DisplayPage, EntityFilters, QueryOptions, QueryRequest, RowFilters,
+    },
 };
 use ic_db::design::prelude::*;
 use ic_db::{
@@ -95,9 +97,7 @@ fn query(
         entity,
         cursor,
         limit,
-        minimum,
-        category,
-        entry_id,
+        entity_filters,
         order,
         descending,
         work,
@@ -120,7 +120,7 @@ fn query(
 
     match entity.as_str() {
         "Entry" => {
-            let query = filter_rows(entry_query(&db, minimum, category, entry_id)?, &filters)?;
+            let query = filter_rows(entry_query(&db, &entity_filters)?, &filters)?;
 
             execute(
                 configure(
@@ -149,7 +149,7 @@ fn query(
             )
         }
         "Document" => {
-            let query = filter_rows(document_query(&db, minimum, category, entry_id)?, &filters)?;
+            let query = filter_rows(document_query(&db, &entity_filters)?, &filters)?;
 
             execute(
                 configure(
@@ -193,7 +193,7 @@ fn query(
         }
         "DecimalRow" => execute(
             configure(
-                filter_rows(decimal_query(&db, minimum, category, entry_id)?, &filters)?,
+                filter_rows(decimal_query(&db, &entity_filters)?, &filters)?,
                 cursor.as_ref(),
                 &order,
                 descending,
@@ -218,7 +218,7 @@ fn query(
             },
         ),
         "BinaryObject" => {
-            let query = filter_rows(blob::query(&db, minimum, category, entry_id)?, &filters)?;
+            let query = filter_rows(blob::query(&db, &entity_filters)?, &filters)?;
 
             execute(
                 configure(
@@ -386,10 +386,15 @@ fn filter_rows<'a, E: Entity>(
         query = query.filter_fields(left, comparison(op)?, right);
     }
     if let Some([field, lower, upper]) = between_fields {
-        query = query.filter_between_fields(field, lower, upper);
+        query = query
+            .filter_fields(field, Comparison::Ge, lower)
+            .filter_fields(field, Comparison::Le, upper);
     }
     if let Some([field, lower, upper]) = not_between_fields {
-        query = query.filter_not_between_fields(field, lower, upper);
+        query = query.filter_any(&[
+            (field, Comparison::Lt, ic_db::QueryOperand::Field(lower)),
+            (field, Comparison::Gt, ic_db::QueryOperand::Field(upper)),
+        ]);
     }
     if let Some((field, value)) = boolean {
         query = query.filter(field, Comparison::Eq, *value);
@@ -501,50 +506,44 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
     }
 }
 
-fn entry_query(
-    db: &crate::handles::Database,
-    minimum: Option<u64>,
-    category: Option<u64>,
-    entry_id: Option<u64>,
-) -> Result<Query<'_, Entry>, String> {
-    if entry_id.is_some() {
+fn entry_query<'a>(
+    db: &'a crate::handles::Database,
+    filters: &EntityFilters,
+) -> Result<Query<'a, Entry>, String> {
+    if filters.entry_id.is_some() {
         return Err("--entry-id applies to Document".into());
     }
     let mut query = db.query::<Entry>();
-    if let Some(value) = minimum {
+    if let Some(value) = filters.minimum {
         query = query.filter("amount", Comparison::Ge, value);
     }
-    if let Some(value) = category {
+    if let Some(value) = filters.category {
         query = query.filter("category", Comparison::Eq, value);
     }
 
     Ok(query)
 }
 
-fn document_query(
-    db: &crate::handles::Database,
-    minimum: Option<u64>,
-    category: Option<u64>,
-    entry_id: Option<u64>,
-) -> Result<Query<'_, Document>, String> {
-    if minimum.is_some() || category.is_some() {
+fn document_query<'a>(
+    db: &'a crate::handles::Database,
+    filters: &EntityFilters,
+) -> Result<Query<'a, Document>, String> {
+    if filters.minimum.is_some() || filters.category.is_some() {
         return Err("--min and --category apply to Entry".into());
     }
     let mut query = db.query::<Document>();
-    if let Some(value) = entry_id {
+    if let Some(value) = filters.entry_id {
         query = query.filter("entry_id", Comparison::Eq, value);
     }
 
     Ok(query)
 }
 
-fn decimal_query(
-    db: &crate::handles::Database,
-    minimum: Option<u64>,
-    category: Option<u64>,
-    entry_id: Option<u64>,
-) -> Result<Query<'_, DecimalRow>, String> {
-    if minimum.is_some() || category.is_some() || entry_id.is_some() {
+fn decimal_query<'a>(
+    db: &'a crate::handles::Database,
+    filters: &EntityFilters,
+) -> Result<Query<'a, DecimalRow>, String> {
+    if filters.minimum.is_some() || filters.category.is_some() || filters.entry_id.is_some() {
         return Err("--min, --category and --entry-id do not apply to DecimalRow".into());
     }
 
@@ -954,9 +953,11 @@ fn aggregate_page<T>(
     let (columns, rows) = table(r.value);
 
     Page {
-        columns,
-        rows,
-        next: None,
+        page: DisplayPage {
+            columns,
+            rows,
+            next: None,
+        },
         examined: r.examined as u32,
         fetched: r.fetched as u32,
         output_bytes: r.output_bytes as u32,
@@ -1024,9 +1025,11 @@ fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) 
 
 fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>) -> Page {
     Page {
-        columns: columns.iter().map(|c| (*c).to_owned()).collect(),
-        rows: page.rows.into_iter().map(render).collect(),
-        next: page.next.map(|c| c.to_bytes()),
+        page: DisplayPage {
+            columns: columns.iter().map(|c| (*c).to_owned()).collect(),
+            rows: page.rows.into_iter().map(render).collect(),
+            next: page.next.map(|c| c.to_bytes()),
+        },
         examined: page.examined as u32,
         fetched: page.fetched as u32,
         output_bytes: page.output_bytes as u32,

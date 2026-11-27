@@ -78,20 +78,51 @@ impl std::error::Error for Error {
     }
 }
 
+///
+/// EntityDeclaration
+/// Associates a resolved host path with its owning store and executable schema.
+///
+struct EntityDeclaration {
+    path: &'static str,
+    store: &'static str,
+    schema: &'static EntitySchema,
+}
+
+///
+/// StoreDeclaration
+/// Binds a store path to its canister and stable allocation key.
+///
+#[derive(Clone, Copy)]
+struct StoreDeclaration {
+    path: &'static str,
+    canister: &'static str,
+    key: &'static str,
+}
+
 #[derive(Default)]
 struct Registry {
-    nodes: Vec<(&'static str, &'static str, &'static EntitySchema)>,
-    stores: Vec<(&'static str, &'static str, &'static str)>,
+    nodes: Vec<EntityDeclaration>,
+    stores: Vec<StoreDeclaration>,
     canisters: Vec<&'static str>,
     sealed: bool,
     late: bool,
 }
 impl Registry {
     fn register(&mut self, path: &'static str, store: &'static str, schema: &'static EntitySchema) {
+        self.collect(|registry| {
+            registry.nodes.push(EntityDeclaration {
+                path,
+                store,
+                schema,
+            })
+        });
+    }
+
+    fn collect(&mut self, add: impl FnOnce(&mut Self)) {
         if self.sealed {
             self.late = true;
         } else {
-            self.nodes.push((path, store, schema));
+            add(self);
         }
     }
 
@@ -100,7 +131,7 @@ impl Registry {
         if !self
             .nodes
             .iter()
-            .any(|(path, _, _)| path.starts_with(&prefix))
+            .any(|entity| entity.path.starts_with(&prefix))
         {
             return Err(Error::EmptyModule);
         }
@@ -110,35 +141,47 @@ impl Registry {
                 "{source} requires one local store; use the producer-owned build for multiple stores"
             )));
         }
+        self.prepare(source, target)?;
         let code = self.assembly(source, target, None, |_| {})?;
         self.sealed = true;
         Ok(code)
     }
 
-    fn assembly(
-        &mut self,
-        source: &str,
-        target: &str,
-        store: Option<&str>,
-        mut member: impl FnMut(&str),
-    ) -> Result<String, Error> {
+    fn prepare(&mut self, source: &str, target: &str) -> Result<(), Error> {
         if self.late {
             return Err(Error::LateRegistration);
         }
         if source.is_empty() || target.is_empty() {
             return Err(Error::InvalidModule);
         }
-        self.nodes.sort_by_key(|(path, _, _)| *path);
-        if let Some(pair) = self.nodes.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-            return Err(Error::DuplicatePath(pair[0].0));
+        self.nodes.sort_by_key(|entity| entity.path);
+        if let Some(pair) = self
+            .nodes
+            .windows(2)
+            .find(|pair| pair[0].path == pair[1].path)
+        {
+            return Err(Error::DuplicatePath(pair[0].path));
         }
+        Ok(())
+    }
+
+    fn assembly(
+        &self,
+        source: &str,
+        target: &str,
+        store: Option<&str>,
+        mut member: impl FnMut(&str),
+    ) -> Result<String, Error> {
         let prefix = format!("{source}::");
         let mut selected: Vec<_> = self
             .nodes
             .iter()
-            .filter(|(_, owner, _)| store.is_none_or(|store| store == *owner))
-            .filter_map(|(path, _, schema)| {
-                path.strip_prefix(&prefix).map(|suffix| (suffix, *schema))
+            .filter(|entity| store.is_none_or(|store| store == entity.store))
+            .filter_map(|entity| {
+                entity
+                    .path
+                    .strip_prefix(&prefix)
+                    .map(|suffix| (suffix, entity.schema))
             })
             .collect();
         if selected.is_empty() {
@@ -225,23 +268,19 @@ pub fn __entity<E: crate::Entity>() {
 pub fn __store<S: crate::Store>() {
     use crate::Canister;
     let mut registry = REGISTRY.lock().expect("schema registration lock poisoned");
-    if registry.sealed {
-        registry.late = true;
-        return;
-    }
-    registry
-        .stores
-        .push((S::DECLARATION, S::Canister::DECLARATION, S::KEY));
+    registry.collect(|registry| {
+        registry.stores.push(StoreDeclaration {
+            path: S::DECLARATION,
+            canister: S::Canister::DECLARATION,
+            key: S::KEY,
+        })
+    });
 }
 
 #[doc(hidden)]
 pub fn __canister<C: crate::Canister>() {
     let mut registry = REGISTRY.lock().expect("schema registration lock poisoned");
-    if registry.sealed {
-        registry.late = true;
-        return;
-    }
-    registry.canisters.push(C::DECLARATION);
+    registry.collect(|registry| registry.canisters.push(C::DECLARATION));
 }
 
 /// Build the complete schema declared under `src/<module>` in its owning crate.

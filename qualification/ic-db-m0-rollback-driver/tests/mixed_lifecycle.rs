@@ -2,15 +2,17 @@
 //! No product dependency, schema descriptors, codecs or query execution in the oracle.
 
 mod artifact;
+mod wire_frame;
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
+use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::{BTreeMap, BTreeSet};
+use wire_frame::{request as encode, response as decode};
 
 use ic_db_qualification_transport::mixed::{
-    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, Query, QueryReply,
-    Reply, Snapshot, Update,
+    Command, CountAction, CountOutcome, CountReply, CountRequest, ItemPage, QUERY, QueryReply,
+    QueryRequest, Snapshot, WRITE, WriteReply, WriteRequest,
 };
 
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
@@ -111,53 +113,31 @@ impl Model {
             .collect();
         ordered.sort_unstable();
 
-        (
-            self.parents.iter().map(|(&id, &code)| (id, code)).collect(),
-            self.items
+        Snapshot {
+            parents: self.parents.iter().map(|(&id, &code)| (id, code)).collect(),
+            items: self
+                .items
                 .iter()
                 .map(|(&id, &(parent, score))| (id, parent, score))
                 .collect(),
-            self.links.iter().map(|(&id, &item)| (id, item)).collect(),
-            [
+            links: self.links.iter().map(|(&id, &item)| (id, item)).collect(),
+            counts: [
                 self.parents.len() as u64,
                 self.items.len() as u64,
                 self.links.len() as u64,
             ],
-            self.revisions,
-            self.items
+            revisions: self.revisions,
+            filtered_ids: self
+                .items
                 .iter()
                 .filter(|(_, row)| row.0 == parent && row.1 >= u128::from(minimum))
                 .map(|(&id, _)| id)
                 .collect(),
-            self.group_counts(),
-            ordered.into_iter().map(|(_, id)| id).collect(),
-        )
+            group_counts: self.group_counts(),
+            score_ordered_ids: ordered.into_iter().map(|(_, id)| id).collect(),
+        }
     }
 }
-fn encode<T: Serialize>(id: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
-        value,
-        Encoding::Frame {
-            method: id,
-            direction: Direction::Request,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
-fn decode<T: DeserializeOwned>(id: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
-        bytes,
-        Encoding::Frame {
-            method: id,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
     ic_wire::encode(
         value,
@@ -182,6 +162,24 @@ fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
     .unwrap()
 }
 
+async fn mounted_write(pic: &PocketIc, canister: CanisterId, request: &WriteRequest) -> WriteReply {
+    let bytes = pic
+        .update_call(
+            canister,
+            canister,
+            "canic_db_write",
+            application_request(WRITE, request),
+        )
+        .await
+        .unwrap();
+
+    application_reply(WRITE, &bytes)
+}
+
+fn mixed_wasm() -> Vec<u8> {
+    std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap()
+}
+
 fn seed_batches() -> [(&'static str, Vec<Command>); 2] {
     [
         (
@@ -201,8 +199,7 @@ fn seed_batches() -> [(&'static str, Vec<Command>); 2] {
 async fn compare_retained_count_advance_at_the_same_checkpoint() {
     use ic_testkit::pocket_ic::Time;
 
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     // Fix both clocks so the job generation, expiry and observed timestamps agree.
     let clock = |offset_seconds| {
         Time::from_nanos_since_unix_epoch((2_000_000_000_u64 + offset_seconds) * 1_000_000_000)
@@ -215,28 +212,16 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
         pic.add_cycles(canister, 10_000_000_000_000).await;
         pic.install_canister(canister, wasm.clone(), vec![], None)
             .await;
-        let call = async |request| {
-            let bytes = pic
-                .update_call(
-                    canister,
-                    canister,
-                    "canic_db_write",
-                    application_request(241, &request),
-                )
-                .await
-                .unwrap();
-
-            application_reply::<Reply>(241, &bytes)
-        };
+        let call = async |request| mounted_write(&pic, canister, &request).await;
         for (_, commands) in seed_batches() {
             assert!(matches!(
-                call(Update::Batch(false, commands)).await,
-                Reply::Batch(Ok(()), _)
+                call(WriteRequest::Batch(false, commands)).await,
+                WriteReply::Batch(Ok(()), _)
             ));
         }
         let count = async |action| {
-            let Reply::Count(result, instructions) =
-                call(Update::Count(CountRequest::Run(false, action))).await
+            let WriteReply::Count(result, instructions) =
+                call(WriteRequest::Count(CountRequest::Run(false, action))).await
             else {
                 panic!("expected count reply")
             };
@@ -413,7 +398,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             canister,
             anonymous,
             "canic_db_write",
-            application_request(241, &Update::Batch(false, vec![(0, 0, 1, 10, 0)])),
+            application_request(WRITE, &WriteRequest::Batch(false, vec![(0, 0, 1, 10, 0)])),
         )
         .await
         .unwrap_err();
@@ -429,20 +414,20 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             .await
             .unwrap()
     };
-    let query = async |caller, request: Query| {
+    let query = async |caller, request: QueryRequest| {
         pic.query_call(
             canister,
             caller,
             "canic_db_query",
-            application_request(242, &request),
+            application_request(QUERY, &request),
         )
         .await
     };
     let read = async |target: bool, parent: u64, minimum: u64| {
-        let bytes = query(canister, Query::Snapshot(target, parent, minimum))
+        let bytes = query(canister, QueryRequest::Snapshot(target, parent, minimum))
             .await
             .unwrap();
-        let QueryReply::Snapshot(result, instructions) = application_reply(242, &bytes) else {
+        let QueryReply::Snapshot(result, instructions) = application_reply(QUERY, &bytes) else {
             panic!("expected snapshot reply")
         };
 
@@ -451,7 +436,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let items = async |target, minimum, work, after| {
         let bytes = query(
             canister,
-            Query::Items {
+            QueryRequest::Items {
                 target,
                 parent: 1,
                 work,
@@ -461,7 +446,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         )
         .await
         .unwrap();
-        let QueryReply::Items(result, instructions) = application_reply(242, &bytes) else {
+        let QueryReply::Items(result, instructions) = application_reply(QUERY, &bytes) else {
             panic!("expected items reply")
         };
 
@@ -479,10 +464,10 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let write = async |target: bool, commands: &[Command]| {
         let bytes = update(
             "canic_db_write",
-            application_request(241, &Update::Batch(target, commands.to_vec())),
+            application_request(WRITE, &WriteRequest::Batch(target, commands.to_vec())),
         )
         .await;
-        let Reply::Batch(result, instructions) = application_reply(241, &bytes) else {
+        let WriteReply::Batch(result, instructions) = application_reply(WRITE, &bytes) else {
             panic!("expected batch reply")
         };
 
@@ -589,10 +574,10 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let job = async |request: CountRequest| {
         let bytes = update(
             "canic_db_write",
-            application_request(241, &Update::Count(request)),
+            application_request(WRITE, &WriteRequest::Count(request)),
         )
         .await;
-        let Reply::Count(result, _) = application_reply(241, &bytes) else {
+        let WriteReply::Count(result, _) = application_reply(WRITE, &bytes) else {
             panic!("expected count reply")
         };
 
@@ -643,7 +628,10 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             canister,
             anonymous,
             "canic_db_write",
-            application_request(241, &Update::Count(CountRequest::Cancel(handle.clone()))),
+            application_request(
+                WRITE,
+                &WriteRequest::Count(CountRequest::Cancel(handle.clone())),
+            ),
         )
         .await
         .unwrap_err();
@@ -687,7 +675,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             let before = pic.get_stable_memory(canister).await;
             let denied = query(
                 anonymous,
-                Query::Items {
+                QueryRequest::Items {
                     target: false,
                     parent: 1,
                     minimum: 100,
@@ -716,7 +704,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         cursor = next;
     }
     assert_eq!(empty_continued, 2);
-    assert_eq!(matches, model.snapshot(1, 100).5);
+    assert_eq!(matches, model.snapshot(1, 100).filtered_ids);
     check(
         &mut model,
         false,
@@ -1063,7 +1051,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         after = next;
         assert!(step < model.items.len(), "target listing must finish");
     }
-    let expected = model.snapshot(1, 1030).5;
+    let expected = model.snapshot(1, 1030).filtered_ids;
     assert!(!expected.is_empty());
     assert_eq!(listed, expected);
     drop(check);
@@ -1088,30 +1076,18 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
 
 #[tokio::test]
 async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let pic = instance().await.unwrap();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
 
-    let update = async |request: Update| {
-        let bytes = pic
-            .update_call(
-                canister,
-                canister,
-                "canic_db_write",
-                application_request(241, &request),
-            )
-            .await
-            .unwrap();
-
-        application_reply::<Reply>(241, &bytes)
-    };
+    let update = async |request| mounted_write(&pic, canister, &request).await;
     let write = async |model: &mut Model, commands: Vec<Command>| {
         model.apply(&commands).unwrap();
-        let Reply::Batch(result, instructions) = update(Update::Batch(false, commands)).await
+        let WriteReply::Batch(result, instructions) =
+            update(WriteRequest::Batch(false, commands)).await
         else {
             panic!("expected batch reply")
         };
@@ -1133,23 +1109,23 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         }
         write(&mut model, batch).await;
     }
-    let read_page = async |request: Query| {
+    let read_page = async |request: QueryRequest| {
         let bytes = pic
             .query_call(
                 canister,
                 canister,
                 "canic_db_query",
-                application_request(242, &request),
+                application_request(QUERY, &request),
             )
             .await
             .unwrap();
-        let QueryReply::Items(result, cost) = application_reply(242, &bytes) else {
+        let QueryReply::Items(result, cost) = application_reply(QUERY, &bytes) else {
             panic!("expected items reply")
         };
         (result.unwrap(), cost)
     };
     let page = async |parent, work, after| {
-        read_page(Query::Items {
+        read_page(QueryRequest::Items {
             target: false,
             parent,
             minimum: 10,
@@ -1225,7 +1201,8 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
         list(phase, model, 2, None, None).await;
     };
     let count = async |request| {
-        let Reply::Count(result, instructions) = update(Update::Count(request)).await else {
+        let WriteReply::Count(result, instructions) = update(WriteRequest::Count(request)).await
+        else {
             panic!("expected count reply")
         };
 
@@ -1386,7 +1363,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
     )
     .await;
     let ranked = async |after| {
-        read_page(Query::RankedItems {
+        read_page(QueryRequest::RankedItems {
             minimum: 100,
             after,
         })
@@ -1421,28 +1398,16 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
 
 #[tokio::test]
 async fn retained_counts_by_parent_selectivity() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let pic = instance().await.unwrap();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
-    let update = async |request| {
-        let bytes = pic
-            .update_call(
-                canister,
-                canister,
-                "canic_db_write",
-                application_request(241, &request),
-            )
-            .await
-            .unwrap();
-        application_reply::<Reply>(241, &bytes)
-    };
+    let update = async |request| mounted_write(&pic, canister, &request).await;
     let write = async |commands| {
         assert!(matches!(
-            update(Update::Batch(false, commands)).await,
-            Reply::Batch(Ok(()), _)
+            update(WriteRequest::Batch(false, commands)).await,
+            WriteReply::Batch(Ok(()), _)
         ));
     };
     write(vec![(0, 0, 1, 10, 0), (0, 0, 2, 20, 0)]).await;
@@ -1463,17 +1428,17 @@ async fn retained_counts_by_parent_selectivity() {
                 canister,
                 canister,
                 "canic_db_query",
-                application_request(242, &request),
+                application_request(QUERY, &request),
             )
             .await
             .unwrap();
-        application_reply::<QueryReply>(242, &bytes)
+        application_reply::<QueryReply>(QUERY, &bytes)
     };
     for (label, request, expected) in [
-        ("primary-hit", Query::ParentById(1), Some((1, 10))),
-        ("primary-miss", Query::ParentById(99), None),
-        ("unique-hit", Query::ParentByCode(10), Some((1, 10))),
-        ("unique-miss", Query::ParentByCode(99), None),
+        ("primary-hit", QueryRequest::ParentById(1), Some((1, 10))),
+        ("primary-miss", QueryRequest::ParentById(99), None),
+        ("unique-hit", QueryRequest::ParentByCode(10), Some((1, 10))),
+        ("unique-miss", QueryRequest::ParentByCode(99), None),
     ] {
         let QueryReply::Parent(row, work) = read(request).await else {
             panic!("expected parent")
@@ -1482,7 +1447,7 @@ async fn retained_counts_by_parent_selectivity() {
         println!("ordinary-read {label} instructions={work}");
     }
     for parent in [1, 2, 3] {
-        let QueryReply::Count(result, work) = read(Query::ParentCount(parent)).await else {
+        let QueryReply::Count(result, work) = read(QueryRequest::ParentCount(parent)).await else {
             panic!("expected count")
         };
         let matches = items.iter().filter(|item| item.3 == parent).count() as u64;
@@ -1493,7 +1458,7 @@ async fn retained_counts_by_parent_selectivity() {
         let mut cursor = None;
         let mut found = Vec::new();
         for page_number in 1..=2 {
-            let QueryReply::Items(result, work) = read(Query::Items {
+            let QueryReply::Items(result, work) = read(QueryRequest::Items {
                 target: false,
                 parent: 1,
                 minimum,
@@ -1530,7 +1495,7 @@ async fn retained_counts_by_parent_selectivity() {
         assert_eq!(found, expected);
     }
     let count = async |request| {
-        let Reply::Count(reply, work) = update(Update::Count(request)).await else {
+        let WriteReply::Count(reply, work) = update(WriteRequest::Count(request)).await else {
             panic!("expected count reply")
         };
         (reply.unwrap(), work)
@@ -1705,8 +1670,7 @@ async fn retained_counts_by_parent_selectivity() {
 
 #[tokio::test]
 async fn compare_mounted_read_modify_write_batch_sizes() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let updates: Vec<Command> = (1..=12).map(|id| (1, 3, id, 0, 150 - 11 * id)).collect();
     for width in [1, 4, 12] {
         let pic = instance().await.unwrap();
@@ -1715,16 +1679,9 @@ async fn compare_mounted_read_modify_write_batch_sizes() {
         pic.install_canister(canister, wasm.clone(), vec![], None)
             .await;
         let write = async |commands| {
-            let bytes = pic
-                .update_call(
-                    canister,
-                    canister,
-                    "canic_db_write",
-                    application_request(241, &Update::Batch(false, commands)),
-                )
-                .await
-                .unwrap();
-            let Reply::Batch(result, work) = application_reply(241, &bytes) else {
+            let WriteReply::Batch(result, work) =
+                mounted_write(&pic, canister, &WriteRequest::Batch(false, commands)).await
+            else {
                 panic!("expected batch reply")
             };
             (result, work)
@@ -1752,11 +1709,11 @@ async fn compare_mounted_read_modify_write_batch_sizes() {
                         canister,
                         canister,
                         "canic_db_query",
-                        application_request(242, &Query::Snapshot(false, parent, 143)),
+                        application_request(QUERY, &QueryRequest::Snapshot(false, parent, 143)),
                     )
                     .await
                     .unwrap();
-                let QueryReply::Snapshot(result, _) = application_reply(242, &bytes) else {
+                let QueryReply::Snapshot(result, _) = application_reply(QUERY, &bytes) else {
                     panic!("expected snapshot reply")
                 };
                 assert_eq!(result.unwrap(), model.snapshot(parent, 143));
@@ -1793,8 +1750,7 @@ async fn compare_mounted_read_modify_write_batch_sizes() {
 async fn compare_returned_managed_row_with_read_after_commit() {
     use ic_testkit::pocket_ic::Time;
 
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let mut control = None;
     for returning in [false, true] {
         let pic = instance().await.unwrap();
@@ -1825,8 +1781,8 @@ async fn compare_returned_managed_row_with_read_after_commit() {
                     canister,
                     "canic_db_write",
                     application_request(
-                        241,
-                        &Update::ReplaceManaged {
+                        WRITE,
+                        &WriteRequest::ReplaceManaged {
                             returning,
                             body: body.into(),
                         },
@@ -1835,7 +1791,7 @@ async fn compare_returned_managed_row_with_read_after_commit() {
                 .await
                 .unwrap();
             let cycles = before - pic.cycle_balance(canister).await;
-            let Reply::Managed(row, instructions) = application_reply(241, &bytes) else {
+            let WriteReply::Managed(row, instructions) = application_reply(WRITE, &bytes) else {
                 panic!("expected managed row");
             };
             let backing = pic.get_stable_memory(canister).await;
@@ -1883,8 +1839,7 @@ async fn compare_returned_managed_row_with_read_after_commit() {
 async fn managed_upsert_replays_across_upgrade_and_refuses_a_conflicting_batch() {
     use ic_testkit::pocket_ic::Time;
 
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let pic = instance().await.unwrap();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
@@ -1892,17 +1847,8 @@ async fn managed_upsert_replays_across_upgrade_and_refuses_a_conflicting_batch()
         .await;
 
     let upsert = async |body: &str, second: Option<&str>| {
-        let request = Update::UpsertManaged(body.into(), second.map(str::to_owned));
-        let bytes = pic
-            .update_call(
-                canister,
-                canister,
-                "canic_db_write",
-                application_request(241, &request),
-            )
-            .await
-            .unwrap();
-        let Reply::Managed(row, _) = application_reply(241, &bytes) else {
+        let request = WriteRequest::UpsertManaged(body.into(), second.map(str::to_owned));
+        let WriteReply::Managed(row, _) = mounted_write(&pic, canister, &request).await else {
             panic!("expected managed row")
         };
         row
@@ -1950,8 +1896,7 @@ async fn managed_upsert_replays_across_upgrade_and_refuses_a_conflicting_batch()
 
 #[tokio::test]
 async fn grouped_count_under_interleaved_writes() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle")).unwrap();
+    let wasm = mixed_wasm();
     let pic = instance().await.unwrap();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 10_000_000_000_000).await;
@@ -1965,24 +1910,25 @@ async fn grouped_count_under_interleaved_writes() {
                 canister,
                 canister,
                 "canic_db_write",
-                application_request(241, &request),
+                application_request(WRITE, &request),
             )
             .await
             .unwrap();
         (
-            application_reply::<Reply>(241, &bytes),
+            application_reply::<WriteReply>(WRITE, &bytes),
             before - pic.cycle_balance(canister).await,
         )
     };
     let write = async |model: &mut Model, commands: Vec<Command>| {
         model.apply(&commands).unwrap();
         assert!(matches!(
-            update(Update::Batch(false, commands)).await.0,
-            Reply::Batch(Ok(()), _)
+            update(WriteRequest::Batch(false, commands)).await.0,
+            WriteReply::Batch(Ok(()), _)
         ));
     };
     let count = async |request| {
-        let (Reply::Count(result, instructions), cycles) = update(Update::Count(request)).await
+        let (WriteReply::Count(result, instructions), cycles) =
+            update(WriteRequest::Count(request)).await
         else {
             panic!("expected count response")
         };
@@ -2080,8 +2026,8 @@ async fn grouped_count_under_interleaved_writes() {
         CountReply::GroupAdvanced(2, 6, CountOutcome::Running)
     );
     let before_refusal = pic.get_stable_memory(canister).await;
-    let (reply, _) = update(Update::Count(request(&handle, 3))).await;
-    assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+    let (reply, _) = update(WriteRequest::Count(request(&handle, 3))).await;
+    assert!(matches!(reply, WriteReply::Count(Err(reason), _) if reason == "InvalidJob"));
     assert!(pic.get_stable_memory(canister).await == before_refusal);
     assert_eq!(
         count(request(&handle, 2)).await.0,
@@ -2124,12 +2070,12 @@ async fn grouped_count_under_interleaved_writes() {
         }
         occupied.push(start().await.0);
     }
-    let (full, _) = update(Update::Count(CountRequest::Run(
+    let (full, _) = update(WriteRequest::Count(CountRequest::Run(
         false,
         CountAction::StartGrouped,
     )))
     .await;
-    assert!(matches!(full, Reply::Count(Err(reason), _) if reason == "JobCapacity"));
+    assert!(matches!(full, WriteReply::Count(Err(reason), _) if reason == "JobCapacity"));
     assert_eq!(
         count(CountRequest::Cancel(handle.clone())).await.0,
         CountReply::Cancelled
@@ -2138,8 +2084,8 @@ async fn grouped_count_under_interleaved_writes() {
     assert_ne!(handle, replacement);
     let checkpoint = pic.get_stable_memory(canister).await;
     for delayed in [request(&handle, 3), CountRequest::Cancel(handle)] {
-        let (reply, _) = update(Update::Count(delayed)).await;
-        assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+        let (reply, _) = update(WriteRequest::Count(delayed)).await;
+        assert!(matches!(reply, WriteReply::Count(Err(reason), _) if reason == "InvalidJob"));
         assert!(pic.get_stable_memory(canister).await == checkpoint);
     }
     assert_eq!(
@@ -2182,8 +2128,8 @@ async fn grouped_count_under_interleaved_writes() {
         CountReply::Removed(0)
     );
     for expired in occupied.drain(..5) {
-        let (reply, _) = update(Update::Count(request(&expired, 0))).await;
-        assert!(matches!(reply, Reply::Count(Err(reason), _) if reason == "InvalidJob"));
+        let (reply, _) = update(WriteRequest::Count(request(&expired, 0))).await;
+        assert!(matches!(reply, WriteReply::Count(Err(reason), _) if reason == "InvalidJob"));
     }
     assert!(pic.get_stable_memory(canister).await == before);
     assert_eq!(

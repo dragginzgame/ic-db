@@ -7,12 +7,8 @@ pub mod host;
 /// A local query result, in the fixture's positional Wire field order.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct ConsolePage {
-    /// Display column names.
-    pub columns: Vec<String>,
-    /// Display cells in column order.
-    pub rows: Vec<Vec<String>>,
-    /// Encoded continuation for a paged read.
-    pub next: Option<Vec<u8>>,
+    /// Displayed rows and their continuation.
+    pub page: DisplayPage,
     /// Examined query candidates.
     pub examined: u32,
     /// Fetched source rows.
@@ -36,6 +32,21 @@ pub struct PayloadFilters {
     pub contains: Option<Vec<u8>>,
 }
 
+/// Entity restrictions shared by ordinary and retained fixture queries.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "console", derive(clap::Args))]
+pub struct EntityFilters {
+    /// Entry.amount >= VALUE.
+    #[cfg_attr(feature = "console", arg(long = "min"))]
+    pub minimum: Option<u64>,
+    /// Entry.category == VALUE.
+    #[cfg_attr(feature = "console", arg(long))]
+    pub category: Option<u64>,
+    /// Document.entry_id == VALUE.
+    #[cfg_attr(feature = "console", arg(long))]
+    pub entry_id: Option<u64>,
+}
+
 /// Local query command in fixture Wire field order.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct QueryRequest {
@@ -45,12 +56,8 @@ pub struct QueryRequest {
     pub cursor: Option<Vec<u8>>,
     /// Maximum rows per page.
     pub limit: u32,
-    /// Lower amount bound.
-    pub minimum: Option<u64>,
-    /// Selected category.
-    pub category: Option<u64>,
-    /// Selected entry ID.
-    pub entry_id: Option<u64>,
+    /// Restrictions on fixture entity fields.
+    pub entity_filters: EntityFilters,
     /// Ordered field specifications.
     pub order: Vec<String>,
     /// Reverse traversal.
@@ -132,11 +139,52 @@ pub struct FieldView {
     pub reference: Option<(String, String)>,
 }
 
-/// Index name, fields, uniqueness and sparse membership.
-pub type IndexView = (String, Vec<String>, bool, bool);
+///
+/// IndexView
+/// An index in the inspected schema.
+///
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct IndexView {
+    /// Index name.
+    pub name: String,
+    /// Component fields in index order.
+    pub fields: Vec<String>,
+    /// Whether the key must be unique.
+    pub unique: bool,
+    /// Whether rows with absent components are excluded.
+    pub present_only: bool,
+}
 
-/// Named type, kind and member descriptions.
-pub type TypeView = (String, String, Vec<(String, String, bool, String)>);
+///
+/// TypeView
+/// A named type in the inspected schema.
+///
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct TypeView {
+    /// Schema name.
+    pub name: String,
+    /// Type category.
+    pub kind: String,
+    /// Declared fields, variants or collection roles.
+    pub members: Vec<TypeMemberView>,
+}
+
+///
+/// TypeMemberView
+/// One member of a named schema type.
+///
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct TypeMemberView {
+    /// Member name.
+    pub name: String,
+    /// Member type.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Whether the member permits absence.
+    pub optional: bool,
+    /// Constraints and metadata.
+    pub info: String,
+}
 
 /// Row predicates carried by the local query and retained-aggregate commands.
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -169,7 +217,7 @@ pub struct RetainedSelection {
     /// Aggregate selection.
     pub select: String,
     /// Minimum, category and entry ID restrictions.
-    pub entity_filters: (Option<u64>, Option<u64>, Option<u64>),
+    pub entity_filters: EntityFilters,
     /// Maximum output groups.
     pub limit: u32,
     /// Inclusive lower and upper group bounds.
@@ -201,8 +249,16 @@ pub struct RetainedResume {
     pub after: Option<Vec<u8>>,
 }
 
-/// Display columns, rows and optional next cursor of a completed retained query.
-pub type RetainedOutput = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
+/// Display columns, rows and continuation shared by ordinary and retained results.
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DisplayPage {
+    /// Display column names.
+    pub columns: Vec<String>,
+    /// Display cells in column order.
+    pub rows: Vec<Vec<String>>,
+    /// Encoded continuation for a paged read.
+    pub next: Option<Vec<u8>>,
+}
 
 /// Progress reported by the local fixture after one retained query step.
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -225,7 +281,7 @@ pub enum RetainedPhase {
     /// Additional input remains.
     Running,
     /// Completed rows and continuation.
-    Complete(RetainedOutput),
+    Complete(DisplayPage),
     /// Source rows changed.
     Invalidated,
     /// Job lifetime elapsed.

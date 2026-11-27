@@ -17,7 +17,7 @@ use ic_db::{
     Timestamp,
 };
 use ic_db_qualification_transport::{
-    RetainedOutput as Output, RetainedPhase, RetainedProgress as Response, RetainedResume,
+    DisplayPage, RetainedPhase, RetainedProgress as Response, RetainedResume,
     RetainedSelection as Selection,
 };
 
@@ -35,7 +35,7 @@ use ic_db_qualification_transport::{
     on_error = crate::transport::endpoint_error
 )]
 fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, String> {
-    start_at(&selection, message_time(time_ns))
+    start_at(&selection, crate::message_time(time_ns))
 }
 
 // aggregate_resume
@@ -52,7 +52,7 @@ fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, St
     on_error = crate::transport::endpoint_error
 )]
 fn aggregate_resume((request, time_ns): (RetainedResume, u64)) -> Result<Response, String> {
-    resume_at(request, message_time(time_ns))
+    resume_at(&request, crate::message_time(time_ns))
 }
 
 // aggregate_cancel
@@ -79,15 +79,26 @@ fn aggregate_cancel(handle: Vec<u8>) -> Result<(), String> {
     open_jobs(&host).cancel(&handle).map_err(|e| e.to_string())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Paging {
+    Scalar,
+    Distinct,
+    Grouped,
+}
+
 macro_rules! selectors {
-    ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
+    ($name:ident { $($shape:ident { $($variant:ident => $text:literal),+ $(,)? })+ }) => {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum $name { $($variant),+ }
+        enum $name { $($($variant,)+)+ }
 
         impl $name {
+            fn paging(self) -> Paging {
+                match self { $( $(Self::$variant)|+ => Paging::$shape, )+ }
+            }
+
             fn parse(text: &str) -> Result<Self, Error> {
                 match text {
-                    $($text => Ok(Self::$variant),)+
+                    $($($text => Ok(Self::$variant),)+)+
                     _ => Err(Error::InvalidQuery),
                 }
             }
@@ -96,94 +107,112 @@ macro_rules! selectors {
 }
 
 selectors! { EntrySelector {
-    Count => "count",
-    CountAmount => "count:amount",
-    DistinctAmount => "distinct:amount",
-    DistinctCountAmount => "distinct-count:amount",
-    DistinctCountCategory => "distinct-count:category",
-    SumAmount => "sum:amount",
-    AvgAmount => "avg:amount",
-    MinAmount => "min:amount",
-    MaxAmount => "max:amount",
-    CategoryCount => "category,count",
-    CategoryCountAmount => "category,count:amount",
-    CategoryDistinctCountAmount => "category,distinct-count:amount",
-    CategoryDistinctCountCategory => "category,distinct-count:category",
-    CategorySummaryAmount => "category,summary:amount",
-    CategorySumAmount => "category,sum:amount",
-    CategoryAvgAmount => "category,avg:amount",
-    CategoryMinAmount => "category,min:amount",
-    CategoryMaxAmount => "category,max:amount",
+    Scalar {
+        Count => "count",
+        CountAmount => "count:amount",
+        DistinctCountAmount => "distinct-count:amount",
+        DistinctCountCategory => "distinct-count:category",
+        SumAmount => "sum:amount",
+        AvgAmount => "avg:amount",
+        MinAmount => "min:amount",
+        MaxAmount => "max:amount",
+    }
+    Distinct {
+        DistinctAmount => "distinct:amount",
+    }
+    Grouped {
+        CategoryCount => "category,count",
+        CategoryCountAmount => "category,count:amount",
+        CategoryDistinctCountAmount => "category,distinct-count:amount",
+        CategoryDistinctCountCategory => "category,distinct-count:category",
+        CategorySummaryAmount => "category,summary:amount",
+        CategorySumAmount => "category,sum:amount",
+        CategoryAvgAmount => "category,avg:amount",
+        CategoryMinAmount => "category,min:amount",
+        CategoryMaxAmount => "category,max:amount",
+    }
 }}
 
 selectors! { DecimalRowSelector {
-    CountValue => "count:value",
-    DistinctCountValue => "distinct-count:value",
-    ZoneCountValue => "zone,count:value",
-    ZoneDistinctCountValue => "zone,distinct-count:value",
-    CountMaybe => "count:maybe",
-    DistinctCountMaybe => "distinct-count:maybe",
-    ZoneCountMaybe => "zone,count:maybe",
-    ZoneDistinctCountMaybe => "zone,distinct-count:maybe",
-    Count => "count",
-    ZoneCount => "zone,count",
-    MinValue => "min:value",
-    ZoneMinValue => "zone,min:value",
-    MaxValue => "max:value",
-    ZoneMaxValue => "zone,max:value",
-    MinMaybe => "min:maybe",
-    ZoneMinMaybe => "zone,min:maybe",
-    MaxMaybe => "max:maybe",
-    ZoneMaxMaybe => "zone,max:maybe",
-    SumValue => "sum:value",
-    ZoneSummaryValue => "zone,summary:value",
-    ZoneSummaryMaybe => "zone,summary:maybe",
-    ZoneSumValue => "zone,sum:value",
-    AvgValue => "avg:value",
-    ZoneAvgValue => "zone,avg:value",
-    SumMaybe => "sum:maybe",
-    ZoneSumMaybe => "zone,sum:maybe",
-    AvgMaybe => "avg:maybe",
-    ZoneAvgMaybe => "zone,avg:maybe",
+    Scalar {
+        CountValue => "count:value",
+        DistinctCountValue => "distinct-count:value",
+        CountMaybe => "count:maybe",
+        DistinctCountMaybe => "distinct-count:maybe",
+        Count => "count",
+        MinValue => "min:value",
+        MaxValue => "max:value",
+        MinMaybe => "min:maybe",
+        MaxMaybe => "max:maybe",
+        SumValue => "sum:value",
+        AvgValue => "avg:value",
+        SumMaybe => "sum:maybe",
+        AvgMaybe => "avg:maybe",
+    }
+    Grouped {
+        ZoneCountValue => "zone,count:value",
+        ZoneDistinctCountValue => "zone,distinct-count:value",
+        ZoneCountMaybe => "zone,count:maybe",
+        ZoneDistinctCountMaybe => "zone,distinct-count:maybe",
+        ZoneCount => "zone,count",
+        ZoneMinValue => "zone,min:value",
+        ZoneMaxValue => "zone,max:value",
+        ZoneMinMaybe => "zone,min:maybe",
+        ZoneMaxMaybe => "zone,max:maybe",
+        ZoneSummaryValue => "zone,summary:value",
+        ZoneSummaryMaybe => "zone,summary:maybe",
+        ZoneSumValue => "zone,sum:value",
+        ZoneAvgValue => "zone,avg:value",
+        ZoneSumMaybe => "zone,sum:maybe",
+        ZoneAvgMaybe => "zone,avg:maybe",
+    }
 }}
 
 selectors! { DocumentSelector {
-    Count => "count",
-    CountNote => "count:note",
-    CountPriority => "count:priority",
-    DistinctCountNote => "distinct-count:note",
-    MinNote => "min:note",
-    MaxNote => "max:note",
-    MinPriority => "min:priority",
-    MaxPriority => "max:priority",
-    SumPriority => "sum:priority",
-    SumScore => "sum:score",
-    EntryIdCount => "entry_id,count",
-    EntryIdCountNote => "entry_id,count:note",
-    EntryIdCountPriority => "entry_id,count:priority",
-    EntryIdDistinctCountNote => "entry_id,distinct-count:note",
-    EntryIdMinNote => "entry_id,min:note",
-    EntryIdMaxNote => "entry_id,max:note",
-    EntryIdMinPriority => "entry_id,min:priority",
-    EntryIdMaxPriority => "entry_id,max:priority",
-    EntryIdSumPriority => "entry_id,sum:priority",
-    EntryIdSumScore => "entry_id,sum:score",
+    Scalar {
+        Count => "count",
+        CountNote => "count:note",
+        CountPriority => "count:priority",
+        DistinctCountNote => "distinct-count:note",
+        MinNote => "min:note",
+        MaxNote => "max:note",
+        MinPriority => "min:priority",
+        MaxPriority => "max:priority",
+        SumPriority => "sum:priority",
+        SumScore => "sum:score",
+    }
+    Grouped {
+        EntryIdCount => "entry_id,count",
+        EntryIdCountNote => "entry_id,count:note",
+        EntryIdCountPriority => "entry_id,count:priority",
+        EntryIdDistinctCountNote => "entry_id,distinct-count:note",
+        EntryIdMinNote => "entry_id,min:note",
+        EntryIdMaxNote => "entry_id,max:note",
+        EntryIdMinPriority => "entry_id,min:priority",
+        EntryIdMaxPriority => "entry_id,max:priority",
+        EntryIdSumPriority => "entry_id,sum:priority",
+        EntryIdSumScore => "entry_id,sum:score",
+    }
 }}
 
 selectors! { BinaryObjectSelector {
-    Count => "count",
-    CountPayload => "count:payload",
-    CountOptional => "count:optional",
-    DistinctCountPayload => "distinct-count:payload",
-    DistinctCountOptional => "distinct-count:optional",
-    MinPayload => "min:payload",
-    MaxPayload => "max:payload",
-    MinOptional => "min:optional",
-    MaxOptional => "max:optional",
-    PayloadCount => "payload,count",
-    PayloadCountOptional => "payload,count:optional",
-    OptionalCount => "optional,count",
-    OptionalCountOptional => "optional,count:optional",
+    Scalar {
+        Count => "count",
+        CountPayload => "count:payload",
+        CountOptional => "count:optional",
+        DistinctCountPayload => "distinct-count:payload",
+        DistinctCountOptional => "distinct-count:optional",
+        MinPayload => "min:payload",
+        MaxPayload => "max:payload",
+        MinOptional => "min:optional",
+        MaxOptional => "max:optional",
+    }
+    Grouped {
+        PayloadCount => "payload,count",
+        PayloadCountOptional => "payload,count:optional",
+        OptionalCount => "optional,count",
+        OptionalCountOptional => "optional,count:optional",
+    }
 }}
 
 enum RetainedQuery<'a> {
@@ -195,24 +224,55 @@ enum RetainedQuery<'a> {
 
 impl<'a> RetainedQuery<'a> {
     fn build(db: &'a crate::handles::Database, selection: &'a Selection) -> Result<Self, String> {
-        let (minimum, category, entry_id) = selection.entity_filters;
         Ok(match selection.entity.as_str() {
-            "Entry" => Self::Entry(
-                EntrySelector::parse(&selection.select).map_err(|e| e.to_string())?,
-                configured(entry_query(db, minimum, category, entry_id)?, selection)?,
-            ),
-            "Document" => Self::Document(
-                DocumentSelector::parse(&selection.select).map_err(|e| e.to_string())?,
-                configured(document_query(db, minimum, category, entry_id)?, selection)?,
-            ),
-            "DecimalRow" => Self::DecimalRow(
-                DecimalRowSelector::parse(&selection.select).map_err(|e| e.to_string())?,
-                configured(decimal_query(db, minimum, category, entry_id)?, selection)?,
-            ),
-            "BinaryObject" => Self::BinaryObject(
-                BinaryObjectSelector::parse(&selection.select).map_err(|e| e.to_string())?,
-                configured(blob::query(db, minimum, category, entry_id)?, selection)?,
-            ),
+            "Entry" => {
+                let selector =
+                    EntrySelector::parse(&selection.select).map_err(|e| e.to_string())?;
+                Self::Entry(
+                    selector,
+                    configured(
+                        entry_query(db, &selection.entity_filters)?,
+                        selection,
+                        selector.paging(),
+                    )?,
+                )
+            }
+            "Document" => {
+                let selector =
+                    DocumentSelector::parse(&selection.select).map_err(|e| e.to_string())?;
+                Self::Document(
+                    selector,
+                    configured(
+                        document_query(db, &selection.entity_filters)?,
+                        selection,
+                        selector.paging(),
+                    )?,
+                )
+            }
+            "DecimalRow" => {
+                let selector =
+                    DecimalRowSelector::parse(&selection.select).map_err(|e| e.to_string())?;
+                Self::DecimalRow(
+                    selector,
+                    configured(
+                        decimal_query(db, &selection.entity_filters)?,
+                        selection,
+                        selector.paging(),
+                    )?,
+                )
+            }
+            "BinaryObject" => {
+                let selector =
+                    BinaryObjectSelector::parse(&selection.select).map_err(|e| e.to_string())?;
+                Self::BinaryObject(
+                    selector,
+                    configured(
+                        blob::query(db, &selection.entity_filters)?,
+                        selection,
+                        selector.paging(),
+                    )?,
+                )
+            }
             _ => return Err(Error::InvalidQuery.to_string()),
         })
     }
@@ -222,6 +282,7 @@ impl<'a> RetainedQuery<'a> {
 fn configured<'a, E: Entity>(
     query: Query<'a, E>,
     selection: &'a Selection,
+    paging: Paging,
 ) -> Result<Query<'a, E>, String> {
     let Selection {
         select,
@@ -232,7 +293,7 @@ fn configured<'a, E: Entity>(
         order: (order, descending),
         ..
     } = selection;
-    if select == "distinct:amount" && *limit != 32 {
+    if paging == Paging::Distinct && *limit != 32 {
         return Err("use --page-size for retained DISTINCT".into());
     }
     let query = super::filter_rows(query, filters)?;
@@ -244,10 +305,6 @@ fn configured<'a, E: Entity>(
         (group_min.as_deref(), group_max.as_deref()),
         parse_group_order(group_order.as_deref())?,
     )
-}
-
-fn message_time(time_ns: u64) -> Timestamp {
-    Timestamp::from_millis((time_ns / 1_000_000) as i64)
 }
 
 pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>, String> {
@@ -275,7 +332,7 @@ pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>,
         .map_err(|e| e.to_string())
 }
 
-fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> Output) -> Response {
+fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> DisplayPage) -> Response {
     Response {
         sequence: step.sequence,
         examined: step.examined,
@@ -297,27 +354,32 @@ fn display_summary<T>(
 ) -> Response {
     display(step, |p| {
         let (columns, rows) = super::summary_table(p.rows, key, render);
-        (columns, rows, p.next.map(|c| c.to_bytes()))
+        DisplayPage {
+            columns,
+            rows,
+            next: p.next.map(|c| c.to_bytes()),
+        }
     })
 }
 
-fn scalar(label: &str, value: Option<String>) -> Output {
-    (
-        vec![label.into()],
-        value.into_iter().map(|v| vec![v]).collect(),
-        None,
-    )
+fn scalar(label: &str, value: Option<String>) -> DisplayPage {
+    DisplayPage {
+        columns: vec![label.into()],
+        rows: value.into_iter().map(|v| vec![v]).collect(),
+        next: None,
+    }
 }
 
-fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> Output {
-    (
-        vec![column.into(), "count".into()],
-        page.rows
+fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> DisplayPage {
+    DisplayPage {
+        columns: vec![column.into(), "count".into()],
+        rows: page
+            .rows
             .into_iter()
             .map(|r| vec![key(r.key), r.count.to_string()])
             .collect(),
-        page.next.map(|c| c.to_bytes()),
-    )
+        next: page.next.map(|c| c.to_bytes()),
+    }
 }
 
 fn values<K, R>(
@@ -325,64 +387,53 @@ fn values<K, R>(
     columns: [&str; 2],
     key: fn(K) -> String,
     render: fn(R) -> String,
-) -> Output {
-    (
-        columns.into_iter().map(String::from).collect(),
-        page.rows
+) -> DisplayPage {
+    DisplayPage {
+        columns: columns.into_iter().map(String::from).collect(),
+        rows: page
+            .rows
             .into_iter()
             .map(|r| vec![key(r.key), optional(r.value.map(render))])
             .collect(),
-        page.next.map(|c| c.to_bytes()),
-    )
+        next: page.next.map(|c| c.to_bytes()),
+    }
 }
 
-pub(super) fn resume_at(
-    RetainedResume {
-        selection,
-        handle,
-        sequence,
-        work,
-        bytes,
-        page_size,
-        after,
-    }: RetainedResume,
-    now: Timestamp,
-) -> Result<Response, String> {
+pub(super) fn resume_at(request: &RetainedResume, now: Timestamp) -> Result<Response, String> {
     let host = runtime();
     let db = open(&host);
     let mut jobs = open_jobs(&host);
-    let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
+    let handle = JobHandle::from_bytes(&request.handle).map_err(|e| e.to_string())?;
     let cursor =
-        crate::queries::decode_group_cursor(after.as_deref()).map_err(|e| e.to_string())?;
-    let budgets = (work, bytes, page_size, cursor.as_ref());
-    let result = match RetainedQuery::build(&db, &selection)? {
+        crate::queries::decode_group_cursor(request.after.as_deref()).map_err(|e| e.to_string())?;
+    let result = match RetainedQuery::build(&db, &request.selection)? {
         RetainedQuery::Entry(selector, query) => selector.resume(
-            resume_query(query, &selection.select, budgets)?,
+            resume_query(query, selector.paging(), request, cursor.as_ref())?,
             &mut jobs,
             &handle,
-            sequence,
+            request.sequence,
             now,
             cursor.as_ref(),
         ),
         RetainedQuery::Document(selector, query) => selector.resume(
-            resume_query(query, &selection.select, budgets)?,
+            resume_query(query, selector.paging(), request, cursor.as_ref())?,
             &mut jobs,
             &handle,
-            sequence,
+            request.sequence,
             now,
         ),
         RetainedQuery::DecimalRow(selector, query) => selector.resume(
-            resume_query(query, &selection.select, budgets)?,
+            resume_query(query, selector.paging(), request, cursor.as_ref())?,
             &mut jobs,
             &handle,
-            sequence,
+            request.sequence,
             now,
         ),
         RetainedQuery::BinaryObject(selector, query) => selector.resume(
-            resume_query(query, &selection.select, budgets)?,
+            resume_query(query, selector.paging(), request, cursor.as_ref())?,
             &mut jobs,
             &handle,
-            sequence,
+            request.sequence,
             now,
         ),
     };
@@ -392,21 +443,19 @@ pub(super) fn resume_at(
 
 fn resume_query<'a, E: Entity>(
     mut query: Query<'a, E>,
-    select: &str,
-    (work, bytes, page_size, cursor): (u32, u32, u32, Option<&'a GroupCursor>),
+    paging: Paging,
+    request: &RetainedResume,
+    cursor: Option<&'a GroupCursor>,
 ) -> Result<Query<'a, E>, String> {
     query = query
-        .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-    if select.contains(',') {
-        query = query.group_page(page_size as usize, cursor);
-    } else if select == "distinct:amount" {
-        query = query.limit(page_size as usize);
-    } else if cursor.is_some() {
-        return Err("scalar aggregates have no page cursor".into());
+        .work_limit(request.work as usize)
+        .test_output_limit(request.bytes as usize);
+    match paging {
+        Paging::Grouped => Ok(query.group_page(request.page_size as usize, cursor)),
+        Paging::Distinct => Ok(query.limit(request.page_size as usize)),
+        Paging::Scalar if cursor.is_some() => Err("scalar aggregates have no page cursor".into()),
+        Paging::Scalar => Ok(query),
     }
-
-    Ok(query)
 }
 
 impl EntrySelector {
@@ -479,15 +528,14 @@ impl EntrySelector {
             Self::DistinctAmount => query
                 .resume_distinct::<AmountOnly>(jobs, handle, sequence, now, after)
                 .map(|s| {
-                    display(s, |p| {
-                        (
-                            vec!["amount".into()],
-                            p.rows
-                                .into_iter()
-                                .map(|r| vec![r.amount.to_string()])
-                                .collect(),
-                            p.next.map(|c| c.to_bytes()),
-                        )
+                    display(s, |p| DisplayPage {
+                        columns: vec!["amount".into()],
+                        rows: p
+                            .rows
+                            .into_iter()
+                            .map(|r| vec![r.amount.to_string()])
+                            .collect(),
+                        next: p.next.map(|c| c.to_bytes()),
                     })
                 }),
             Self::DistinctCountAmount => query

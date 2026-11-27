@@ -201,7 +201,16 @@ fn ordered_indexes_swaps_noops_refusals_and_reopen() {
     assert_eq!(read(&db), vec![1, 2, 3, 4, 5, 6]);
     for pair in values().windows(2) {
         assert!(pair[0] < pair[1]);
-        let key = |v: Ulid| ic_db::__private::encode_index(&[(v.into(), false)], false).unwrap();
+        let key = |v: Ulid| {
+            ic_db::__private::encode_index(
+                &[ic_db::__private::IndexComponent {
+                    value: v.into(),
+                    optional: false,
+                }],
+                false,
+            )
+            .unwrap()
+        };
         assert_eq!(key(pair[0]), pair[0].to_bytes());
         assert!(key(pair[0]) < key(pair[1]));
     }

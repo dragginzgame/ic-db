@@ -557,10 +557,10 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             let member: syn::Ident = syn::parse_str(member)?;
             let component = quote! {{
                 let (member, optional) = (&parent.#member).__ic_db_member_presence();
-                (member.map(|value| (*value).__ic_db_member_operand()).into(), #optional || optional)
+                ::ic_db::__private::IndexComponent { value: member.map(|value| (*value).__ic_db_member_operand()).into(), optional: #optional || optional }
             }};
             let component = if optional {
-                quote! { row.#parent.as_ref().map_or((::ic_db::IndexValue::Absent, true), |parent| #component) }
+                quote! { row.#parent.as_ref().map_or(::ic_db::__private::IndexComponent { value: ::ic_db::IndexValue::Absent, optional: true }, |parent| #component) }
             } else {
                 quote! {{ let parent = &row.#parent; #component }}
             };
@@ -612,7 +612,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
                 let value = field.index_value(ident);
                 let optional = field.optional;
 
-                quote!((#value, #optional))
+                quote!(::ic_db::__private::IndexComponent { value: #value, optional: #optional })
             })
             .collect();
         if unique {

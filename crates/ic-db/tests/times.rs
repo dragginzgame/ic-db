@@ -152,7 +152,16 @@ fn independent_bytes_full_domains_and_absence() {
     };
     assert_ne!(row.encode().unwrap(), present.encode().unwrap());
     // Exact operand bytes: full unsigned duration; timestamp sign is biased.
-    let key = |value| ic_db::__private::encode_index(&[(value, false)], false).unwrap();
+    let key = |value| {
+        ic_db::__private::encode_index(
+            &[ic_db::__private::IndexComponent {
+                value,
+                optional: false,
+            }],
+            false,
+        )
+        .unwrap()
+    };
     assert_eq!(key(Duration::MAX.into()), [255; 8]);
     assert_eq!(key(Timestamp::MIN.into()), [0; 8]);
     assert_eq!(key(Timestamp::EPOCH.into()), [128, 0, 0, 0, 0, 0, 0, 0]);

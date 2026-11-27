@@ -202,7 +202,14 @@ impl Plan<'_> {
             hash.update(b"order\0");
             hash.update([order.len() as u8]);
             let mut directions = 0u8;
-            for (i, &super::OrderTerm(name, direction)) in order.iter().enumerate() {
+            for (
+                i,
+                &super::OrderTerm {
+                    field: name,
+                    direction,
+                },
+            ) in order.iter().enumerate()
+            {
                 if direction == super::SortDirection::Descending {
                     directions |= 1 << i;
                 }

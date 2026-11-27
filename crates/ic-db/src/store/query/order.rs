@@ -70,10 +70,17 @@ pub(super) fn select<'a>(
         if order.is_empty() {
             return Err(Error::InvalidQuery);
         }
-        for (i, &OrderTerm(name, direction)) in order.iter().enumerate() {
+        for (
+            i,
+            &OrderTerm {
+                field: name,
+                direction,
+            },
+        ) in order.iter().enumerate()
+        {
             let (position, member) = crate::member::resolve_field(entity, name)?;
             if (member.is_none() && !key::supports(entity.fields[position].value))
-                || order[..i].iter().any(|term| term.0 == name)
+                || order[..i].iter().any(|term| term.field == name)
                 || (name == entity.primary_key && i + 1 != order.len())
             {
                 return Err(Error::InvalidQuery);
@@ -181,7 +188,7 @@ pub(super) fn select<'a>(
     // neither ordering nor tie-breaking bytes to the complete sort.
     let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
     let mut varying = Vec::with_capacity(order.len() + 1);
-    for (i, &OrderTerm(name, _)) in order.iter().enumerate() {
+    for (i, &OrderTerm { field: name, .. }) in order.iter().enumerate() {
         if equality(entity, request, name).is_none() {
             varying.push(positions[i]);
         }
@@ -250,6 +257,20 @@ fn prefix_value<'a>(
         .iter()
         .zip(values)
         .find_map(|(name, value)| (*name == field).then_some(*value))
+}
+
+///
+/// CandidateRank
+/// Lower ranks win. Declaration order defines the planner's tie breakers.
+///
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct CandidateRank<'a> {
+    multiple_owners: bool,
+    requires_owner_read: bool,
+    fixed_components: std::cmp::Reverse<usize>,
+    lacks_secondary_bound: bool,
+    index_width: usize,
+    index_name: &'a str,
 }
 
 /// Select a complete input range before reduction or sorting. Predicate coverage
@@ -324,7 +345,14 @@ pub(super) fn select_filtered_path<'a>(
         if values.is_empty() && !bounded && !covered && !index.present_only {
             continue;
         }
-        let score = (!single_owner, !covered, fixed, !bounded, width, name);
+        let score = CandidateRank {
+            multiple_owners: !single_owner,
+            requires_owner_read: !covered,
+            fixed_components: fixed,
+            lacks_secondary_bound: !bounded,
+            index_width: width,
+            index_name: name,
+        };
         if best.as_ref().is_none_or(|(old, _)| score < *old) {
             best = Some((score, (path, covered)));
         }
@@ -516,10 +544,14 @@ fn scan_direction(
     // Once the requested order distinguishes a complete unique tuple, no
     // later term can break a tie. Only varying key components set the direction.
     if index.is_some_and(|i| i.unique) && !order.is_empty() {
-        let mut wanted = order.iter().filter(|term| !fixed(&term.0));
+        let mut wanted = order.iter().filter(|term| !fixed(&term.field));
         let mut direction = None;
         let matches = fields.iter().filter(|name| !fixed(name)).all(|name| {
-            let Some(OrderTerm(requested, direction_term)) = wanted.next() else {
+            let Some(OrderTerm {
+                field: requested,
+                direction: direction_term,
+            }) = wanted.next()
+            else {
                 return false;
             };
             let descending = *direction_term == SortDirection::Descending;
@@ -531,17 +563,16 @@ fn scan_direction(
     }
     // Current physical keys share one direction. Constant fields do not affect
     // ordering, but every varying field must agree with the primary tie-breaker.
-    if order
-        .iter()
-        .any(|term| (term.1 == SortDirection::Descending) != primary_direction && !fixed(&term.0))
-    {
+    if order.iter().any(|term| {
+        (term.direction == SortDirection::Descending) != primary_direction && !fixed(&term.field)
+    }) {
         return None;
     }
     // The primary key uniquely determines all later components. Compare both
     // sequences only up to it, stripping fields constant across matching rows.
     let wanted = order
         .iter()
-        .map(|term| term.0)
+        .map(|term| term.field)
         .take_while(|name| *name != entity.primary_key)
         .filter(|name| !fixed(name))
         .chain(std::iter::once(entity.primary_key));
