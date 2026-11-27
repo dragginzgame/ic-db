@@ -220,7 +220,7 @@ async fn compare_retained_count_advance_at_the_same_checkpoint() {
                 .update_call(
                     canister,
                     canister,
-                    "db_write",
+                    "canic_db_write",
                     application_request(241, &request),
                 )
                 .await
@@ -305,8 +305,14 @@ async fn compare_records_host_composition() {
     ] {
         let path = std::env::var_os(variable).expect(variable);
         let (wasm, facts) = artifact::read(std::fs::File::open(path).unwrap()).unwrap();
-        assert_eq!(facts.exports.contains("canister_update db_write"), mounted);
-        assert_eq!(facts.exports.contains("canister_query db_query"), mounted);
+        assert_eq!(
+            facts.exports.contains("canister_update canic_db_write"),
+            mounted
+        );
+        assert_eq!(
+            facts.exports.contains("canister_query canic_db_query"),
+            mounted
+        );
         assert!(!facts.exports.contains("canister_update fault_batch"));
         let endpoints = facts
             .exports
@@ -385,7 +391,7 @@ async fn compare_records_host_composition() {
 async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     let path = std::env::var_os("IC_DB_M4_WASM").expect("run make m4-lifecycle");
     let (wasm, facts) = artifact::read(std::fs::File::open(path).unwrap()).unwrap();
-    assert!(facts.exports.contains("canister_update db_write"));
+    assert!(facts.exports.contains("canister_update canic_db_write"));
     assert!(!facts.exports.contains("canister_update mixed_job"));
     assert!(!facts.exports.contains("canister_query mixed_page"));
     assert!(!facts.exports.contains("canister_update fault_batch"));
@@ -406,7 +412,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         .update_call(
             canister,
             anonymous,
-            "db_write",
+            "canic_db_write",
             application_request(241, &Update::Batch(false, vec![(0, 0, 1, 10, 0)])),
         )
         .await
@@ -427,7 +433,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         pic.query_call(
             canister,
             caller,
-            "db_query",
+            "canic_db_query",
             application_request(242, &request),
         )
         .await
@@ -472,7 +478,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     };
     let write = async |target: bool, commands: &[Command]| {
         let bytes = update(
-            "db_write",
+            "canic_db_write",
             application_request(241, &Update::Batch(target, commands.to_vec())),
         )
         .await;
@@ -551,7 +557,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     assert_eq!(pic.get_stable_memory(canister).await, backing);
     // Inspection authorization must run before even a malformed frame is decoded.
     let refused = pic
-        .query_call(canister, anonymous, "db_inspect", vec![])
+        .query_call(canister, anonymous, "canic_db_inspect", vec![])
         .await
         .unwrap_err();
     assert!(
@@ -566,7 +572,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
             .query_call(
                 canister,
                 canister,
-                "db_inspect",
+                "canic_db_inspect",
                 application_request(INSPECT, &()),
             )
             .await
@@ -582,7 +588,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
     );
     let job = async |request: CountRequest| {
         let bytes = update(
-            "db_write",
+            "canic_db_write",
             application_request(241, &Update::Count(request)),
         )
         .await;
@@ -636,7 +642,7 @@ async fn mixed_history_matches_independent_model_through_upgrade_and_copy() {
         .update_call(
             canister,
             anonymous,
-            "db_write",
+            "canic_db_write",
             application_request(241, &Update::Count(CountRequest::Cancel(handle.clone()))),
         )
         .await
@@ -1095,7 +1101,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             .update_call(
                 canister,
                 canister,
-                "db_write",
+                "canic_db_write",
                 application_request(241, &request),
             )
             .await
@@ -1132,7 +1138,7 @@ async fn skewed_listing_and_retained_count_across_write_and_upgrade() {
             .query_call(
                 canister,
                 canister,
-                "db_query",
+                "canic_db_query",
                 application_request(242, &request),
             )
             .await
@@ -1426,7 +1432,7 @@ async fn retained_counts_by_parent_selectivity() {
             .update_call(
                 canister,
                 canister,
-                "db_write",
+                "canic_db_write",
                 application_request(241, &request),
             )
             .await
@@ -1456,7 +1462,7 @@ async fn retained_counts_by_parent_selectivity() {
             .query_call(
                 canister,
                 canister,
-                "db_query",
+                "canic_db_query",
                 application_request(242, &request),
             )
             .await
@@ -1713,7 +1719,7 @@ async fn compare_mounted_read_modify_write_batch_sizes() {
                 .update_call(
                     canister,
                     canister,
-                    "db_write",
+                    "canic_db_write",
                     application_request(241, &Update::Batch(false, commands)),
                 )
                 .await
@@ -1745,7 +1751,7 @@ async fn compare_mounted_read_modify_write_batch_sizes() {
                     .query_call(
                         canister,
                         canister,
-                        "db_query",
+                        "canic_db_query",
                         application_request(242, &Query::Snapshot(false, parent, 143)),
                     )
                     .await
@@ -1817,7 +1823,7 @@ async fn compare_returned_managed_row_with_read_after_commit() {
                 .update_call(
                     canister,
                     canister,
-                    "db_write",
+                    "canic_db_write",
                     application_request(
                         241,
                         &Update::ReplaceManaged {
@@ -1891,7 +1897,7 @@ async fn managed_upsert_replays_across_upgrade_and_refuses_a_conflicting_batch()
             .update_call(
                 canister,
                 canister,
-                "db_write",
+                "canic_db_write",
                 application_request(241, &request),
             )
             .await
@@ -1958,7 +1964,7 @@ async fn grouped_count_under_interleaved_writes() {
             .update_call(
                 canister,
                 canister,
-                "db_write",
+                "canic_db_write",
                 application_request(241, &request),
             )
             .await

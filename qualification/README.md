@@ -16,7 +16,7 @@ Package directories match their Cargo package names. Qualification callers use
 Wire 0.31.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.275.0 endpoints. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
+with Canic 0.275.0 endpoints `canic_db_inspect`, `canic_db_query` and `canic_db_write`. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such

@@ -11,7 +11,7 @@
 
 ### 🧪 Testing
 
-- Qualification uses Canic 0.275.0 for the mounted canister endpoints.
+- Qualification uses Canic 0.275.0 and calls its mounted `canic_db_inspect`, `canic_db_query` and `canic_db_write` endpoints.
 - The record benchmark defines each workload’s default build features alongside its fixtures, so maintainers can review the comparison in one place.
 - The local console and its fixture share a query response with named counters for examined candidates, fetched rows and encoded bytes. Existing fixture clients can read the same Wire payload.
 
