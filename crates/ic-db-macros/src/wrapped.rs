@@ -2,7 +2,7 @@
 
 use super::{
     declaration,
-    field::{Field, Kind, parse_value},
+    field::{Field, Kind, parse_item, parse_max_items},
     once, text,
 };
 use proc_macro2::TokenStream;
@@ -13,7 +13,8 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
     let mut item = declaration(item, label)?;
     let mut name = None;
     let mut validation = None;
-    let mut parts = Vec::new();
+    let mut kind = None;
+    let mut bound = None;
     let (wire, options) = crate::declaration_options(args)?;
     for meta in options {
         if meta.path().is_ident("name") {
@@ -27,8 +28,10 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
                 ));
             }
             once(&mut validation, rules, &meta)?;
-        } else if meta.path().is_ident("item") || (many && meta.path().is_ident("max_items")) {
-            parts.push(meta);
+        } else if meta.path().is_ident("item") {
+            once(&mut kind, parse_item(&meta)?, &meta)?;
+        } else if many && meta.path().is_ident("max_items") {
+            once(&mut bound, parse_max_items(&meta)?, &meta)?;
         } else {
             return Err(syn::Error::new_spanned(
                 meta,
@@ -37,8 +40,13 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
         }
     }
     let name = super::declaration_name(name, &item.ident, label)?;
-    let cardinality = many.then(|| quote!(many,));
-    let (kind, optional, bound) = parse_value(&syn::parse_quote!(value(#cardinality #(#parts),*)))?;
+    let kind = kind.ok_or_else(|| syn::Error::new_spanned(&item.ident, "expected item(...)"))?;
+    if many && bound.is_none() {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "list requires max_items",
+        ));
+    }
     if !many && matches!(kind, Kind::Named(..)) {
         return Err(syn::Error::new_spanned(
             item.ident,
@@ -46,7 +54,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
         ));
     }
     let ident = item.ident;
-    let mut field = Field::nested("value", kind, optional, bound);
+    let mut field = Field::nested("value", kind, false, bound);
     field.resolve_self(&ident);
     let checked_principal = validation.is_some() && matches!(field.kind, Kind::Principal);
     let (ty, body, write, read, inner_vis, constructor) = if let Some(rules) = validation {

@@ -675,7 +675,7 @@ fn item_page<E: SelectColumns<Key = u64>>(
     after: Option<&[u8]>,
     id: impl FnOnce(E::Columns) -> Column<E, u64>,
 ) -> Result<ItemPage, Error> {
-    let cursor = after.map(ic_db::QueryCursor::from_bytes).transpose()?;
+    let cursor = crate::queries::decode_cursor(after)?;
     let page = query
         .work_limit(usize::from(work))
         .limit(2)

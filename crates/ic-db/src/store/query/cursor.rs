@@ -25,7 +25,8 @@ pub(super) enum Resume {
     AfterUnemittedClass = 2,
 }
 impl QueryCursor {
-    pub(crate) const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
+    /// Maximum length of a serialized query cursor, in bytes.
+    pub const MAX_ENCODED_BYTES: usize = 34 + crate::MAX_INDEX_KEY_BYTES;
 
     /// Encode the bounded continuation for an application's transport.
     #[must_use]

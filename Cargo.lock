@@ -909,6 +909,7 @@ name = "ic-db-cli"
 version = "0.34.0"
 dependencies = [
  "clap",
+ "ic-db",
  "ic-host-text",
  "ic-testkit",
  "ic-wire",

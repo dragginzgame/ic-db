@@ -108,11 +108,7 @@ fn query(
     ): Request,
 ) -> Result<Page, String> {
     let group_order = parse_group_order(group_order.as_deref())?;
-    let cursor = cursor
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(message)?;
+    let cursor = crate::queries::decode_cursor(cursor.as_deref()).map_err(message)?;
     let order = parse_order(&order)?;
     let host = runtime();
     let db = open(&host);

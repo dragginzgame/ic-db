@@ -1,6 +1,18 @@
 use super::{Command, FilterArgs, charged_cycles, parse_console_line};
 
 #[test]
+fn query_cursor_argument_checks_framing_before_execution() {
+    let tail = "00".repeat(33);
+    assert!(parse_console_line(&format!("query Entry --after 0100{tail}")).is_ok());
+    for prefix in ["0200", "0103"] {
+        let error = parse_console_line(&format!("query Entry --after {prefix}{tail}"))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+}
+
+#[test]
 fn blob_literals_are_exact_bounded_bytes() {
     for (literal, expected) in [
         ("0x", vec![]),

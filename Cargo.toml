@@ -17,6 +17,7 @@ publish = ["crates-io"]
 ctor = { version = "1.0.14", default-features = false, features = ["std"] }
 ethnum = { version = "1.5.3", default-features = false, features = ["serde"] }
 getrandom = "0.4.3"
+ic-db = { version = "0.34.0", path = "crates/ic-db" }
 ic-db-macros = { version = "=0.34.0", path = "crates/ic-db-macros" }
 ic-logging = { version = "0.26.0", default-features = false }
 ic-metrics = { version = "0.30.23", default-features = false }
@@ -43,7 +44,6 @@ shlex = "2.0.1"
 tokio = "1.54.1"
 
 # Tests and tooling
-ic-db = { path = "crates/ic-db" }
 toko-tooling = "=0.46.9"
 
 [workspace.lints.cargo]

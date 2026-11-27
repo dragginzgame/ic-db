@@ -2,7 +2,7 @@
 
 use super::{COPY_SOURCE, COPY_TARGET, CopyMapping, Entry, EntryV2, whole_schema};
 use crate::{aggregate_store::open_jobs, handles::Database, runtime};
-use ic_db::{Entity, Error, JobHandle, JobOutcome, QueryCursor, Timestamp};
+use ic_db::{Entity, Error, JobHandle, JobOutcome, Timestamp};
 use ic_storage::StableKey;
 
 // maintenance_job
@@ -46,16 +46,8 @@ fn control(
     let revision = db.revision::<CopyMapping>()?;
     let query = db.query::<CopyMapping>().work_limit(work as usize);
     if operation == 2 {
-        let cursor = if bytes.is_empty() {
-            None
-        } else {
-            Some(QueryCursor::from_bytes(bytes)?)
-        };
-        let query = query.limit(1);
-        let page = match &cursor {
-            Some(cursor) => query.after(cursor).fetch()?,
-            None => query.fetch()?,
-        };
+        let cursor = crate::queries::decode_cursor((!bytes.is_empty()).then_some(bytes))?;
+        let page = query.limit(1).after(cursor.as_ref()).fetch()?;
 
         return Ok((
             page.next

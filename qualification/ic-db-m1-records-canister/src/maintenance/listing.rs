@@ -5,7 +5,7 @@ use crate::{
     handles::{Database, Query, SchemaCopy},
     runtime,
 };
-use ic_db::{Batch, Error, QueryCursor, SchemaTransition, design::prelude::*};
+use ic_db::{Batch, Error, SchemaTransition, design::prelude::*};
 use ic_storage::StableKey;
 use records_schema::{Document, Entry, RecordsStore};
 
@@ -162,7 +162,7 @@ fn listing_page<E: Entity<Key = u64>>(
     query: Query<'_, E>,
     after: Option<&[u8]>,
 ) -> Result<Page, Error> {
-    let cursor = after.map(QueryCursor::from_bytes).transpose()?;
+    let cursor = crate::queries::decode_cursor(after)?;
     let page = query.descending().limit(2).after(cursor.as_ref()).fetch()?;
 
     Ok((

@@ -12,7 +12,7 @@ use crate::{
     schema::ManagedRow,
 };
 use ic_db::design::prelude::*;
-use ic_db::{Batch, EntitySchema, Error, QueryCursor, SchemaTransition};
+use ic_db::{Batch, EntitySchema, Error, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableCell};
 
 // maintenance_control
@@ -71,11 +71,8 @@ fn maintenance_source(
     (after, rows, bytes): (Option<Vec<u8>>, u8, u32),
 ) -> Result<SourcePage, String> {
     let (source, transition) = declaration(&[9])?;
-    let cursor = after
-        .as_deref()
-        .map(QueryCursor::from_bytes)
-        .transpose()
-        .map_err(|error| format!("{error:?}"))?;
+    let cursor =
+        crate::queries::decode_cursor(after.as_deref()).map_err(|error| format!("{error:?}"))?;
     let host = runtime();
     let memory = host.open_memory(&StableKey::parse(KEY).unwrap()).unwrap();
     let maintenance =

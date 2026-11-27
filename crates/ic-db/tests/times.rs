@@ -1,14 +1,13 @@
 //! Exact millisecond values across storage, indexes, collections and reopen.
 
+#[path = "support/allocations.rs"]
+mod allocations;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{AggregateJobs, Batch, Database, Error, IndexValue, JobOutcome};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 use std::collections::{BTreeMap, BTreeSet};
 
 ///
@@ -72,18 +71,7 @@ struct Deadlines {}
 )]
 struct Collections {}
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let req = SealedDeclarationSnapshot::new(vec![
-        MemoryRequest::new("test", "test.db.v1").unwrap(),
-        MemoryRequest::new("test", "test.jobs.v1").unwrap(),
-    ])
-    .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&req, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
+    allocations::host_with(backing, &["test.db.v1", "test.jobs.v1"])
 }
 
 fn rows() -> Vec<TimeRow> {

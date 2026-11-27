@@ -245,7 +245,7 @@ enum Command {
         filters: FilterArgs,
         /// Opaque hexadecimal continuation from a previous page (not a row ID).
         #[arg(long, value_name="CURSOR", value_parser=parse_cursor)]
-        after: Option<CursorArg>,
+        after: Option<ic_db::QueryCursor>,
         #[arg(long, default_value_t=3, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
         #[command(flatten)]
@@ -293,8 +293,6 @@ enum Command {
     #[command(alias = "exit")]
     Quit,
 }
-#[derive(Clone, Debug)]
-struct CursorArg(Vec<u8>);
 #[derive(clap::Args, Debug)]
 struct GroupBounds {
     /// For grouped summaries, prefix each bound with count:, sum: or avg:.
@@ -432,15 +430,15 @@ fn parse_blob(text: &str) -> Result<BlobArg, String> {
     let digits = text
         .strip_prefix("0x")
         .ok_or("Blob literals require a 0x prefix")?;
-    hex_bytes(digits, 0..=2048)
+    hex_bytes(digits, 1024)
         .map(BlobArg)
         .ok_or_else(|| "expected 0x followed by 0–1024 complete hexadecimal byte pairs".into())
 }
 
-fn parse_cursor(text: &str) -> Result<CursorArg, String> {
-    hex_bytes(text, 70..=1092)
-        .map(CursorArg)
-        .ok_or_else(|| "expected a hexadecimal query cursor (70–1092 digits), not a row ID".into())
+fn parse_cursor(text: &str) -> Result<ic_db::QueryCursor, String> {
+    let bytes = hex_bytes(text, ic_db::QueryCursor::MAX_ENCODED_BYTES)
+        .ok_or("expected a hexadecimal query cursor")?;
+    ic_db::QueryCursor::from_bytes(&bytes).map_err(|error| error.to_string())
 }
 
 fn lowercase_hex(bytes: &[u8]) -> String {
@@ -453,16 +451,22 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn hex_bytes(digits: &str, length: std::ops::RangeInclusive<usize>) -> Option<Vec<u8>> {
-    if !length.contains(&digits.len())
-        || !digits.len().is_multiple_of(2)
-        || !digits.bytes().all(|digit| digit.is_ascii_hexdigit())
-    {
+fn hex_bytes(digits: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let (pairs, trailing) = digits.as_bytes().as_chunks::<2>();
+    if !trailing.is_empty() || pairs.len() > max_bytes {
         return None;
     }
-    (0..digits.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).ok())
+    pairs
+        .iter()
+        .map(|&[hi, lo]| Some(nibble(hi)? << 4 | nibble(lo)?))
         .collect()
 }
 
@@ -874,7 +878,7 @@ async fn session(
             } => {
                 let request = (
                     entity.as_str(),
-                    after.map(|cursor| cursor.0),
+                    after.map(|cursor| cursor.to_bytes()),
                     limit,
                     minimum,
                     category,

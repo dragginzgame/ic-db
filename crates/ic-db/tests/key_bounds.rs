@@ -1,14 +1,13 @@
 //! Complete encoded-key admission, independent of row and field bounds.
 
+#[path = "support/allocations.rs"]
+mod allocations;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 
 ///
 /// TextKey
@@ -79,19 +78,7 @@ struct Sparse {}
 struct Wide {}
 
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut runtime = MemoryRuntime::new(backing).unwrap();
-    runtime
-        .bootstrap(
-            &SealedDeclarationSnapshot::new(vec![
-                MemoryRequest::new("test", "test.keys.v1").unwrap(),
-            ])
-            .unwrap(),
-            &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-            &GenericAllocationPolicy,
-        )
-        .unwrap();
-
-    runtime
+    allocations::host_with(backing, &["test.keys.v1"])
 }
 
 #[test]

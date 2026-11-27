@@ -349,11 +349,8 @@ pub(super) fn resume_at(
     let db = open(&host);
     let mut jobs = open_jobs(&host);
     let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
-    let cursor = after
-        .as_deref()
-        .map(GroupCursor::from_bytes)
-        .transpose()
-        .map_err(|e| e.to_string())?;
+    let cursor =
+        crate::queries::decode_group_cursor(after.as_deref()).map_err(|e| e.to_string())?;
     let (entity, select, (minimum, category, entry_id), ..) = &selection;
     let budgets = (work, bytes, page_size, cursor.as_ref());
     let result = match Selector::parse(entity, select)? {

@@ -1,6 +1,8 @@
 //! Exercise the installed-layout CLI through a controlling terminal and its real launcher.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+#[path = "support/installed.rs"]
+mod installed;
 use std::{
     io::{Read, Write},
     process::{Command, Stdio},
@@ -62,16 +64,7 @@ fn terminal_survives_pocketic_default_idle_timeout() {
 
 fn terminal_session(idle: bool) {
     let prefix = std::env::temp_dir().join(format!("ic-db-terminal-{}-{idle}", std::process::id()));
-    std::fs::create_dir(&prefix).unwrap();
-    std::fs::create_dir(prefix.join("bin")).unwrap();
-    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
-    let binary = prefix.join("bin/db");
-    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
-    std::fs::copy(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m3-cli"),
-        prefix.join("share/ic-db/m1/records.wasm"),
-    )
-    .unwrap();
+    let binary = installed::install(&prefix);
     // script supplies the controlling terminal missing from ordinary piped tests.
     let mut command = Command::new("script");
     #[cfg(target_os = "linux")]

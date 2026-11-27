@@ -189,7 +189,7 @@ fn advance(
     let db = open(&host);
     let mut jobs = open_jobs(&host);
     let handle = JobHandle::from_bytes(&bytes)?;
-    let cursor = after.as_deref().map(GroupCursor::from_bytes).transpose()?;
+    let cursor = crate::queries::decode_group_cursor(after.as_deref())?;
     let now = Timestamp::from_millis(1);
     let query = db
         .query::<Document>()

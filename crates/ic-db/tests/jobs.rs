@@ -1,14 +1,13 @@
 //! Exact retained aggregates: independent results, retries, invalidation and reclamation.
 
+#[path = "support/allocations.rs"]
+mod allocations;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{AggregateJobs, Batch, Comparison, Database, Error, GroupOrder, JobHandle, JobOutcome};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 
 ///
 /// Row
@@ -1033,18 +1032,7 @@ fn any_clauses_resume_exact_counts_and_refuse_changed_boolean_structure() {
 }
 
 fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let declarations = SealedDeclarationSnapshot::new(vec![
-        MemoryRequest::new("test", "test.db.v1").unwrap(),
-        MemoryRequest::new("test", "test.jobs.v1").unwrap(),
-    ])
-    .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
+    allocations::host_with(backing, &["test.db.v1", "test.jobs.v1"])
 }
 
 fn schema() -> Schema {

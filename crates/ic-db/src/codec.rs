@@ -80,8 +80,12 @@ impl Encoder {
         ) {
             return value.encode_into(self);
         }
+        self.nested(|writer| value.encode_into(writer))
+    }
+
+    fn nested<T>(&mut self, write: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
         self.budget.enter().map_err(|_| Error::Limit)?;
-        let result = value.encode_into(self);
+        let result = write(self);
         self.budget.depth -= 1;
 
         result
@@ -94,17 +98,13 @@ impl Encoder {
         write: fn(&mut Self, &T) -> Result<(), Error>,
     ) -> Result<(), Error> {
         self.collection_header(values.len(), max)?;
-        self.budget.enter().map_err(|_| Error::Limit)?;
-        let result = (|| {
+        self.nested(|writer| {
             for value in values {
-                write(self, value)?;
+                write(writer, value)?;
             }
 
             Ok(())
-        })();
-        self.budget.depth -= 1;
-
-        result
+        })
     }
 
     pub fn nat64(&mut self, value: u64) -> Result<(), Error> {
@@ -306,6 +306,10 @@ impl<'a> Decoder<'a> {
         if matches!(definition.body, TypeBody::Wrapped(_) | TypeBody::Checked(_)) {
             return read(self);
         }
+        self.nested(read)
+    }
+
+    fn nested<T>(&mut self, read: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
         self.budget.enter()?;
         let result = read(self);
         self.budget.depth -= 1;
@@ -314,24 +318,13 @@ impl<'a> Decoder<'a> {
     }
     // Indexed unit enums still consume the ordinary structured-value budget.
     pub(crate) fn unit_enum(&mut self, variants: usize) -> Result<u8, Error> {
-        self.budget.enter()?;
-        let result = self.nat8().and_then(|ordinal| {
-            if usize::from(ordinal) < variants {
-                Ok(ordinal)
-            } else {
-                Err(Error::Corrupt)
+        self.nested(|reader| {
+            let ordinal = reader.nat8()?;
+            if usize::from(ordinal) >= variants {
+                return Err(Error::Corrupt);
             }
-        });
-        self.budget.depth -= 1;
-
-        result
-    }
-
-    fn list_count(&mut self, max: u32) -> Result<usize, Error> {
-        let count = self.collection_count(max)?;
-        self.budget.enter()?;
-
-        Ok(count)
+            Ok(ordinal)
+        })
     }
 
     fn collection_count(&mut self, max: u32) -> Result<usize, Error> {
@@ -346,18 +339,15 @@ impl<'a> Decoder<'a> {
         max: u32,
         read: fn(&mut Self) -> Result<T, Error>,
     ) -> Result<Vec<T>, Error> {
-        let count = self.list_count(max)?;
-        let result = (|| {
+        let count = self.collection_count(max)?;
+        self.nested(|reader| {
             let mut values = Vec::new();
             for _ in 0..count {
-                values.push(read(self)?);
+                values.push(read(reader)?);
             }
 
             Ok(values)
-        })();
-        self.budget.depth -= 1;
-
-        result
+        })
     }
 
     fn skip_named(&mut self, link: TypeLink) -> Result<(), Error> {
@@ -659,7 +649,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn bounded_bytes(&mut self, max: usize) -> Result<&'a [u8], Error> {
+    pub(crate) fn blob_ref(&mut self, max: usize) -> Result<&'a [u8], Error> {
         let len = usize::try_from(u32::from_le_bytes(self.fixed()?)).map_err(|_| Error::Corrupt)?;
         if len > max {
             return Err(Error::Corrupt);
@@ -674,8 +664,7 @@ impl<'a> Decoder<'a> {
 
     pub fn principal(&mut self) -> Result<Principal, Error> {
         // IcyDB's owned scalar decoder admits raw identity bytes, not text or Wire.
-        Principal::try_from_slice(self.bounded_bytes(MAX_PRINCIPAL_BYTES)?)
-            .map_err(|_| Error::Corrupt)
+        Principal::try_from_slice(self.blob_ref(MAX_PRINCIPAL_BYTES)?).map_err(|_| Error::Corrupt)
     }
 
     pub(crate) fn checked_text(&mut self, rule: crate::NewtypeRule) -> Result<&'a str, Error> {
@@ -692,28 +681,22 @@ impl<'a> Decoder<'a> {
     }
     // Borrow from the supplier's row buffer, as IcyDB's direct scalar views do.
     // Owning decode and inspection share these exact length/UTF-8 checks.
-    pub(crate) fn blob_ref(&mut self, max: usize) -> Result<&'a [u8], Error> {
-        self.bounded_bytes(max)
-    }
-
     pub(crate) fn text_ref(&mut self, max: usize) -> Result<&'a str, Error> {
-        std::str::from_utf8(self.bounded_bytes(max)?).map_err(|_| Error::Corrupt)
+        std::str::from_utf8(self.blob_ref(max)?).map_err(|_| Error::Corrupt)
     }
     // Skipping avoids materialization, not validation. Reuse the scalar decoder
     // so an unselected invalid tag, UTF-8 payload or length cannot be hidden.
     pub(crate) fn skip(&mut self, value: FieldType) -> Result<(), Error> {
         match value {
             FieldType::List { item, max_items } => {
-                let count = self.list_count(max_items)?;
-                let result = (|| {
+                let count = self.collection_count(max_items)?;
+                self.nested(|reader| {
                     for _ in 0..count {
-                        self.skip(*item)?;
+                        reader.skip(*item)?;
                     }
 
                     Ok(())
-                })();
-                self.budget.depth -= 1;
-                result?;
+                })?;
             }
             FieldType::Named(link) => self.skip_named(link)?,
             FieldType::Nat8 => {

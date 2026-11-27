@@ -1,5 +1,7 @@
 //! Installed migration demo and subsequent console queries.
 
+#[path = "support/installed.rs"]
+mod installed;
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -9,16 +11,7 @@ use std::{
 fn installed_demo_prints_migrated_rows_and_keeps_the_query_fixture() {
     let prefix =
         std::env::temp_dir().join(format!("ic-db-migration-console-{}", std::process::id()));
-    std::fs::create_dir(&prefix).unwrap();
-    std::fs::create_dir(prefix.join("bin")).unwrap();
-    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
-    let binary = prefix.join("bin/db");
-    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
-    std::fs::copy(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m3-cli"),
-        prefix.join("share/ic-db/m1/records.wasm"),
-    )
-    .unwrap();
+    let binary = installed::install(&prefix);
     let mut child = Command::new(&binary)
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())

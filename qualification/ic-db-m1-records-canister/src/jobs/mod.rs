@@ -364,11 +364,8 @@ fn job_page(
     let db = open(&host);
     let mut jobs = open_jobs(&host);
     let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
-    let cursor = after
-        .as_deref()
-        .map(ic_db::GroupCursor::from_bytes)
-        .transpose()
-        .map_err(|e| e.to_string())?;
+    let cursor =
+        crate::queries::decode_group_cursor(after.as_deref()).map_err(|e| e.to_string())?;
     faults::arm_job_write(fault);
     let result = query(&db, 3)
         .group_page(size as usize, cursor.as_ref())
@@ -416,11 +413,8 @@ fn job_group_extremum(
     let db = open(&host);
     let mut jobs = open_jobs(&host);
     let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
-    let cursor = after
-        .as_deref()
-        .map(ic_db::GroupCursor::from_bytes)
-        .transpose()
-        .map_err(|e| e.to_string())?;
+    let cursor =
+        crate::queries::decode_group_cursor(after.as_deref()).map_err(|e| e.to_string())?;
     let query = query(&db, operation)
         .work_limit(work as usize)
         .group_page(size as usize, cursor.as_ref());

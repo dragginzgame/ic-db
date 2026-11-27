@@ -1,14 +1,14 @@
 //! Durable source freezing, exact identity admission and pre-copy cancellation.
 
+#[path = "support/host.rs"]
+mod test_host;
+use test_host::host;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, Maintenance, QueryCursor, SchemaTransition};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 
 ///
 /// Source
@@ -58,22 +58,6 @@ fn identity(name: &str, version: u32, inputs: &[u8]) -> SchemaTransition {
 
 fn key() -> StableKey {
     StableKey::parse("test.db.v1").unwrap()
-}
-
-fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut runtime = MemoryRuntime::new(memory).unwrap();
-    runtime
-        .bootstrap(
-            &SealedDeclarationSnapshot::new(vec![
-                MemoryRequest::new("test", "test.db.v1").unwrap(),
-            ])
-            .unwrap(),
-            &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-            &GenericAllocationPolicy,
-        )
-        .unwrap();
-
-    runtime
 }
 
 fn create(runtime: &MemoryRuntime<VectorMemory>) -> Database {

@@ -1,14 +1,13 @@
 //! Maintained counts share the batch rollback and copy-publication boundaries.
 
+#[path = "support/allocations.rs"]
+mod allocations;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, SchemaCopy, SchemaTransition};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 
 ///
 /// Row
@@ -62,19 +61,7 @@ fn key(name: &str) -> StableKey {
 }
 
 fn host(memory: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut h = MemoryRuntime::new(memory).unwrap();
-    h.bootstrap(
-        &SealedDeclarationSnapshot::new(vec![
-            MemoryRequest::new("test", "test.source.v1").unwrap(),
-            MemoryRequest::new("test", "test.target.v1").unwrap(),
-        ])
-        .unwrap(),
-        &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-        &GenericAllocationPolicy,
-    )
-    .unwrap();
-
-    h
+    allocations::host_with(memory, &["test.source.v1", "test.target.v1"])
 }
 
 fn create(h: &MemoryRuntime<VectorMemory>) -> Database {

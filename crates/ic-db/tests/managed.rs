@@ -1,14 +1,14 @@
 //! Frozen IcyDB time-policy regressions on the single typed commit path.
 
+#[path = "support/host.rs"]
+mod test_host;
+use test_host::host as runtime;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
 
 ///
 /// CreatedAt
@@ -129,22 +129,6 @@ fn independent_roles_share_batch_time_and_deletes_need_no_clock() {
 
 fn time(n: i64) -> Timestamp {
     Timestamp::from_millis(n)
-}
-
-fn runtime(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut runtime = MemoryRuntime::new(backing).unwrap();
-    runtime
-        .bootstrap(
-            &SealedDeclarationSnapshot::new(vec![
-                MemoryRequest::new("test", "test.db.v1").unwrap(),
-            ])
-            .unwrap(),
-            &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-            &GenericAllocationPolicy,
-        )
-        .unwrap();
-
-    runtime
 }
 
 #[test]

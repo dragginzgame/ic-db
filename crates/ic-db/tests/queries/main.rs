@@ -1,5 +1,8 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
 
+#[path = "../support/host.rs"]
+mod test_host;
+use test_host::host;
 mod aggregate_paths;
 mod blobs;
 mod cursors;
@@ -14,10 +17,7 @@ pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Comparison as C, Database, Error, IndexValue, QueryCursor};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{MemoryRuntime, StableKey, VectorMemory};
 
 ///
 /// Entry
@@ -126,18 +126,6 @@ struct Missing {}
 
 #[record(fields())]
 struct Empty {}
-fn host<M: ic_storage::MemoryBacking>(backing: M) -> MemoryRuntime<M> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let req =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&req, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
-}
 
 fn row(id: u64) -> Entry {
     Entry {

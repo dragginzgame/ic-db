@@ -1,6 +1,7 @@
 //! Hold host/transport fixed while varying reachable fluent shapes and mapping sites.
 
-mod artifact;
+#[path = "artifact/growth.rs"]
+mod growth;
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
@@ -92,27 +93,9 @@ async fn exercise<'a>(
     variants: impl IntoIterator<Item = (&'a str, u8, u8)>,
 ) {
     for (variant, count, last_mode) in variants {
-        let (wasm, facts) = crate::artifact::read(
-            std::fs::File::open(directory.join(format!("{variant}.wasm"))).unwrap(),
-        )
-        .unwrap();
-        let exports: Vec<_> = facts
-            .exports
-            .iter()
-            .map(String::as_str)
-            .filter(|name| name.starts_with("canister_"))
-            .collect();
-        assert_eq!(exports, ["canister_init", "canister_update exercise"]);
-        eprintln!(
-            "variant={variant} entities={count} wasm_bytes={} code_section_bytes={} sha256={}",
-            facts.identity.bytes,
-            facts.code_section_bytes,
-            facts
-                .identity
-                .sha256
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
+        let wasm = growth::read(
+            &directory.join(format!("{variant}.wasm")),
+            format_args!("variant={variant} entities={count}"),
         );
         let owned = instance().await.unwrap();
         let pic = &owned;

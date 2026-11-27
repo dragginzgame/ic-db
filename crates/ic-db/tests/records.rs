@@ -1,15 +1,15 @@
 //! First public journey: real generated records, governed storage and final-state batches.
 
+#[path = "support/host.rs"]
+mod test_host;
+use test_host::host;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use enum_values::Lifecycle as State;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
 
 ///
 /// Entry
@@ -357,19 +357,6 @@ struct OptionalLink {}
 
 fn schema() -> Schema {
     Schema::new(&[TokenRow::SCHEMA, Entry::SCHEMA]).unwrap()
-}
-
-fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let declarations =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&declarations, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
 }
 
 #[test]

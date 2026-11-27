@@ -511,6 +511,13 @@ pub(super) fn decode_cursor(bytes: Option<&[u8]>) -> Result<Option<QueryCursor>,
     bytes.map(QueryCursor::from_bytes).transpose()
 }
 
+#[cfg(any(feature = "aggregate-jobs", feature = "retained-console"))]
+pub(super) fn decode_group_cursor(
+    bytes: Option<&[u8]>,
+) -> Result<Option<ic_db::GroupCursor>, ic_db::Error> {
+    bytes.map(ic_db::GroupCursor::from_bytes).transpose()
+}
+
 fn query_error(error: &ic_db::Error) -> u8 {
     match error {
         ic_db::Error::InvalidCursor => 1,

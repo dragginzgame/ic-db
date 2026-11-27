@@ -233,7 +233,7 @@ checksum = "e6d8c3142f5559b8c1b4d9f4580eed117cf15fcbebb85896aa467b9c660ddddb"
 dependencies = [
  "canic-macros",
  "ic-blob-storage",
- "ic-db 0.33.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ic-db 0.33.1",
  "ic-entropy 0.7.0",
  "ic-jobs",
  "ic-logging",
@@ -919,6 +919,26 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bd8d6b7a3b033f738154c5be68eb43c947ef4e14c9c6f5b54def211be144d8a"
+dependencies = [
+ "ethnum",
+ "getrandom 0.4.3",
+ "ic-db-macros 0.33.1",
+ "ic-logging",
+ "ic-metrics",
+ "ic-platform-runtime 0.23.27",
+ "ic-platform-types 0.21.6",
+ "ic-storage 0.80.6",
+ "memchr",
+ "serde",
+ "sha2 0.11.2",
+ "ulid",
+]
+
+[[package]]
+name = "ic-db"
 version = "0.34.0"
 dependencies = [
  "ctor",
@@ -929,26 +949,6 @@ dependencies = [
  "ic-platform-types 0.21.6",
  "ic-storage 0.80.6",
  "ic-wire 0.31.1",
- "memchr",
- "serde",
- "sha2 0.11.2",
- "ulid",
-]
-
-[[package]]
-name = "ic-db"
-version = "0.33.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bd8d6b7a3b033f738154c5be68eb43c947ef4e14c9c6f5b54def211be144d8a"
-dependencies = [
- "ethnum",
- "getrandom 0.4.3",
- "ic-db-macros 0.33.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "ic-logging",
- "ic-metrics",
- "ic-platform-runtime 0.23.27",
- "ic-platform-types 0.21.6",
- "ic-storage 0.80.6",
  "memchr",
  "serde",
  "sha2 0.11.2",
@@ -1080,7 +1080,9 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.34.0"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "020d7db23ffe19c4ddfe3ec5967af38b88010dbd39daace27e1cf60194aa47c8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1089,9 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.33.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "020d7db23ffe19c4ddfe3ec5967af38b88010dbd39daace27e1cf60194aa47c8"
+version = "0.34.0"
 dependencies = [
  "proc-macro2",
  "quote",

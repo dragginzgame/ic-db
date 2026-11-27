@@ -1,11 +1,11 @@
 //! Omission/default semantics on the real typed and persistent write path.
 
+#[path = "support/host.rs"]
+mod test_host;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, FieldSchema, FieldType, InsertInput, LiteralDefault};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
+use test_host::host as runtime;
 
 ///
 /// Entry
@@ -208,22 +208,6 @@ fn literal_defaults_preserve_every_integer_width_without_host_narrowing() {
         (i8::MIN, i16::MIN, i32::MIN, i64::MIN, i128::MIN)
     );
     assert_eq!(Extremes::decode(&row.encode().unwrap()).unwrap(), row);
-}
-
-fn runtime(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut runtime = MemoryRuntime::new(backing).unwrap();
-    runtime
-        .bootstrap(
-            &SealedDeclarationSnapshot::new(vec![
-                MemoryRequest::new("test", "test.db.v1").unwrap(),
-            ])
-            .unwrap(),
-            &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-            &GenericAllocationPolicy,
-        )
-        .unwrap();
-
-    runtime
 }
 
 #[test]

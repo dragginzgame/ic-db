@@ -1,5 +1,7 @@
 //! Installed command admission, output and interactive queries against the local fixture.
 
+#[path = "support/installed.rs"]
+mod installed;
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -76,16 +78,7 @@ fn console_counts_use_entity_metadata() {
     );
 
     let prefix = std::env::temp_dir().join(format!("ic-db-count-{}", std::process::id()));
-    std::fs::create_dir(&prefix).unwrap();
-    std::fs::create_dir(prefix.join("bin")).unwrap();
-    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
-    let binary = prefix.join("bin/db");
-    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
-    std::fs::copy(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build the console fixture"),
-        prefix.join("share/ic-db/m1/records.wasm"),
-    )
-    .unwrap();
+    let binary = installed::install(&prefix);
     let output = run_console(
         &binary,
         "count Entry\nquery Entry --min 0 --select count --work 1\ncount Document\ncount DecimalRow\nquery Entry --select count --category 1\ncount Entry\ncount SetRow\ncount IdentityRow\nquit\n",
@@ -141,16 +134,7 @@ fn console_schema_json_is_complete_selected_and_pipeable() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("--json"));
 
     let prefix = std::env::temp_dir().join(format!("ic-db-schema-json-{}", std::process::id()));
-    std::fs::create_dir(&prefix).unwrap();
-    std::fs::create_dir(prefix.join("bin")).unwrap();
-    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
-    let binary = prefix.join("bin/db");
-    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
-    std::fs::copy(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build the console fixture"),
-        prefix.join("share/ic-db/m1/records.wasm"),
-    )
-    .unwrap();
+    let binary = installed::install(&prefix);
     let inspect = |args: &[&str]| -> serde_json::Value {
         let output = Command::new(&binary).args(args).output().unwrap();
         assert!(
@@ -247,16 +231,7 @@ fn console_schema_json_is_complete_selected_and_pipeable() {
 #[test]
 fn console_inspects_and_queries() {
     let prefix = std::env::temp_dir().join(format!("ic-db-console-{}", std::process::id()));
-    std::fs::create_dir(&prefix).unwrap();
-    std::fs::create_dir(prefix.join("bin")).unwrap();
-    std::fs::create_dir_all(prefix.join("share/ic-db/m1")).unwrap();
-    let binary = prefix.join("bin/db");
-    std::fs::copy(env!("CARGO_BIN_EXE_db"), &binary).unwrap();
-    std::fs::copy(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"),
-        prefix.join("share/ic-db/m1/records.wasm"),
-    )
-    .unwrap();
+    let binary = installed::install(&prefix);
     let mut child = Command::new(&binary)
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())

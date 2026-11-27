@@ -1,14 +1,13 @@
 //! Reused executable metadata never stands in for current durable admission.
 
+#[path = "support/allocations.rs"]
+mod allocations;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
 
 ///
 /// Payload
@@ -48,21 +47,8 @@ struct Other {}
 #[test]
 fn retained_schema_rechecks_each_allocation_and_each_open() {
     let backing = VectorMemory::default();
-    let mut runtime = MemoryRuntime::new(backing.clone()).unwrap();
     let names = ["test.first.v1", "test.second.v1"];
-    runtime
-        .bootstrap(
-            &SealedDeclarationSnapshot::new(
-                names
-                    .iter()
-                    .map(|name| MemoryRequest::new("test", name).unwrap())
-                    .collect(),
-            )
-            .unwrap(),
-            &AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap(),
-            &GenericAllocationPolicy,
-        )
-        .unwrap();
+    let runtime = allocations::host_with(backing.clone(), &names);
     let schema = Schema::new(&[Entry::SCHEMA, Other::SCHEMA]).unwrap();
     for (name, identity) in names.iter().zip([1_u8, 2]) {
         let key = StableKey::parse(name).unwrap();

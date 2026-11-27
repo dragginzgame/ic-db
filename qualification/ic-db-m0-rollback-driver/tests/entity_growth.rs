@@ -1,6 +1,7 @@
 //! Entity growth with independently checked reachability, isolation and upgrade.
 
-mod artifact;
+#[path = "artifact/growth.rs"]
+mod growth;
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
@@ -22,27 +23,9 @@ async fn typed_entity_growth() {
         ("retained", 8),
         ("retained", 32),
     ] {
-        let (wasm, facts) = crate::artifact::read(
-            std::fs::File::open(directory.join(format!("{variant}-{count}.wasm"))).unwrap(),
-        )
-        .unwrap();
-        let exports: Vec<_> = facts
-            .exports
-            .iter()
-            .map(String::as_str)
-            .filter(|name| name.starts_with("canister_"))
-            .collect();
-        assert_eq!(exports, ["canister_init", "canister_update exercise"]);
-        eprintln!(
-            "host={variant} entities={count} wasm_bytes={} code_section_bytes={} sha256={}",
-            facts.identity.bytes,
-            facts.code_section_bytes,
-            facts
-                .identity
-                .sha256
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
+        let wasm = growth::read(
+            &directory.join(format!("{variant}-{count}.wasm")),
+            format_args!("host={variant} entities={count}"),
         );
         let owned = instance().await.unwrap();
         let pic = &owned;

@@ -396,37 +396,7 @@ impl Field {
     }
 
     pub fn encode_with(&self, value: &TokenStream) -> TokenStream {
-        let write = match &self.kind {
-            Kind::Named(path, indirect) => {
-                if *indirect {
-                    quote!(writer.named::<#path>(value.as_ref())?)
-                } else {
-                    quote!(writer.named::<#path>(value)?)
-                }
-            }
-            Kind::Integer(integer) => {
-                let name = quote::format_ident!("{}", integer.codec);
-                quote!(writer.#name(*value)?)
-            }
-            Kind::Float32 => quote!(writer.float32(*value)?),
-            Kind::Float64 => quote!(writer.float64(*value)?),
-            Kind::Subaccount => quote!(writer.subaccount(*value)?),
-            Kind::Account => quote!(writer.account(*value)?),
-            Kind::U256 => quote!(writer.u256(*value)?),
-            Kind::Ulid => quote!(writer.ulid(*value)?),
-            Kind::Date => quote!(writer.date(*value)?),
-            Kind::Decimal(scale) => quote!(writer.decimal(*value, #scale)?),
-            Kind::Duration => quote!(writer.duration(*value)?),
-            Kind::Timestamp => quote!(writer.timestamp(*value)?),
-            Kind::Bool => quote!(writer.boolean(*value)?),
-            Kind::Principal => quote!(writer.principal(value)?),
-            Kind::Text(max) => {
-                quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value.as_bytes())? })
-            }
-            Kind::Blob(max) => {
-                quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value)? })
-            }
-        };
+        let write = self.item_codec().0;
         let write = if let Some(max) = self.many {
             quote!(writer.list(value, #max, |writer, value| { #write; Ok(()) })?)
         } else {
@@ -449,38 +419,59 @@ impl Field {
         quote!(#ident: #value,)
     }
 
-    fn read_item_result(&self) -> TokenStream {
-        match &self.kind {
-            Kind::Named(path, indirect) => {
-                if *indirect {
-                    quote!(reader.named::<#path>().map(::std::boxed::Box::new))
-                } else {
-                    quote!(reader.named::<#path>())
-                }
+    fn item_codec(&self) -> (TokenStream, TokenStream) {
+        let method = match &self.kind {
+            Kind::Named(path, false) => {
+                return (
+                    quote!(writer.named::<#path>(value)?),
+                    quote!(reader.named::<#path>()),
+                );
             }
-            Kind::Integer(integer) => {
-                let name = quote::format_ident!("{}", integer.codec);
-                quote!(reader.#name())
+            Kind::Named(path, true) => {
+                return (
+                    quote!(writer.named::<#path>(value.as_ref())?),
+                    quote!(reader.named::<#path>().map(::std::boxed::Box::new)),
+                );
             }
-            Kind::Float32 => quote!(reader.float32()),
-            Kind::Float64 => quote!(reader.float64()),
-            Kind::Subaccount => quote!(reader.subaccount()),
-            Kind::Account => quote!(reader.account()),
-            Kind::U256 => quote!(reader.u256()),
-            Kind::Ulid => quote!(reader.ulid()),
-            Kind::Date => quote!(reader.date()),
-            Kind::Decimal(scale) => quote!(reader.decimal(#scale)),
-            Kind::Duration => quote!(reader.duration()),
-            Kind::Timestamp => quote!(reader.timestamp()),
-            Kind::Bool => quote!(reader.boolean()),
-            Kind::Principal => quote!(reader.principal()),
-            Kind::Text(max) => quote!(reader.text(#max as usize)),
-            Kind::Blob(max) => quote!(reader.blob(#max as usize)),
-        }
+            Kind::Decimal(scale) => {
+                return (
+                    quote!(writer.decimal(*value, #scale)?),
+                    quote!(reader.decimal(#scale)),
+                );
+            }
+            Kind::Principal => {
+                return (quote!(writer.principal(value)?), quote!(reader.principal()));
+            }
+            Kind::Text(max) => {
+                return (
+                    quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value.as_bytes())? }),
+                    quote!(reader.text(#max as usize)),
+                );
+            }
+            Kind::Blob(max) => {
+                return (
+                    quote!({ if value.len() > #max as usize { return Err(::ic_db::Error::Limit); } writer.bytes(value)? }),
+                    quote!(reader.blob(#max as usize)),
+                );
+            }
+            Kind::Integer(integer) => integer.codec,
+            Kind::Float32 => "float32",
+            Kind::Float64 => "float64",
+            Kind::Subaccount => "subaccount",
+            Kind::Account => "account",
+            Kind::U256 => "u256",
+            Kind::Ulid => "ulid",
+            Kind::Date => "date",
+            Kind::Duration => "duration",
+            Kind::Timestamp => "timestamp",
+            Kind::Bool => "boolean",
+        };
+        let method = quote::format_ident!("{method}");
+        (quote!(writer.#method(*value)?), quote!(reader.#method()))
     }
 
     pub fn read_result(&self) -> TokenStream {
-        let item = self.read_item_result();
+        let item = self.item_codec().1;
         let read = if let Some(max) = self.many {
             quote!(reader.list(#max, |reader| #item))
         } else {

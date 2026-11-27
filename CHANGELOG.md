@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.34.1] - Unreleased
+
+### 🔄 Changed
+
+- The local console validates hexadecimal query cursors before contacting the fixture. Rust clients can use `QueryCursor::MAX_ENCODED_BYTES` to bound input before decoding it.
+
+### 🧪 Testing
+
+- CLI integration tests share the installed fixture layout. Entity and query growth measurements now use the same Wasm export check and artifact report.
+
 ## [0.34.0] - 2026-11-27
 
 ### 🔄 Changed
