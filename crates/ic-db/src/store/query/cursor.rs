@@ -31,7 +31,8 @@ impl QueryCursor {
     /// Encode the bounded continuation for an application's transport.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![1, self.resume as u8];
+        let mut bytes = Vec::with_capacity(34 + self.position.len());
+        bytes.extend([1, self.resume as u8]);
         bytes.extend(self.binding);
         bytes.extend(&self.position);
 
@@ -200,7 +201,11 @@ impl Plan<'_> {
         if let Some(order) = &request.order {
             hash.update(b"order\0");
             hash.update([order.len() as u8]);
-            for name in order {
+            let mut directions = 0u8;
+            for (i, &super::OrderTerm(name, direction)) in order.iter().enumerate() {
+                if direction == super::SortDirection::Descending {
+                    directions |= 1 << i;
+                }
                 // Field names were admitted by order selection above.
                 if let Some(position) = entity.field_position(name) {
                     hash.update([position as u8]);
@@ -210,10 +215,10 @@ impl Plan<'_> {
                     hash.update(name.as_bytes());
                 }
             }
-        }
-        if request.order_descending != 0 {
-            hash.update(b"order-directions\0");
-            hash.update([request.order_descending]);
+            if directions != 0 {
+                hash.update(b"order-directions\0");
+                hash.update([directions]);
+            }
         }
         // Projected shapes bind their field selection and column order.
         if let Some(mask) = self.projection {

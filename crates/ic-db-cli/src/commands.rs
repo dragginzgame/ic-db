@@ -1,8 +1,6 @@
 //! Local fixture commands using typed Wire replies.
 
-use super::{
-    CallKind, EntityView, FixtureCalls, Status, TypeView, print_schema, print_schema_json,
-};
+use super::{CallKind, FixtureCalls, print_schema, print_schema_json};
 use ic_host_text::{bordered_table, escape};
 
 pub(super) async fn count(calls: &mut FixtureCalls<'_>, entity: &str) -> Result<(), String> {
@@ -22,7 +20,11 @@ pub(super) async fn schema(
     entity_summary: bool,
     json: bool,
 ) -> Result<(), String> {
-    let (status, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) = calls
+    let ic_db_cli::SchemaResponse {
+        status,
+        entities,
+        types,
+    } = calls
         .framed(CallKind::Query, "schema", 2, &selected)
         .await?;
     if entities.is_empty()
@@ -37,7 +39,7 @@ pub(super) async fn schema(
     if entity_summary {
         let mut summaries: Vec<_> = entities
             .into_iter()
-            .map(|entity| (entity.0, entity.3.len()))
+            .map(|entity| (entity.name, entity.fields.len()))
             .collect();
         summaries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -58,7 +60,7 @@ pub(super) async fn schema(
             println!("{}", bordered_table(&["Entity", "Columns"], &rows));
         }
     } else if json {
-        print_schema_json(status.0, &entities, &types)?;
+        print_schema_json(status.schema, &entities, &types)?;
     } else {
         print_schema(entities, types);
     }

@@ -18,9 +18,7 @@ type Page = (
 
 #[tokio::test]
 async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

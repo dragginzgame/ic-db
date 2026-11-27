@@ -50,9 +50,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         after: Option<&'a GroupCursor>,
     ) -> Result<JobStep<GroupPage<K>>, Error> {
         observe!(resume, {
-            if self.request.groups.page.is_some() {
-                return Err(Error::InvalidQuery);
-            }
+            self.request.groups.admit_start_page()?;
             let page_size = self.request.rows;
             let query = self.group_page(page_size, after);
             let plan = query.aggregate_plan(Some(K::definition()), true)?;
@@ -129,9 +127,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            if self.request.groups.page.is_some() {
-                return Err(Error::InvalidQuery);
-            }
+            self.request.groups.admit_start_page()?;
             let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
 
             self.start_groups(jobs, now, expires, plan, reducer, None)

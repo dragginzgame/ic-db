@@ -8,7 +8,7 @@ use wire_call::call;
 #[tokio::test]
 #[ignore = "requires measurement Wasm and PocketIC"]
 async fn atomic_delete_costs() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let expanded = std::env::var_os("IC_DB_DELETE_EXPERIMENT_256").is_some();
     let owned = instance().await.unwrap();
     let pic = &owned;
@@ -93,7 +93,7 @@ async fn atomic_delete_costs() {
 
 #[tokio::test]
 async fn repeated_parent_delete_refusals() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

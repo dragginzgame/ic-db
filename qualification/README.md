@@ -371,6 +371,53 @@ compared. Settling follows the harness's explicit per-write policy, not a measur
 production scheduler. Smaller mechanisms and narrower reachable obligations both
 contribute; this is not evidence of blanket feature parity or SQL-removal savings.
 
+### Query cleanup on the 0.35.0 worktree
+
+Two runs of `make m2-query-growth` compared the working tree immediately before
+and after the query and fixture cleanup on the 0.34.2 base. Each entity held
+eight three-column Nat64 rows. The fluent queries fetched a two-row first page.
+Sizes below are uncompressed bytes.
+
+| Fixture | Before Wasm | After Wasm | Before code section | After code section |
+| --- | ---: | ---: | ---: | ---: |
+| One entity, eight query shapes | 364,387 | 363,420 | 339,253 | 338,286 |
+| Eight entities, eight shapes | 393,436 | 392,431 | 367,851 | 366,846 |
+| 32 entities, eight shapes | 499,079 | 497,874 | 472,161 | 470,956 |
+| Local retained console | 1,421,053 | 1,420,197 | 1,360,366 | 1,359,510 |
+
+Across the 11 growth builds, Wasm shrank by 964–1,205 bytes. The eight-shape
+slope from eight to 32 entities fell from 4,402 to 4,393 bytes per added entity.
+Warm fluent work fell by 26–671 instructions per call across all measured
+builds, with the same absolute reduction in charged cycles. On the 32-entity
+fixture, the two-term OR used 671 fewer instructions, descending amount order
+used 573 fewer, and filtering by category in ID order saved 26. The direct
+read and sampled inserts had identical work and cycle counts in that fixture.
+These measurements cover execution and charging on PocketIC. Application
+latency and larger row populations were outside this comparison.
+
+### Fixed integer comparisons and cursor encoding on the 0.35.0 worktree
+
+The next cleanup used the preceding worktree as its baseline. Both runs of
+`make m2-query-growth` included the same additional one-entity fixture,
+`planner-probes`, alongside the 11 existing builds. Each entity held eight
+Nat64 rows. Mode 18 fetched two rows and encoded and decoded its continuation.
+Mode 19 queried IDs in `[3, 45]` with the additional condition `id < 45`.
+The driver checked the returned rows against its tuple oracle.
+
+| Warm operation | Before work instructions | After | Before charged cycles | After |
+| --- | ---: | ---: | ---: | ---: |
+| Query with cursor round trip | 90,555 | 90,032 | 7,267,200 | 7,266,677 |
+| Fixed integer comparison | 137,460 | 125,194 | 7,312,938 | 7,300,672 |
+
+The existing fluent queries used 0–94 additional work instructions per warm call,
+with an equal increase in charged cycles. The four direct-operation builds had
+identical Wasm sizes. The seven existing fluent builds grew by 726–738 bytes.
+The 32-entity, eight-shape build grew from 497,874 to 498,612 uncompressed
+bytes and from 470,956 to 471,693 code-section bytes. The eight-entity build
+also grew by 738 bytes, keeping the 8-to-32 slope at 4,393 bytes per entity.
+The retained console grew from 1,420,197 to 1,420,950 bytes, including a code
+section increase from 1,359,510 to 1,360,314 bytes.
+
 ### Wasm size snapshot (0.26.3 worktree)
 
 Uncompressed release builds for `wasm32-unknown-unknown`, using the locked

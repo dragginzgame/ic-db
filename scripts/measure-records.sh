@@ -77,7 +77,7 @@ case "$workload" in
     queries)
         default_features=retained-host
         evidence="${IC_DB_QUERY_GROWTH_DIR:-$PWD/qualification/target/evidence/query-growth}"
-        engines=(direct direct-entities direct-32 one one-8 one-32 shapes entities shapes-32 two-indexes maps)
+        engines=(direct direct-entities direct-32 one one-8 one-32 shapes entities shapes-32 two-indexes maps planner-probes)
         test_name=query_growth
         ;;
     *) printf 'Expected ranked-listing, fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, growth or queries workload\n' >&2; exit 2 ;;
@@ -133,6 +133,7 @@ for engine in "${engines[@]}"; do
             one) build_features+=,fluent ;;
             one-8|one-32) build_features+=",fluent,entities-${engine##*-}" ;;
             shapes) build_features+=,fluent-shapes ;;
+            planner-probes) build_features+=,planner-probes ;;
             maps) build_features+=,fluent-maps ;;
             entities) build_features+=,fluent-shapes,entities-8 ;;
             shapes-32) build_features+=,fluent-shapes,entities-32 ;;

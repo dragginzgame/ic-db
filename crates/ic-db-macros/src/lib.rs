@@ -577,7 +577,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             || index.fields.iter().any(|name| {
                 !authored
                     .iter()
-                    .any(|field| &field.name == name && field.indexable())
+                    .any(|field| &field.name == name && field.many.is_none())
             })
         {
             return Err(fail(
@@ -635,22 +635,22 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let column_types = ordered.iter().map(|field| field.rust_type());
     let column_positions = (0..ordered.len()).map(|position| position as u8);
     let column_reads = ordered.iter().map(|field| field.read_result());
-    let nested_writes: Vec<_> = ordered
+    let writes: Vec<_> = ordered
         .iter()
         .zip(&ordered_ids)
+        .map(|(field, id)| field.encode(id))
+        .collect();
+    let nested_writes: Vec<_> = ordered
+        .iter()
+        .zip(&writes)
         .filter(|(f, _)| f.many.is_some() || matches!(f.kind, field::Kind::Named(..)))
-        .map(|(f, id)| f.encode(id))
+        .map(|(_, write)| write)
         .collect();
     let nested_validation = if nested_writes.is_empty() {
         quote!()
     } else {
         quote! { let mut writer = ::ic_db::__private::Encoder::for_entity(<Self as ::ic_db::Entity>::SCHEMA); #(#nested_writes)* }
     };
-    let writes: Vec<_> = ordered
-        .iter()
-        .zip(&ordered_ids)
-        .map(|(field, id)| field.encode(id))
-        .collect();
     let reads: Vec<_> = ordered
         .iter()
         .zip(&ordered_ids)

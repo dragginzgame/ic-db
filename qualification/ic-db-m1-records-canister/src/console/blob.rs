@@ -1,7 +1,7 @@
 //! Fixed Blob result shapes for the local console; the engine owns all query work.
 
 use super::{Page, display, display_groups, display_scalar, extremum, hex};
-use crate::{handles::Query, schema::BinaryObject};
+use crate::{handles::Query, schema::BinaryObject, transport::PayloadFilters};
 use ic_db::design::prelude::*;
 use ic_db::{Comparison, Error};
 
@@ -38,33 +38,26 @@ pub(super) fn optional_hex(value: Option<Vec<u8>>) -> String {
     value.map_or_else(|| "—".into(), |v| hex(&v))
 }
 
-pub(super) type Filters = [Option<Vec<u8>>; 5];
-
-pub(super) fn validate(entity: &str, filters: &Filters) -> Result<(), String> {
-    if entity != "BinaryObject" && filters.iter().any(Option::is_some) {
-        return Err("payload filters apply to BinaryObject".into());
-    }
-
-    Ok(())
-}
-
-pub(super) fn filter<'a, E: Entity>(mut query: Query<'a, E>, filters: &'a Filters) -> Query<'a, E> {
+pub(super) fn filter<'a, E: Entity>(
+    mut query: Query<'a, E>,
+    filters: &'a PayloadFilters,
+) -> Result<Query<'a, E>, String> {
     for (comparison, operand) in [
-        Comparison::Ge,
-        Comparison::Le,
-        Comparison::StartsWith,
-        Comparison::EndsWith,
-        Comparison::Contains,
-    ]
-    .into_iter()
-    .zip(filters)
-    {
+        (Comparison::Ge, &filters.minimum),
+        (Comparison::Le, &filters.maximum),
+        (Comparison::StartsWith, &filters.prefix),
+        (Comparison::EndsWith, &filters.suffix),
+        (Comparison::Contains, &filters.contains),
+    ] {
         if let Some(operand) = operand.as_deref() {
+            if E::SCHEMA.name != "BinaryObject" {
+                return Err("payload filters apply to BinaryObject".into());
+            }
             query = query.filter("payload", comparison, operand);
         }
     }
 
-    query
+    Ok(query)
 }
 
 pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Page, Error> {

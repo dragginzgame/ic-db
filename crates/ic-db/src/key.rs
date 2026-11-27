@@ -254,6 +254,13 @@ impl<'a> IndexValue<'a> {
         }
     }
 
+    #[inline]
+    pub(crate) fn component(self, optional: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        self.append_component(optional, &mut bytes);
+        bytes
+    }
+
     pub(crate) fn append_component(self, optional: bool, out: &mut Vec<u8>) {
         if optional {
             out.push(u8::from(self != Self::Absent));
@@ -313,25 +320,16 @@ impl<'a> IndexValue<'a> {
 // Minimum completion of a query prefix, including unknown trailing components.
 // Variable-width identities reserve their shortest valid frame, not their maximum.
 pub(crate) fn minimum_bytes(field: FieldType) -> Result<usize, Error> {
-    Ok(match operand_type(field) {
-        FieldType::Named(link) if unit_enum_len((link.definition)()).is_some() => 1,
-        FieldType::Bool
-        | FieldType::Nat8
-        | FieldType::Int8
-        | FieldType::Principal
-        | FieldType::Decimal { .. } => 1,
-        FieldType::Nat16 | FieldType::Int16 | FieldType::Text { .. } | FieldType::Blob { .. } => 2,
-        FieldType::Nat32 | FieldType::Int32 | FieldType::Float32 | FieldType::Date => 4,
-        FieldType::Nat64
-        | FieldType::Int64
-        | FieldType::Float64
-        | FieldType::Timestamp
-        | FieldType::Duration => 8,
-        FieldType::Nat128 | FieldType::Int128 | FieldType::Ulid => 16,
-        FieldType::U256 | FieldType::Subaccount => 32,
-        FieldType::Account => 33,
-        _ => return Err(Error::InvalidOperand),
-    })
+    let field = operand_type(field);
+    if let Some(width) = fixed_width(field) {
+        return Ok(width);
+    }
+    match field {
+        FieldType::Principal | FieldType::Decimal { .. } => Ok(1),
+        FieldType::Text { .. } | FieldType::Blob { .. } => Ok(2),
+        FieldType::Account => Ok(33),
+        _ => Err(Error::InvalidOperand),
+    }
 }
 
 /// Shared generated/stored-row membership and component encoding.
@@ -414,6 +412,13 @@ macro_rules! integer_operands {
         )+
 
         impl IndexValue<'_> {
+            pub(crate) fn integer_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                match (self, other) {
+                    $((Self::$variant(left), Self::$variant(right)) => Some(left.cmp(right)),)+
+                    _ => None,
+                }
+            }
+
             fn integer_successor(self) -> Option<Self> {
                 match self {
                     $(Self::$variant(n) => n.checked_add(<$integer>::from(true)).map(Self::$variant),)+
@@ -445,65 +450,18 @@ integer_operands!(
     Int128(i128),
 );
 
-impl From<Principal> for IndexValue<'_> {
-    fn from(value: Principal) -> Self {
-        Self::Principal(value)
-    }
+macro_rules! scalar_conversions {
+    ($($scalar:ident),+ $(,)?) => {$(
+        impl From<$scalar> for IndexValue<'_> {
+            fn from(value: $scalar) -> Self {
+                Self::$scalar(value)
+            }
+        }
+    )+};
 }
-
-impl From<Ulid> for IndexValue<'_> {
-    fn from(value: Ulid) -> Self {
-        Self::Ulid(value)
-    }
-}
-
-impl From<Timestamp> for IndexValue<'_> {
-    fn from(value: Timestamp) -> Self {
-        Self::Timestamp(value)
-    }
-}
-
-impl From<Decimal> for IndexValue<'_> {
-    fn from(value: Decimal) -> Self {
-        Self::Decimal(value)
-    }
-}
-
-impl From<Duration> for IndexValue<'_> {
-    fn from(value: Duration) -> Self {
-        Self::Duration(value)
-    }
-}
-
-impl From<Date> for IndexValue<'_> {
-    fn from(value: Date) -> Self {
-        Self::Date(value)
-    }
-}
-
-impl From<Float32> for IndexValue<'_> {
-    fn from(value: Float32) -> Self {
-        Self::Float32(value)
-    }
-}
-
-impl From<Float64> for IndexValue<'_> {
-    fn from(value: Float64) -> Self {
-        Self::Float64(value)
-    }
-}
-
-impl From<Subaccount> for IndexValue<'_> {
-    fn from(value: Subaccount) -> Self {
-        Self::Subaccount(value)
-    }
-}
-
-impl From<Account> for IndexValue<'_> {
-    fn from(value: Account) -> Self {
-        Self::Account(value)
-    }
-}
+scalar_conversions!(
+    Principal, Ulid, Timestamp, Decimal, Duration, Date, Float32, Float64, Subaccount, Account
+);
 
 // Schema admission and byte framing share the fixed-width contract here.
 pub(crate) fn fixed_width(field: FieldType) -> Option<usize> {
@@ -545,17 +503,7 @@ pub(crate) fn is_fixed_extreme(field: FieldType, bytes: &[u8], upper: bool) -> b
 }
 
 pub(crate) fn supports(field: FieldType) -> bool {
-    let field = operand_type(field);
-
-    fixed_width(field).is_some()
-        || matches!(
-            field,
-            FieldType::Principal
-                | FieldType::Account
-                | FieldType::Text { .. }
-                | FieldType::Blob { .. }
-                | FieldType::Decimal { .. }
-        )
+    minimum_bytes(field).is_ok()
 }
 
 // Stored entries and cursor positions share the same optional-component framing.

@@ -14,14 +14,13 @@ use crate::{
     queries::{IdOnly, Summary},
     runtime,
     schema::{DecimalRow, Document, Entry},
-    transport::{ConsolePage as Page, RowFilters},
+    transport::{ConsolePage as Page, QueryOptions, QueryRequest, RowFilters},
 };
 use ic_db::design::prelude::*;
 use ic_db::{
     Aggregate, Comparison, Error, GroupCount, GroupOrder, GroupValue, QueryCursor, QueryPage,
     SortDirection, SummaryMeasure,
 };
-use std::fmt::Write;
 
 // cardinality
 // Read the maintained row count for the named entity.
@@ -70,7 +69,7 @@ fn cardinality(entity: String) -> Result<u64, String> {
     on_error = crate::transport::endpoint_error
 )]
 fn measured_query(
-    (request, counter): crate::transport::Measured<Request>,
+    (request, counter): crate::transport::Measured<QueryRequest>,
 ) -> (Result<Page, String>, u64) {
     let start = counter();
     let result = query(request);
@@ -92,7 +91,7 @@ fn measured_query(
     on_error = crate::transport::endpoint_error
 )]
 fn query(
-    (
+    QueryRequest {
         entity,
         cursor,
         limit,
@@ -104,8 +103,14 @@ fn query(
         work,
         bytes,
         select,
-        (distinct, (group_min, group_max), group_order, filters),
-    ): Request,
+        options:
+            QueryOptions {
+                distinct,
+                group_bounds: (group_min, group_max),
+                group_order,
+                filters,
+            },
+    }: QueryRequest,
 ) -> Result<Page, String> {
     let group_order = parse_group_order(group_order.as_deref())?;
     let cursor = crate::queries::decode_cursor(cursor.as_deref()).map_err(message)?;
@@ -248,13 +253,7 @@ fn query(
 }
 
 pub(super) fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(2 + bytes.len() * 2);
-    text.push_str("0x");
-    for byte in bytes {
-        write!(text, "{byte:02x}").expect("writing to String cannot fail");
-    }
-
-    text
+    ic_db_qualification_transport::lowercase_hex(bytes, "0x")
 }
 
 ///
@@ -376,8 +375,7 @@ fn filter_rows<'a, E: Entity>(
         absent,
         length,
     } = filters;
-    blob::validate(E::SCHEMA.name, payload)?;
-    let mut query = blob::filter(query, payload);
+    let mut query = blob::filter(query, payload)?;
     if let Some(field) = present {
         query = query.filter_present(field);
     }
@@ -421,35 +419,21 @@ fn comparison(op: &str) -> Result<Comparison, String> {
     })
 }
 
-type Request = (
-    String,
-    Option<Vec<u8>>,
-    u32,
-    Option<u64>,
-    Option<u64>,
-    Option<u64>,
-    Vec<String>,
-    bool,
-    u32,
-    u32,
-    String,
-    (
-        bool,
-        (Option<String>, Option<String>),
-        Option<String>,
-        RowFilters,
-    ),
-);
+fn parse_direction(text: &str) -> Option<SortDirection> {
+    match text {
+        "asc" => Some(SortDirection::Ascending),
+        "desc" => Some(SortDirection::Descending),
+        _ => None,
+    }
+}
+
 fn parse_order(order: &[String]) -> Result<Vec<(&str, SortDirection)>, String> {
     order
         .iter()
         .map(|field| {
             let (name, direction) = field.split_once(':').unwrap_or((field, "asc"));
-            let direction = match direction {
-                "asc" => SortDirection::Ascending,
-                "desc" => SortDirection::Descending,
-                _ => return Err("order direction must be asc or desc".to_owned()),
-            };
+            let direction =
+                parse_direction(direction).ok_or("order direction must be asc or desc")?;
 
             Ok((name, direction))
         })
@@ -506,11 +490,8 @@ fn parse_group_order(order: Option<&str>) -> Result<Option<GroupOrder>, String> 
         Some("asc") => Ok(Some(GroupOrder::AggregateAscending)),
         Some("desc") => Ok(Some(GroupOrder::AggregateDescending)),
         Some(value) if let Some((measure, direction)) = value.split_once(':') => {
-            let direction = match direction {
-                "asc" => SortDirection::Ascending,
-                "desc" => SortDirection::Descending,
-                _ => return Err("summary order direction must be asc or desc".into()),
-            };
+            let direction =
+                parse_direction(direction).ok_or("summary order direction must be asc or desc")?;
             Ok(Some(GroupOrder::Summary(
                 summary_measure(measure)?,
                 direction,

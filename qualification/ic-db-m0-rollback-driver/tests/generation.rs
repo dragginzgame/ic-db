@@ -8,9 +8,7 @@ type Page = (Vec<Row>, Option<[u8; 16]>, u64);
 
 #[tokio::test]
 async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records-wasm"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

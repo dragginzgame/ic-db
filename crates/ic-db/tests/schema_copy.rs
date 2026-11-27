@@ -1778,10 +1778,7 @@ fn populated_listing_index_replacement_resumes_and_preserves_references() {
     ));
     let mut after = None;
     for expected in [3, 1, 4] {
-        let mut q = query();
-        if let Some(cursor) = &after {
-            q = q.after(cursor);
-        }
+        let q = query().after(after.as_ref());
         let page = q.fetch().unwrap();
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].id, expected);

@@ -543,7 +543,7 @@ fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
     } else if operation == 20 {
         use ic_db::QueryOperand::{Field, Literal};
 
-        query.filter_any_operands(&[
+        query.filter_any(&[
             ("id", Comparison::Eq, Field("category")),
             ("category", Comparison::Eq, Literal(0_u64.into())),
         ])

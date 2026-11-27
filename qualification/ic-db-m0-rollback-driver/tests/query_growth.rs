@@ -19,7 +19,8 @@ fn expected(input: &[Row], mode: u8, args: Row) -> Vec<Row> {
             10 | 13 | 20..=27 => amount >= args.2,
             11 => amount <= args.2,
             12 => amount == args.2 || id == args.0,
-            14 => true,
+            14 | 18 => true,
+            19 => (id == args.0 || id == args.2) && id < args.2,
             15 => category == args.1,
             16 => id >= args.0 && id <= args.2,
             17 => category != args.1 && category != args.2,
@@ -69,6 +70,7 @@ async fn fluent_shapes_and_mapping_growth() {
             ("one-32", 32, 10),
             ("shapes", 1, 17),
             ("maps", 1, 27),
+            ("planner-probes", 1, 19),
             ("entities", 8, 17),
             ("shapes-32", 32, 17),
         ],
@@ -166,7 +168,7 @@ async fn exercise<'a>(
             }
         }
         let modes: Vec<_> = (10..=last_mode)
-            .filter(|mode| !matches!(mode, 18 | 19))
+            .filter(|mode| variant == "planner-probes" || !matches!(mode, 18 | 19))
             .collect();
         for (entity, rows) in inputs.iter().enumerate() {
             let args = (3, 1, 45 + entity as u64 * 100);

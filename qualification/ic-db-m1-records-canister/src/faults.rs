@@ -77,7 +77,12 @@ fn fault_batch(
 fn fault_status((): ()) -> ([u8; 32], [u8; 16], u64, u64, u64, u64) {
     let host = runtime();
     let db = open(&host);
-    let (schema, identity, revision, pages) = super::status(&db);
+    let super::Status {
+        schema,
+        incarnation: identity,
+        revision,
+        pages,
+    } = super::status(&db);
 
     (
         schema,

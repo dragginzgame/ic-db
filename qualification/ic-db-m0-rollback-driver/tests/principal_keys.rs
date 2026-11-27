@@ -9,9 +9,7 @@ type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);
 
 #[tokio::test]
 async fn principal_identity_pages_references_and_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records-wasm"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

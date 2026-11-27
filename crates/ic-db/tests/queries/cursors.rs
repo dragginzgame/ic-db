@@ -80,9 +80,7 @@ fn primary_range_pages_clamp_cursors_and_retry_byte_limited_rows() {
             if descending {
                 q = q.descending();
             }
-            if let Some(c) = &cursor {
-                q = q.after(c);
-            }
+            q = q.after(cursor.as_ref());
             let page = q.fetch().unwrap();
             if page
                 .rows
@@ -175,9 +173,7 @@ fn sparse_index_pages_progress_in_both_directions() {
             if descending {
                 query = query.descending();
             }
-            if let Some(c) = &cursor {
-                query = query.after(c);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch().unwrap();
             assert!(page.examined <= 1);
             assert_eq!(page.examined, page.fetched);

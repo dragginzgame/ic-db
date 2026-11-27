@@ -258,14 +258,12 @@ fn bytes_agree_across_indexes_pages_filters_and_aggregates() {
     let mut actual = Vec::new();
     let mut after = None;
     loop {
-        let mut q = db
+        let q = db
             .query::<Binary>()
             .order_by(&["payload", "id"])
             .limit(2)
-            .work_limit(3);
-        if let Some(cursor) = &after {
-            q = q.after(cursor);
-        }
+            .work_limit(3)
+            .after(after.as_ref());
         let page = q.fetch().unwrap();
         actual.extend(page.rows);
         after = page.next;
@@ -577,9 +575,7 @@ fn blob_suffixes_and_substrings_match_raw_bytes_without_matching_inside_zero_esc
                             if descending {
                                 q = q.descending();
                             }
-                            if let Some(cursor) = &cursor {
-                                q = q.after(cursor);
-                            }
+                            q = q.after(cursor.as_ref());
                             let page = q.fetch().unwrap();
                             assert!(page.examined <= 3);
                             examined += page.examined;
@@ -738,10 +734,7 @@ fn blob_prefixes_match_raw_bytes_on_scans_indexes_and_sparse_pages() {
                     let mut examined = 0;
                     let mut complete = false;
                     for _ in 0..16 {
-                        let mut q = query().limit(2).work_limit(3);
-                        if let Some(after) = &cursor {
-                            q = q.after(after);
-                        }
+                        let q = query().limit(2).work_limit(3).after(cursor.as_ref());
                         let page = q.fetch().unwrap();
                         assert!(page.examined <= 3);
                         examined += page.examined;

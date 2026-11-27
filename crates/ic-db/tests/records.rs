@@ -2496,8 +2496,8 @@ fn text_indexes_preserve_exact_order_and_component_boundaries() {
         .query::<TextIndex>()
         .eq("second", "")
         .filter_any(&[
-            ("first", ic_db::Comparison::Eq, "😀".into()),
-            ("first", ic_db::Comparison::Eq, "aa".into()),
+            ("first", ic_db::Comparison::Eq, "😀"),
+            ("first", ic_db::Comparison::Eq, "aa"),
         ])
         .fetch()
         .unwrap();

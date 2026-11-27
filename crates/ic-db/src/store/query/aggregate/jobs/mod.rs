@@ -32,21 +32,30 @@ pub struct JobHandle {
     generation: u64,
 }
 impl JobHandle {
+    const ENCODED_LEN: usize = 26;
+
     /// Encode an exact, bounded transport handle; no query or accumulator travels in it.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![1, self.slot];
+        let mut bytes = Vec::with_capacity(Self::ENCODED_LEN);
+        self.append_to(&mut bytes);
+        bytes
+    }
+
+    fn append_to(&self, bytes: &mut Vec<u8>) {
+        bytes.extend([1, self.slot]);
         bytes.extend(self.incarnation);
         bytes.extend(self.generation.to_le_bytes());
-
-        bytes
     }
 
     /// Decode framing; the job store also validates incarnation and slot generation.
     /// # Errors
     /// Refuses unsupported, malformed, zero or oversized handles.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != 26 || bytes[0] != 1 || !(1..=storage::SLOTS).contains(&bytes[1]) {
+        if bytes.len() != Self::ENCODED_LEN
+            || bytes[0] != 1
+            || !(1..=storage::SLOTS).contains(&bytes[1])
+        {
             return Err(Error::InvalidJob);
         }
         let incarnation = bytes[2..18].try_into().map_err(|_| Error::InvalidJob)?;

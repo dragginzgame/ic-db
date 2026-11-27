@@ -5,13 +5,11 @@ use ic_wire::{Direction, Encoding};
 
 type Reply = (bool, Vec<Vec<String>>);
 
-fn wasm() -> Vec<u8> {
-    std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m3-cli")).unwrap()
-}
+use ic_db_m0_rollback_driver::records_wasm;
 
 #[tokio::test]
 async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
-    let wasm = wasm();
+    let wasm = records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

@@ -9,9 +9,7 @@ type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 
 #[tokio::test]
 async fn live_order_and_filter_changes_resume_from_the_old_position_after_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let pic = instance().await.unwrap();
     for descending in [false, true] {
         let canister = pic.create_canister().await;
@@ -154,9 +152,7 @@ async fn live_order_and_filter_changes_resume_from_the_old_position_after_upgrad
 
 #[tokio::test]
 async fn deleted_and_reinserted_cursor_rows_do_not_restart_the_range() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let pic = instance().await.unwrap();
     for descending in [false, true] {
         let canister = pic.create_canister().await;

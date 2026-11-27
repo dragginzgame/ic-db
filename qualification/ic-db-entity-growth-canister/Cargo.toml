@@ -21,6 +21,7 @@ entities-32 = ["entities-8"]
 retained-host = []
 second-index = []
 fluent = []
+planner-probes = ["fluent-shapes"]
 fluent-shapes = ["fluent"]
 fluent-maps = ["fluent-shapes"]
 

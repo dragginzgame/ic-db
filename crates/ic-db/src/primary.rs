@@ -165,52 +165,22 @@ primary_keys!(
 );
 impl RowKey {
     pub(crate) fn decode(bytes: &[u8], field: FieldType) -> Result<Self, Error> {
+        fn integer<const N: usize>(bytes: &[u8], sign_mask: u8) -> Result<[u8; N], Error> {
+            let mut value: [u8; N] = bytes.try_into().map_err(|_| Error::Corrupt)?;
+            value[0] ^= sign_mask;
+            Ok(value)
+        }
         match field {
-            FieldType::Nat8 => Ok(Self::Nat8(u8::from_be_bytes(
-                bytes.try_into().map_err(|_| Error::Corrupt)?,
-            ))),
-            FieldType::Nat16 => Ok(Self::Nat16(u16::from_be_bytes(
-                bytes.try_into().map_err(|_| Error::Corrupt)?,
-            ))),
-            FieldType::Nat32 => Ok(Self::Nat32(u32::from_be_bytes(
-                bytes.try_into().map_err(|_| Error::Corrupt)?,
-            ))),
-            FieldType::Nat64 => Ok(Self::Nat64(u64::from_be_bytes(
-                bytes.try_into().map_err(|_| Error::Corrupt)?,
-            ))),
-            FieldType::Nat128 => Ok(Self::Nat128(u128::from_be_bytes(
-                bytes.try_into().map_err(|_| Error::Corrupt)?,
-            ))),
-            FieldType::Int8 => {
-                let mut bytes: [u8; 1] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-                bytes[0] ^= 0x80;
-
-                Ok(Self::Int8(i8::from_be_bytes(bytes)))
-            }
-            FieldType::Int16 => {
-                let mut bytes: [u8; 2] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-                bytes[0] ^= 0x80;
-
-                Ok(Self::Int16(i16::from_be_bytes(bytes)))
-            }
-            FieldType::Int32 => {
-                let mut bytes: [u8; 4] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-                bytes[0] ^= 0x80;
-
-                Ok(Self::Int32(i32::from_be_bytes(bytes)))
-            }
-            FieldType::Int64 => {
-                let mut bytes: [u8; 8] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-                bytes[0] ^= 0x80;
-
-                Ok(Self::Int64(i64::from_be_bytes(bytes)))
-            }
-            FieldType::Int128 => {
-                let mut bytes: [u8; 16] = bytes.try_into().map_err(|_| Error::Corrupt)?;
-                bytes[0] ^= 0x80;
-
-                Ok(Self::Int128(i128::from_be_bytes(bytes)))
-            }
+            FieldType::Nat8 => Ok(Self::Nat8(u8::from_be_bytes(integer(bytes, 0)?))),
+            FieldType::Nat16 => Ok(Self::Nat16(u16::from_be_bytes(integer(bytes, 0)?))),
+            FieldType::Nat32 => Ok(Self::Nat32(u32::from_be_bytes(integer(bytes, 0)?))),
+            FieldType::Nat64 => Ok(Self::Nat64(u64::from_be_bytes(integer(bytes, 0)?))),
+            FieldType::Nat128 => Ok(Self::Nat128(u128::from_be_bytes(integer(bytes, 0)?))),
+            FieldType::Int8 => Ok(Self::Int8(i8::from_be_bytes(integer(bytes, 0x80)?))),
+            FieldType::Int16 => Ok(Self::Int16(i16::from_be_bytes(integer(bytes, 0x80)?))),
+            FieldType::Int32 => Ok(Self::Int32(i32::from_be_bytes(integer(bytes, 0x80)?))),
+            FieldType::Int64 => Ok(Self::Int64(i64::from_be_bytes(integer(bytes, 0x80)?))),
+            FieldType::Int128 => Ok(Self::Int128(i128::from_be_bytes(integer(bytes, 0x80)?))),
             FieldType::U256 => Ok(Self::U256(U256::from_be_bytes(
                 bytes.try_into().map_err(|_| Error::Corrupt)?,
             ))),

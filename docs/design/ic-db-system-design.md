@@ -1525,6 +1525,8 @@ is an executable example of the selected contract, not another migration engine.
 
 Storage checks each encoded map key against the 512-byte bound before binary search. Every in-bound byte string admits a `StoreKey`, whose derived order compares its bytes lexicographically. The borrowed comparator therefore needs no allocation or field decoding. Row and index readers still validate the selected entry. Frozen IcyDB `6d421e3` compares decoded index components in `db/index/key/codec/mod.rs`; IC DB already encodes their ordering in the physical key. [Installed bulk-read measurements](../../qualification/README.md#borrowed-key-comparison-on-storage-0806)
 
+When two fixed operands have the same integer type, the planner compares their typed values directly. This preserves the order of their physical components across signed boundaries and all supported widths. Other ordered scalar operands retain their component comparison.
+
 Ordinary query cursors may expire across deployments. Within a deployment, a cursor resumes an admitted traversal after its query binding and physical position pass validation. The planner selects the access path. The cursor module binds that choice and the admitted query terms. Frozen IcyDB `6d421e3` also distinguishes continuation identity from the window and current position in `db/cursor/signature.rs`. IC DB includes its physical prefix in the binding because it resumes from a stored key.
 
 A full primary-key page checks whether the next key belongs to the entity. Storage 0.80.3 advances the positioned iterator without loading an external value. The last returned row remains the continuation. Frozen IcyDB `6d421e3`, `db/executor/pipeline/contracts/execution/inputs.rs`, also discards lookahead after deciding continuation. The primary page needs only the namespace because it has no residual predicate. [Installed page measurements](../../qualification/README.md#primary-page-lookahead-on-storage-0803)
@@ -2770,14 +2772,10 @@ instructions live in the [qualification receipt](../../qualification/README.md#c
 The M2 slice delivers `Database::query::<E>()` with up to eight comparisons over
 top-level ordered scalar/unit-enum fields, plus absence checks on every optional
 stored type. `filter` adds an AND term; `filter_any`
-adds a nonempty OR clause, ANDed with other terms/clauses. With
-`filter_any_operands`, each alternative can use an exact literal or another
-field on the row. Literal-only clauses lower to the same terms as `filter_any`,
-including cursor and job identity. Both spellings use one traversal and emit a
-matching row once even if several alternatives match. Frozen IcyDB
+adds a nonempty OR clause, ANDed with other terms/clauses. Each alternative can compare an exact literal, another field on the row, or a length threshold. Literal and explicit operand forms bind the same cursor and job identity. One traversal emits each matching row once. Frozen IcyDB
 `6d421e3` composed `CompareFields` under `FilterExpr::or` in
-`db/query/expr/filter/mod.rs`. Here the existing flat clause stores the two
-operand kinds directly. All alternatives count
+`db/query/expr/filter/mod.rs`. Here the existing flat clause stores the
+operands directly. All alternatives count
 toward the same eight-term budget; empty or oversized clauses refuse with `Limit`.
 Runtime field names
 resolve against the admitted entity, and operand widths/types must match exactly.

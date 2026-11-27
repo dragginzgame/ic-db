@@ -10,7 +10,7 @@ use wire_call::call;
 #[tokio::test]
 #[ignore = "requires query-measurements Wasm; run make m2-duration-costs"]
 async fn grouped_duration_summary_costs() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

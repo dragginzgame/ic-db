@@ -699,77 +699,27 @@ impl<'a> Decoder<'a> {
                 })?;
             }
             FieldType::Named(link) => self.skip_named(link)?,
-            FieldType::Nat8 => {
-                self.nat8()?;
+            // Every bit pattern is valid for these fixed-width row fields.
+            FieldType::Nat8 | FieldType::Int8 => {
+                self.take(1)?;
             }
-            FieldType::Nat16 => {
-                self.nat16()?;
+            FieldType::Nat16 | FieldType::Int16 => {
+                self.take(2)?;
             }
-            FieldType::Nat32 => {
-                self.nat32()?;
+            FieldType::Nat32 | FieldType::Int32 => {
+                self.take(4)?;
             }
-            FieldType::Nat64 => {
-                self.nat64()?;
+            FieldType::Nat64 | FieldType::Int64 | FieldType::Timestamp | FieldType::Duration => {
+                self.take(8)?;
             }
-            FieldType::Nat128 => {
-                self.nat128()?;
+            FieldType::Nat128 | FieldType::Int128 | FieldType::Ulid => {
+                self.take(16)?;
             }
-            FieldType::Float32 => {
-                self.float32()?;
+            FieldType::Subaccount | FieldType::U256 => {
+                self.take(32)?;
             }
-            FieldType::Float64 => {
-                self.float64()?;
-            }
-            FieldType::Subaccount => {
-                self.subaccount()?;
-            }
-            FieldType::Ulid => {
-                self.ulid()?;
-            }
-            FieldType::Timestamp => {
-                self.timestamp()?;
-            }
-            FieldType::Decimal { scale } => {
-                self.decimal(scale)?;
-            }
-            FieldType::Duration => {
-                self.duration()?;
-            }
-            FieldType::Date => {
-                self.date()?;
-            }
-            FieldType::Account => {
-                self.account()?;
-            }
-            FieldType::U256 => {
-                self.u256()?;
-            }
-            FieldType::Int8 => {
-                self.int8()?;
-            }
-            FieldType::Int16 => {
-                self.int16()?;
-            }
-            FieldType::Int32 => {
-                self.int32()?;
-            }
-            FieldType::Int64 => {
-                self.int64()?;
-            }
-            FieldType::Int128 => {
-                self.int128()?;
-            }
-            FieldType::Bool => {
-                self.boolean()?;
-            }
-            FieldType::Principal => {
-                self.principal()?;
-            }
-            FieldType::Text { max_bytes } => {
-                self.text_ref(max_bytes as usize)?;
-            }
-            FieldType::Blob { max_bytes } => {
-                self.blob_ref(max_bytes as usize)?;
+            scalar => {
+                crate::IndexValue::read(self, scalar)?;
             }
         }
 

@@ -66,9 +66,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
         field: Option<&str>,
     ) -> Result<JobHandle, Error> {
-        if self.request.groups.page.is_some() {
-            return Err(Error::InvalidQuery);
-        }
+        self.request.groups.admit_start_page()?;
         let plan = self.aggregate_plan(Some(K::definition()), true)?;
 
         self.start_groups(jobs, now, expires, plan, self.count_reducer(field)?, field)
@@ -217,9 +215,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            if self.request.groups.page.is_some() {
-                return Err(Error::InvalidQuery);
-            }
+            self.request.groups.admit_start_page()?;
             let job = self.summary_job::<K, S, A>()?;
             self.start_group_job(jobs, now, expires, job)
         })
@@ -276,9 +272,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
         admitted: (Plan<'_>, Reducer),
     ) -> Result<JobHandle, Error> {
-        if self.request.groups.page.is_some() {
-            return Err(Error::InvalidQuery);
-        }
+        self.request.groups.admit_start_page()?;
         let (plan, reducer) = admitted;
 
         self.start_groups(jobs, now, expires, plan, reducer, None)

@@ -180,9 +180,7 @@ fn every_compound_cursor_returns_the_remaining_sqlite_order() {
                 if descending {
                     q = q.descending();
                 }
-                if let Some(cursor) = after {
-                    q = q.after(cursor);
-                }
+                q = q.after(after);
 
                 q.fetch_as::<Id>().unwrap()
             };
@@ -265,14 +263,12 @@ fn a_fixed_rank_seeks_the_matching_lane_and_rank() {
                 } else {
                     q.eq(Item::RANK, 1_u8)
                 };
-                let mut q = q
+                let q = q
                     .filter_fields(left, Comparison::Eq, right)
                     .order_desc(Item::ID)
                     .limit(1)
-                    .work_limit(1);
-                if let Some(after) = after {
-                    q = q.after(after);
-                }
+                    .work_limit(1)
+                    .after(after);
                 let page = q.fetch_as::<Id>().unwrap();
                 assert_eq!(page.examined, page.rows.len());
                 page
@@ -309,7 +305,7 @@ fn a_fixed_rank_seeks_the_matching_lane_and_rank() {
     let mixed = db
         .query::<Item>()
         .eq(Item::RANK, 1_u8)
-        .filter_any_operands(&[
+        .filter_any(&[
             (
                 Item::LANE,
                 Comparison::Eq,
@@ -358,17 +354,15 @@ fn integer_bounds_fix_one_lane_for_ordered_pages() {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_id_pages(&expected, |continuation| {
-            let mut q = db
+            let q = db
                 .query::<Item>()
                 .filter(Item::LANE, upper, hi)
                 .filter(Item::LANE, lower, lo)
                 .order_desc(Item::RANK)
                 .order_desc(Item::ID)
                 .work_limit(1)
-                .limit(1);
-            if let Some(after) = continuation {
-                q = q.after(after);
-            }
+                .limit(1)
+                .after(continuation);
             q.fetch_as::<Id>().unwrap()
         });
     }
@@ -415,9 +409,7 @@ fn membership_intersections_and_exclusions_leave_one_lane_for_index_order() {
                     .order_desc(Item::ID)
                     .limit(1)
                     .work_limit(1);
-                if let Some(after) = continuation {
-                    q = q.after(after);
-                }
+                q = q.after(continuation);
                 q.fetch_as::<Id>().unwrap()
             });
         }
@@ -450,12 +442,12 @@ fn membership_intersections_and_exclusions_leave_one_lane_for_index_order() {
     };
     for q in [
         hinted().filter_in(Item::LANE, &[1_u8, 2, 0]),
-        hinted().filter_any(&[
+        hinted().filter_any::<ic_db::IndexValue>(&[
             (Item::LANE, Comparison::Eq, 1_u8.into()),
             (Item::VISIBLE, Comparison::Eq, true.into()),
         ]),
         hinted().ne(Item::RANK, 0_u8),
-        hinted().filter_any(&[
+        hinted().filter_any::<ic_db::IndexValue>(&[
             (Item::LANE, Comparison::Ne, 0_u8.into()),
             (Item::VISIBLE, Comparison::Eq, true.into()),
         ]),
@@ -488,16 +480,14 @@ fn ranges_narrow_membership_for_ranked_pages() {
         let mut seen = Vec::new();
         let mut after = None;
         for _ in 0..=expected.len() {
-            let mut q = db
+            let q = db
                 .query::<Item>()
                 .filter_in(Item::LANE, &[0_u8, 1, 2])
                 .filter(Item::LANE, cmp, bound)
                 .order_asc(Item::RANK)
                 .limit(1)
-                .work_limit(1);
-            if let Some(cursor) = &after {
-                q = q.after(cursor);
-            }
+                .work_limit(1)
+                .after(after.as_ref());
             let page = q.fetch_as::<Id>().unwrap();
             if expected.is_empty() {
                 assert_eq!(page.examined, 0);
@@ -522,10 +512,7 @@ fn ranges_narrow_membership_for_ranked_pages() {
             .unwrap();
         let q = db.query::<Item>().gt(Item::LANE, 0_u8);
         let result = if alternative {
-            q.filter_any(&[
-                (Item::LANE, Lt, 1_u8.into()),
-                (Item::LANE, Comparison::Eq, 2_u8.into()),
-            ])
+            q.filter_any(&[(Item::LANE, Lt, 1_u8), (Item::LANE, Comparison::Eq, 2_u8)])
         } else {
             q.lt(Item::LANE, 1_u8).work_limit(1)
         }
@@ -591,9 +578,7 @@ fn sparse_price_order_ignores_an_impossible_or_alternative() {
             .order_asc(Item::ID)
             .limit(1)
             .work_limit(1);
-            if let Some(cursor) = continuation {
-                query = query.after(cursor);
-            }
+            query = query.after(continuation);
             query.fetch_as::<Id>().unwrap()
         });
     }
@@ -641,21 +626,19 @@ fn sparse_price_order_checks_both_operands_of_a_field_comparison() {
     ];
     let query = || {
         db.query::<Item>()
-            .filter_any_operands(&clause)
+            .filter_any(&clause)
             .order_asc(Item::PRICE)
             .order_asc(Item::ID)
     };
     let expected = sql.prepare("SELECT id FROM items WHERE lane=0 AND rank=2 AND (cents IS NOT NULL OR lane>rank) ORDER BY cents,id")
         .unwrap().query_map([], |r| r.get::<_, u32>(0).map(u64::from)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
     assert_id_pages(&expected, |continuation| {
-        let mut q = query()
+        let q = query()
             .eq(Item::LANE, 0_u8)
             .eq(Item::RANK, 2_u8)
             .limit(1)
-            .work_limit(1);
-        if let Some(cursor) = continuation {
-            q = q.after(cursor);
-        }
+            .work_limit(1)
+            .after(continuation);
         q.fetch_as::<Id>().unwrap()
     });
     let lane = [2_u8.into()];
@@ -746,9 +729,7 @@ fn live_page_and_filtered_total_share_one_read_boundary() {
             .order_by(&[Item::RANK, Item::ID])
             .limit(2)
             .work_limit(4);
-        if let Some(cursor) = after {
-            listing = listing.after(cursor);
-        }
+        listing = listing.after(after);
         let page = listing.select(|item| item.id).fetch().unwrap();
         assert!(matches!(
             matching().work_limit(4).count(),
@@ -925,9 +906,7 @@ fn equal_column_distinct_pages_match_sqlite_across_reopen_and_byte_retry() {
                 if descending {
                     query = query.descending();
                 }
-                if let Some(after) = &cursor {
-                    query = query.after(after);
-                }
+                query = query.after(cursor.as_ref());
                 let page = query.select(|item| item.rank).fetch().unwrap();
                 examined += page.examined;
                 assert!(page.examined <= work && page.output_bytes <= bytes);
@@ -1680,7 +1659,7 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
         let ids = [2_u64, 8, 30, 2];
         for reverse in [false, true] {
             let mut terms = [
-                (Item::VISIBLE, Comparison::Eq, true.into()),
+                (Item::VISIBLE, Comparison::Eq, ic_db::IndexValue::from(true)),
                 (Item::ID, Comparison::Ge, 2_u64.into()),
             ];
             if reverse {
@@ -1711,7 +1690,7 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
             );
         }
         let alternatives = [
-            (Item::VISIBLE, Comparison::Eq, true.into()),
+            (Item::VISIBLE, Comparison::Eq, ic_db::IndexValue::from(true)),
             (Item::ID, Comparison::Eq, 8_u64.into()),
         ];
         let expected: u32 = sql.query_row(
@@ -1758,7 +1737,7 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
                     [lane], |row| row.get(0)).unwrap();
             let probes = if lane == 0 { 4 } else { 1 };
             let count = query()
-                .filter_any(&[
+                .filter_any::<ic_db::IndexValue>(&[
                     (Item::LANE, Comparison::Eq, lane.into()),
                     (Item::ID, Comparison::Eq, 3_u64.into()),
                 ])
@@ -1771,7 +1750,7 @@ fn automatic_counts_follow_committed_index_membership_across_reopen() {
             );
         }
         let residual = query()
-            .filter_any(&[
+            .filter_any::<ic_db::IndexValue>(&[
                 (Item::VISIBLE, Comparison::Eq, true.into()),
                 (Item::ID, Comparison::Eq, 3_u64.into()),
             ])

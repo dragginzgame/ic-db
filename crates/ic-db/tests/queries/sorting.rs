@@ -698,13 +698,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
             .order_by(&order)
             .limit(2)
             .test_output_limit(16);
-        let page = if let Some(cursor) = &cursor {
-            query.after(cursor)
-        } else {
-            query
-        }
-        .fetch_as::<Summary>()
-        .unwrap();
+        let page = query.after(cursor.as_ref()).fetch_as::<Summary>().unwrap();
         seen.extend(page.rows.iter().map(|r| r.id));
         cursor = page.next;
         if cursor.is_none() {
@@ -957,10 +951,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     }
     assert!(matches!(
         db.query::<Entry>()
-            .filter_any(&[
-                ("category", C::Eq, 0_u8.into()),
-                ("category", C::Eq, 1_u8.into())
-            ])
+            .filter_any(&[("category", C::Eq, 0_u8), ("category", C::Eq, 1_u8)])
             .order_by(&[("amount", Desc)])
             .distinct()
             .fetch_as::<CategoryAmount>(),

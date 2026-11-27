@@ -5,9 +5,7 @@ use ic_wire::{Direction, Encoding};
 
 #[tokio::test]
 async fn enum_collections_preserve_bytes_and_atomicity() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

@@ -26,7 +26,7 @@ pub(super) fn operate<E: Entity<Key = u64>>(
             .fetch(),
         #[cfg(feature = "fluent-shapes")]
         12 => query
-            .filter_any(&[
+            .filter_any::<ic_db::IndexValue>(&[
                 ("amount", C::Eq, input.2.into()),
                 ("id", C::Eq, input.0.into()),
             ])
@@ -54,6 +54,13 @@ pub(super) fn operate<E: Entity<Key = u64>>(
             .filter_not_in("category", &[input.1, input.2])
             .order_by(&["id"])
             .fetch(),
+        #[cfg(feature = "planner-probes")]
+        18 => query.fetch(),
+        #[cfg(feature = "planner-probes")]
+        19 => query
+            .filter_in("id", &[input.0, input.2])
+            .filter("id", C::Lt, input.2)
+            .fetch(),
         #[cfg(feature = "fluent-maps")]
         20..=27 => query
             .filter("amount", C::Ge, input.2)
@@ -64,6 +71,18 @@ pub(super) fn operate<E: Entity<Key = u64>>(
     .unwrap();
     // Keep continuation available until after mapping: these samples intentionally
     // consume only the first page. A mapping closure never enters the executor.
+    #[cfg(feature = "planner-probes")]
+    if mode == 18 {
+        let frame = page
+            .next
+            .as_ref()
+            .expect("first page has a continuation")
+            .to_bytes();
+        assert_eq!(
+            ic_db::QueryCursor::from_bytes(&frame).unwrap(),
+            page.next.unwrap()
+        );
+    }
     let rows = page.rows.iter().map(project);
     #[cfg(not(feature = "fluent-maps"))]
     let rows = rows.collect();

@@ -1,6 +1,6 @@
 //! Typed column selection at the boundary of the shared projection executor.
 
-use super::{Decoder, Entity, Error, Memory, Query, QueryPage, fetch_rows};
+use super::{Decoder, Entity, Error, Memory, Query, QueryPage, SingleResult, fetch_rows};
 use std::marker::PhantomData;
 
 /// A column of entity `E` whose stored value decodes to `T`.
@@ -135,8 +135,9 @@ impl<E: Entity, M: Memory, S: Selection<E>> SelectedQuery<'_, E, M, S> {
     /// Returns `Limit` if the work budget ends before a match or proven exhaustion.
     /// Ordinary selection and query errors apply.
     pub fn first(self) -> Result<Option<S::Output>, Error> {
-        self.query
-            .first_with(|query| selected_page(query, &self.selection))
+        self.query.single_with(SingleResult::First, |query| {
+            selected_page(query, &self.selection)
+        })
     }
 
     /// Return the sole selected result, or `None` on a proven miss.
@@ -144,8 +145,9 @@ impl<E: Entity, M: Memory, S: Selection<E>> SelectedQuery<'_, E, M, S> {
     /// A second match returns `MultipleMatches`; an inconclusive scan returns
     /// `Limit`. A continuation is refused. Ordinary selection and query errors apply.
     pub fn try_one(self) -> Result<Option<S::Output>, Error> {
-        self.query
-            .try_one_with(|query| selected_page(query, &self.selection))
+        self.query.single_with(SingleResult::Only, |query| {
+            selected_page(query, &self.selection)
+        })
     }
 }
 

@@ -7,7 +7,7 @@ use super::{
     },
     storage::{MAX_JOB_BYTES, Record},
 };
-use crate::store::query::{build_comparison_key, projection_positions};
+use crate::store::query::{build_comparison_key, set_bit_positions};
 use crate::{
     EntitySchema, Error, IndexValue,
     codec::{Decoder, Encoder, MAX_ROW_BYTES},
@@ -81,8 +81,7 @@ impl Reducer {
                 }
                 let value = IndexValue::read(&mut reader, field.value)?;
                 reader.finish()?;
-                let mut key = Vec::new();
-                value.append_component(field.optional, &mut key);
+                let key = value.component(field.optional);
                 if key.len() > MAX_COMPARISON_KEY {
                     return Err(Error::Corrupt);
                 }
@@ -287,7 +286,7 @@ fn read_distinct(
     for _ in 0..count {
         let bytes = reader.blob_ref(MAX_COMPARISON_KEY)?;
         let mut remaining = bytes;
-        for i in projection_positions(mask) {
+        for i in set_bit_positions(mask) {
             let field = &entity.fields[i];
             if field.optional {
                 let (&tag, rest) = remaining.split_first().ok_or(Error::Corrupt)?;

@@ -32,9 +32,7 @@ type DisplayPage = (
 #[tokio::test]
 async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
     type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -182,9 +180,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
 #[tokio::test]
 async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuation() {
     type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -265,9 +261,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
 #[tokio::test]
 async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
     type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -358,9 +352,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
 
 #[tokio::test]
 async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -502,9 +494,7 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
 #[tokio::test]
 async fn optional_list_filters_project_and_continue_across_upgrade() {
     type IdPage = (Vec<u64>, Option<Vec<u8>>, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -617,9 +607,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
 #[tokio::test]
 async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_matches() {
     type SparsePage = (Vec<u64>, Option<Vec<u8>>, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -738,9 +726,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
 #[tokio::test]
 async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
     type TextPage = (Vec<Option<String>>, Option<Vec<u8>>, u32, u32);
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -885,9 +871,7 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
 
 #[tokio::test]
 async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -979,9 +963,7 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
 
 #[tokio::test]
 async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-queries"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let predecessor = std::env::var_os("IC_DB_QUERY_PREDECESSOR_WASM")
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());
@@ -1097,9 +1079,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
 
 #[tokio::test]
 async fn sparse_fluent_pages_retry_and_reopen() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -1899,9 +1879,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
 
 #[tokio::test]
 async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-records"))
-            .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

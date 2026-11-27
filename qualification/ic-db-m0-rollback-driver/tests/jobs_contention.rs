@@ -4,7 +4,8 @@ mod wire_frame;
 use ic_db_m0_rollback_driver::instance;
 use wire_frame::{request, response};
 
-type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
+mod job_step;
+use job_step::Step;
 
 #[tokio::test]
 async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
@@ -84,8 +85,8 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
         } else {
             (1, 0, None)
         };
-        assert_eq!((step.2, step.4, step.5.as_deref()), expected);
-        *sequence = step.0;
+        assert_eq!((step.examined, step.phase, step.value.as_deref()), expected);
+        *sequence = step.sequence;
     }
     // Complete one grouped sum and retain its historical result. Expected values
     // come from fixture tuples, not the database's reducer or row decoder.
@@ -96,10 +97,10 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
     );
     let complete = advance(&jobs[0].1, 4, jobs[0].2, 32).await.unwrap();
     assert_eq!(
-        (complete.2, complete.4, complete.5.as_deref()),
+        (complete.examined, complete.phase, complete.value.as_deref()),
         (6, 1, Some(expected.as_str()))
     );
-    jobs[0].2 = complete.0;
+    jobs[0].2 = complete.sequence;
     upgrade().await;
     let full = pic.get_stable_memory(canister).await;
     assert_eq!(start(6).await, Err("JobCapacity".into()));
@@ -126,22 +127,31 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
     assert_eq!(pic.get_stable_memory(canister).await, replaced);
 
     // A committed Entry change invalidates unfinished Entry jobs only.
-    assert_eq!(control(2, &[], 0, 0).await, Ok(complete.1 + 1));
+    assert_eq!(
+        control(2, &[], 0, 0).await,
+        Ok(complete.source_revision + 1)
+    );
     upgrade().await;
     for (index, (operation, handle, sequence)) in jobs.iter_mut().enumerate() {
         let step = advance(handle, *operation, *sequence, 32).await.unwrap();
         if index == 0 {
             assert_eq!(
-                (step.1, step.4, step.5.as_deref()),
-                (complete.1, 1, Some(expected.as_str()))
+                (step.source_revision, step.phase, step.value.as_deref()),
+                (complete.source_revision, 1, Some(expected.as_str()))
             );
         } else if *operation == 6 {
             // The fixture's one Document has note=None, so its present-value count is zero.
-            assert_eq!((step.2, step.4, step.5.as_deref()), (1, 1, Some("0")));
+            assert_eq!(
+                (step.examined, step.phase, step.value.as_deref()),
+                (1, 1, Some("0"))
+            );
         } else {
-            assert_eq!((step.1, step.2, step.4, step.5), (complete.1, 1, 2, None));
+            assert_eq!(
+                (step.source_revision, step.examined, step.phase, step.value),
+                (complete.source_revision, 1, 2, None)
+            );
         }
-        *sequence = step.0;
+        *sequence = step.sequence;
     }
     // Completed and invalidated jobs retain custody until explicit cancellation.
     let full = pic.get_stable_memory(canister).await;
@@ -166,8 +176,13 @@ async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
     for handle in &fresh {
         let step = advance(handle, 4, 0, 32).await.unwrap();
         assert_eq!(
-            (step.1, step.2, step.4, step.5.as_deref()),
-            (complete.1 + 1, 6, 1, Some("0:120,1:94"))
+            (
+                step.source_revision,
+                step.examined,
+                step.phase,
+                step.value.as_deref()
+            ),
+            (complete.source_revision + 1, 6, 1, Some("0:120,1:94"))
         );
     }
     // Expiry cleanup has a per-call removal bound, also after an upgrade. It
@@ -270,14 +285,17 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
         let mut revision = None;
         for call in 1..=8 {
             let step = advance(&handle, sequence, 12).await.unwrap();
-            assert_eq!(step.1, *revision.get_or_insert(step.1));
-            assert_eq!(step.2, (call * 12).min(96));
-            sequence = step.0;
+            assert_eq!(
+                step.source_revision,
+                *revision.get_or_insert(step.source_revision)
+            );
+            assert_eq!(step.examined, (call * 12).min(96));
+            sequence = step.sequence;
             if call == 8 {
-                assert_eq!((step.4, step.5), (1, Some(base.to_string())));
+                assert_eq!((step.phase, step.value), (1, Some(base.to_string())));
                 break;
             }
-            assert_eq!((step.4, step.5), (0, None));
+            assert_eq!((step.phase, step.value), (0, None));
 
             match operation {
                 0 => {}
@@ -290,7 +308,10 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                     }
                     assert_eq!(pic.get_stable_memory(canister).await, before);
                 }
-                _ => assert_eq!(controlled(control(operation, &[]).await.unwrap()), step.1),
+                _ => assert_eq!(
+                    controlled(control(operation, &[]).await.unwrap()),
+                    step.source_revision
+                ),
             }
         }
         controlled(control(0, &handle).await.unwrap());
@@ -306,24 +327,24 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
             let mut sequence = 0;
             for _ in 0..calls_before_write {
                 let step = advance(&handle, sequence, work).await.unwrap();
-                sequence = step.0;
-                if step.4 == 1 {
-                    assert_eq!((step.2, step.5), (96, Some(base.to_string())));
+                sequence = step.sequence;
+                if step.phase == 1 {
+                    assert_eq!((step.examined, step.value), (96, Some(base.to_string())));
                     break;
                 }
-                assert_eq!((step.4, step.5), (0, None));
+                assert_eq!((step.phase, step.value), (0, None));
             }
             assert_eq!(write(1, 12, 0).await, Ok(()));
             let outcome = advance(&handle, sequence, work).await.unwrap();
             if calls_before_write * work >= 96 {
                 assert_eq!(
-                    (outcome.2, outcome.4, outcome.5),
+                    (outcome.examined, outcome.phase, outcome.value),
                     (96, 1, Some(base.to_string()))
                 );
                 completions += 1;
             } else {
                 assert_eq!(
-                    (outcome.2, outcome.4, outcome.5),
+                    (outcome.examined, outcome.phase, outcome.value),
                     (u64::from(calls_before_write * work), 2, None)
                 );
             }
@@ -343,12 +364,15 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     for attempt in 0..3 {
         let handle = start().await;
         let first = advance(&handle, 0, 12).await.unwrap();
-        assert_eq!((first.2, first.4, first.5), (12, 0, None));
+        assert_eq!((first.examined, first.phase, first.value), (12, 0, None));
         if let Some(previous) = previous_revision {
-            assert!(first.1 > previous);
+            assert!(first.source_revision > previous);
         }
-        previous_revision = Some(first.1);
-        assert_eq!(controlled(control(2, &[]).await.unwrap()), first.1 + 1);
+        previous_revision = Some(first.source_revision);
+        assert_eq!(
+            controlled(control(2, &[]).await.unwrap()),
+            first.source_revision + 1
+        );
         changes += 1;
         if attempt == 1 {
             // Restoration is another committed change, not an unchanged boundary.
@@ -360,15 +384,32 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 .await
                 .unwrap();
         }
-        let invalid = advance(&handle, first.0, 12).await.unwrap();
+        let invalid = advance(&handle, first.sequence, 12).await.unwrap();
         assert_eq!(
-            (invalid.1, invalid.2, invalid.4, &invalid.5),
-            (first.1, 12, 2, &None)
+            (
+                invalid.source_revision,
+                invalid.examined,
+                invalid.phase,
+                &invalid.value
+            ),
+            (first.source_revision, 12, 2, &None)
         );
         let retry = advance(&handle, 0, 12).await.unwrap();
         assert_eq!(
-            (retry.0, retry.1, retry.2, retry.4, retry.5),
-            (invalid.0, invalid.1, invalid.2, 2, None)
+            (
+                retry.sequence,
+                retry.source_revision,
+                retry.examined,
+                retry.phase,
+                retry.value
+            ),
+            (
+                invalid.sequence,
+                invalid.source_revision,
+                invalid.examined,
+                2,
+                None
+            )
         );
         controlled(control(0, &handle).await.unwrap());
         assert!(advance(&handle, 0, 12).await.is_err());
@@ -382,22 +423,26 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
     let mut captured_revision = 0;
     for call in 1..=8 {
         let step = advance(&handle, sequence, 12).await.unwrap();
-        sequence = step.0;
-        captured_revision = step.1;
+        sequence = step.sequence;
+        captured_revision = step.source_revision;
 
         if call == 8 {
             assert_eq!(
-                (step.2, step.4, step.5),
+                (step.examined, step.phase, step.value),
                 (96, 1, Some((base + changes).to_string()))
             );
         } else {
-            assert_eq!((step.4, step.5), (0, None));
+            assert_eq!((step.phase, step.value), (0, None));
         }
     }
     controlled(control(2, &[]).await.unwrap());
     let historical = advance(&handle, sequence, 12).await.unwrap();
     assert_eq!(
-        (historical.1, historical.4, historical.5),
+        (
+            historical.source_revision,
+            historical.phase,
+            historical.value
+        ),
         (captured_revision, 1, Some((base + changes).to_string()))
     );
     controlled(control(0, &handle).await.unwrap());

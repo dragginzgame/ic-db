@@ -390,7 +390,7 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
         let alternatives = db
             .query::<Product>()
             .filter(CURRENCY, op, short)
-            .filter_any_operands(&[
+            .filter_any(&[
                 (CURRENCY, op, ic_db::QueryOperand::Literal(conflict.into())),
                 (CURRENCY, op, ic_db::QueryOperand::Literal(long.into())),
             ])
@@ -401,7 +401,7 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
     // A long suffix in one OR alternative imposes no minimum on the other.
     let alternatives = db
         .query::<Product>()
-        .filter_any_operands(&[
+        .filter_any(&[
             (
                 CURRENCY,
                 ic_db::Comparison::EndsWith,
@@ -453,7 +453,7 @@ fn nested_prices_match_sqlite_nullable_cents_after_reopen() {
         Err(Error::Limit)
     ));
     let either = |comparison| {
-        db.query::<Product>().filter_any_operands(&[
+        db.query::<Product>().filter_any(&[
             (AMOUNT, comparison, ic_db::QueryOperand::Field(AMOUNT)),
             (
                 Product::ID,
@@ -828,9 +828,7 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
             for &(field, op, value) in filters {
                 query = query.filter(field, op, value);
             }
-            if let Some(after) = &cursor {
-                query = query.after(after);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch().unwrap();
             examined += page.examined;
             assert!(examined <= candidates, "{predicate}");
@@ -926,10 +924,12 @@ fn indexed_member_ranges_match_sqlite_with_one_candidate_pages() {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let query = || {
-            db.query::<Ranked>().gte(SCORE, 255_u16).filter_any(&[
-                (SCORE, ic_db::Comparison::Eq, score.into()),
-                (OTHER, ic_db::Comparison::Eq, 0_u16.into()),
-            ])
+            db.query::<Ranked>()
+                .gte(SCORE, 255_u16)
+                .filter_any::<ic_db::IndexValue>(&[
+                    (SCORE, ic_db::Comparison::Eq, score.into()),
+                    (OTHER, ic_db::Comparison::Eq, 0_u16.into()),
+                ])
         };
         let count = query().count().unwrap();
         assert_eq!(count.value, expected.len() as u64);
@@ -993,9 +993,7 @@ fn distinct_bucket_equal_to_indexed_member_matches_sqlite() {
             } else {
                 query.order_asc(SCORE)
             };
-            if let Some(cursor) = &after {
-                query = query.after(cursor);
-            }
+            query = query.after(after.as_ref());
             let page = query.select(|r| r.bucket).fetch().unwrap();
             assert!(page.examined <= 1);
             seen.extend(page.rows);
@@ -1329,7 +1327,7 @@ fn scalar_member_keys_agree_with_sqlite_after_reopen_and_replacement() {
         ];
         let count = db
             .query::<Observation>()
-            .filter_any_operands(&alternatives)
+            .filter_any(&alternatives)
             .work_limit(4)
             .count()
             .unwrap();
@@ -1695,7 +1693,7 @@ fn sparse_index_requires_schema_or_predicates_to_prove_presence() {
             .order_asc(Measurement::SAMPLE)
     };
     let present_options = [
-        (OPTIONAL_MEMBER, Eq, 7_u16.into()),
+        (OPTIONAL_MEMBER, Eq, ic_db::IndexValue::from(7_u16)),
         (OPTIONAL_MEMBER, Eq, 8_u16.into()),
     ];
     for (query, guard) in [
@@ -1733,7 +1731,7 @@ fn sparse_index_requires_schema_or_predicates_to_prove_presence() {
     ));
     // An alternative fixing the other operand cannot exclude the both-absent row.
     let alternatives = [
-        (OPTIONAL_MEMBER, Eq, 7_u16.into()),
+        (OPTIONAL_MEMBER, Eq, ic_db::IndexValue::from(7_u16)),
         (Measurement::ID, Eq, 0_u64.into()),
     ];
     let query = || {
@@ -1864,10 +1862,11 @@ fn optional_price_index_tracks_replacements_across_reopen() {
                 let mut seen = Vec::new();
                 let mut cursor = None;
                 for _ in 0..=expected.len() {
-                    let mut q = query().order_asc(path).limit(1).work_limit(1);
-                    if let Some(after) = &cursor {
-                        q = q.after(after);
-                    }
+                    let q = query()
+                        .order_asc(path)
+                        .limit(1)
+                        .work_limit(1)
+                        .after(cursor.as_ref());
                     let page = q.fetch().unwrap();
                     seen.extend(page.rows.into_iter().map(|offer| offer.id));
                     cursor = page.next;

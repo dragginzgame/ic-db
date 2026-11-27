@@ -560,11 +560,10 @@ impl<M: Memory> Database<M> {
         }
         let mut masks = masks.into_iter();
         self.map.try_visit_sorted_keys(&probes, |_, bytes| {
-            let mut slots = masks.next().expect("one visit per distinct key");
+            let slots = masks.next().expect("one visit per distinct key");
             if let Some(bytes) = bytes {
-                while slots != 0 {
-                    visit(slots.trailing_zeros() as usize, &bytes)?;
-                    slots &= slots - 1;
+                for slot in query::set_bit_positions(slots) {
+                    visit(slot, &bytes)?;
                 }
             }
             Ok(())

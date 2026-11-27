@@ -9,7 +9,7 @@ use wire_call::call;
 #[ignore = "requires the query-measurements Wasm; run make m2-listing-costs"]
 async fn ordered_listing_paths_match_sqlite_page_by_page() {
     type Sample = (Vec<u64>, Option<Vec<u8>>, u32, u32, u64);
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -382,7 +382,7 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
 #[tokio::test]
 #[ignore = "requires the query-measurements Wasm; run make m2-filter-costs"]
 async fn measured_membership_and_empty_text_return_expected_counts() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -464,7 +464,7 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
     use ic_db_m0_rollback_driver::LIMITS;
     use ic_wire::{Direction, Encoding};
     type Sample = (Vec<[u8; 16]>, Option<Vec<u8>>, u32, u32, u32, u64, u64);
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -532,7 +532,7 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
 #[tokio::test]
 #[ignore = "requires the query-measurements Wasm; run make m2-bulk-selection"]
 async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -633,7 +633,7 @@ async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
 #[tokio::test]
 #[ignore = "requires page-measurement Wasm and PocketIC"]
 async fn primary_page_lookahead() {
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let predecessor = std::env::var_os("IC_DB_PAGE_PREDECESSOR")
         .map(|path| std::fs::read(path).unwrap())
         .unwrap_or_else(|| wasm.clone());

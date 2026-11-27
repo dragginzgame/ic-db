@@ -1,6 +1,6 @@
 //! Select a proven ordered path or a bounded complete-sort fallback.
 
-use super::{Comparison, Predicate, QueryOperand, Request};
+use super::{Comparison, OrderTerm, Predicate, QueryOperand, Request, SortDirection};
 use crate::{EntitySchema, Error, IndexSchema, IndexValue, key, store::admit_index_prefix};
 
 // Carry the admitted prefix and its component count together; downstream proofs
@@ -70,18 +70,18 @@ pub(super) fn select<'a>(
         if order.is_empty() {
             return Err(Error::InvalidQuery);
         }
-        for (i, name) in order.iter().enumerate() {
+        for (i, &OrderTerm(name, direction)) in order.iter().enumerate() {
             let (position, member) = crate::member::resolve_field(entity, name)?;
             if (member.is_none() && !key::supports(entity.fields[position].value))
-                || order[..i].contains(name)
-                || (*name == entity.primary_key && i + 1 != order.len())
+                || order[..i].iter().any(|term| term.0 == name)
+                || (name == entity.primary_key && i + 1 != order.len())
             {
                 return Err(Error::InvalidQuery);
             }
             positions[i] = SortField {
                 position,
                 member,
-                descending: request.order_descending & (1 << i) != 0,
+                descending: direction == SortDirection::Descending,
             };
         }
     }
@@ -181,7 +181,7 @@ pub(super) fn select<'a>(
     // neither ordering nor tie-breaking bytes to the complete sort.
     let order = request.order.as_ref().ok_or(Error::InvalidQuery)?;
     let mut varying = Vec::with_capacity(order.len() + 1);
-    for (i, name) in order.iter().enumerate() {
+    for (i, &OrderTerm(name, _)) in order.iter().enumerate() {
         if equality(entity, request, name).is_none() {
             varying.push(positions[i]);
         }
@@ -516,13 +516,13 @@ fn scan_direction(
     // Once the requested order distinguishes a complete unique tuple, no
     // later term can break a tie. Only varying key components set the direction.
     if index.is_some_and(|i| i.unique) && !order.is_empty() {
-        let mut wanted = order.iter().enumerate().filter(|(_, name)| !fixed(name));
+        let mut wanted = order.iter().filter(|term| !fixed(&term.0));
         let mut direction = None;
         let matches = fields.iter().filter(|name| !fixed(name)).all(|name| {
-            let Some((slot, requested)) = wanted.next() else {
+            let Some(OrderTerm(requested, direction_term)) = wanted.next() else {
                 return false;
             };
-            let descending = request.order_descending & (1 << slot) != 0;
+            let descending = *direction_term == SortDirection::Descending;
             requested == name && *direction.get_or_insert(descending) == descending
         });
         if matches {
@@ -531,21 +531,17 @@ fn scan_direction(
     }
     // Current physical keys share one direction. Constant fields do not affect
     // ordering, but every varying field must agree with the primary tie-breaker.
-    // The ordinary all-ascending order already has uniform directions. For
-    // explicit directions, only a disagreement needs a fixed-field proof.
-    if request.order_descending != 0 {
-        let descending = primary_direction;
-        if order.iter().enumerate().any(|(i, name)| {
-            (request.order_descending & (1 << i) != 0) != descending && !fixed(name)
-        }) {
-            return None;
-        }
+    if order
+        .iter()
+        .any(|term| (term.1 == SortDirection::Descending) != primary_direction && !fixed(&term.0))
+    {
+        return None;
     }
     // The primary key uniquely determines all later components. Compare both
     // sequences only up to it, stripping fields constant across matching rows.
     let wanted = order
         .iter()
-        .copied()
+        .map(|term| term.0)
         .take_while(|name| *name != entity.primary_key)
         .filter(|name| !fixed(name))
         .chain(std::iter::once(entity.primary_key));

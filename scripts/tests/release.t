@@ -66,7 +66,7 @@ for my $command (
 }
 my (undef, $source) = run('git', 'rev-parse', 'HEAD'); chomp $source;
 local $ENV{RELEASE_SOURCE} = $source;
-local $ENV{PATH} = "$temp/.tools/host/bin:$ENV{PATH}";
+local $ENV{PATH} = "$temp/.tools/host/bin:$root/.tools/host/bin:$ENV{PATH}";
 make_path("$temp/target", "$temp/.git/release-state/ic-db");
 my $receipt = "$temp/.git/release-state/ic-db/$source.verified";
 write_file($receipt, "$source\n");
@@ -261,4 +261,55 @@ for my $attempt (qw(failed-validation complete-validation metadata-resume)) {
     diag sprintf('%s: %.3f sec across %d phases (prepared tools, substituted leaves)',
         $attempt, $seconds, scalar @phases);
 }
+# Exercise the consumer's pin transformation with the same transaction used by a
+# fresh prepare or a saved prepare retry. Committed checks select Git objects.
+make_path("$temp/ci", "$temp/target/pin-check");
+my $pin_path = 'ci/dependency-pinning-exceptions.json';
+($status, $out) = run('bash', 'scripts/release.sh', 'release-files');
+is($status, 0, 'release declares its metadata files') or diag $out;
+ok(grep({ $_ eq $pin_path } split /\0/, $out), 'pin exception is selected for staging and recovery');
+my $original_pin = encode_json([{
+    rule => 'cargo-exact', file => 'Cargo.toml', subject => 'ic-db-macros',
+    value => '=0.22.1', reason => 'fixture',
+}, { rule => 'unrelated', value => '=0.22.1' }]);
+write_file("$temp/$pin_path", $original_pin);
+write_file("$temp/Cargo.toml", "[workspace.dependencies]\nic-db-macros = { version = \"=0.22.1\" }\n");
+run('git', 'add', 'Cargo.toml', $pin_path);
+($status, $out) = run('git', 'commit', '-qm', 'pin fixture');
+is($status, 0, 'prepare source pin fixture') or diag $out;
+(undef, my $pin_source) = run('git', 'rev-parse', 'HEAD'); chomp $pin_source;
+local $ENV{RELEASE_SOURCE} = $pin_source;
+local $ENV{RELEASE_PREVIOUS} = '0.22.1';
+local $ENV{RELEASE_VERSION} = '0.22.2';
+local $ENV{PIN_ADAPTER} = "$root/scripts/release-metadata.sh";
+my $prepare_pin = <<'BASH';
+set -eu
+source "$PIN_ADAPTER"
+source vendor/toko-tooling/scripts/ci/release-metadata-transaction.sh
+render() {
+    sed 's/=0.22.1/=0.22.2/' "$1/Cargo.toml" > "$2/Cargo.toml" || return
+    render_macro_pin "$1/$pin_file" "$2/Cargo.toml" > "$2/$pin_file"
+}
+check() { check_macro_pin target/pin-check && [[ "$PIN_RESULT" == pass ]]; }
+release_metadata_prepare "$PWD/target/pin.XXXXXX" render check Cargo.toml "$pin_file"
+BASH
+local $ENV{PIN_RESULT} = 'refuse';
+($status, $out) = run('bash', '-c', $prepare_pin);
+isnt($status, 0, 'refused metadata check rolls back pin preparation');
+is(read_file("$temp/$pin_path"), $original_pin, 'rollback restores original exception bytes');
+$ENV{PIN_RESULT} = 'pass';
+($status, $out) = run('bash', '-c', $prepare_pin);
+is($status, 0, 'prepare retry advances the pin with the manifest') or diag $out;
+my $expected_pin = decode_json($original_pin);
+$expected_pin->[0]{value} = '=0.22.2';
+is_deeply(decode_json(read_file("$temp/$pin_path")), $expected_pin, 'only the selected exception advances');
+run('git', 'commit', '-qam', 'prepared metadata');
+(undef, my $pin_commit) = run('git', 'rev-parse', 'HEAD'); chomp $pin_commit;
+write_file("$temp/$pin_path", $original_pin);
+my $check_pin = 'source "$PIN_ADAPTER"; check_macro_pin target/pin-check';
+($status, $out) = run('bash', '-c', $check_pin);
+isnt($status, 0, 'prepared check rejects a stale working pin');
+local $ENV{RELEASE_COMMIT} = $pin_commit;
+($status, $out) = run('bash', '-c', $check_pin);
+is($status, 0, 'delivery recovery checks the committed pin') or diag $out;
 done_testing;

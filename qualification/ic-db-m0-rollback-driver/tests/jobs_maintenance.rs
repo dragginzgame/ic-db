@@ -3,7 +3,9 @@
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
-type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
+mod job_step;
+mod wire_frame;
+use job_step::Step;
 
 #[tokio::test]
 async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellation() {
@@ -29,58 +31,22 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
             canister,
             canister,
             "job_start",
-            ic_wire::encode(
-                &(1_u8, 0_i64, expires, 0_u64),
-                Encoding::Frame {
-                    method: 110,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(110, &(1_u8, 0_i64, expires, 0_u64)),
         )
         .await
     };
-    let handle = |reply: Vec<u8>| {
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let handle =
+        |reply: Vec<u8>| wire_frame::response::<Result<Vec<u8>, String>>(110, &reply).unwrap();
     let advance = async |handle: &[u8], sequence: u64, work: u32, now: i64| {
         pic.update_call(
             canister,
             canister,
             "job_advance",
-            ic_wire::encode(
-                &(handle, 1_u8, sequence, work, now, 0_u64, false),
-                Encoding::Frame {
-                    method: 111,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(111, &(handle, 1_u8, sequence, work, now, 0_u64, false)),
         )
         .await
     };
-    let step = |reply: Vec<u8>| {
-        ic_wire::decode::<Result<Step, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let step = |reply: Vec<u8>| wire_frame::response::<Result<Step, String>>(111, &reply);
     let control = async |operation: u8, handle: &[u8], now: i64, limit: u32| {
         let reply = pic
             .update_call(
@@ -147,13 +113,19 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     ];
     let completed = handle(start(1000).await.unwrap());
     let first = step(advance(&running, 0, 2, 1).await.unwrap()).unwrap();
-    assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+    assert_eq!(
+        (first.sequence, first.examined, first.phase, first.value),
+        (1, 2, 0, None)
+    );
     let total = (1_u64..=6)
         .map(|id| id * 10 + id % 2)
         .sum::<u64>()
         .to_string();
     let done = step(advance(&completed, 0, 128, 1).await.unwrap()).unwrap();
-    assert_eq!((done.2, done.4, done.5), (6, 1, Some(total.clone())));
+    assert_eq!(
+        (done.examined, done.phase, done.value),
+        (6, 1, Some(total.clone()))
+    );
     admitted(maintenance(0, false).await.unwrap()).unwrap();
 
     for executable in [&wasm, &changed] {
@@ -163,7 +135,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
         // Maintenance refusal therefore reaches the caller as a message trap.
         let error = start(1000).await.unwrap_err();
         assert!(error.to_string().contains("Maintenance"), "{error}");
-        for (job, sequence) in [(&running, first.0), (&completed, done.0)] {
+        for (job, sequence) in [(&running, first.sequence), (&completed, done.sequence)] {
             let error = advance(job, sequence, 2, 21).await.unwrap_err();
             assert!(error.to_string().contains("Maintenance"), "{error}");
         }
@@ -187,7 +159,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(control(1, &[], 20, 1).await, Ok(0));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert!(advance(&running, first.0, 2, 21).await.is_err());
+    assert!(advance(&running, first.sequence, 2, 21).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
 
     upgrade(&wasm).await;
@@ -195,23 +167,48 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
     assert!(maintenance(2, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     admitted(maintenance(2, false).await.unwrap()).unwrap();
-    let second = step(advance(&running, first.0, 2, 21).await.unwrap()).unwrap();
+    let second = step(advance(&running, first.sequence, 2, 21).await.unwrap()).unwrap();
     assert_eq!(
-        (second.0, second.1, second.2, second.4, second.5),
-        (2, first.1, 4, 0, None)
+        (
+            second.sequence,
+            second.source_revision,
+            second.examined,
+            second.phase,
+            second.value
+        ),
+        (2, first.source_revision, 4, 0, None)
     );
-    let retry = step(advance(&running, first.0, 2, 21).await.unwrap()).unwrap();
-    assert_eq!((retry.0, retry.1, retry.2, retry.4), (2, first.1, 4, 0));
-    let third = step(advance(&running, second.0, 2, 22).await.unwrap()).unwrap();
-    let final_step = step(advance(&running, third.0, 2, 23).await.unwrap()).unwrap();
+    let retry = step(advance(&running, first.sequence, 2, 21).await.unwrap()).unwrap();
     assert_eq!(
-        (final_step.1, final_step.2, final_step.4, final_step.5),
-        (first.1, 6, 1, Some(total.clone()))
+        (
+            retry.sequence,
+            retry.source_revision,
+            retry.examined,
+            retry.phase
+        ),
+        (2, first.source_revision, 4, 0)
     );
-    let retained = step(advance(&completed, done.0, 2, 23).await.unwrap()).unwrap();
+    let third = step(advance(&running, second.sequence, 2, 22).await.unwrap()).unwrap();
+    let final_step = step(advance(&running, third.sequence, 2, 23).await.unwrap()).unwrap();
     assert_eq!(
-        (retained.0, retained.1, retained.2, retained.4, retained.5),
-        (done.0, done.1, 6, 1, Some(total))
+        (
+            final_step.source_revision,
+            final_step.examined,
+            final_step.phase,
+            final_step.value
+        ),
+        (first.source_revision, 6, 1, Some(total.clone()))
+    );
+    let retained = step(advance(&completed, done.sequence, 2, 23).await.unwrap()).unwrap();
+    assert_eq!(
+        (
+            retained.sequence,
+            retained.source_revision,
+            retained.examined,
+            retained.phase,
+            retained.value
+        ),
+        (done.sequence, done.source_revision, 6, 1, Some(total))
     );
 
     let fresh = handle(start(1000).await.unwrap());

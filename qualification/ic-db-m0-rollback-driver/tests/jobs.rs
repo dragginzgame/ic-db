@@ -4,7 +4,9 @@ mod wire_call;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
-type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
+use wire_call::wire_frame;
+mod job_step;
+use job_step::Step as Response;
 
 #[tokio::test]
 async fn grouped_or_selection_preserves_rollback_binding_and_upgrade() {
@@ -37,81 +39,49 @@ async fn check_job_binding_across_upgrade(operation: u8, changed: u8, expected: 
             canister,
             canister,
             "job_start",
-            ic_wire::encode(
-                &(operation, 0_i64, 100_i64, 0_u64),
-                Encoding::Frame {
-                    method: 110,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(110, &(operation, 0_i64, 100_i64, 0_u64)),
         )
         .await
         .unwrap();
-    let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
-        &reply,
-        Encoding::Frame {
-            method: 110,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
+    let handle = wire_frame::response::<Result<Vec<u8>, String>>(110, &reply).unwrap();
     let advance = async |operation: u8, sequence: u64, fault: u64| {
         pic.update_call(
             canister,
             canister,
             "job_advance",
-            ic_wire::encode(
+            wire_frame::request(
+                111,
                 &(&handle, operation, sequence, 2_u32, 1_i64, fault, false),
-                Encoding::Frame {
-                    method: 111,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Response, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(111, &bytes);
     let first = decode(advance(operation, 0, 0).await.unwrap()).unwrap();
-    assert_eq!((first.0, first.2, first.4), (1, 2, 0));
+    assert_eq!((first.sequence, first.examined, first.phase), (1, 2, 0));
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(
-        decode(advance(changed, first.0, 0).await.unwrap()).unwrap_err(),
+        decode(advance(changed, first.sequence, 0).await.unwrap()).unwrap_err(),
         "InvalidJob"
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert!(advance(operation, first.0, 1).await.is_err());
+    assert!(advance(operation, first.sequence, 1).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
-    let mut sequence = first.0;
+    let mut sequence = first.sequence;
     for _ in 0..4 {
         let step = decode(advance(operation, sequence, 0).await.unwrap()).unwrap();
-        sequence = step.0;
-        if step.4 == 1 {
-            assert_eq!(step.2, 6);
-            assert_eq!(step.5.as_deref(), Some(expected));
+        sequence = step.sequence;
+        if step.phase == 1 {
+            assert_eq!(step.examined, 6);
+            assert_eq!(step.value.as_deref(), Some(expected));
             owned.drop().await;
 
             return;
         }
-        assert_eq!(step.4, 0);
+        assert_eq!(step.phase, 0);
     }
     panic!("retained operation {operation} did not finish within its work bound");
 }
@@ -131,15 +101,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
             canister,
             canister,
             "job_start",
-            ic_wire::encode(
-                &(operation, 0_i64, 100_i64, fault),
-                Encoding::Frame {
-                    method: 110,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(110, &(operation, 0_i64, 100_i64, fault)),
         )
         .await
     };
@@ -153,15 +115,10 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
             canister,
             canister,
             "job_advance",
-            ic_wire::encode(
+            wire_frame::request(
+                111,
                 &(handle, operation, sequence, 2_u32, now, fault, trap_after),
-                Encoding::Frame {
-                    method: 111,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
     };
@@ -182,30 +139,10 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Response, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
-    let handle = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let decode =
+        |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(111, &bytes).unwrap();
+    let handle =
+        |bytes: Vec<u8>| wire_frame::response::<Result<Vec<u8>, String>>(110, &bytes).unwrap();
     let controlled = |bytes: Vec<u8>| {
         ic_wire::decode::<Result<u64, String>>(
             &bytes,
@@ -230,25 +167,28 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let sum = handle(start(1, 0).await.unwrap());
     let average = handle(start(2, 0).await.unwrap());
     let first = decode(advance(&count, 0, 0, 1, 0, false).await.unwrap());
-    assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+    assert_eq!(
+        (first.sequence, first.examined, first.phase, first.value),
+        (1, 2, 0, None)
+    );
     let first_sum = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap());
     assert_eq!(
         (
-            first_sum.0,
-            first_sum.2,
-            first_sum.4,
-            first_sum.5.as_deref()
+            first_sum.sequence,
+            first_sum.examined,
+            first_sum.phase,
+            first_sum.value.as_deref()
         ),
         (1, 2, 0, None)
     );
-    assert!(first.6 > 0);
+    assert!(first.writes > 0);
     let first_average = decode(advance(&average, 2, 0, 1, 0, false).await.unwrap());
     assert_eq!(
         (
-            first_average.0,
-            first_average.2,
-            first_average.4,
-            first_average.5
+            first_average.sequence,
+            first_average.examined,
+            first_average.phase,
+            first_average.value
         ),
         (1, 2, 0, None)
     );
@@ -260,7 +200,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     for fault in 1.. {
         match advance(&probe, 1, 1, 2, fault, false).await {
             Ok(reply) => {
-                let writes = decode(reply).6;
+                let writes = decode(reply).writes;
                 assert!(writes > 0);
                 assert_eq!(writes + 1, fault);
                 break;
@@ -287,10 +227,10 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let first_grouped = decode(advance(&grouped, 3, 0, 1, 0, false).await.unwrap());
     assert_eq!(
         (
-            first_grouped.0,
-            first_grouped.2,
-            first_grouped.4,
-            first_grouped.5
+            first_grouped.sequence,
+            first_grouped.examined,
+            first_grouped.phase,
+            first_grouped.value
         ),
         (1, 2, 0, None)
     );
@@ -304,7 +244,10 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let distinct = handle(start(8, 0).await.unwrap());
     for (job, operation) in [(&grouped_sum, 4), (&grouped_average, 5), (&distinct, 8)] {
         let first = decode(advance(job, operation, 0, 1, 0, false).await.unwrap());
-        assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+        assert_eq!(
+            (first.sequence, first.examined, first.phase, first.value),
+            (1, 2, 0, None)
+        );
         let before = pic.get_stable_memory(canister).await;
         assert!(advance(job, operation, 1, 2, 1, false).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -321,11 +264,14 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     assert_eq!(pic.get_stable_memory(canister).await, before);
     // Replaying the prior sequence must not write a checkpoint.
     let replay = decode(advance(&sum, 1, 0, 1, 0, false).await.unwrap());
-    assert_eq!((replay.0, replay.2, replay.4), (1, 2, 0));
+    assert_eq!((replay.sequence, replay.examined, replay.phase), (1, 2, 0));
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let group_distinct = handle(start(9, 0).await.unwrap());
     let first = decode(advance(&group_distinct, 9, 0, 1, 0, false).await.unwrap());
-    assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+    assert_eq!(
+        (first.sequence, first.examined, first.phase, first.value),
+        (1, 2, 0, None)
+    );
     let before = pic.get_stable_memory(canister).await;
     assert!(advance(&group_distinct, 9, 1, 2, 1, false).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -342,7 +288,13 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     ] {
         let retry = decode(advance(job, operation, 0, 1, 0, false).await.unwrap());
         assert_eq!(
-            (retry.0, retry.2, retry.4, retry.5, retry.6),
+            (
+                retry.sequence,
+                retry.examined,
+                retry.phase,
+                retry.value,
+                retry.writes
+            ),
             (1, 2, 0, None, 0)
         );
     }
@@ -351,31 +303,38 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let retry_grouped = decode(advance(&grouped, 3, 0, 1, 0, false).await.unwrap());
     assert_eq!(
         (
-            retry_grouped.0,
-            retry_grouped.2,
-            retry_grouped.4,
-            retry_grouped.5
+            retry_grouped.sequence,
+            retry_grouped.examined,
+            retry_grouped.phase,
+            retry_grouped.value
         ),
         (1, 2, 0, None)
     );
     assert_eq!(
         (
-            retry_average.0,
-            retry_average.2,
-            retry_average.4,
-            retry_average.5
+            retry_average.sequence,
+            retry_average.examined,
+            retry_average.phase,
+            retry_average.value
         ),
         (1, 2, 0, None)
     );
     assert_eq!(
-        (retry.0, retry.1, retry.2, retry.3, retry.4, retry.5),
         (
-            first_sum.0,
-            first_sum.1,
-            first_sum.2,
-            first_sum.3,
-            first_sum.4,
-            first_sum.5
+            retry.sequence,
+            retry.source_revision,
+            retry.examined,
+            retry.input_bytes,
+            retry.phase,
+            retry.value
+        ),
+        (
+            first_sum.sequence,
+            first_sum.source_revision,
+            first_sum.examined,
+            first_sum.input_bytes,
+            first_sum.phase,
+            first_sum.value
         )
     );
     controlled(control(3, &vec![], 0, 0).await.unwrap()); // Noop source replacement.
@@ -403,39 +362,54 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         );
 
         if sequence < 2 {
-            assert_eq!((c.4, s.4, a.4, g.4), (0, 0, 0, 0));
-            assert_eq!((gs.4, ga.4, d.4, gd.4), (0, 0, 0, 0));
+            assert_eq!((c.phase, s.phase, a.phase, g.phase), (0, 0, 0, 0));
+            assert_eq!((gs.phase, ga.phase, d.phase, gd.phase), (0, 0, 0, 0));
         } else {
-            assert_eq!((c.2, c.4, c.5), (6, 1, Some("6".into())));
+            assert_eq!((c.examined, c.phase, c.value), (6, 1, Some("6".into())));
             let expected: u64 = (1..=6).map(|id| id * 10 + id % 2).sum();
-            assert_eq!((s.2, s.4, s.5), (6, 1, Some(expected.to_string())));
-            assert_eq!((a.2, a.4, a.5), (6, 1, Some("35.5".into())));
-            assert_eq!((g.2, g.4, g.5), (6, 1, Some("0:3,1:3".into())));
-            assert_eq!((gs.2, gs.4, gs.5), (6, 1, Some("0:120,1:93".into())));
-            assert_eq!((ga.2, ga.4, ga.5), (6, 1, Some("0:40,1:31".into())));
-            assert_eq!((d.2, d.4, d.5), (6, 1, Some("2".into())));
-            assert_eq!((gd.2, gd.4, gd.5), (6, 1, Some("0:1,1:1".into())));
+            assert_eq!(
+                (s.examined, s.phase, s.value),
+                (6, 1, Some(expected.to_string()))
+            );
+            assert_eq!((a.examined, a.phase, a.value), (6, 1, Some("35.5".into())));
+            assert_eq!(
+                (g.examined, g.phase, g.value),
+                (6, 1, Some("0:3,1:3".into()))
+            );
+            assert_eq!(
+                (gs.examined, gs.phase, gs.value),
+                (6, 1, Some("0:120,1:93".into()))
+            );
+            assert_eq!(
+                (ga.examined, ga.phase, ga.value),
+                (6, 1, Some("0:40,1:31".into()))
+            );
+            assert_eq!((d.examined, d.phase, d.value), (6, 1, Some("2".into())));
+            assert_eq!(
+                (gd.examined, gd.phase, gd.value),
+                (6, 1, Some("0:1,1:1".into()))
+            );
         }
     }
     let live = handle(start(2, 0).await.unwrap());
     decode(advance(&live, 2, 0, 1, 0, false).await.unwrap());
     controlled(control(2, &vec![], 0, 0).await.unwrap());
     let invalidated = decode(advance(&live, 2, 0, 2, 0, false).await.unwrap());
-    assert_eq!((invalidated.4, invalidated.5), (2, None));
+    assert_eq!((invalidated.phase, invalidated.value), (2, None));
     // A completed result keeps its captured boundary after later source writes.
     assert_eq!(
-        decode(advance(&sum, 1, 0, 2, 0, false).await.unwrap()).5,
+        decode(advance(&sum, 1, 0, 2, 0, false).await.unwrap()).value,
         Some("213".into())
     );
     assert_eq!(
-        decode(advance(&average, 2, 0, 2, 0, false).await.unwrap()).5,
+        decode(advance(&average, 2, 0, 2, 0, false).await.unwrap()).value,
         Some("35.5".into())
     );
     let expired = decode(advance(&sum, 1, 0, 100, 0, false).await.unwrap());
-    assert_eq!((expired.4, expired.5), (3, None));
+    assert_eq!((expired.phase, expired.value), (3, None));
     assert_eq!(controlled(control(1, &vec![], 100, 1).await.unwrap()), 1);
     assert_eq!(
-        decode(advance(&grouped, 3, 0, 2, 0, false).await.unwrap()).5,
+        decode(advance(&grouped, 3, 0, 2, 0, false).await.unwrap()).value,
         Some("0:3,1:3".into())
     );
     assert_eq!(controlled(control(1, &vec![], 100, 16).await.unwrap()), 8);
@@ -474,30 +448,15 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
                 canister,
                 canister,
                 "job_advance",
-                ic_wire::encode(
+                wire_frame::request(
+                    111,
                     &(handle, operation, sequence, 1_u32, 1_i64, fault, trap_after),
-                    Encoding::Frame {
-                        method: 111,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                ),
             )
             .await
         };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Response, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let decode =
+        |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(111, &bytes).unwrap();
     let mut jobs = Vec::new();
     for operation in [6_u8, 7] {
         let response = pic
@@ -505,28 +464,11 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
                 canister,
                 canister,
                 "job_start",
-                ic_wire::encode(
-                    &(operation, 0_i64, 100_i64, 0_u64),
-                    Encoding::Frame {
-                        method: 110,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(110, &(operation, 0_i64, 100_i64, 0_u64)),
             )
             .await
             .unwrap();
-        let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
-            &response,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap();
+        let handle = wire_frame::response::<Result<Vec<u8>, String>>(110, &response).unwrap();
         let before = pic.get_stable_memory(canister).await;
         assert!(advance(&handle, operation, 0, 1, false).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -534,7 +476,12 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
         assert_eq!(pic.get_stable_memory(canister).await, before);
         let step = decode(advance(&handle, operation, 0, 0, false).await.unwrap());
         assert_eq!(
-            (step.0, step.2, step.4, step.5.as_deref()),
+            (
+                step.sequence,
+                step.examined,
+                step.phase,
+                step.value.as_deref()
+            ),
             (1, 1, 1, Some(if operation == 6 { "0" } else { "1:0" }))
         );
         jobs.push((operation, handle, step));
@@ -545,12 +492,22 @@ async fn present_field_jobs_preserve_zero_counts_across_rollback_and_upgrade() {
     for (operation, handle, saved) in jobs {
         let retry = decode(advance(&handle, operation, 0, 0, false).await.unwrap());
         assert_eq!(
-            (retry.0, retry.2, retry.4, retry.5.as_deref()),
-            (saved.0, saved.2, saved.4, saved.5.as_deref())
+            (
+                retry.sequence,
+                retry.examined,
+                retry.phase,
+                retry.value.as_deref()
+            ),
+            (
+                saved.sequence,
+                saved.examined,
+                saved.phase,
+                saved.value.as_deref()
+            )
         );
         let complete = decode(advance(&handle, operation, 1, 0, false).await.unwrap());
         assert_eq!(
-            (complete.2, complete.4, complete.5.as_deref()),
+            (complete.examined, complete.phase, complete.value.as_deref()),
             (1, 1, Some(if operation == 6 { "0" } else { "1:0" }))
         );
     }
@@ -574,29 +531,12 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
                 canister,
                 canister,
                 "job_start",
-                ic_wire::encode(
-                    &(3_u8, 0_i64, 100_i64, 0_u64),
-                    Encoding::Frame {
-                        method: 110,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(110, &(3_u8, 0_i64, 100_i64, 0_u64)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &response,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<Vec<u8>, String>>(110, &response).unwrap()
     };
     let handle = start().await;
     let response = pic
@@ -604,29 +544,12 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
             canister,
             canister,
             "job_advance",
-            ic_wire::encode(
-                &(&handle, 3_u8, 0_u64, 128_u32, 1_i64, 0_u64, false),
-                Encoding::Frame {
-                    method: 111,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(111, &(&handle, 3_u8, 0_u64, 128_u32, 1_i64, 0_u64, false)),
         )
         .await
         .unwrap();
-    let old = ic_wire::decode::<Result<Response, String>>(
-        &response,
-        Encoding::Frame {
-            method: 111,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!((old.4, old.5.as_deref()), (1, Some("0:3,1:3")));
+    let old = wire_frame::response::<Result<Response, String>>(111, &response).unwrap();
+    assert_eq!((old.phase, old.value.as_deref()), (1, Some("0:3,1:3")));
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
         .await
         .unwrap();
@@ -676,30 +599,37 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
     let fresh = decode(page(&pending, 0, None, 1, 0, false).await.unwrap());
     assert_eq!((fresh.1, fresh.2), (1, vec![(0, 3)]));
     // A job completed before upgrade can be paged without rewriting its format.
-    let first = decode(page(&handle, old.0, None, 2, 0, false).await.unwrap());
+    let first = decode(
+        page(&handle, old.sequence, None, 2, 0, false)
+            .await
+            .unwrap(),
+    );
     assert_eq!(
         (first.0, first.1, first.2, first.4),
-        (old.0, 1, vec![(0, 3)], old.1)
+        (old.sequence, 1, vec![(0, 3)], old.source_revision)
     );
     let cursor = first.3.unwrap();
     // A different output page can share the same checkpoint and observed time.
     // Arm the first supplier write: this replay must finish without hitting it.
     let replay = decode(
-        page(&handle, old.0, Some(cursor.clone()), 2, 1, false)
+        page(&handle, old.sequence, Some(cursor.clone()), 2, 1, false)
             .await
             .unwrap(),
     );
-    assert_eq!(replay, (old.0, 1, vec![(1, 3)], None, old.1));
+    assert_eq!(
+        replay,
+        (old.sequence, 1, vec![(1, 3)], None, old.source_revision)
+    );
     let before = pic.get_stable_memory(canister).await;
     // A later clock observation must still be saved, even on this completed job.
     assert!(
-        page(&handle, old.0, Some(cursor.clone()), 3, 1, false)
+        page(&handle, old.sequence, Some(cursor.clone()), 3, 1, false)
             .await
             .is_err()
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert!(
-        page(&handle, old.0, Some(cursor.clone()), 3, 0, true)
+        page(&handle, old.sequence, Some(cursor.clone()), 3, 0, true)
             .await
             .is_err()
     );
@@ -725,14 +655,17 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
         .unwrap();
     for _ in 0..2 {
         let last = decode(
-            page(&handle, old.0, Some(cursor.clone()), 3, 0, false)
+            page(&handle, old.sequence, Some(cursor.clone()), 3, 0, false)
                 .await
                 .unwrap(),
         );
-        assert_eq!(last, (old.0, 1, vec![(1, 3)], None, old.1));
+        assert_eq!(
+            last,
+            (old.sequence, 1, vec![(1, 3)], None, old.source_revision)
+        );
     }
     let expired = decode(
-        page(&handle, old.0, Some(cursor), 100, 0, false)
+        page(&handle, old.sequence, Some(cursor), 100, 0, false)
             .await
             .unwrap(),
     );
@@ -756,29 +689,12 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
                 canister,
                 canister,
                 "job_start",
-                ic_wire::encode(
-                    &(operation, 0_i64, 100_i64, 0_u64),
-                    Encoding::Frame {
-                        method: 110,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(110, &(operation, 0_i64, 100_i64, 0_u64)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<Vec<u8>, String>>(110, &bytes).unwrap()
     };
     let advance =
         async |handle: &Vec<u8>, operation: u8, sequence: u64, fault: u64, trap_after: bool| {
@@ -786,42 +702,30 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
                 canister,
                 canister,
                 "job_advance",
-                ic_wire::encode(
+                wire_frame::request(
+                    111,
                     &(handle, operation, sequence, 2_u32, 1_i64, fault, trap_after),
-                    Encoding::Frame {
-                        method: 111,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                ),
             )
             .await
         };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Response, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let decode =
+        |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(111, &bytes).unwrap();
     let min = start(10).await;
     let max = start(11).await;
     for (handle, op) in [(&min, 10), (&max, 11)] {
         let first = decode(advance(handle, op, 0, 0, false).await.unwrap());
-        assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+        assert_eq!(
+            (first.sequence, first.examined, first.phase, first.value),
+            (1, 2, 0, None)
+        );
         let before = pic.get_stable_memory(canister).await;
         assert!(advance(handle, op, 1, 1, false).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
         assert!(advance(handle, op, 1, 0, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
         let retry = decode(advance(handle, op, 0, 0, false).await.unwrap());
-        assert_eq!((retry.0, retry.2, retry.4), (1, 2, 0));
+        assert_eq!((retry.sequence, retry.examined, retry.phase), (1, 2, 0));
     }
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
@@ -832,13 +736,13 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
 
         loop {
             let step = decode(advance(handle, op, sequence, 0, false).await.unwrap());
-            sequence = step.0;
-            if step.4 == 1 {
-                assert_eq!((step.2, step.5.as_deref()), (6, Some(expected)));
-                completed.push((handle, op, step.0, step.1, expected));
+            sequence = step.sequence;
+            if step.phase == 1 {
+                assert_eq!((step.examined, step.value.as_deref()), (6, Some(expected)));
+                completed.push((handle, op, step.sequence, step.source_revision, expected));
                 break;
             }
-            assert_eq!(step.4, 0);
+            assert_eq!(step.phase, 0);
             assert!(sequence < 6);
         }
     }
@@ -872,13 +776,18 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
     .unwrap()
     .unwrap();
     assert_eq!(
-        decode(advance(&running, 10, 1, 0, false).await.unwrap()).4,
+        decode(advance(&running, 10, 1, 0, false).await.unwrap()).phase,
         2
     );
     for (handle, op, sequence, revision, expected) in completed {
         let step = decode(advance(handle, op, sequence, 0, false).await.unwrap());
         assert_eq!(
-            (step.0, step.1, step.4, step.5.as_deref()),
+            (
+                step.sequence,
+                step.source_revision,
+                step.phase,
+                step.value.as_deref()
+            ),
             (sequence, revision, 1, Some(expected))
         );
     }
@@ -902,29 +811,12 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
                 canister,
                 canister,
                 "job_start",
-                ic_wire::encode(
-                    &(operation, 0_i64, 100_i64, 0_u64),
-                    Encoding::Frame {
-                        method: 110,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(110, &(operation, 0_i64, 100_i64, 0_u64)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<Vec<u8>, String>>(110, &bytes).unwrap()
     };
     let advance = async |handle: &Vec<u8>,
                          op: u8,
@@ -1119,7 +1011,13 @@ async fn duration_groups_resume_with_exact_totals_across_upgrade() {
             )
             .await;
             let cycles = before - pic.cycle_balance(canister).await;
-            let (next, _, seen, _, phase, result, _) = reply.unwrap();
+            let job_step::Step {
+                sequence: next,
+                examined: seen,
+                phase,
+                value: result,
+                ..
+            } = reply.unwrap();
             assert_eq!(seen, u64::from(examined));
             assert_eq!(next, sequence + 1);
             sequence = next;
@@ -1191,7 +1089,10 @@ async fn duration_summary_overflow_preserves_checkpoint_and_allows_cancellation(
     write(&rows).await;
     let handle = start().await;
     let first = advance(&handle, 0, 2).await.unwrap();
-    assert_eq!((first.0, first.2, first.4, first.5), (1, 2, 0, None));
+    assert_eq!(
+        (first.sequence, first.examined, first.phase, first.value),
+        (1, 2, 0, None)
+    );
     let saved = pic.get_stable_memory(canister).await;
     for _ in 0..2 {
         assert_eq!(
@@ -1215,9 +1116,9 @@ async fn duration_summary_overflow_preserves_checkpoint_and_allows_cancellation(
     let replacement = start().await;
     assert_eq!(advance(&handle, 1, 8).await.unwrap_err(), "InvalidJob");
     let done = advance(&replacement, 0, 8).await.unwrap();
-    assert_eq!((done.2, done.4), (3, 1));
+    assert_eq!((done.examined, done.phase), (3, 1));
     assert_eq!(
-        done.5.as_deref(),
+        done.value.as_deref(),
         Some("0:1:7:7,1:2:18446744073709551615:9223372036854775808")
     );
     owned.drop().await;

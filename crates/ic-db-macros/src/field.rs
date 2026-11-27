@@ -197,29 +197,6 @@ impl Field {
         self.kind.primary_key() && !self.optional && self.many.is_none()
     }
 
-    pub fn indexable(&self) -> bool {
-        self.many.is_none()
-            && matches!(
-                self.kind,
-                Kind::Integer(_)
-                    | Kind::Float32
-                    | Kind::Float64
-                    | Kind::Subaccount
-                    | Kind::Account
-                    | Kind::U256
-                    | Kind::Ulid
-                    | Kind::Date
-                    | Kind::Decimal(_)
-                    | Kind::Duration
-                    | Kind::Timestamp
-                    | Kind::Principal
-                    | Kind::Bool
-                    | Kind::Text(_)
-                    | Kind::Blob(_)
-                    | Kind::Named(_, _)
-            )
-    }
-
     pub fn index_value(&self, ident: &syn::Ident) -> TokenStream {
         self.index_operand(ident, self.optional)
     }

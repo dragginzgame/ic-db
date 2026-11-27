@@ -424,7 +424,7 @@ fn read(
     let cursor = decode_cursor(cursor.as_deref()).map_err(|_| 1_u8)?;
     let query = db.query::<Entry>();
     let mut query = match shape {
-        Shape::Any => query.filter_any(&[
+        Shape::Any => query.filter_any::<IndexValue>(&[
             (Entry::AMOUNT, Comparison::Ge, minimum.into()),
             (Entry::AMOUNT, Comparison::Le, 20_u64.into()),
         ]),

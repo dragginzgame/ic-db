@@ -1,7 +1,7 @@
 //! Bounded Wire update calls shared by installed qualification tests.
 
 #[path = "../wire_frame/mod.rs"]
-mod wire_frame;
+pub(super) mod wire_frame;
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
 use serde::{Serialize, de::DeserializeOwned};
 

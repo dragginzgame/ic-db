@@ -17,7 +17,7 @@ use ic_db::{
     Timestamp,
 };
 use ic_db_qualification_transport::{
-    RetainedOutput as Output, RetainedPhase, RetainedProgress as Response,
+    RetainedOutput as Output, RetainedPhase, RetainedProgress as Response, RetainedResume,
     RetainedSelection as Selection,
 };
 
@@ -51,7 +51,7 @@ fn aggregate_start((selection, time_ns): (Selection, u64)) -> Result<Vec<u8>, St
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn aggregate_resume((request, time_ns): (Request, u64)) -> Result<Response, String> {
+fn aggregate_resume((request, time_ns): (RetainedResume, u64)) -> Result<Response, String> {
     resume_at(request, message_time(time_ns))
 }
 
@@ -186,23 +186,35 @@ selectors! { BinaryObjectSelector {
     OptionalCountOptional => "optional,count:optional",
 }}
 
-enum Selector {
-    Entry(EntrySelector),
-    DecimalRow(DecimalRowSelector),
-    Document(DocumentSelector),
-    BinaryObject(BinaryObjectSelector),
+enum RetainedQuery<'a> {
+    Entry(EntrySelector, Query<'a, Entry>),
+    Document(DocumentSelector, Query<'a, Document>),
+    DecimalRow(DecimalRowSelector, Query<'a, DecimalRow>),
+    BinaryObject(BinaryObjectSelector, Query<'a, BinaryObject>),
 }
 
-impl Selector {
-    fn parse(entity: &str, select: &str) -> Result<Self, String> {
-        match entity {
-            "Entry" => EntrySelector::parse(select).map(Self::Entry),
-            "DecimalRow" => DecimalRowSelector::parse(select).map(Self::DecimalRow),
-            "Document" => DocumentSelector::parse(select).map(Self::Document),
-            "BinaryObject" => BinaryObjectSelector::parse(select).map(Self::BinaryObject),
-            _ => Err(Error::InvalidQuery),
-        }
-        .map_err(|e| e.to_string())
+impl<'a> RetainedQuery<'a> {
+    fn build(db: &'a crate::handles::Database, selection: &'a Selection) -> Result<Self, String> {
+        let (minimum, category, entry_id) = selection.entity_filters;
+        Ok(match selection.entity.as_str() {
+            "Entry" => Self::Entry(
+                EntrySelector::parse(&selection.select).map_err(|e| e.to_string())?,
+                configured(entry_query(db, minimum, category, entry_id)?, selection)?,
+            ),
+            "Document" => Self::Document(
+                DocumentSelector::parse(&selection.select).map_err(|e| e.to_string())?,
+                configured(document_query(db, minimum, category, entry_id)?, selection)?,
+            ),
+            "DecimalRow" => Self::DecimalRow(
+                DecimalRowSelector::parse(&selection.select).map_err(|e| e.to_string())?,
+                configured(decimal_query(db, minimum, category, entry_id)?, selection)?,
+            ),
+            "BinaryObject" => Self::BinaryObject(
+                BinaryObjectSelector::parse(&selection.select).map_err(|e| e.to_string())?,
+                configured(blob::query(db, minimum, category, entry_id)?, selection)?,
+            ),
+            _ => return Err(Error::InvalidQuery.to_string()),
+        })
     }
 }
 
@@ -211,8 +223,15 @@ fn configured<'a, E: Entity>(
     query: Query<'a, E>,
     selection: &'a Selection,
 ) -> Result<Query<'a, E>, String> {
-    let (_, select, _, limit, (group_min, group_max), group_order, filters, (order, descending)) =
-        selection;
+    let Selection {
+        select,
+        limit,
+        group_bounds: (group_min, group_max),
+        group_order,
+        filters,
+        order: (order, descending),
+        ..
+    } = selection;
     if select == "distinct:amount" && *limit != 32 {
         return Err("use --page-size for retained DISTINCT".into());
     }
@@ -240,38 +259,15 @@ pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>,
             .checked_add(60_000)
             .ok_or("clock overflow")?,
     );
-    let (entity, select, (minimum, category, entry_id), ..) = selection;
-    let result = match Selector::parse(entity, select)? {
-        Selector::Entry(selector) => selector.start(
-            configured(entry_query(&db, *minimum, *category, *entry_id)?, selection)?,
-            &mut jobs,
-            now,
-            expires,
-        ),
-        Selector::Document(selector) => selector.start(
-            configured(
-                document_query(&db, *minimum, *category, *entry_id)?,
-                selection,
-            )?,
-            &mut jobs,
-            now,
-            expires,
-        ),
-        Selector::DecimalRow(selector) => selector.start(
-            configured(
-                decimal_query(&db, *minimum, *category, *entry_id)?,
-                selection,
-            )?,
-            &mut jobs,
-            now,
-            expires,
-        ),
-        Selector::BinaryObject(selector) => selector.start(
-            configured(blob::query(&db, *minimum, *category, *entry_id)?, selection)?,
-            &mut jobs,
-            now,
-            expires,
-        ),
+    let result = match RetainedQuery::build(&db, selection)? {
+        RetainedQuery::Entry(selector, query) => selector.start(query, &mut jobs, now, expires),
+        RetainedQuery::Document(selector, query) => selector.start(query, &mut jobs, now, expires),
+        RetainedQuery::DecimalRow(selector, query) => {
+            selector.start(query, &mut jobs, now, expires)
+        }
+        RetainedQuery::BinaryObject(selector, query) => {
+            selector.start(query, &mut jobs, now, expires)
+        }
     };
 
     result
@@ -279,7 +275,6 @@ pub(super) fn start_at(selection: &Selection, now: Timestamp) -> Result<Vec<u8>,
         .map_err(|e| e.to_string())
 }
 
-type Request = (Selection, Vec<u8>, u64, u32, u32, u32, Option<Vec<u8>>);
 fn display<T>(step: JobStep<T>, convert: impl FnOnce(T) -> Output) -> Response {
     Response {
         sequence: step.sequence,
@@ -342,7 +337,15 @@ fn values<K, R>(
 }
 
 pub(super) fn resume_at(
-    (selection, handle, sequence, work, bytes, page_size, after): Request,
+    RetainedResume {
+        selection,
+        handle,
+        sequence,
+        work,
+        bytes,
+        page_size,
+        after,
+    }: RetainedResume,
     now: Timestamp,
 ) -> Result<Response, String> {
     let host = runtime();
@@ -351,61 +354,32 @@ pub(super) fn resume_at(
     let handle = JobHandle::from_bytes(&handle).map_err(|e| e.to_string())?;
     let cursor =
         crate::queries::decode_group_cursor(after.as_deref()).map_err(|e| e.to_string())?;
-    let (entity, select, (minimum, category, entry_id), ..) = &selection;
     let budgets = (work, bytes, page_size, cursor.as_ref());
-    let result = match Selector::parse(entity, select)? {
-        Selector::Entry(selector) => selector.resume(
-            resume_query(
-                configured(
-                    entry_query(&db, *minimum, *category, *entry_id)?,
-                    &selection,
-                )?,
-                select,
-                budgets,
-            )?,
+    let result = match RetainedQuery::build(&db, &selection)? {
+        RetainedQuery::Entry(selector, query) => selector.resume(
+            resume_query(query, &selection.select, budgets)?,
             &mut jobs,
             &handle,
             sequence,
             now,
             cursor.as_ref(),
         ),
-        Selector::Document(selector) => selector.resume(
-            resume_query(
-                configured(
-                    document_query(&db, *minimum, *category, *entry_id)?,
-                    &selection,
-                )?,
-                select,
-                budgets,
-            )?,
+        RetainedQuery::Document(selector, query) => selector.resume(
+            resume_query(query, &selection.select, budgets)?,
             &mut jobs,
             &handle,
             sequence,
             now,
         ),
-        Selector::DecimalRow(selector) => selector.resume(
-            resume_query(
-                configured(
-                    decimal_query(&db, *minimum, *category, *entry_id)?,
-                    &selection,
-                )?,
-                select,
-                budgets,
-            )?,
+        RetainedQuery::DecimalRow(selector, query) => selector.resume(
+            resume_query(query, &selection.select, budgets)?,
             &mut jobs,
             &handle,
             sequence,
             now,
         ),
-        Selector::BinaryObject(selector) => selector.resume(
-            resume_query(
-                configured(
-                    blob::query(&db, *minimum, *category, *entry_id)?,
-                    &selection,
-                )?,
-                select,
-                budgets,
-            )?,
+        RetainedQuery::BinaryObject(selector, query) => selector.resume(
+            resume_query(query, &selection.select, budgets)?,
             &mut jobs,
             &handle,
             sequence,

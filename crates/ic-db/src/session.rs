@@ -2,7 +2,7 @@
 
 use crate::{Batch, Database, Entity, Error, IndexValue, InsertInput, Query};
 use std::{
-    cell::{Ref, RefCell},
+    cell::{Ref, RefCell, RefMut},
     rc::Rc,
 };
 
@@ -137,6 +137,10 @@ impl DatabaseSession {
         self.0.try_borrow().map_err(|_| Error::BorrowConflict)
     }
 
+    fn write(&self) -> Result<RefMut<'_, Database>, Error> {
+        self.0.try_borrow_mut().map_err(|_| Error::BorrowConflict)
+    }
+
     /// Build a live query over this attachment. Execution sees writes committed
     /// before the terminal call. An exclusive borrow at execution returns
     /// [`Error::BorrowConflict`]. The builder owns a session handle and borrows
@@ -202,10 +206,7 @@ impl DatabaseSession {
         &self,
         input: impl InsertInput<Entity = K::Entity>,
     ) -> Result<InsertOutcome<K::Entity>, Error> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| Error::BorrowConflict)?
-            .insert_if_absent::<K>(input)
+        self.write()?.insert_if_absent::<K>(input)
     }
 
     /// Replace one existing entity and return its stored value including any assigned update time.
@@ -223,10 +224,7 @@ impl DatabaseSession {
     /// # Errors
     /// Propagates borrow, preparation and commit errors.
     pub fn upsert<E: Entity>(&self, row: &E) -> Result<E, Error> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| Error::BorrowConflict)?
-            .upsert(row)
+        self.write()?.upsert(row)
     }
 
     /// Delete one entity by primary key as one batch.
@@ -245,10 +243,7 @@ impl DatabaseSession {
     /// Returns [`Error::BorrowConflict`] before mutation if a borrow is active,
     /// or the original [`Database::commit`] error.
     pub fn commit(&self, batch: Batch) -> Result<(), Error> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| Error::BorrowConflict)?
-            .commit(batch)
+        self.write()?.commit(batch)
     }
 
     /// Commit the batch and return one queued insert or replacement by entity and key.
@@ -260,9 +255,6 @@ impl DatabaseSession {
         batch: Batch,
         key: impl Into<crate::Id<E>>,
     ) -> Result<E, Error> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| Error::BorrowConflict)?
-            .commit_returning(batch, key)
+        self.write()?.commit_returning(batch, key)
     }
 }

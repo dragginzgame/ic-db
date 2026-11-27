@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.35.0] - Unreleased
+
+### ⚠️ Breaking
+
+- Replace `filter_any_operands` with `filter_any`. Pass same-type literals directly. For mixed literal types, use `filter_any::<IndexValue>`. Field and length comparisons still use `QueryOperand`. Clause order, limits and cursor identities are preserved.
+- The local CLI fixture exposes named query, schema, payload-filter and retained aggregate request fields. Rust callers constructing those fixture contracts should use the new field names.
+
+### 🔄 Changed
+
+- Compare fixed integer operands directly during query planning and encode query and group cursors into one output buffer. Existing cursor frame bytes and stored data formats are preserved.
+
 ## [0.34.2] - 2026-11-27
 
 ### 🐛 Fixed

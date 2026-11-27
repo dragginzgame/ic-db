@@ -13,10 +13,7 @@ type Read = (Vec<u64>, u64, u64);
 
 #[tokio::test]
 async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
-    let wasm = std::fs::read(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m1-write-envelope"),
-    )
-    .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;

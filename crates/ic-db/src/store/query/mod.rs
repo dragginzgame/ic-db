@@ -189,19 +189,25 @@ impl Comparison {
         if let Some(result) = self.accepts_values(left, right) {
             return Some(result);
         }
-        match self {
-            Comparison::Lt | Comparison::Le | Comparison::Gt | Comparison::Ge => {
-                // Other admitted scalars use the declared component order.
-                let mut encoded = Vec::new();
-                left.append_component(false, &mut encoded);
-                let split = encoded.len();
-                right.append_component(false, &mut encoded);
-                let (left, right) = encoded.split_at(split);
-
-                Some(self.accepts(Some(left), Some(right), false))
-            }
-            _ => None,
+        if let Some(order) = left.integer_cmp(&right) {
+            return match self {
+                Self::Lt => Some(order.is_lt()),
+                Self::Le => Some(order.is_le()),
+                Self::Gt => Some(order.is_gt()),
+                Self::Ge => Some(order.is_ge()),
+                _ => None,
+            };
         }
+        if !self.is_relational() {
+            return None;
+        }
+        // Other admitted scalars use the declared component order.
+        let mut encoded = Vec::new();
+        left.append_component(false, &mut encoded);
+        let split = encoded.len();
+        right.append_component(false, &mut encoded);
+        let (left, right) = encoded.split_at(split);
+        Some(self.accepts(Some(left), Some(right), false))
     }
 
     // Text and Blob operands borrowed from rows or fixed query values are already unframed.
@@ -353,6 +359,12 @@ pub enum QueryOperand<'a> {
     Length(u32),
     /// Compare with another field or supported direct record member on the same row.
     Field(&'a str),
+}
+
+impl<'a, T: Into<IndexValue<'a>>> From<T> for QueryOperand<'a> {
+    fn from(value: T) -> Self {
+        Self::Literal(value.into())
+    }
 }
 
 struct Predicate<'a> {
@@ -512,8 +524,7 @@ struct Request<'a> {
     groups: aggregate::GroupRequest<'a>,
     predicates: Vec<Predicate<'a>>,
     index: Option<(&'a str, Vec<IndexValue<'a>>)>,
-    order: Option<Vec<&'a str>>,
-    order_descending: u8,
+    order: Option<Vec<OrderTerm<'a>>>,
     descending: bool,
     distinct: bool,
     single_result_probe: Option<SingleResult>,
@@ -531,7 +542,6 @@ impl Default for Request<'_> {
             predicates: Vec::new(),
             index: None,
             order: None,
-            order_descending: 0,
             descending: false,
             distinct: false,
             single_result_probe: None,
@@ -677,20 +687,17 @@ impl<'a> Request<'a> {
         &mut self,
         alternatives: impl ExactSizeIterator<Item = (&'a str, Comparison, QueryOperand<'a>)>,
     ) {
-        let count = alternatives.len();
-
-        if count == 0 || count > MAX_TERMS - self.predicates.len() {
-            self.over_limit = true;
-        } else {
-            self.predicates.extend(alternatives.enumerate().map(
-                |(i, (field, comparison, operand))| Predicate {
-                    field,
-                    comparison,
-                    operand,
-                    or_next: i + 1 < count,
-                },
-            ));
-        }
+        append_clause(
+            &mut self.predicates,
+            &mut self.over_limit,
+            alternatives,
+            |(field, comparison, operand), or_next| Predicate {
+                field,
+                comparison,
+                operand,
+                or_next,
+            },
+        );
     }
 
     #[inline(never)]
@@ -725,12 +732,7 @@ impl<'a> Request<'a> {
 
             return;
         }
-        self.order = Some(Vec::with_capacity(fields.len()));
-        self.order_descending = 0;
-        for &term in fields {
-            let OrderTerm(field, direction) = term.into();
-            self.append_order(field, direction);
-        }
+        self.order = Some(fields.iter().copied().map(Into::into).collect());
     }
 
     fn append_order(&mut self, field: &'a str, direction: SortDirection) {
@@ -740,19 +742,30 @@ impl<'a> Request<'a> {
 
             return;
         }
-        if direction == SortDirection::Descending {
-            self.order_descending |= 1 << fields.len();
-        }
-        fields.push(field);
+        fields.push(OrderTerm(field, direction));
     }
 
     fn primary_descending(&self, entity: &EntitySchema) -> bool {
-        self.order_descending != 0
-            && self.order.as_ref().is_some_and(|fields| {
-                fields.last() == Some(&entity.primary_key)
-                    && self.order_descending & (1 << (fields.len() - 1)) != 0
-            })
+        matches!(self.order.as_deref().and_then(|order| order.last()), Some(OrderTerm(name, SortDirection::Descending)) if *name == entity.primary_key)
     }
+}
+
+fn append_clause<I, T>(
+    predicates: &mut Vec<T>,
+    over_limit: &mut bool,
+    terms: impl ExactSizeIterator<Item = I>,
+    predicate: impl Fn(I, bool) -> T,
+) {
+    let count = terms.len();
+    if count == 0 || count > MAX_TERMS - predicates.len() {
+        *over_limit = true;
+        return;
+    }
+    predicates.extend(
+        terms
+            .enumerate()
+            .map(|(i, term)| predicate(term, i + 1 < count)),
+    );
 }
 
 // Maintenance gets only bounded primary traversal, not a second query frontend.
@@ -829,17 +842,17 @@ impl<M: Memory> Database<M> {
     /// Begin a live primary-key-ordered query. Admission occurs on `fetch`.
     #[must_use]
     pub fn query<E: Entity>(&self) -> Query<'_, E, M> {
-        Query {
-            db: QuerySource::Direct(self),
-            entity: PhantomData,
-            request: Request::default(),
-        }
+        Query::new(QuerySource::Direct(self))
     }
 }
 impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     pub(crate) fn from_session(db: Rc<RefCell<Database<M>>>) -> Self {
+        Self::new(QuerySource::Session(db))
+    }
+
+    fn new(db: QuerySource<'a, M>) -> Self {
         Self {
-            db: QuerySource::Session(db),
+            db,
             request: Request::default(),
             entity: PhantomData,
         }
@@ -1062,16 +1075,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Match `field < lower || field > upper` using fields of the same row.
     /// A missing bound makes only its own comparison false. A missing tested field
     /// never matches. Uses one OR clause and the same two comparison terms and
-    /// continuation as the equivalent `filter_any_operands` call.
+    /// continuation as the equivalent `filter_any` call.
     #[must_use]
     pub fn filter_not_between_fields(self, field: &'a str, lower: &'a str, upper: &'a str) -> Self {
-        self.filter_any_operands(&[
+        self.filter_any(&[
             (field, Comparison::Lt, QueryOperand::Field(lower)),
             (field, Comparison::Gt, QueryOperand::Field(upper)),
         ])
     }
 
-    /// Add an OR clause of literal comparisons, ANDed with other filters.
+    /// Add one OR clause, ANDed with other filters. Pass raw values of one type,
+    /// `IndexValue` for mixed literal types, or `QueryOperand` to include field and length comparisons.
     /// Alternatives may compare different direct scalar members of a record.
     /// Each clause must contain at least one comparison; all filters together
     /// may contain at most eight. Empty/oversized clauses refuse with `Error::Limit`
@@ -1079,27 +1093,15 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Uses one ordered traversal, without union scans or duplicate rows. Alternatives
     /// do not establish fixed index prefixes; a one-term clause behaves like `filter`.
     #[must_use]
-    pub fn filter_any(mut self, alternatives: &[(&'a str, Comparison, IndexValue<'a>)]) -> Self {
+    pub fn filter_any<T: Copy + Into<QueryOperand<'a>>>(
+        mut self,
+        alternatives: &[(&'a str, Comparison, T)],
+    ) -> Self {
         self.request.or_clause(
             alternatives
                 .iter()
-                .map(|&(field, op, value)| (field, op, QueryOperand::Literal(value))),
+                .map(|&(field, op, value)| (field, op, value.into())),
         );
-
-        self
-    }
-
-    /// Add one OR clause of literal, field-to-field or length comparisons.
-    /// Each alternative follows its corresponding single-filter admission rules.
-    /// All alternatives share the eight-comparison budget with the other filters.
-    /// Literal-only clauses have the same cursor and job identity as `filter_any`.
-    #[must_use]
-    pub fn filter_any_operands(
-        mut self,
-        alternatives: &[(&'a str, Comparison, QueryOperand<'a>)],
-    ) -> Self {
-        self.request.or_clause(alternatives.iter().copied());
-
         self
     }
 
@@ -1262,22 +1264,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and storage errors as `fetch`. Returns `Limit`
     /// if the work budget ends before a match or exhaustion is established.
     pub fn first(self) -> Result<Option<E>, Error> {
-        self.first_with(Self::entity_page)
+        self.single_with(SingleResult::First, Self::entity_page)
     }
 
     /// Return the first projected record in query order.
     /// # Errors
     /// Applies the projection checks of [`Self::fetch_as`] and the work bound of [`Self::first`].
     pub fn first_as<R: Value>(self) -> Result<Option<R>, Error> {
-        self.first_with(Self::projected_page::<R>)
-    }
-
-    fn first_with<R>(
-        self,
-        fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
-    ) -> Result<Option<R>, Error> {
-        observe!(query, { fetch(self.probe_matches(SingleResult::First)?) })
-            .map(|mut page| page.rows.pop())
+        self.single_with(SingleResult::First, Self::projected_page::<R>)
     }
 
     /// Return the only match, or `None` when the query is exhausted without one.
@@ -1287,7 +1281,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns `MultipleMatches` on a second match and `Limit` if the page is
     /// incomplete before cardinality is known. Ordinary fetch errors apply.
     pub fn try_one(self) -> Result<Option<E>, Error> {
-        self.try_one_with(Self::entity_page)
+        self.single_with(SingleResult::Only, Self::entity_page)
     }
 
     /// Return the sole projected result, or `None` on a proven miss.
@@ -1296,33 +1290,28 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Errors
     /// Applies the projection checks of [`Self::fetch_as`] and the cardinality checks of [`Self::try_one`].
     pub fn try_one_as<R: Value>(self) -> Result<Option<R>, Error> {
-        self.try_one_with(Self::projected_page::<R>)
+        self.single_with(SingleResult::Only, Self::projected_page::<R>)
     }
 
-    fn try_one_with<R>(
-        self,
+    fn single_with<R>(
+        mut self,
+        probe: SingleResult,
         fetch: impl FnOnce(Self) -> Result<QueryPage<R>, Error>,
     ) -> Result<Option<R>, Error> {
         observe!(query, {
-            if self.request.cursor.is_some() {
+            if probe == SingleResult::Only && self.request.cursor.is_some() {
                 return Err(Error::InvalidQuery);
             }
-            fetch(self.probe_matches(SingleResult::Only)?)
+            if !(1..=32).contains(&self.request.rows) {
+                return Err(Error::Limit);
+            }
+            self.request.single_result_probe = Some(probe);
+            fetch(self.limit(match probe {
+                SingleResult::First => 1,
+                SingleResult::Only => 2,
+            }))
         })
         .map(|mut page| page.rows.pop())
-    }
-
-    fn probe_matches(mut self, probe: SingleResult) -> Result<Self, Error> {
-        if !(1..=32).contains(&self.request.rows) {
-            return Err(Error::Limit);
-        }
-
-        self.request.single_result_probe = Some(probe);
-
-        Ok(self.limit(match probe {
-            SingleResult::First => 1,
-            SingleResult::Only => 2,
-        }))
     }
 
     /// Project matching top-level fields into an existing `#[record]` type.
@@ -1453,6 +1442,18 @@ enum MemberNeedle {
 
 // Operands have already been type-checked. Text and Blob literals carry their
 // original bytes, before the durable key codec escapes embedded zeros.
+fn admit_literal_size(value: &IndexValue<'_>) -> Result<(), Error> {
+    let size = match value {
+        IndexValue::Text(text) => text.len(),
+        IndexValue::Blob(bytes) => bytes.len(),
+        _ => return Ok(()),
+    };
+    if size > crate::codec::MAX_ROW_BYTES {
+        return Err(Error::Limit);
+    }
+    Ok(())
+}
+
 fn scalar_bytes(value: IndexValue<'_>) -> Option<&[u8]> {
     match value {
         IndexValue::Text(text) => Some(text.as_bytes()),
@@ -1520,9 +1521,8 @@ fn contains_member(
     Ok(false)
 }
 
-// Admission sets bits only for fields in this entity. Consuming the lowest
-// bit first preserves the canonical field order of projected records and keys.
-fn projection_positions(mut mask: u32) -> impl Iterator<Item = usize> {
+// Ascending positions preserve projection field order and bulk lookup slot order.
+pub(super) fn set_bit_positions(mut mask: u32) -> impl Iterator<Item = usize> {
     std::iter::from_fn(move || {
         if mask == 0 {
             return None;
@@ -1534,7 +1534,7 @@ fn projection_positions(mut mask: u32) -> impl Iterator<Item = usize> {
 }
 
 fn admit_ordered_fields(entity: &EntitySchema, mask: u32) -> Result<(), Error> {
-    for i in projection_positions(mask) {
+    for i in set_bit_positions(mask) {
         if !key::supports(entity.fields[i].value) {
             return Err(Error::InvalidQuery);
         }
@@ -1560,7 +1560,7 @@ fn build_comparison_key<'a>(
     mut value: impl FnMut(usize, &crate::FieldSchema) -> Result<IndexValue<'a>, Error>,
 ) -> Result<(), Error> {
     key.clear();
-    for i in projection_positions(mask) {
+    for i in set_bit_positions(mask) {
         let field = &entity.fields[i];
         value(i, field)?.append_component(field.optional, key);
         if key.len() > MAX_COMPARISON_KEY {
@@ -1585,7 +1585,7 @@ fn admit_output(size: usize, limit: usize, used: &mut usize) -> Result<(), Error
 
 // Size and copy already validated projection spans using the same field mask.
 fn projection_size(spans: &[(u16, u16)], mask: u32) -> usize {
-    projection_positions(mask)
+    set_bit_positions(mask)
         .map(|i| {
             let (start, end) = spans[i];
             usize::from(end - start)
@@ -1595,7 +1595,7 @@ fn projection_size(spans: &[(u16, u16)], mask: u32) -> usize {
 
 fn copy_projection(bytes: &[u8], spans: &[(u16, u16)], mask: u32, size: usize) -> Vec<u8> {
     let mut output = Vec::with_capacity(size);
-    for i in projection_positions(mask) {
+    for i in set_bit_positions(mask) {
         let (start, end) = spans[i];
         output.extend_from_slice(&bytes[usize::from(start)..usize::from(end)]);
     }
@@ -1661,13 +1661,7 @@ impl<'a> Plan<'a> {
             })
             .chain(request.index.iter().flat_map(|(_, values)| values.iter()))
         {
-            if match value {
-                IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
-                IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
-                _ => false,
-            } {
-                return Err(Error::Limit);
-            }
+            admit_literal_size(value)?;
         }
         let primary = entity
             .field_position(entity.primary_key)
@@ -1706,8 +1700,7 @@ impl<'a> Plan<'a> {
                         field.optional || leaf.optional,
                         value,
                     )?;
-                    let mut literal = Vec::new();
-                    value.append_component(field.optional || leaf.optional, &mut literal);
+                    let literal = value.component(field.optional || leaf.optional);
                     plan.span_fields |= 1 << position;
                     TermOperand::Nested {
                         member,
@@ -1783,8 +1776,7 @@ impl<'a> Plan<'a> {
                             return Err(Error::InvalidQuery);
                         }
                         value.admit(item, false)?;
-                        let mut bytes = Vec::new();
-                        value.append_component(false, &mut bytes);
+                        let bytes = value.component(false);
                         plan.span_fields |= 1 << position;
 
                         TermOperand::Member {
@@ -1805,8 +1797,7 @@ impl<'a> Plan<'a> {
                         predicate
                             .comparison
                             .admit(field.value, field.optional, value)?;
-                        let mut bytes = Vec::new();
-                        value.append_component(field.optional, &mut bytes);
+                        let bytes = value.component(field.optional);
 
                         TermOperand::Literal { bytes, absent }
                     }

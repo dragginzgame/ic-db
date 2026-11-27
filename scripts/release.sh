@@ -8,10 +8,12 @@ installer="$PWD/vendor/toko-tooling/scripts/dev/install-rust-tools.sh"
 export CARGO_RELEASE_METADATA_MAX_BYTES=8388608
 source scripts/release-metadata.sh
 
+release_files=(Cargo.toml Cargo.lock qualification/Cargo.lock CHANGELOG.md ci/dependency-pinning-exceptions.json)
+
 metadata_check() {
     bash "$shared/cargo-release-metadata.sh" check ic-db || return
     select_metadata_editor || return
-    check_qualification_lock
+    check_local_release_metadata
 }
 
 verified_source() {
@@ -27,7 +29,7 @@ case "${1:-}" in
         bash "$shared/read-cargo-workspace-version.sh" --stable Cargo.toml
         ;;
     release-files)
-        printf '%s\0' Cargo.toml Cargo.lock qualification/Cargo.lock CHANGELOG.md
+        printf '%s\0' "${release_files[@]}"
         ;;
     release-preflight)
         bash "$shared/check-release-source.sh"
@@ -69,14 +71,16 @@ case "${1:-}" in
         # shellcheck source=vendor/toko-tooling/scripts/ci/release-metadata-transaction.sh
         source "$shared/release-metadata-transaction.sh"
         release_metadata_prepare "${TMPDIR:-/tmp}/ic-db-release-metadata.XXXXXX" \
-            render_release_metadata metadata_check Cargo.lock qualification/Cargo.lock CHANGELOG.md Cargo.toml
+            render_release_metadata metadata_check "${release_files[@]}"
         make fmt-check
         ;;
     release-prepared-check|release-commit-check)
         verified_source
         metadata_check
-        bash "$shared/check-release-source.sh" --allow Cargo.toml --allow Cargo.lock --allow qualification/Cargo.lock --allow CHANGELOG.md
-        git diff --exit-code "$RELEASE_SOURCE" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
+        allowed=()
+        for file in "${release_files[@]}"; do allowed+=(--allow "$file"); done
+        bash "$shared/check-release-source.sh" "${allowed[@]}"
+        git diff --exit-code "$RELEASE_SOURCE" -- . "${release_files[@]/#/:!}"
         if [[ "$1" == release-commit-check ]]; then
             git diff --exit-code
         fi
@@ -84,7 +88,7 @@ case "${1:-}" in
     release-committed-check|release-tagged-check|release-push-check)
         verified_source
         [[ "$(git rev-parse "${RELEASE_COMMIT:?}^")" == "$RELEASE_SOURCE" ]] || exit 1
-        git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . ':!Cargo.toml' ':!Cargo.lock' ':!qualification/Cargo.lock' ':!CHANGELOG.md'
+        git diff --exit-code "$RELEASE_SOURCE" "$RELEASE_COMMIT" -- . "${release_files[@]/#/:!}"
         metadata_check
         if [[ "$1" == release-push-check ]]; then
             [[ "$(gh repo view dragginzgame/ic-db --json visibility --jq .visibility)" == PUBLIC ]] || exit 1

@@ -793,7 +793,7 @@ fn field_ranges_use_row_bounds_and_resume_as_their_explicit_comparisons() {
     let first = outside().limit(2).fetch().unwrap();
     let rest = db
         .query::<Entry>()
-        .filter_any_operands(&[
+        .filter_any(&[
             ("id", C::Lt, Field("amount")),
             ("id", C::Gt, Field("maybe")),
         ])
@@ -858,7 +858,7 @@ fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
         ("id", C::Eq, Field("maybe")),
         ("id", C::Le, Literal(3_u64.into())),
     ];
-    let query = || db.query::<Entry>().filter_any_operands(&alternatives);
+    let query = || db.query::<Entry>().filter_any(&alternatives);
     assert_eq!(ids(&query().fetch().unwrap().rows), [1, 2, 3, 4, 5, 7, 8]);
     assert_eq!(
         query()
@@ -875,7 +875,7 @@ fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
     let proven = [alternatives[0], ("maybe", C::Le, Literal(3_u64.into()))];
     let page = db
         .query::<Entry>()
-        .filter_any_operands(&proven)
+        .filter_any(&proven)
         .using_index("maybe", &[])
         .fetch()
         .unwrap();
@@ -885,7 +885,7 @@ fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
     let changed = [("id", C::Eq, Field("amount")), alternatives[1]];
     assert!(matches!(
         db.query::<Entry>()
-            .filter_any_operands(&changed)
+            .filter_any(&changed)
             .after(&cursor)
             .fetch(),
         Err(Error::InvalidCursor)
@@ -903,7 +903,7 @@ fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
     assert_eq!(
         ids(&db
             .query::<Entry>()
-            .filter_any_operands(&explicit)
+            .filter_any(&explicit)
             .after(&cursor)
             .fetch()
             .unwrap()
@@ -912,12 +912,12 @@ fn mixed_or_clauses_share_one_scan_and_preserve_operand_identity() {
     );
     let invalid = [("id", C::Eq, Field("id")), ("id", C::Eq, Field("missing"))];
     assert!(matches!(
-        db.query::<Entry>().filter_any_operands(&invalid).count(),
+        db.query::<Entry>().filter_any(&invalid).count(),
         Err(Error::InvalidQuery)
     ));
     for terms in [&[][..], &[alternatives[0]; 9][..]] {
         assert!(matches!(
-            db.query::<Entry>().filter_any_operands(terms).fetch(),
+            db.query::<Entry>().filter_any(terms).fetch(),
             Err(Error::Limit)
         ));
     }
@@ -1095,7 +1095,7 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
         .unwrap();
     assert_eq!((empty.value, empty.examined), (0, 0));
     let alternatives = [
-        ("amount", C::Eq, 0_u64.into()),
+        ("amount", C::Eq, IndexValue::from(0_u64)),
         ("amount", C::Eq, 20_u64.into()),
     ];
     let page = db
@@ -1167,15 +1167,15 @@ fn absent_index_prefix_checks_presence_before_scanning() {
         absent().filter_length(TextRow::TEXT, C::Eq, 0),
         absent().filter_fields(TextRow::REQUIRED, C::Eq, TextRow::TEXT),
         absent().filter_any(&[
-            (TextRow::TEXT, C::StartsWith, "".into()),
-            (TextRow::TEXT, C::Lt, "z".into()),
+            (TextRow::TEXT, C::StartsWith, ""),
+            (TextRow::TEXT, C::Lt, "z"),
         ]),
     ] {
         let count = impossible.work_limit(1).count().unwrap();
         assert_eq!((count.value, count.examined, count.fetched), (0, 0, 0));
     }
     let allowed = absent()
-        .filter_any(&[
+        .filter_any::<IndexValue>(&[
             (TextRow::TEXT, C::StartsWith, "".into()),
             (TextRow::ID, C::Eq, 0_u64.into()),
         ])
@@ -1298,9 +1298,7 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
             if descending {
                 query = query.descending();
             }
-            if let Some(cursor) = &cursor {
-                query = query.after(cursor);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch_as::<PresenceId>().unwrap();
             rows.extend(page.rows.into_iter().map(|r| r.id));
             cursor = page.next;
@@ -1523,10 +1521,7 @@ fn text_prefix_seeks_cover_unicode_boundaries_and_empty_required_text() {
     let page = db
         .query::<WideRange>()
         .using_index("text", &[])
-        .filter_any(&[
-            ("text", C::StartsWith, "a".into()),
-            ("text", C::StartsWith, "é".into()),
-        ])
+        .filter_any(&[("text", C::StartsWith, "a"), ("text", C::StartsWith, "é")])
         .fetch()
         .unwrap();
     assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [3, 16]);
@@ -1606,7 +1601,10 @@ fn primary_ranges_match_integer_oracle_and_only_examine_the_intersection() {
             .fetch(),
         Err(Error::InvalidOperand)
     ));
-    let alternatives = [("id", C::Le, 2_u64.into()), ("id", C::Ge, 7_u64.into())];
+    let alternatives = [
+        ("id", C::Le, IndexValue::from(2_u64)),
+        ("id", C::Ge, 7_u64.into()),
+    ];
     let page = db
         .query::<Entry>()
         .filter_any(&alternatives)
@@ -1886,8 +1884,8 @@ fn text_contains_matches_long_repetitive_and_escaped_inputs() {
     let actual = db
         .query::<TextRow>()
         .filter_any(&[
-            ("required", C::Contains, "lai".into()),
-            ("required", C::Contains, "clair".into()),
+            ("required", C::Contains, "lai"),
+            ("required", C::Contains, "clair"),
         ])
         .fetch()
         .unwrap();
@@ -1953,7 +1951,7 @@ fn length_compares_text_in_utf8_bytes_and_binds_pages() {
     let either_length = |second_field, second_op| {
         db.query::<TextRow>()
             .filter_length(TextRow::TEXT, C::Lt, 2)
-            .filter_any_operands(&[
+            .filter_any(&[
                 (TextRow::TEXT, C::Ge, ic_db::QueryOperand::Length(2)),
                 (second_field, second_op, ic_db::QueryOperand::Length(1)),
             ])
@@ -2104,7 +2102,7 @@ fn empty_length_alternatives_bound_only_single_value_branches() {
         ];
         let count = db
             .query::<TextRow>()
-            .filter_any_operands(&alternatives)
+            .filter_any(&alternatives)
             .work_limit(interval + 1)
             .count()
             .unwrap();
@@ -2113,7 +2111,7 @@ fn empty_length_alternatives_bound_only_single_value_branches() {
     // Length <= 1 also matches "A" and "a", beyond the literal endpoint.
     let wider = db
         .query::<TextRow>()
-        .filter_any_operands(&[
+        .filter_any(&[
             (TextRow::TEXT, C::Le, Length(1)),
             (TextRow::TEXT, C::Eq, Literal(endpoint.into())),
         ])
@@ -2138,14 +2136,12 @@ fn empty_text_pages_resume_after_matching_rows_change() {
     db.commit(batch).unwrap();
 
     let page = |db: &Database, cursor: Option<&QueryCursor>| {
-        let mut query = db
+        let query = db
             .query::<TextRow>()
             .filter_length(TextRow::TEXT, C::Eq, 0)
             .gte(TextRow::BUCKET, 1_u8)
-            .work_limit(1);
-        if let Some(cursor) = cursor {
-            query = query.after(cursor);
-        }
+            .work_limit(1)
+            .after(cursor);
         query.fetch().unwrap()
     };
     // ID 1 has empty text, but its bucket fails the residual predicate.
@@ -2260,9 +2256,7 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
                     if descending {
                         query = query.descending();
                     }
-                    if let Some(cursor) = &cursor {
-                        query = query.after(cursor);
-                    }
+                    query = query.after(cursor.as_ref());
                     let page = query.fetch().unwrap();
                     assert!(page.examined <= 1);
                     examined += page.examined;
@@ -2295,15 +2289,13 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
             let mut cursor = None;
             let mut examined = 0;
             for step in 0..32 {
-                let mut query = db
+                let query = db
                     .query::<TextRow>()
                     .filter("text", comparison, needle)
                     .order_by(&["text"])
                     .distinct()
-                    .work_limit(1);
-                if let Some(cursor) = &cursor {
-                    query = query.after(cursor);
-                }
+                    .work_limit(1)
+                    .after(cursor.as_ref());
                 let page = query.fetch_as::<TextOnly>().unwrap();
                 examined += page.examined;
                 actual.extend(page.rows.into_iter().map(|r| r.text));
@@ -2334,10 +2326,7 @@ fn text_matches_rust_oracle_across_pages_and_distinct_classes() {
     }
     let rows = db
         .query::<TextRow>()
-        .filter_any(&[
-            ("text", C::StartsWith, "é".into()),
-            ("text", C::StartsWith, "a\0".into()),
-        ])
+        .filter_any(&[("text", C::StartsWith, "é"), ("text", C::StartsWith, "a\0")])
         .fetch()
         .unwrap()
         .rows;
@@ -2407,7 +2396,7 @@ fn text_groups_and_refusals_share_exact_admission() {
         ));
         assert!(matches!(
             db.query::<TextRow>()
-                .filter_any(&[
+                .filter_any::<IndexValue>(&[
                     ("text", comparison, "".into()),
                     ("id", comparison, 0_u64.into())
                 ])
@@ -2472,9 +2461,7 @@ fn exclusion_matches_optional_value_oracle_and_inequality_cursors() {
                 if descending {
                     query = query.descending();
                 }
-                if let Some(cursor) = &cursor {
-                    query = query.after(cursor);
-                }
+                query = query.after(cursor.as_ref());
                 let page = query.fetch().unwrap();
                 assert!(page.examined <= 1);
                 actual.extend(ids(&page.rows));
@@ -2665,7 +2652,7 @@ fn contradictory_residual_bounds_finish_without_examining_candidates() {
         .unwrap();
     assert_eq!((probes.value, probes.examined, probes.fetched), (0, 0, 0));
     let alternatives = [
-        (Entry::AMOUNT, C::Lt, 40_u64.into()),
+        (Entry::AMOUNT, C::Lt, IndexValue::from(40_u64)),
         (Entry::ID, C::Eq, 4_u64.into()),
     ];
     let page = listing()
@@ -2725,7 +2712,7 @@ fn outside_ranges_preserve_sparse_progress_absence_and_or_cursor_identity() {
                     expected.reverse();
                 }
                 let alternatives = [
-                    ("maybe", C::Lt, lower.into()),
+                    ("maybe", C::Lt, IndexValue::from(lower)),
                     ("maybe", C::Gt, upper.into()),
                 ];
                 let mut cursor = None;
@@ -2745,9 +2732,7 @@ fn outside_ranges_preserve_sparse_progress_absence_and_or_cursor_identity() {
                     if descending {
                         query = query.descending();
                     }
-                    if let Some(cursor) = &cursor {
-                        query = query.after(cursor);
-                    }
+                    query = query.after(cursor.as_ref());
                     let page = query.fetch().unwrap();
                     assert!(page.examined <= 1);
                     actual.extend(ids(&page.rows));
@@ -2897,10 +2882,7 @@ fn primary_membership_seeks_to_the_requested_interval_and_checks_its_gaps() {
 
     let mixed = db
         .query::<Entry>()
-        .filter_any(&[
-            (Entry::ID, C::Eq, 8_u64.into()),
-            (Entry::AMOUNT, C::Eq, 20_u64.into()),
-        ])
+        .filter_any(&[(Entry::ID, C::Eq, 8_u64), (Entry::AMOUNT, C::Eq, 20_u64)])
         .fetch()
         .unwrap();
     assert_eq!(ids(&mixed.rows), [2, 8]);
@@ -2941,10 +2923,7 @@ fn primary_membership_counts_intersect_before_spending_the_probe_budget() {
     let mixed = || {
         db.query::<Entry>()
             .filter_in(Entry::ID, &[1_u64, 8, 99, 8])
-            .filter_any(&[
-                (Entry::ID, C::Eq, 1_u64.into()),
-                (Entry::AMOUNT, C::Eq, 80_u64.into()),
-            ])
+            .filter_any(&[(Entry::ID, C::Eq, 1_u64), (Entry::AMOUNT, C::Eq, 80_u64)])
     };
     let count = mixed().work_limit(3).count().unwrap();
     // ID 1 qualifies by key, ID 8 needs its amount checked, and ID 99 is missing.
@@ -3126,13 +3105,11 @@ fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
     let mut cursor = None;
     let mut actual = Vec::new();
     for page_number in 0..16 {
-        let mut query = db
+        let query = db
             .query::<Entry>()
             .filter_in("maybe", &values)
-            .work_limit(1);
-        if let Some(cursor) = &cursor {
-            query = query.after(cursor);
-        }
+            .work_limit(1)
+            .after(cursor.as_ref());
         let page = query.fetch().unwrap();
         assert!(page.examined <= 1);
         actual.extend(ids(&page.rows));
@@ -3160,7 +3137,7 @@ fn membership_preserves_absence_duplicates_and_equality_cursor_identity() {
         1
     );
 
-    let values = [1_u64.into(), 3_u64.into()];
+    let values = [IndexValue::from(1_u64), 3_u64.into()];
     let page = db
         .query::<Entry>()
         .filter_in("id", &values)
@@ -3258,7 +3235,7 @@ fn any_clauses_compose_with_and_and_progress_without_duplicate_rows() {
         ("maybe", C::Eq, IndexValue::Absent),
     ];
     let second = [
-        ("category", C::Eq, 0_u8.into()),
+        ("category", C::Eq, IndexValue::from(0_u8)),
         ("id", C::Eq, 1_u64.into()),
     ];
     let expected: Vec<_> = (1..=8)
@@ -3285,9 +3262,7 @@ fn any_clauses_compose_with_and_and_progress_without_duplicate_rows() {
                 if descending {
                     query = query.descending();
                 }
-                if let Some(cursor) = &cursor {
-                    query = query.after(cursor);
-                }
+                query = query.after(cursor.as_ref());
                 let page = query.fetch_as::<Summary>().unwrap();
                 assert!(page.examined <= work);
                 assert!(page.output_bytes <= 16);
@@ -3363,7 +3338,7 @@ fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
     let alternatives = [
-        ("category", C::Eq, 0_u8.into()),
+        ("category", C::Eq, IndexValue::from(0_u8)),
         ("category", C::Eq, 1_u8.into()),
     ];
     let rows = db
@@ -3386,7 +3361,7 @@ fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
         let query = db
             .query::<Entry>()
             .filter("category", required, 1_u8)
-            .filter_any(&[
+            .filter_any::<IndexValue>(&[
                 ("category", alternative, 1_u8.into()),
                 ("id", C::Gt, 0_u64.into()),
             ])
@@ -3420,7 +3395,7 @@ fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
     );
     let mixed = db
         .query::<Entry>()
-        .filter_any(&[
+        .filter_any::<IndexValue>(&[
             ("category", C::Eq, 0_u8.into()),
             ("id", C::Eq, 1_u64.into()),
         ])
@@ -3436,10 +3411,7 @@ fn any_equalities_cannot_claim_fixed_order_or_index_membership() {
     assert_eq!(
         ids(&db
             .query::<Entry>()
-            .filter_any(&[
-                ("maybe", C::Eq, 1_u64.into()),
-                ("maybe", C::Eq, 2_u64.into())
-            ])
+            .filter_any(&[("maybe", C::Eq, 1_u64), ("maybe", C::Eq, 2_u64)])
             .using_index("maybe", &[])
             .fetch()
             .unwrap()
@@ -3465,15 +3437,15 @@ fn any_admits_every_operand_and_binds_boolean_structure() {
     }
     assert!(matches!(
         db.query::<Other>()
-            .filter_any(&[("id", C::Eq, 0_u64.into()), ("id", C::Eq, 1_u8.into())])
+            .filter_any::<IndexValue>(&[("id", C::Eq, 0_u64.into()), ("id", C::Eq, 1_u8.into())])
             .fetch(),
         Err(Error::InvalidOperand)
     ));
     assert!(matches!(
-        db.query::<Entry>().filter_any(&[]).fetch(),
+        db.query::<Entry>().filter_any::<IndexValue>(&[]).fetch(),
         Err(Error::Limit)
     ));
-    let repeated = [("id", C::Ge, 0_u64.into()); 8];
+    let repeated = [("id", C::Ge, IndexValue::from(0_u64)); 8];
     assert_eq!(
         db.query::<Entry>()
             .filter_any(&repeated)
@@ -3491,12 +3463,15 @@ fn any_admits_every_operand_and_binds_boolean_structure() {
     ));
     assert!(matches!(
         db.query::<Entry>()
-            .filter_any(&[("id", C::Ge, 0_u64.into()); 9])
+            .filter_any(&[("id", C::Ge, 0_u64); 9])
             .fetch(),
         Err(Error::Limit)
     ));
 
-    let alternatives = [("id", C::Ge, 2_u64.into()), ("id", C::Le, 5_u64.into())];
+    let alternatives = [
+        ("id", C::Ge, IndexValue::from(2_u64)),
+        ("id", C::Le, 5_u64.into()),
+    ];
     let cursor = db
         .query::<Entry>()
         .filter_any(&alternatives)
@@ -3619,7 +3594,7 @@ fn existence_stops_on_a_valid_match_and_never_reports_budget_exhaustion_as_false
     // A range in one alternative cannot exclude matches from the other.
     let alternatives = db
         .query::<Entry>()
-        .filter_any(&[
+        .filter_any::<IndexValue>(&[
             ("amount", C::Ge, 80_u64.into()),
             ("category", C::Eq, 1_u8.into()),
         ])
@@ -3731,7 +3706,7 @@ fn impossible_residuals_skip_complete_key_probes() {
         }
         let viable = query()
             .filter_length(Entry::PAYLOAD, C::Ge, 3)
-            .filter_any_operands(&[
+            .filter_any(&[
                 (Entry::PAYLOAD, C::Lt, ic_db::QueryOperand::Length(3)),
                 (
                     Entry::AMOUNT,
@@ -3792,7 +3767,10 @@ fn existence_admits_every_operand_and_refuses_incompatible_modifiers() {
     let db = create(&runtime, 1);
     assert!(matches!(
         db.query::<Entry>()
-            .filter_any(&[("id", C::Ge, 0_u64.into()), ("amount", C::Eq, 0_u8.into())])
+            .filter_any::<IndexValue>(&[
+                ("id", C::Ge, 0_u64.into()),
+                ("amount", C::Eq, 0_u8.into())
+            ])
             .exists(),
         Err(Error::InvalidOperand)
     ));
@@ -4117,9 +4095,7 @@ fn projection_uses_result_bytes_and_preserves_bounded_continuation() {
             if descending {
                 query = query.descending();
             }
-            if let Some(cursor) = &cursor {
-                query = query.after(cursor);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch_as::<Summary>().unwrap();
             assert!(page.examined <= 2);
             assert_eq!(page.output_bytes, 16 * page.rows.len());
@@ -4581,9 +4557,7 @@ fn presence_filters_cover_optional_stored_types_and_keep_empty_values_present() 
                     if descending {
                         query = query.descending();
                     }
-                    if let Some(cursor) = &cursor {
-                        query = query.after(cursor);
-                    }
+                    query = query.after(cursor.as_ref());
                     let page = query.fetch_as::<PresenceId>().unwrap();
                     actual.extend(page.rows.into_iter().map(|r| r.id));
                     cursor = page.next;
@@ -4943,9 +4917,7 @@ fn automatic_order_matches_a_full_sort_with_ties_and_sparse_pages() {
                 if descending {
                     query = query.descending();
                 }
-                if let Some(cursor) = &cursor {
-                    query = query.after(cursor);
-                }
+                query = query.after(cursor.as_ref());
                 let page = query.fetch_as::<Summary>().unwrap();
                 assert!(page.examined <= 1);
                 examined += page.examined;
@@ -5059,7 +5031,7 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
         for covered in [
             fixed().filter_in(Entry::CATEGORY, &[0_u8, 1]),
             fixed().filter_not_in(Entry::CATEGORY, &[0_u8, 2]),
-            fixed().filter_any(&[
+            fixed().filter_any::<IndexValue>(&[
                 (Entry::AMOUNT, C::Eq, 30_u64.into()),
                 (Entry::CATEGORY, C::Eq, 1_u8.into()),
             ]),
@@ -5068,7 +5040,7 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
             assert_eq!((count.value, count.examined, count.fetched), (4, 4, 0));
         }
         let residual = fixed()
-            .filter_any(&[
+            .filter_any::<IndexValue>(&[
                 (Entry::CATEGORY, C::Ne, 1_u8.into()),
                 (Entry::AMOUNT, C::Eq, 30_u64.into()),
             ])
@@ -5076,7 +5048,7 @@ fn fixed_values_disprove_membership_only_when_every_alternative_fails() {
             .unwrap();
         assert_eq!((residual.value, residual.fetched), (1, 4));
         let result = fixed()
-            .filter_any(&[
+            .filter_any::<IndexValue>(&[
                 (Entry::CATEGORY, C::Ne, 1_u8.into()),
                 (Entry::ID, C::Eq, 3_u64.into()),
             ])
@@ -5244,7 +5216,7 @@ fn primary_point_counts_use_the_key_only_when_it_proves_every_clause() {
     for id in [3_u64, 9] {
         let point = || db.query::<Entry>().eq(Entry::ID, id).work_limit(1);
         let covered = point()
-            .filter_any(&[
+            .filter_any::<IndexValue>(&[
                 (Entry::CATEGORY, C::Eq, 0_u8.into()),
                 (Entry::ID, C::Eq, id.into()),
             ])
@@ -5261,7 +5233,7 @@ fn primary_point_counts_use_the_key_only_when_it_proves_every_clause() {
         let residual = db
             .query::<Entry>()
             .eq(Entry::ID, 3_u64)
-            .filter_any(&[
+            .filter_any::<IndexValue>(&[
                 (Entry::ID, C::Eq, 4_u64.into()),
                 (Entry::CATEGORY, C::Eq, category.into()),
             ])
@@ -5315,7 +5287,7 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
     let alternatives = |field| {
         db.query::<Entry>()
             .filter_absent("maybe")
-            .filter_any(&[("maybe", C::Gt, 4_u64.into()), (field, C::Eq, 6_u64.into())])
+            .filter_any(&[("maybe", C::Gt, 4_u64), (field, C::Eq, 6_u64)])
     };
     let impossible = alternatives("maybe").work_limit(1).count().unwrap();
     assert_eq!(
@@ -5357,9 +5329,7 @@ fn sparse_membership_uses_filter_presence_without_changing_order_or_distinct() {
                     if descending {
                         query = query.descending();
                     }
-                    if let Some(cursor) = &cursor {
-                        query = query.after(cursor);
-                    }
+                    query = query.after(cursor.as_ref());
                     let page = query.fetch().unwrap();
                     examined += page.examined;
                     actual.extend(ids(&page.rows));
@@ -5839,9 +5809,7 @@ fn automatic_optional_order_retains_absence_and_primary_ties() {
             if descending {
                 query = query.descending();
             }
-            if let Some(cursor) = &cursor {
-                query = query.after(cursor);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch().unwrap();
             ids.extend(page.rows.into_iter().map(|r| r.id));
             cursor = page.next;
@@ -5887,9 +5855,7 @@ fn automatic_optional_order_retains_absence_and_primary_ties() {
                 if descending {
                     query = query.descending();
                 }
-                if let Some(cursor) = &cursor {
-                    query = query.after(cursor);
-                }
+                query = query.after(cursor.as_ref());
                 let page = query.fetch_as::<OptionalValue>().unwrap();
                 actual.extend(page.rows.into_iter().map(|r| r.value));
                 examined += page.examined;
@@ -5927,9 +5893,7 @@ fn distinct_prefixes_span_work_pages_and_retry_output_bytes() {
             if descending {
                 query = query.descending();
             }
-            if let Some(c) = &cursor {
-                query = query.after(c);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch_as::<CategoryOnly>().unwrap();
             examined += page.examined;
             assert_eq!(page.output_bytes, page.rows.len());
@@ -6098,9 +6062,7 @@ fn distinct_filters_reject_or_emit_whole_classes_across_pages() {
                     if descending {
                         query = query.descending();
                     }
-                    if let Some(cursor) = &cursor {
-                        query = query.after(cursor);
-                    }
+                    query = query.after(cursor.as_ref());
                     let page = query.fetch_as::<CategoryOnly>().unwrap();
                     assert!(page.examined <= work);
                     actual.extend(page.rows.into_iter().map(|r| r.category));
@@ -6219,10 +6181,7 @@ fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
     let mut after = None;
     let mut seen = Vec::new();
     for _ in 0..=38 {
-        let mut query = present().limit(3).work_limit(4);
-        if let Some(cursor) = &after {
-            query = query.after(cursor);
-        }
+        let query = present().limit(3).work_limit(4).after(after.as_ref());
         let page = query.fetch_as::<Assignment>().unwrap();
         assert!(page.rows.len() <= 3 && page.examined <= 4);
         seen.extend(page.rows);
@@ -6254,9 +6213,7 @@ fn distinct_pages_a_complete_unique_tuple_only_when_all_matches_are_indexed() {
                 if reverse {
                     query = query.descending();
                 }
-                if let Some(cursor) = &after {
-                    query = query.after(cursor);
-                }
+                query = query.after(after.as_ref());
                 let page = query.fetch().unwrap();
                 seen.extend(page.rows.into_iter().map(|r| r.id));
                 after = page.next;
@@ -6864,9 +6821,7 @@ fn distinct_filters_share_automatic_and_explicit_prefix_proofs() {
             if explicit {
                 query = query.using_index("category,amount,id", &[1_u8.into()]);
             }
-            if let Some(cursor) = &cursor {
-                query = query.after(cursor);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch_as::<AmountOnly>().unwrap();
             actual.extend(page.rows.into_iter().map(|r| r.amount));
             examined += page.examined;
@@ -6913,15 +6868,13 @@ fn distinct_column_equal_to_primary_key_pages_in_primary_order() {
         let mut after = None;
         let mut ids = Vec::new();
         for _ in 0..=8 {
-            let mut q = db
+            let q = db
                 .query::<Entry>()
                 .filter_fields(left, C::Eq, right)
                 .order_desc(Entry::ID)
                 .distinct()
-                .work_limit(1);
-            if let Some(cursor) = &after {
-                q = q.after(cursor);
-            }
+                .work_limit(1)
+                .after(after.as_ref());
             let page = q.select(|e| e.amount).fetch().unwrap();
             assert!(page.examined <= 1);
             ids.extend(page.rows);
@@ -6940,7 +6893,7 @@ fn distinct_column_equal_to_primary_key_pages_in_primary_order() {
     ];
     let page = db
         .query::<Entry>()
-        .filter_any_operands(&alternatives)
+        .filter_any(&alternatives)
         .order_desc(Entry::ID)
         .distinct()
         .select(|e| e.amount)
@@ -6979,10 +6932,10 @@ fn distinct_equal_columns_share_an_order_component() {
     let mut cursor = None;
     let mut seen = Vec::new();
     for _ in 0..=input.len() {
-        let mut q = query().order_asc(TextRow::TEXT).work_limit(1);
-        if let Some(after) = &cursor {
-            q = q.after(after);
-        }
+        let q = query()
+            .order_asc(TextRow::TEXT)
+            .work_limit(1)
+            .after(cursor.as_ref());
         let page = q.select(|r| (r.required, r.text)).fetch().unwrap();
         seen.extend(page.rows);
         cursor = page.next;
@@ -7028,7 +6981,7 @@ fn distinct_equal_columns_share_an_order_component() {
     ];
     assert!(matches!(
         db.query::<TextRow>()
-            .filter_any_operands(&alternatives)
+            .filter_any(&alternatives)
             .order_asc(TextRow::TEXT)
             .distinct()
             .work_limit(1)
@@ -7082,7 +7035,7 @@ fn distinct_transfers_a_fixed_index_value_only_through_mandatory_equality() {
         ),
     ];
     let all = query()
-        .filter_any_operands(&alternatives)
+        .filter_any(&alternatives)
         .select(|row| row.required)
         .fetch()
         .unwrap();
@@ -7117,9 +7070,7 @@ fn primary_scan_pages_a_literal_fixed_distinct_projection() {
                 if reverse {
                     query = query.descending();
                 }
-                if let Some(cursor) = &after {
-                    query = query.after(cursor);
-                }
+                query = query.after(after.as_ref());
                 let page = query.fetch_as::<PayloadOnly>().unwrap();
                 assert!(page.examined <= 1);
                 examined += page.examined;
@@ -7186,9 +7137,7 @@ fn adjacent_distinct_pages_a_tuple_with_a_fixed_non_index_field() {
             if reverse {
                 query = query.descending().using_index("category", &[]);
             }
-            if let Some(after) = &cursor {
-                query = query.after(after);
-            }
+            query = query.after(cursor.as_ref());
             let page = query.fetch_as::<CategoryAmount>().unwrap();
             examined += page.examined;
             assert!(page.examined <= 1);
@@ -7277,9 +7226,7 @@ fn adjacent_distinct_crosses_a_fixed_interior_index_component() {
                 if reverse {
                     query = query.descending();
                 }
-                if let Some(cursor) = &after {
-                    query = query.after(cursor);
-                }
+                query = query.after(after.as_ref());
                 let page = query.fetch_as::<CategoryAmount>().unwrap();
                 output.extend(page.rows.into_iter().map(|row| (row.category, row.amount)));
                 after = page.next;
@@ -10740,7 +10687,7 @@ fn primary_range_counts_skip_rows_only_for_a_complete_interval() {
     assert_eq!((residual.value, residual.fetched), (2, 4));
     let alternatives = db
         .query::<Entry>()
-        .filter_any(&[("id", C::Eq, 1_u64.into()), ("id", C::Eq, 8_u64.into())])
+        .filter_any(&[("id", C::Eq, 1_u64), ("id", C::Eq, 8_u64)])
         .count()
         .unwrap();
     assert_eq!(

@@ -9,7 +9,8 @@ use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
 use wire_call::call;
 
-type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
+mod job_step;
+use job_step::Step;
 type Page = (u64, u8, Vec<(u64, u64)>, Option<Vec<u8>>, u64);
 
 async fn advance(
@@ -34,7 +35,7 @@ async fn advance(
         .unwrap();
     eprintln!(
         "job-envelope op={operation} seq={sequence} work={work} progress={:?} instructions={instructions} cycles={cycles}",
-        result.as_ref().map(|s| (s.0, s.2, s.4))
+        result.as_ref().map(|s| (s.sequence, s.examined, s.phase))
     );
     assert!(instructions > 0 && cycles > 0);
 
@@ -166,12 +167,12 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         let prefix = advance(pic, canister, &handle, operation, 0, (rows - 1) as u32)
             .await
             .unwrap();
-        assert_eq!((prefix.2, prefix.4), (rows - 1, 0));
-        let complete = advance(pic, canister, &handle, operation, prefix.0, 1)
+        assert_eq!((prefix.examined, prefix.phase), (rows - 1, 0));
+        let complete = advance(pic, canister, &handle, operation, prefix.sequence, 1)
             .await
             .unwrap();
         assert_eq!(
-            (complete.2, complete.4, complete.5.as_deref()),
+            (complete.examined, complete.phase, complete.value.as_deref()),
             (rows, 1, Some(expected.as_str()))
         );
         cancel(&handle).await;
@@ -189,15 +190,15 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
             .await
             .unwrap();
         examined += u64::from(work);
-        assert_eq!((step.2, step.4, step.5), (examined, 0, None));
-        sequences[0] = step.0;
+        assert_eq!((step.examined, step.phase, step.value), (examined, 0, None));
+        sequences[0] = step.sequence;
     }
     // Duplicates at the 32-key limit must still be admissible.
     let step = advance(pic, canister, &distinct, 8, 0, rows as u32)
         .await
         .unwrap();
-    assert_eq!((step.2, step.4), (rows, 1));
-    sequences[1] = step.0;
+    assert_eq!((step.examined, step.phase), (rows, 1));
+    sequences[1] = step.sequence;
     upgrade().await;
     let before = pic.get_stable_memory(canister).await;
     assert!(page(&grouped, sequences[0], &None, 1).await.is_err());
@@ -206,7 +207,10 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let retry = advance(pic, canister, &grouped, 3, sequences[0] - 1, 16)
         .await
         .unwrap();
-    assert_eq!((retry.0, retry.2, retry.4), (sequences[0], rows - 1, 0));
+    assert_eq!(
+        (retry.sequence, retry.examined, retry.phase),
+        (sequences[0], rows - 1, 0)
+    );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let mut after = None;
     let mut actual = Vec::new();
@@ -231,7 +235,7 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         .await
         .unwrap();
     assert_eq!(
-        (complete.2, complete.4, complete.5.as_deref()),
+        (complete.examined, complete.phase, complete.value.as_deref()),
         (rows, 1, Some("32"))
     );
     cancel(&grouped).await;
@@ -246,14 +250,14 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
             .unwrap();
         let before = pic.get_stable_memory(canister).await;
         assert!(
-            advance(pic, canister, &handle, operation, saved.0, 1)
+            advance(pic, canister, &handle, operation, saved.sequence, 1)
                 .await
                 .is_err()
         );
         assert_eq!(pic.get_stable_memory(canister).await, before);
         upgrade().await;
         assert!(
-            advance(pic, canister, &handle, operation, saved.0, 1)
+            advance(pic, canister, &handle, operation, saved.sequence, 1)
                 .await
                 .is_err()
         );
@@ -261,13 +265,16 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         let retry = advance(pic, canister, &handle, operation, 0, 1)
             .await
             .unwrap();
-        assert_eq!((retry.0, retry.2, retry.4), (saved.0, rows, 0));
+        assert_eq!(
+            (retry.sequence, retry.examined, retry.phase),
+            (saved.sequence, rows, 0)
+        );
         cancel(&handle).await;
         // Explicit cancellation releases capacity for a different, completable job.
         let count = start(0).await;
         let step = advance(pic, canister, &count, 0, 0, 128).await.unwrap();
         assert_eq!(
-            (step.2, step.4, step.5),
+            (step.examined, step.phase, step.value),
             (rows + 1, 1, Some((rows + 1).to_string()))
         );
         cancel(&count).await;
@@ -304,8 +311,8 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         let step = advance(pic, bytes_canister, &numeric, 16, sequence, 32)
             .await
             .unwrap();
-        assert_eq!((step.2, step.4), (examined, 0));
-        sequence = step.0;
+        assert_eq!((step.examined, step.phase), (examined, 0));
+        sequence = step.sequence;
         if examined == 512 {
             upgrade_stopped(pic, bytes_canister, wasm.clone(), vec![], None)
                 .await
@@ -319,7 +326,10 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         .map(|key| format!("{key}:32"))
         .collect::<Vec<_>>()
         .join(",");
-    assert_eq!((done.2, done.4, done.5), (1024, 1, Some(expected)));
+    assert_eq!(
+        (done.examined, done.phase, done.value),
+        (1024, 1, Some(expected))
+    );
     call::<Result<u64, String>>(
         pic,
         bytes_canister,
@@ -346,11 +356,11 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
         match advance(pic, bytes_canister, &handle, 17, sequence, 16).await {
             Ok(step) => {
                 assert_eq!(
-                    step.4, 0,
+                    step.phase, 0,
                     "byte-bound witness must refuse before completion"
                 );
-                sequence = step.0;
-                examined = step.2;
+                sequence = step.sequence;
+                examined = step.examined;
             }
             Err(_) => {
                 assert!((512..1024).contains(&examined));
@@ -375,9 +385,9 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
 
         match advance(pic, bytes_canister, &handle, 17, sequence, 1).await {
             Ok(step) => {
-                assert_eq!((step.2, step.4), (examined + 1, 0));
-                sequence = step.0;
-                examined = step.2;
+                assert_eq!((step.examined, step.phase), (examined + 1, 0));
+                sequence = step.sequence;
+                examined = step.examined;
             }
             Err(_) => {
                 assert_eq!(pic.get_stable_memory(bytes_canister).await, before);
@@ -410,15 +420,18 @@ async fn retained_limits_finalization_and_pages_preserve_exact_checkpoints() {
     let prefix = advance(pic, bytes_canister, &fresh, 0, 0, 512)
         .await
         .unwrap();
-    assert_eq!((prefix.2, prefix.4), (512, 0));
-    let prefix = advance(pic, bytes_canister, &fresh, 0, prefix.0, 512)
+    assert_eq!((prefix.examined, prefix.phase), (512, 0));
+    let prefix = advance(pic, bytes_canister, &fresh, 0, prefix.sequence, 512)
         .await
         .unwrap();
-    assert_eq!((prefix.2, prefix.4), (1024, 1));
-    let done = advance(pic, bytes_canister, &fresh, 0, prefix.0, 1)
+    assert_eq!((prefix.examined, prefix.phase), (1024, 1));
+    let done = advance(pic, bytes_canister, &fresh, 0, prefix.sequence, 1)
         .await
         .unwrap();
-    assert_eq!((done.2, done.4, done.5.as_deref()), (1024, 1, Some("1024")));
+    assert_eq!(
+        (done.examined, done.phase, done.value.as_deref()),
+        (1024, 1, Some("1024"))
+    );
     call::<Result<u64, String>>(
         pic,
         bytes_canister,
@@ -495,14 +508,17 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
             canister,
             handle,
             17,
-            prefix.0,
+            prefix.sequence,
             u32::try_from(retained_rows - 512).unwrap(),
         )
         .await
         .unwrap();
-        assert_eq!((full.2, full.4, full.5), (retained_rows, 0, None));
+        assert_eq!(
+            (full.examined, full.phase, full.value),
+            (retained_rows, 0, None)
+        );
 
-        full.0
+        full.sequence
     };
     let mut handles = Vec::new();
     let mut sequences = Vec::new();
@@ -526,7 +542,12 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
         .await
         .unwrap();
     assert_eq!(
-        (invalid.0, invalid.2, invalid.4, invalid.5),
+        (
+            invalid.sequence,
+            invalid.examined,
+            invalid.phase,
+            invalid.value
+        ),
         (sequences[0] + 1, retained_rows, 2, None)
     );
     let before = pic.get_stable_memory(canister).await;
@@ -598,8 +619,11 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
             )
             .await;
             let step = step.unwrap();
-            assert_eq!(step.4, 0);
-            assert_eq!(step.2, if sequence == 0 { 512 } else { retained_rows });
+            assert_eq!(step.phase, 0);
+            assert_eq!(
+                step.examined,
+                if sequence == 0 { 512 } else { retained_rows }
+            );
         }
         replacements.push(fresh);
     }
@@ -966,12 +990,15 @@ async fn ranked_distinct_counts_match_sqlite_across_upgrade() {
         let step = advance(&pic, canister, &handle, 22, sequence, 7)
             .await
             .unwrap();
-        sequence = step.0;
-        assert_eq!(step.2, (call_number * 7).min(128));
+        sequence = step.sequence;
+        assert_eq!(step.examined, (call_number * 7).min(128));
         if call_number == 19 {
-            assert_eq!((step.4, step.5.as_deref()), (1, Some(expected.as_str())));
+            assert_eq!(
+                (step.phase, step.value.as_deref()),
+                (1, Some(expected.as_str()))
+            );
         } else {
-            assert_eq!((step.4, step.5), (0, None));
+            assert_eq!((step.phase, step.value), (0, None));
         }
         if call_number == 9 {
             upgrade_stopped(&pic, canister, wasm.clone(), vec![], None)

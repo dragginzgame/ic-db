@@ -855,7 +855,7 @@ fn range_helpers_resume_exact_counts_through_explicit_comparisons_after_reopen()
             )
             .unwrap();
             let alternatives = [
-                ("amount", Comparison::Lt, 20_i128.into()),
+                ("amount", Comparison::Lt, ic_db::IndexValue::from(20_i128)),
                 ("amount", Comparison::Gt, 30_i128.into()),
             ];
             let query = db.query::<Row>();
@@ -966,7 +966,7 @@ fn any_clauses_resume_exact_counts_and_refuse_changed_boolean_structure() {
     let runtime = host(backing.clone());
     let (db, mut jobs) = create(&runtime, &[Some(10), None, Some(30), Some(40)], 0);
     let alternatives = [
-        ("id", Comparison::Lt, 2_u64.into()),
+        ("id", Comparison::Lt, ic_db::IndexValue::from(2_u64)),
         ("amount", Comparison::Ge, 30_i128.into()),
     ];
     let query = || db.query::<Row>().filter_any(&alternatives).work_limit(1);
@@ -1088,7 +1088,7 @@ fn retained_length_filter_binds_threshold_and_resumes_the_same_clause() {
     let runtime = host(VectorMemory::default());
     let (db, mut jobs) = create(&runtime, &[None, None, None], 4);
     let query = |length| {
-        db.query::<Row>().filter_any_operands(&[
+        db.query::<Row>().filter_any(&[
             ("payload", Comparison::Lt, Length(length)),
             ("id", Comparison::Eq, Literal(2_u64.into())),
         ])

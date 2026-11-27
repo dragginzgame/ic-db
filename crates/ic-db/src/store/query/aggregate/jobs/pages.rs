@@ -43,8 +43,9 @@ impl GroupCursor {
     /// Encode a fixed 28-byte transport cursor.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![Self::WIRE_VERSION];
-        bytes.extend(self.handle.to_bytes());
+        let mut bytes = Vec::with_capacity(JobHandle::ENCODED_LEN + 2);
+        bytes.push(Self::WIRE_VERSION);
+        self.handle.append_to(&mut bytes);
         bytes.push(self.position);
 
         bytes

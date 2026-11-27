@@ -62,6 +62,7 @@ use schema::{
     BinaryObject, Document, Entry, IdentityRow, NarrowNumbers, OptionalLink, RecordsStore,
     WideNumbers,
 };
+use transport::{EntityView, FieldView, SchemaResponse, Status};
 
 // initialize
 // Initialize the fixture’s stable state at installation.
@@ -189,12 +190,18 @@ fn inspect((): ()) -> Status {
     clippy::needless_pass_by_value,
     reason = "Platform entrypoints receive an owned decoded request"
 )]
-fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) {
+fn schema(selected: Option<String>) -> SchemaResponse {
     let host = runtime();
     let db = open(&host);
     let description = match db.schema().describe(selected.as_deref()) {
         Ok(description) => description,
-        Err(ic_db::Error::UnknownEntity) => return (status(&db), vec![], vec![]),
+        Err(ic_db::Error::UnknownEntity) => {
+            return SchemaResponse {
+                status: status(&db),
+                entities: vec![],
+                types: vec![],
+            };
+        }
         Err(error) => panic!("invalid fixture schema: {error:?}"),
     };
     let entities = description
@@ -226,12 +233,12 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                         );
                     }
 
-                    (
-                        field.name.into(),
+                    FieldView {
+                        name: field.name.into(),
                         kind,
-                        field.optional,
+                        optional: field.optional,
                         info,
-                        field.reference.map(|reference| {
+                        reference: field.reference.map(|reference| {
                             (
                                 {
                                     let target = db
@@ -251,7 +258,7 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                                     .into(),
                             )
                         }),
-                    )
+                    }
                 })
                 .collect();
             let indexes = entity
@@ -267,13 +274,13 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
                 })
                 .collect();
 
-            (
-                entity.name.into(),
-                entity.id,
-                entity.primary_key.into(),
+            EntityView {
+                name: entity.name.into(),
+                id: entity.id,
+                primary: entity.primary_key.into(),
                 fields,
                 indexes,
-            )
+            }
         })
         .collect();
     let types = description
@@ -370,7 +377,11 @@ fn schema(selected: Option<String>) -> (Status, Vec<EntityView>, Vec<TypeView>) 
         })
         .collect();
 
-    (status(&db), entities, types)
+    SchemaResponse {
+        status: status(&db),
+        entities,
+        types,
+    }
 }
 
 // write
@@ -2856,7 +2867,6 @@ type Backing = faults::FaultMemory;
 type Backing = DefaultMemoryImpl;
 
 const KEY: &str = <RecordsStore as ic_db::Store>::KEY;
-type Status = ([u8; 32], [u8; 16], u64, u64);
 
 fn runtime() -> std::rc::Rc<MemoryRuntime<Backing>> {
     // Host custody survives calls; Database handles and leases remain local.
@@ -2908,19 +2918,13 @@ fn open(host: &MemoryRuntime<Backing>) -> Database {
 }
 
 fn status(db: &Database) -> Status {
-    (
-        db.schema().fingerprint(),
-        db.incarnation(),
-        db.revision::<Entry>().unwrap(),
-        ic_storage::Memory::size(&DefaultMemoryImpl::default()),
-    )
+    Status {
+        schema: db.schema().fingerprint(),
+        incarnation: db.incarnation(),
+        revision: db.revision::<Entry>().unwrap(),
+        pages: ic_storage::Memory::size(&DefaultMemoryImpl::default()),
+    }
 }
-
-// Private fixture transport: entity identity, fields and indexes, without terminal layout.
-type FieldView = (String, String, bool, String, Option<(String, String)>);
-type IndexView = (String, Vec<String>, bool, bool);
-type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
-type TypeView = (String, String, Vec<(String, String, bool, String)>);
 
 type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
 

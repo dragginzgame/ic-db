@@ -8,7 +8,10 @@ mod tests;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_cli::host::{LIMITS, instance};
-use ic_db_cli::{ConsolePage, RetainedPhase, RetainedProgress, RowFilters};
+use ic_db_cli::{
+    ConsolePage, EntityView, FieldView, PayloadFilters, QueryOptions, QueryRequest, RetainedPhase,
+    RetainedProgress, RowFilters, Status, TypeView, lowercase_hex,
+};
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
@@ -50,7 +53,7 @@ fn charged_cycles(before: u128, after: u128) -> String {
 struct FixtureCalls<'a> {
     pic: &'a pocket_ic::nonblocking::PocketIc,
     canister: pocket_ic::CanisterId,
-    statistics: Vec<String>,
+    statistics: Option<&'a mut Vec<String>>,
 }
 
 impl FixtureCalls<'_> {
@@ -60,8 +63,15 @@ impl FixtureCalls<'_> {
         method: &str,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, pocket_ic::RejectResponse> {
-        let before = self.pic.cycle_balance(self.canister).await;
-        let started = Instant::now();
+        let measurement = if let Some(lines) = self.statistics.as_deref_mut() {
+            Some((
+                lines,
+                self.pic.cycle_balance(self.canister).await,
+                Instant::now(),
+            ))
+        } else {
+            None
+        };
         let result = match kind {
             CallKind::Query => {
                 self.pic
@@ -73,6 +83,9 @@ impl FixtureCalls<'_> {
                     .update_call(self.canister, self.canister, method, payload)
                     .await
             }
+        };
+        let Some((lines, before, started)) = measurement else {
+            return result;
         };
         let elapsed = started.elapsed();
         let after = self.pic.cycle_balance(self.canister).await;
@@ -86,7 +99,7 @@ impl FixtureCalls<'_> {
             charged_cycles(before, after)
         );
 
-        self.statistics.push(statistics);
+        lines.push(statistics);
         result
     }
 
@@ -405,14 +418,13 @@ impl FilterArgs {
         };
 
         Ok(RowFilters {
-            payload: [
-                self.payload_min,
-                self.payload_max,
-                self.payload_prefix,
-                self.payload_suffix,
-                self.payload_contains,
-            ]
-            .map(|arg| arg.map(|v| v.0)),
+            payload: PayloadFilters {
+                minimum: self.payload_min.map(|arg| arg.0),
+                maximum: self.payload_max.map(|arg| arg.0),
+                prefix: self.payload_prefix.map(|arg| arg.0),
+                suffix: self.payload_suffix.map(|arg| arg.0),
+                contains: self.payload_contains.map(|arg| arg.0),
+            },
             compare: operands(self.compare)?,
             between_fields: operands(self.between_fields)?,
             not_between_fields: operands(self.not_between_fields)?,
@@ -441,16 +453,6 @@ fn parse_cursor(text: &str) -> Result<ic_db::QueryCursor, String> {
     ic_db::QueryCursor::from_bytes(&bytes).map_err(|error| error.to_string())
 }
 
-fn lowercase_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(output, "{byte:02x}").expect("writing to String");
-    }
-
-    output
-}
-
 fn hex_bytes(digits: &str, max_bytes: usize) -> Option<Vec<u8>> {
     fn nibble(byte: u8) -> Option<u8> {
         match byte {
@@ -474,13 +476,6 @@ fn help() {
     Cli::command().print_help().unwrap();
     println!();
 }
-type Status = ([u8; 32], [u8; 16], u64, u64);
-type FieldView = (String, String, bool, String, Option<(String, String)>);
-type IndexView = (String, Vec<String>, bool, bool);
-type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
-
-type TypeView = (String, String, Vec<(String, String, bool, String)>);
-
 fn print_schema_json(
     fingerprint: [u8; 32],
     entities: &[EntityView],
@@ -489,25 +484,41 @@ fn print_schema_json(
     use serde_json::json;
     let entities: Vec<_> = entities
         .iter()
-        .map(|(name, _, primary, fields, indexes)| {
-            let fields: Vec<_> = fields
-                .iter()
-                .map(|(name, kind, optional, info, reference)| {
-                    json!({"name": name, "type": kind, "optional": optional, "info": info,
+        .map(
+            |EntityView {
+                 name,
+                 primary,
+                 fields,
+                 indexes,
+                 ..
+             }| {
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(
+                        |FieldView {
+                             name,
+                             kind,
+                             optional,
+                             info,
+                             reference,
+                         }| {
+                            json!({"name": name, "type": kind, "optional": optional, "info": info,
                     "reference": reference.as_ref().map(|(target, index)|
                         json!({"target": target, "index": index}))})
-                })
-                .collect();
-            let indexes: Vec<_> = indexes
-                .iter()
-                .map(|(name, fields, unique, present_only)| {
-                    json!({"name": name, "fields": fields, "unique": unique,
+                        },
+                    )
+                    .collect();
+                let indexes: Vec<_> = indexes
+                    .iter()
+                    .map(|(name, fields, unique, present_only)| {
+                        json!({"name": name, "fields": fields, "unique": unique,
                     "present_only": present_only})
-                })
-                .collect();
+                    })
+                    .collect();
 
-            json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
-        })
+                json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
+            },
+        )
         .collect();
     let types: Vec<_> = types
         .iter()
@@ -521,7 +532,7 @@ fn print_schema_json(
         .collect();
     let document = json!({
         "source": "local_fixture",
-        "schema_fingerprint": lowercase_hex(&fingerprint),
+        "schema_fingerprint": lowercase_hex(&fingerprint, ""),
         "entities": entities,
         "types": types,
     });
@@ -541,36 +552,51 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
             "entities"
         }
     );
-    for (name, _, primary, mut fields, indexes) in entities {
+    for EntityView {
+        name,
+        primary,
+        mut fields,
+        indexes,
+        ..
+    } in entities
+    {
         println!("{}", escape(&name));
         println!(
             "Primary key: {} (supplied by the application)\n",
             escape(&primary)
         );
-        fields.sort_by_key(|field| field.0 != primary); // primary first, otherwise canonical order
-        let references = fields.iter().any(|field| field.4.is_some());
+        fields.sort_by_key(|field| field.name != primary); // primary first, otherwise canonical order
+        let references = fields.iter().any(|field| field.reference.is_some());
         let rows: Vec<Vec<String>> = fields
             .into_iter()
-            .map(|(name, kind, optional, info, reference)| {
-                let key = if name == primary { "Primary" } else { "-" };
-                let mut row = vec![
-                    name,
-                    kind,
-                    if optional { "Yes" } else { "No" }.into(),
-                    key.into(),
-                    if info.is_empty() { "-".into() } else { info },
-                ];
-                if references {
-                    row.extend(match reference {
-                        Some((target, index)) => {
-                            [target, format!("({})", index.replace(',', ", "))]
-                        }
-                        None => ["-".into(), "-".into()],
-                    });
-                }
+            .map(
+                |FieldView {
+                     name,
+                     kind,
+                     optional,
+                     info,
+                     reference,
+                 }| {
+                    let key = if name == primary { "Primary" } else { "-" };
+                    let mut row = vec![
+                        name,
+                        kind,
+                        if optional { "Yes" } else { "No" }.into(),
+                        key.into(),
+                        if info.is_empty() { "-".into() } else { info },
+                    ];
+                    if references {
+                        row.extend(match reference {
+                            Some((target, index)) => {
+                                [target, format!("({})", index.replace(',', ", "))]
+                            }
+                            None => ["-".into(), "-".into()],
+                        });
+                    }
 
-                row
-            })
+                    row
+                },
+            )
             .collect();
         let mut columns = vec!["Field", "Type", "Optional", "Key", "Info"];
         if references {
@@ -639,12 +665,22 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
     }
 }
 
-fn print_status((schema, incarnation, revision, pages): Status) {
+fn print_status(
+    Status {
+        schema,
+        incarnation,
+        revision,
+        pages,
+    }: Status,
+) {
     let rows = vec![
         vec!["Format".into(), "ICDBMF02".into()],
         vec!["Schema admission".into(), "Exact match".into()],
-        vec!["Schema fingerprint".into(), lowercase_hex(&schema)],
-        vec!["Database incarnation".into(), lowercase_hex(&incarnation)],
+        vec!["Schema fingerprint".into(), lowercase_hex(&schema, "")],
+        vec![
+            "Database incarnation".into(),
+            lowercase_hex(&incarnation, ""),
+        ],
         vec!["Entry revision".into(), revision.to_string()],
         vec![
             "Wasm linear memory".into(),
@@ -744,32 +780,18 @@ async fn session(
         (2, None, "2.50".to_owned()),
         (3, None, "-0.75".to_owned()),
     ];
-    let reply = pic
-        .update_call(
-            canister,
-            canister,
-            "decimal_batch",
-            ic_wire::encode(
-                &(decimal_rows, false),
-                Encoding::Frame {
-                    method: 67,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .map_err(|e| e.to_string())?,
-        )
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    ic_wire::decode::<Result<(), u8>>(
-        &reply,
-        Encoding::Frame {
-            method: 67,
-            direction: Direction::Response,
-        },
-        LIMITS,
+    FixtureCalls {
+        pic,
+        canister,
+        statistics: None,
+    }
+    .framed::<Result<(), u8>>(
+        CallKind::Update,
+        "decimal_batch",
+        67,
+        &(decimal_rows, false),
     )
-    .map_err(|e| e.to_string())?
+    .await?
     .map_err(|e| format!("decimal fixture setup failed: {e}"))?;
     if !matches!(
         cli.command,
@@ -786,10 +808,11 @@ async fn session(
             command,
             Command::Schema { json: true, .. } | Command::Entities { json: true }
         );
+        let mut statistics = Vec::new();
         let mut calls = FixtureCalls {
             pic,
             canister,
-            statistics: Vec::new(),
+            statistics: Some(&mut statistics),
         };
         let outcome = async {
         match command {
@@ -808,37 +831,36 @@ async fn session(
                 work,
                 page_size,
             } => {
-                let selection: ic_db_cli::RetainedSelection = (
+                let selection = ic_db_cli::RetainedSelection {
                     entity,
                     select,
-                    (minimum, category, entry_id),
+                    entity_filters: (minimum, category, entry_id),
                     limit,
-                    (group_min, group_max),
+                    group_bounds: (group_min, group_max),
                     group_order,
-                    filters.into_filters()?,
-                    (order.order_by, order.desc),
-                );
+                    filters: filters.into_filters()?,
+                    order: (order.order_by, order.desc),
+                };
                 let handle = calls.framed::<Result<Vec<u8>, String>>(CallKind::Update, "aggregate_start", 120, &selection).await??;
-                println!("\n{} — {}", selection.0, selection.1);
+                println!("\n{} — {}", selection.entity, selection.select);
+                let mut request = ic_db_cli::RetainedResume { selection, handle, sequence: 0, work, bytes: FIXTURE_OUTPUT_BYTES, page_size, after: None };
                 let run = async {
-                    let mut sequence = 0;
-                    let mut after: Option<Vec<u8>> = None;
                     // At most six rows per entity and two groups. A finite host bound
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
                         let result: Result<RetainedProgress, String> = calls.framed(CallKind::Update, "aggregate_resume", 121,
-                            &(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after)).await?;
+                            &request).await?;
                         let RetainedProgress { sequence: saved, phase, examined, input_bytes, output_bytes } = result?;
                         let label = phase.label();
                         println!("Call {call}: {label}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
-                        sequence = saved;
+                        request.sequence = saved;
 
                         match phase {
                             RetainedPhase::Running => {},
                             RetainedPhase::Complete((columns, rows, next)) => {
                                 println!("{}", bordered_table(&columns, &rows));
                                 if next.is_none() { return Ok(()); }
-                                after = next;
+                                request.after = next;
                             }
                             RetainedPhase::Expired | RetainedPhase::Invalidated => return Err(format!("aggregate {label}")),
                         }
@@ -848,7 +870,7 @@ async fn session(
                 }.await;
                 // Cleanup also runs after an output/resource refusal. No automatic
                 // restart, lost cursor, or client-side aggregation is hidden here.
-                let cleanup = calls.framed::<Result<(), String>>(CallKind::Update, "aggregate_cancel", 122, &handle)
+                let cleanup = calls.framed::<Result<(), String>>(CallKind::Update, "aggregate_cancel", 122, &request.handle)
                     .await.and_then(|result| result);
 
                 match (run, cleanup) {
@@ -876,25 +898,16 @@ async fn session(
                 group_bounds: GroupBounds { group_min, group_max },
                 group_order,
             } => {
-                let request = (
-                    entity.as_str(),
-                    after.map(|cursor| cursor.to_bytes()),
-                    limit,
-                    minimum,
-                    category,
-                    entry_id,
-                    order_by,
-                    desc,
-                    work,
-                    FIXTURE_OUTPUT_BYTES,
-                    select,
-                    (distinct, (group_min, group_max), group_order, filters.into_filters()?),
-                );
+                let request = QueryRequest {
+                    entity, cursor: after.map(|cursor| cursor.to_bytes()), limit, minimum, category, entry_id,
+                    order: order_by, descending: desc, work, bytes: FIXTURE_OUTPUT_BYTES, select,
+                    options: QueryOptions { distinct, group_bounds: (group_min, group_max), group_order, filters: filters.into_filters()? },
+                };
                 let result: Result<ConsolePage, String> =
                     calls.framed(CallKind::Query, "query", 3, &request).await?;
                 let ConsolePage { columns, rows, next, examined, fetched, output_bytes: bytes } = result?;
                 let count = rows.len();
-                println!("\n{entity}\n{}", bordered_table(&columns, &rows));
+                println!("\n{}\n{}", request.entity, bordered_table(&columns, &rows));
                 let noun = if count == 1 { "row" } else { "rows" };
                 println!(
                     "{count} {noun}; {examined} examined; {fetched} fetched; {bytes} encoded bytes."
@@ -903,7 +916,7 @@ async fn session(
                     "Next cursor: {}",
                     next.map_or_else(
                         || "none".into(),
-                        |c| lowercase_hex(&c)
+                        |c| lowercase_hex(&c, "")
                     )
                 );
             }
@@ -911,7 +924,7 @@ async fn session(
 
         Ok(())
         }.await;
-        for line in calls.statistics {
+        for line in statistics {
             if json || outcome.is_err() {
                 eprintln!("{line}");
             } else {

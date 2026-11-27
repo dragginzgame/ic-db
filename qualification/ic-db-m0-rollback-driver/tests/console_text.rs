@@ -1,8 +1,8 @@
 //! Console group selection uses the same typed semantics in both execution modes.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_db_qualification_transport::RowFilters;
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
+use ic_db_qualification_transport::{PayloadFilters, RowFilters};
+mod wire_frame;
 
 type Page = (
     Vec<String>,
@@ -16,8 +16,7 @@ use ic_db_qualification_transport::{RetainedPhase, RetainedProgress as Progress}
 
 #[tokio::test]
 async fn text_bounds_preserve_exact_values_and_retained_progress() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -52,30 +51,11 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 canister,
                 canister,
                 "replace_document",
-                ic_wire::encode(
-                    &row,
-                    Encoding::Frame {
-                        method: 8,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(8, &row),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 8,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(8, &reply), Ok(()));
         let expected_rows: Vec<Vec<String>> = expected
             .into_iter()
             .map(|text| vec!["1".into(), text.into()])
@@ -101,27 +81,11 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     canister,
                     canister,
                     "query",
-                    ic_wire::encode(
-                        &request,
-                        Encoding::Frame {
-                            method: 3,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(3, &request),
                 )
                 .await
                 .unwrap();
-            let page = ic_wire::decode::<Result<Page, String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 3,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let page = wire_frame::response::<Result<Page, String>>(3, &reply);
             assert_eq!(page.is_ok(), valid, "{select}: {lower:?}..{upper:?}");
             if valid {
                 assert_eq!(page.unwrap().1, expected_rows);
@@ -143,27 +107,11 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     canister,
                     canister,
                     "aggregate_start",
-                    ic_wire::encode(
-                        &selection,
-                        Encoding::Frame {
-                            method: 120,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(120, &selection),
                 )
                 .await
                 .unwrap();
-            let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 120,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let handle = wire_frame::response::<Result<Vec<u8>, String>>(120, &reply);
             assert_eq!(handle.is_ok(), valid);
             if !valid {
                 assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -187,28 +135,11 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                         canister,
                         canister,
                         "aggregate_resume",
-                        ic_wire::encode(
-                            &request,
-                            Encoding::Frame {
-                                method: 121,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
+                        wire_frame::request(121, &request),
                     )
                     .await
                     .unwrap();
-                let step = ic_wire::decode::<Result<Progress, String>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 121,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap()
-                .unwrap();
+                let step = wire_frame::response::<Result<Progress, String>>(121, &reply).unwrap();
                 sequence = step.sequence;
                 if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
                     assert_eq!(page_rows, expected_rows);
@@ -236,30 +167,11 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                             canister,
                             canister,
                             "aggregate_resume",
-                            ic_wire::encode(
-                                &request,
-                                Encoding::Frame {
-                                    method: 121,
-                                    direction: Direction::Request,
-                                },
-                                LIMITS,
-                            )
-                            .unwrap(),
+                            wire_frame::request(121, &request),
                         )
                         .await
                         .unwrap();
-                    assert!(
-                        ic_wire::decode::<Result<Progress, String>>(
-                            &reply,
-                            Encoding::Frame {
-                                method: 121,
-                                direction: Direction::Response
-                            },
-                            LIMITS
-                        )
-                        .unwrap()
-                        .is_err()
-                    );
+                    assert!(wire_frame::response::<Result<Progress, String>>(121, &reply).is_err());
                     assert_eq!(pic.get_stable_memory(canister).await, checkpoint);
                     ic_db_m0_rollback_driver::upgrade_stopped(
                         pic,
@@ -278,28 +190,12 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                     canister,
                     canister,
                     "aggregate_cancel",
-                    ic_wire::encode(
-                        &handle,
-                        Encoding::Frame {
-                            method: 122,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(122, &handle),
                 )
                 .await
                 .unwrap();
             assert_eq!(
-                ic_wire::decode::<Result<(), String>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 122,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
+                wire_frame::response::<Result<(), String>>(122, &reply),
                 Ok(())
             );
         }
@@ -309,8 +205,7 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
 
 #[tokio::test]
 async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -352,28 +247,11 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
-        let page = ic_wire::decode::<Result<Page, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap();
+        let page = wire_frame::response::<Result<Page, String>>(3, &reply).unwrap();
         let expected = vec![
             vec!["1".to_string(), odd.into()],
             vec!["0".to_string(), even.into()],
@@ -398,28 +276,11 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
             canister,
             canister,
             "aggregate_start",
-            ic_wire::encode(
-                &selection,
-                Encoding::Frame {
-                    method: 120,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(120, &selection),
         )
         .await
         .unwrap();
-    let handle = ic_wire::decode::<Result<Vec<u8>, String>>(
-        &reply,
-        Encoding::Frame {
-            method: 120,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
+    let handle = wire_frame::response::<Result<Vec<u8>, String>>(120, &reply).unwrap();
     let mut sequence = 0_u64;
     let mut cursor = None::<Vec<u8>>;
     let mut rows = Vec::new();
@@ -433,28 +294,11 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                 canister,
                 canister,
                 "aggregate_resume",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 121,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(121, &request),
             )
             .await
             .unwrap();
-        let step = ic_wire::decode::<Result<Progress, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 121,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap();
+        let step = wire_frame::response::<Result<Progress, String>>(121, &reply).unwrap();
         sequence = step.sequence;
         if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
             cursor = next;
@@ -483,30 +327,11 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
                     canister,
                     canister,
                     "aggregate_resume",
-                    ic_wire::encode(
-                        &request,
-                        Encoding::Frame {
-                            method: 121,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(121, &request),
                 )
                 .await
                 .unwrap();
-            assert!(
-                ic_wire::decode::<Result<Progress, String>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 121,
-                        direction: Direction::Response
-                    },
-                    LIMITS,
-                )
-                .unwrap()
-                .is_err()
-            );
+            assert!(wire_frame::response::<Result<Progress, String>>(121, &reply).is_err());
             assert_eq!(pic.get_stable_memory(canister).await, before);
         }
     }
@@ -517,8 +342,7 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
 
 #[tokio::test]
 async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -527,7 +351,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
         .await;
     let query_with_filters = async |entity: &str,
                                     select: &str,
-                                    filters: [Option<Vec<u8>>; 5],
+                                    payload: PayloadFilters,
                                     presence: [Option<&str>; 2],
                                     bytes: u32| {
         let request = (
@@ -547,7 +371,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 (None::<String>, None::<String>),
                 None::<String>,
                 RowFilters {
-                    payload: filters,
+                    payload,
                     present: presence[0].map(str::to_owned),
                     absent: presence[1].map(str::to_owned),
                     ..Default::default()
@@ -560,35 +384,24 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
         assert_eq!(pic.get_stable_memory(canister).await, before);
 
-        ic_wire::decode::<Result<Page, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, String>>(3, &reply)
     };
     let query_with_prefix = async |entity: &str, select: &str, lower, upper, prefix, bytes| {
         query_with_filters(
             entity,
             select,
-            [lower, upper, prefix, None, None],
+            PayloadFilters {
+                minimum: lower,
+                maximum: upper,
+                prefix,
+                ..Default::default()
+            },
             [None, None],
             bytes,
         )
@@ -620,30 +433,11 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
                 canister,
                 canister,
                 "replace_binary_object",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 14,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(14, &request),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 14,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(14, &reply), Ok(()));
         ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
             .unwrap();
@@ -672,7 +466,10 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             let page = query_with_filters(
                 "BinaryObject",
                 "payload",
-                [None, None, None, None, Some(needle)],
+                PayloadFilters {
+                    contains: Some(needle),
+                    ..Default::default()
+                },
                 [None, None],
                 4096,
             )
@@ -691,7 +488,10 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             let page = query_with_filters(
                 "BinaryObject",
                 "payload",
-                [None, None, None, Some(suffix.clone()), None],
+                PayloadFilters {
+                    suffix: Some(suffix.clone()),
+                    ..Default::default()
+                },
                 [None, None],
                 4096,
             )
@@ -785,7 +585,10 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             query_with_filters(
                 entity,
                 "id",
-                [None, None, None, Some(suffix), None],
+                PayloadFilters {
+                    suffix: Some(suffix),
+                    ..Default::default()
+                },
                 [None, None],
                 4096
             )

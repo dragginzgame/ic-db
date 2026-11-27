@@ -1,6 +1,32 @@
 use super::{Command, FilterArgs, charged_cycles, parse_console_line};
 
 #[test]
+fn named_payload_filters_keep_their_wire_positions() {
+    let filters = super::PayloadFilters {
+        minimum: Some(vec![]),
+        maximum: None,
+        prefix: Some(vec![1]),
+        suffix: Some(vec![2]),
+        contains: Some(vec![3]),
+    };
+    let previous = [
+        Some(vec![]),
+        None,
+        Some(vec![1_u8]),
+        Some(vec![2]),
+        Some(vec![3]),
+    ];
+    let frame = || ic_wire::Encoding::Frame {
+        method: 3,
+        direction: ic_wire::Direction::Request,
+    };
+    assert_eq!(
+        ic_wire::encode(&filters, frame(), super::LIMITS).unwrap(),
+        ic_wire::encode(&previous, frame(), super::LIMITS).unwrap(),
+    );
+}
+
+#[test]
 fn query_cursor_argument_checks_framing_before_execution() {
     let tail = "00".repeat(33);
     assert!(parse_console_line(&format!("query Entry --after 0100{tail}")).is_ok());

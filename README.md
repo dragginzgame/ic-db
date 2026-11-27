@@ -185,8 +185,8 @@ Use `filter_any` for a bounded OR clause, combined with other filters using AND:
 let page = db.query::<Entry>()
     .eq(Entry::CATEGORY, 1_u64)
     .filter_any(&[
-        (Entry::AMOUNT, ic_db::Comparison::Lt, 20_u64.into()),
-        (Entry::AMOUNT, ic_db::Comparison::Ge, 50_u64.into()),
+        (Entry::AMOUNT, ic_db::Comparison::Lt, 20_u64),
+        (Entry::AMOUNT, ic_db::Comparison::Ge, 50_u64),
     ])
     .fetch()?;
 ```
@@ -1614,7 +1614,7 @@ performance/comparison workloads remain explicitly selected.
 | Native contracts / shared logger | `tools-check`, `fmt-check`, `test` (engine/macros with build feature), `doc`, `docs-check`, `m0-contracts` (numeric/schema/row/nested/query examples) | Each release; tools/source/docs and both workspace inputs |
 | Installed M0 / fixture owners | `m0-core`: one artifact/session, entrypoints + rollback + batch + reads; separate `m0-aggregation` and `m0-maintenance` variants | Message boundaries, final-state constraints, pages, revision invalidation and interrupted migration; fixture source/features, server and compiler |
 | Installed product / fixture owners | `m1-records-wasm`, `m1-commit-failures`, `m3-maintenance-wasm` (including `m3-jobs`), `m3-cli` | Generated types, product rollback, copy/cancel/publish/reclaim, retained jobs and CLI/terminal composition; exact built artifacts and native callers |
-| Version/delivery / shared runner + IC Build | Two-lock metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; follow verified tag delivery with `make publish` |
+| Version/delivery / shared runner + IC Build | Both lockfiles and the version-specific macro-pin exception in one metadata transaction, exact source diff, commit/tag/remote verification | After successful validation, or the recorded metadata/delivery recovery phase; follow verified tag delivery with `make publish` |
 | Hosted CI | Secret scan once; `make ci` on Linux and both supported macOS architectures | Main-branch pushes and pull requests; independent hosted evidence, not a reason to repeat that whole matrix locally |
 | Frozen comparison / explicit consumer selection | Pinned IcyDB schema/canister and comparison targets remain isolated | A changed comparison question or explicit benchmark request; excluded from routine release lint and gates |
 

@@ -3,7 +3,7 @@
 mod wire_call;
 
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
-use ic_db_qualification_transport::{RetainedSelection as Selection, RowFilters};
+use ic_db_qualification_transport::{PayloadFilters, RetainedSelection as Selection, RowFilters};
 use wire_call::call;
 
 use ic_db_qualification_transport::{RetainedOutput, RetainedPhase, RetainedProgress as Step};
@@ -18,8 +18,7 @@ fn completed(step: &Step) -> &RetainedOutput {
 
 #[tokio::test]
 async fn distinct_keys_page_past_32_after_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -39,16 +38,16 @@ async fn distinct_keys_page_past_32_after_upgrade() {
     }
     // An exact count retains 32 keys. Its 33rd distinct value must allow
     // cancellation at the previous checkpoint and a fresh enumeration.
-    let count: Selection = (
-        "Entry".into(),
-        "distinct-count:amount".into(),
-        (None, None, None),
-        32,
-        (None, None),
-        None,
-        RowFilters::default(),
-        Default::default(),
-    );
+    let count = Selection {
+        entity: "Entry".into(),
+        select: "distinct-count:amount".into(),
+        entity_filters: (None, None, None),
+        limit: 32,
+        group_bounds: (None, None),
+        group_order: None,
+        filters: RowFilters::default(),
+        order: Default::default(),
+    };
     let refused = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &count)
         .await
         .unwrap();
@@ -88,20 +87,20 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         (Some("first"), false),
         (Some("first"), true),
     ] {
-        let selection: Selection = (
-            "Entry".into(),
-            "distinct:amount".into(),
-            (None, None, None),
-            32,
-            (None, None),
-            order.map(str::to_owned),
-            RowFilters::default(),
-            if reverse_input {
+        let selection = Selection {
+            entity: "Entry".into(),
+            select: "distinct:amount".into(),
+            entity_filters: (None, None, None),
+            limit: 32,
+            group_bounds: (None, None),
+            group_order: order.map(str::to_owned),
+            filters: RowFilters::default(),
+            order: if reverse_input {
                 (vec!["category".into()], true)
             } else {
                 Default::default()
             },
-        );
+        };
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
@@ -185,23 +184,23 @@ async fn distinct_keys_page_past_32_after_upgrade() {
 #[ignore = "requires the retained-console Wasm built from the v0.33.1 tag"]
 async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
     let old = std::fs::read(std::env::var_os("IC_DB_V0331_CONSOLE_WASM").unwrap()).unwrap();
-    let new = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let new = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, old, vec![], None).await;
 
-    let selection: Selection = (
-        "Entry".into(),
-        "distinct:amount".into(),
-        (None, None, None),
-        32,
-        (None, None),
-        None,
-        RowFilters::default(),
-        Default::default(),
-    );
+    let selection = Selection {
+        entity: "Entry".into(),
+        select: "distinct:amount".into(),
+        entity_filters: (None, None, None),
+        limit: 32,
+        group_bounds: (None, None),
+        group_order: None,
+        filters: RowFilters::default(),
+        order: Default::default(),
+    };
     type PreviousStep = (
         u64,
         String,
@@ -279,23 +278,22 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
 // Hold the returned page, cursor position and access path fixed as the checkpoint grows.
 #[tokio::test]
 async fn completed_distinct_single_key_page_cost_by_cardinality() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
-    let selection: Selection = (
-        "Entry".into(),
-        "distinct:amount".into(),
-        (None, None, None),
-        32,
-        (None, None),
-        Some("first".into()),
-        RowFilters::default(),
-        Default::default(),
-    );
+    let selection = Selection {
+        entity: "Entry".into(),
+        select: "distinct:amount".into(),
+        entity_filters: (None, None, None),
+        limit: 32,
+        group_bounds: (None, None),
+        group_order: Some("first".into()),
+        filters: RowFilters::default(),
+        order: Default::default(),
+    };
     let mut populated = 0;
     for keys in [8_u64, 32, 128, 255] {
         for id in populated + 1..=keys {
@@ -371,8 +369,7 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
 
 #[tokio::test]
 async fn repeated_group_keys_preserve_counts_across_checkpoints() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -402,16 +399,16 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
             vec![vec!["0", "1"], vec!["1", "1"]],
         ),
     ] {
-        let selection: Selection = (
-            "Entry".into(),
-            select.into(),
-            (None, None, None),
-            32,
-            (None, None),
-            None,
-            RowFilters::default(),
-            Default::default(),
-        );
+        let selection = Selection {
+            entity: "Entry".into(),
+            select: select.into(),
+            entity_filters: (None, None, None),
+            limit: 32,
+            group_bounds: (None, None),
+            group_order: None,
+            filters: RowFilters::default(),
+            order: Default::default(),
+        };
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
@@ -456,8 +453,7 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
 
 #[tokio::test]
 async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -501,19 +497,19 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
     set_note("").await;
 
     let selection = |right: &str| -> Selection {
-        (
-            "Document".into(),
-            "count".into(),
-            (None, None, None),
-            32,
-            (None, None),
-            None,
-            RowFilters {
+        Selection {
+            entity: "Document".into(),
+            select: "count".into(),
+            entity_filters: (None, None, None),
+            limit: 32,
+            group_bounds: (None, None),
+            group_order: None,
+            filters: RowFilters {
                 compare: Some(["title".into(), "contains".into(), right.into()]),
                 ..Default::default()
             },
-            Default::default(),
-        )
+            order: Default::default(),
+        }
     };
     let original = selection("note");
     let start = async || {
@@ -634,10 +630,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
         ([None, Some("0"), None, None], true, Some("0")),
         ([None; 4], true, None),
     ];
-    let wasm = std::fs::read(
-        std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("build with make m2-cli-artifact"),
-    )
-    .unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -672,16 +665,16 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
         let mut jobs = Vec::new();
         for grouped in [false, true] {
             let select = format!("{}avg:{field}", if grouped { "zone," } else { "" });
-            let selection: Selection = (
-                "DecimalRow".into(),
+            let selection = Selection {
+                entity: "DecimalRow".into(),
                 select,
-                (None, None, None),
-                32,
-                (None, None),
-                None,
-                RowFilters::default(),
-                Default::default(),
-            );
+                entity_filters: (None, None, None),
+                limit: 32,
+                group_bounds: (None, None),
+                group_order: None,
+                filters: RowFilters::default(),
+                order: Default::default(),
+            };
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                     .await
@@ -842,8 +835,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
 
 #[tokio::test]
 async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").expect("run make m2-cli")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -922,16 +914,16 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         ];
         let mut jobs = Vec::new();
         for (selector, expected) in cases {
-            let selection: Selection = (
-                "BinaryObject".into(),
-                selector.into(),
-                (None, None, None),
-                32,
-                (None, None),
-                None,
-                RowFilters::default(),
-                Default::default(),
-            );
+            let selection = Selection {
+                entity: "BinaryObject".into(),
+                select: selector.into(),
+                entity_filters: (None, None, None),
+                limit: 32,
+                group_bounds: (None, None),
+                group_order: None,
+                filters: RowFilters::default(),
+                order: Default::default(),
+            };
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                     .await
@@ -950,17 +942,17 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .unwrap();
         assert_eq!(pic.get_stable_memory(canister).await, before);
         for (selection, handle, expected) in jobs {
-            if selection.1 == "min:payload" {
+            if selection.select == "min:payload" {
                 let before = pic.get_stable_memory(canister).await;
                 let mut changed = selection.clone();
-                changed.1 = "max:payload".into();
+                changed.select = "max:payload".into();
                 assert!(advance(&changed, &handle, 1, 4096).await.is_err());
                 assert!(advance(&selection, &handle, 1, 1).await.is_err());
                 assert_eq!(pic.get_stable_memory(canister).await, before);
             }
             let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
             assert_eq!((complete.phase.label(), complete.examined), ("Complete", 1));
-            assert_eq!(completed(&complete).1, expected, "{}", selection.1);
+            assert_eq!(completed(&complete).1, expected, "{}", selection.select);
             assert!(completed(&complete).2.is_none());
             call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
                 .await
@@ -1037,19 +1029,25 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .zip(upper.as_ref())
             .is_some_and(|(lo, hi)| lo > hi);
         replace(payload, None).await;
-        let selection: Selection = (
-            "BinaryObject".into(),
-            "count".into(),
-            (None, None, None),
-            32,
-            (None, None),
-            None,
-            RowFilters {
-                payload: [lower, upper, prefix, suffix, None],
+        let selection = Selection {
+            entity: "BinaryObject".into(),
+            select: "count".into(),
+            entity_filters: (None, None, None),
+            limit: 32,
+            group_bounds: (None, None),
+            group_order: None,
+            filters: RowFilters {
+                payload: PayloadFilters {
+                    minimum: lower,
+                    maximum: upper,
+                    prefix,
+                    suffix,
+                    contains: None,
+                },
                 ..Default::default()
             },
-            Default::default(),
-        );
+            order: Default::default(),
+        };
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
@@ -1067,29 +1065,38 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .unwrap();
         let before = pic.get_stable_memory(canister).await;
         let mut changed = selection.clone();
-        changed.6.payload[4] = Some(vec![255]);
+        changed.filters.payload.contains = Some(vec![255]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         changed = selection.clone();
-        changed.6.payload[3] = Some(vec![42]);
+        changed.filters.payload.suffix = Some(vec![42]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6.payload[3] = Some(vec![0; 1025]);
+        changed.filters.payload.suffix = Some(vec![0; 1025]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         changed = selection.clone();
-        changed.6.payload[2] = Some(vec![42]);
+        changed.filters.payload.prefix = Some(vec![42]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6.payload[2] = Some(vec![0; 1025]);
+        changed.filters.payload.prefix = Some(vec![0; 1025]);
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6.payload = [Some(vec![1, 2, 3]), None, None, None, None];
+        changed.filters.payload = PayloadFilters {
+            minimum: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
-        changed.6.payload = [Some(vec![0; 1025]), None, None, None, None];
+        changed.filters.payload = PayloadFilters {
+            minimum: Some(vec![0; 1025]),
+            ..Default::default()
+        };
         assert!(advance(&changed, &handle, 1, 4096).await.is_err());
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
                 .await
                 .is_err()
         );
-        changed.0 = "Document".into();
-        changed.6.payload = [Some(vec![]), None, None, None, None];
+        changed.entity = "Document".into();
+        changed.filters.payload = PayloadFilters {
+            minimum: Some(vec![]),
+            ..Default::default()
+        };
         assert!(
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &changed)
                 .await
@@ -1109,16 +1116,16 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .await
             .unwrap();
     }
-    let selection: Selection = (
-        "BinaryObject".into(),
-        "max:payload".into(),
-        (None, None, None),
-        32,
-        (None, None),
-        None,
-        RowFilters::default(),
-        Default::default(),
-    );
+    let selection = Selection {
+        entity: "BinaryObject".into(),
+        select: "max:payload".into(),
+        entity_filters: (None, None, None),
+        limit: 32,
+        group_bounds: (None, None),
+        group_order: None,
+        filters: RowFilters::default(),
+        order: Default::default(),
+    };
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await
         .unwrap();
@@ -1132,7 +1139,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         .unwrap();
     let before = pic.get_stable_memory(canister).await;
     let mut invalid = selection;
-    invalid.1 = "sum:payload".into();
+    invalid.select = "sum:payload".into();
     assert!(
         call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &invalid)
             .await
@@ -1153,7 +1160,7 @@ async fn literal_text_scan_cost() {
         u32,
         u32,
     );
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -1289,7 +1296,7 @@ async fn literal_text_scan_cost() {
 #[ignore = "matched Document update-call cycle measurement"]
 async fn document_replacement_costs() {
     type Document = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
-    let wasm = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
+    let wasm = ic_db_m0_rollback_driver::records_wasm();
     let pic = instance().await.unwrap();
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 3_000_000_000_000).await;

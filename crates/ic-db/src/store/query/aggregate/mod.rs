@@ -7,9 +7,9 @@ mod numeric;
 use super::distinct::DistinctKeys;
 use super::probe::{MemberProbe, probe_members};
 use super::{
-    Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, MAX_TERMS, Plan,
-    PlanOutput, Query, QueryPage, admit_ordered_fields, admit_output, admit_projection,
-    comparison_key, copy_projection, execute, projection_size,
+    Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Plan, PlanOutput, Query,
+    QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
+    copy_projection, execute, projection_size,
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema,
@@ -64,6 +64,13 @@ pub(super) struct GroupRequest<'a> {
     page: Option<jobs::pages::PageRequest<'a>>,
 }
 impl GroupRequest<'_> {
+    fn admit_start_page(&self) -> Result<(), Error> {
+        if self.page.is_some() {
+            return Err(Error::InvalidQuery);
+        }
+        Ok(())
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.predicates.is_empty() && self.order.is_none() && self.page.is_none()
     }
@@ -140,19 +147,12 @@ impl GroupRequest<'_> {
                         (Some(SummaryMeasure::Average), Some(_)) => (field, true),
                         _ => return Err(Error::InvalidQuery),
                     };
-                    if match value {
-                        IndexValue::Text(text) => text.len() > crate::codec::MAX_ROW_BYTES,
-                        IndexValue::Blob(bytes) => bytes.len() > crate::codec::MAX_ROW_BYTES,
-                        _ => false,
-                    } {
-                        return Err(Error::Limit);
-                    }
+                    super::admit_literal_size(&value)?;
                     comparison.admit(field.value, absent_result, value)?;
                     let key = if value == IndexValue::Absent {
                         None
                     } else {
-                        let mut key = Vec::new();
-                        value.append_component(field.optional, &mut key);
+                        let key = value.component(field.optional);
                         if key.len() > MAX_COMPARISON_KEY {
                             return Err(Error::Limit);
                         }
@@ -339,19 +339,17 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         mut self,
         terms: impl ExactSizeIterator<Item = (Option<SummaryMeasure>, Comparison, IndexValue<'a>)>,
     ) -> Self {
-        let count = terms.len();
-        if count == 0 || count > MAX_TERMS - self.request.groups.predicates.len() {
-            self.request.over_limit = true;
-        } else {
-            self.request.groups.predicates.extend(terms.enumerate().map(
-                |(i, (measure, comparison, operand))| GroupPredicate {
-                    measure,
-                    comparison,
-                    operand,
-                    or_next: i + 1 != count,
-                },
-            ));
-        }
+        super::append_clause(
+            &mut self.request.groups.predicates,
+            &mut self.request.over_limit,
+            terms,
+            |(measure, comparison, operand), or_next| GroupPredicate {
+                measure,
+                comparison,
+                operand,
+                or_next,
+            },
+        );
 
         self
     }
@@ -940,7 +938,6 @@ impl super::Request<'_> {
             groups,
             index: None,
             order: None,
-            order_descending: 0,
             descending: false,
             distinct: false,
             cursor: None,

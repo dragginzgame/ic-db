@@ -172,10 +172,7 @@ fn aggregate_owner_range_checks_residual_rows() {
     let alternatives = db
         .query::<Entry>()
         .eq("category", 0_u8)
-        .filter_any(&[
-            ("id", C::Ge, 8_u64.into()),
-            ("amount", C::Eq, 20_u64.into()),
-        ])
+        .filter_any(&[("id", C::Ge, 8_u64), ("amount", C::Eq, 20_u64)])
         .count()
         .unwrap();
     assert_eq!(
