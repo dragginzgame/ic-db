@@ -39,7 +39,7 @@ sha2.workspace = true
 ulid.workspace = true
 
 [dev-dependencies]
-ic-db = { workspace = true, features = ["test-support"] }
+ic-db = { path = ".", features = ["test-support"] }
 serde_json.workspace = true
 toko-tooling.workspace = true
 

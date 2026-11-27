@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.34.2] - Unreleased
+
+### 🐛 Fixed
+
+- Keep the runtime’s test-only self-dependency local so Cargo can publish the runtime, macros and CLI together. This delivers the cursor and qualification changes from the 0.34.1 source tag to crates.io.
+
 ## [0.34.1] - 2026-11-27
 
 ### 🔄 Changed
