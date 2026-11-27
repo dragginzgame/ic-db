@@ -5,22 +5,36 @@ use ic_wire::{Direction, Encoding};
 
 type Row = (u64, u64, u64);
 
-pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool) {
-    let fluent = std::env::var_os("IC_DB_FLUENT_COMPARISON").is_some();
-    let keyset = std::env::var_os("IC_DB_KEYSET_COMPARISON").is_some();
-    let aggregate = std::env::var_os("IC_DB_AGGREGATE_COMPARISON").is_some();
-    let profile = std::env::var_os("IC_DB_COUNT_PROFILE").is_some();
-    let counts = std::env::var_os("IC_DB_COUNT_COMPARISON").is_some();
-    let prefix_candidate = label == "ic-db" && std::env::var_os("IC_DB_PREFIX_CANDIDATE").is_some();
-    assert!(!prefix_candidate || (counts && !profile));
-    assert!(
-        [fluent, keyset, aggregate, counts]
-            .into_iter()
-            .filter(|selected| *selected)
-            .count()
-            == 1,
-        "select one comparison workload"
-    );
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Workload {
+    Fluent,
+    Keyset,
+    Aggregate,
+    Count,
+    CountProfile,
+}
+
+impl Workload {
+    pub fn selected() -> Self {
+        match std::env::var("IC_DB_COMPARISON_WORKLOAD").as_deref() {
+            Ok("fluent") => Self::Fluent,
+            Ok("keyset") => Self::Keyset,
+            Ok("aggregate") => Self::Aggregate,
+            Ok("count") => Self::Count,
+            Ok("count-profile") => Self::CountProfile,
+            _ => panic!("select a scalar comparison with scripts/measure-records.sh"),
+        }
+    }
+}
+
+pub async fn run(
+    label: &str,
+    wasm_path: &std::ffi::OsStr,
+    needs_settling: bool,
+    workload: Workload,
+) {
+    let profile = workload == Workload::CountProfile;
+    let counts = matches!(workload, Workload::Count | Workload::CountProfile);
     let (wasm, facts) = crate::artifact::read(std::fs::File::open(wasm_path).unwrap()).unwrap();
     let methods: Vec<_> = facts
         .exports
@@ -35,24 +49,15 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
         "canister_update insert",
         "canister_update read_modify_write",
     ];
-    if keyset {
-        expected_methods.insert(0, "canister_query keyset_listing");
-    }
-    if fluent {
-        expected_methods.insert(0, "canister_query fluent_listing");
-    }
-    if aggregate {
-        expected_methods.insert(0, "canister_query grouped_aggregate");
-    }
-    if counts {
-        expected_methods.insert(0, "canister_query count_rows");
-    }
+    let method = match workload {
+        Workload::Keyset => "canister_query keyset_listing",
+        Workload::Fluent => "canister_query fluent_listing",
+        Workload::Aggregate => "canister_query grouped_aggregate",
+        Workload::Count | Workload::CountProfile => "canister_query count_rows",
+    };
+    expected_methods.insert(0, method);
     if profile {
-        assert!(counts && label == "ic-db");
         expected_methods.insert(0, "canister_query count_profile");
-    }
-    if prefix_candidate {
-        expected_methods.insert(3, "canister_query prefix_count");
     }
     assert_eq!(
         methods, expected_methods,
@@ -267,7 +272,7 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
         startup().await
     );
 
-    if keyset {
+    if workload == Workload::Keyset {
         // Final item state of the skewed application after its move, seeded
         // directly: the timed workload contains reads on immutable input.
         let mut expected = Vec::new();
@@ -434,29 +439,8 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
                 .collect::<Vec<_>>()
         );
     }
-    if label == "ic-db" && std::env::var_os("IC_DB_PREFIX_WRITE_PROFILE").is_some() {
-        assert!(counts && !profile);
-        for (name, value) in [
-            ("same_prefix", (7_u64, 0_u64, 708_u64)),
-            ("no_op", (7, 0, 708)),
-        ] {
-            let backing = pic.get_stable_memory(canister).await;
-            let (actual, instructions, cycles) = replace(value).await;
-            assert_eq!(actual, Some(value));
-            eprintln!(
-                "{label} {name}_replace_instructions={instructions} cycles={cycles} settling={:?}",
-                settle().await
-            );
-            if name == "no_op" && !needs_settling {
-                assert_eq!(pic.get_stable_memory(canister).await, backing);
-            }
-            *source.iter_mut().find(|row| row.0 == 7).unwrap() = value;
-            assert_eq!(lookup(7).await.0, Some(value));
-        }
-    }
-
     let compare_fluent = async |phase: &str| {
-        if !fluent {
+        if workload != Workload::Fluent {
             return;
         }
         // Compare only the first requested rows on unchanged data. The engines'
@@ -527,7 +511,7 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
         }
     };
     let compare_aggregates = async |phase: &str| {
-        if !aggregate {
+        if workload != Workload::Aggregate {
             return;
         }
         for (category, minimum) in [
@@ -675,40 +659,6 @@ pub async fn run(label: &str, wasm_path: &std::ffi::OsStr, needs_settling: bool)
                 "{label} exact_count phase={phase} rows={} category={category:?} expected={expected} result={result:?} instructions={instructions}",
                 expected_rows.len()
             );
-            if prefix_candidate && let Some(category) = category {
-                let reply = pic
-                    .query_call(
-                        canister,
-                        canister,
-                        "prefix_count",
-                        ic_wire::encode(
-                            &category,
-                            Encoding::Frame {
-                                method: 9,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                let (result, instructions): (u64, u64) = ic_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 9,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
-                assert_eq!(result, expected);
-                assert_eq!(pic.get_stable_memory(canister).await, backing);
-                eprintln!(
-                    "ic-db prefix_metadata phase={phase} rows={} category={category} expected={expected} instructions={instructions}",
-                    expected_rows.len()
-                );
-            }
             if profile {
                 let modes: &[u8] = if category.is_none() {
                     &[0, 2]

@@ -1,5 +1,10 @@
 //! Write contracts at the schema and storage boundaries.
 
+#[path = "support/raw_map.rs"]
+pub mod raw_map;
+#[path = "support/host.rs"]
+mod test_host;
+
 use ic_db::design::prelude::*;
 use ic_db::{
     Batch, DatabaseSession, Error,
@@ -111,6 +116,81 @@ fn list_references_follow_final_batch_state_and_large_rows_reopen() {
         session.read().unwrap().revision::<Thumbnail>().unwrap(),
         revision
     );
+}
+
+#[test]
+fn list_entry_validation_checks_membership_owner_suffix_and_other_index_bounds() {
+    use ic_db::Database;
+    use ic_storage::{StableKey, VectorMemory};
+
+    #[entity(store = FixtureStore, pk(field = "id"), index(field = "label"), fields(
+        field(name = "id", value(item(prim = "Nat64"))),
+        field(name = "label", value(item(prim = "Text", max_bytes = 512))),
+        field(name = "images", value(many, max_items = 4, item(prim = "Nat64")), references(entity = "Thumbnail"))
+    ))]
+    struct Album {}
+
+    let backing = VectorMemory::default();
+    let runtime = test_host::host(backing.clone());
+    let slot = StableKey::parse("test.db.v1").unwrap();
+    let allocation = || runtime.open_memory(&slot).unwrap();
+    let schema = Schema::new(&[Album::SCHEMA, Thumbnail::SCHEMA]).unwrap();
+    let mut db = Database::create(allocation(), schema.clone(), [1; 16]).unwrap();
+    let mut seed = Batch::at_for_test(Timestamp::from_millis(1));
+    for id in [1, 2] {
+        seed.insert_input(Thumbnail::insert().id(id).payload(vec![]))
+            .unwrap();
+    }
+    let mut album = Album {
+        id: 9,
+        label: String::new(),
+        images: vec![1, 1],
+    };
+    seed.insert(&album).unwrap();
+    db.commit(seed).unwrap();
+    drop(db);
+
+    let raw = raw_map::RawMap::load(allocation());
+    let original = raw.keys().find(|key| key.first() == Some(&4)).unwrap();
+    let owner = raw.get(&original).unwrap();
+    drop(raw);
+    // Raw Nat64 target and owner follow the tag, entity and field identifiers.
+    for (target, suffix) in [(2_u64, 9_u64), (1, 8)] {
+        let mut forged = original[..9].to_vec();
+        forged.extend(target.to_be_bytes());
+        forged.extend(suffix.to_be_bytes());
+        let mut raw = raw_map::RawMap::load(allocation());
+        raw.insert(forged.clone(), owner.clone());
+        drop(raw);
+        let mut db = Database::open(allocation(), schema.clone()).unwrap();
+        let before = backing.borrow().clone();
+        let mut delete = Batch::new();
+        delete.delete::<Thumbnail>(target).unwrap();
+        assert!(matches!(db.commit(delete), Err(Error::Corrupt)));
+        assert_eq!(*backing.borrow(), before);
+        drop(db);
+        raw_map::RawMap::load(allocation()).remove(&forged);
+    }
+    // The stored row fits, but its unrelated secondary key exceeds 512 bytes.
+    let mut row_key = vec![2];
+    row_key.extend(Album::SCHEMA.id.to_be_bytes());
+    row_key.extend(album.id.to_be_bytes());
+    album.label = "x".repeat(512);
+    let saved = raw_map::RawMap::load(allocation())
+        .insert(row_key.clone(), album.encode().unwrap())
+        .unwrap();
+    let mut db = Database::open(allocation(), schema.clone()).unwrap();
+    let before = backing.borrow().clone();
+    let mut delete = Batch::new();
+    delete.delete::<Thumbnail>(1).unwrap();
+    assert!(matches!(db.commit(delete), Err(Error::Limit)));
+    assert_eq!(*backing.borrow(), before);
+    drop(db);
+    raw_map::RawMap::load(allocation()).insert(row_key, saved);
+    let mut db = Database::open(allocation(), schema).unwrap();
+    let mut delete = Batch::new();
+    delete.delete::<Thumbnail>(2).unwrap();
+    db.commit(delete).unwrap();
 }
 
 #[test]

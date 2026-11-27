@@ -1,6 +1,8 @@
 //! Fluent reads: independent result expectations, cursor bindings and bounded progress.
 
+mod aggregate_paths;
 mod blobs;
+mod cursors;
 #[cfg(feature = "logging")]
 mod logging;
 #[cfg(feature = "metrics")]
@@ -167,6 +169,35 @@ fn create(runtime: &MemoryRuntime<VectorMemory>, incarnation: u8) -> Database {
 
 fn ids(rows: &[Entry]) -> Vec<u64> {
     rows.iter().map(|r| r.id).collect()
+}
+
+#[test]
+fn optional_equality_preserves_the_underlying_query_and_cursor() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let query = || db.query::<Entry>().limit(1);
+    let plain = query().fetch().unwrap();
+    let omitted = query()
+        .eq_if_some(Entry::CATEGORY, None::<u8>)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&omitted.rows), ids(&plain.rows));
+    assert_eq!(omitted.next, plain.next);
+
+    let first = query().eq(Entry::CATEGORY, 0_u8).fetch().unwrap();
+    let cursor = first.next.unwrap();
+    let resumed = query()
+        .eq(Entry::CATEGORY, 0_u8)
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    let optional = query()
+        .eq_if_some(Entry::CATEGORY, Some(0_u8))
+        .after(&cursor)
+        .fetch()
+        .unwrap();
+    assert_eq!(ids(&optional.rows), ids(&resumed.rows));
+    assert_eq!(optional.next, resumed.next);
 }
 
 #[test]
@@ -648,151 +679,6 @@ fn fixed_non_unique_index_seeks_the_owner_key() {
 }
 
 #[test]
-fn covered_count_prefers_the_exact_unique_key() {
-    ///
-    /// CodedRow
-    /// Exercises competing code and score indexes on rows keyed by `id`.
-    ///
-
-    #[entity(
-        store = ic_db::testing::FixtureStore,
-        pk(field = "id"),
-        index(name = "by_code_and_id", fields = ["code", "id"]),
-        index(field = "code", unique),
-        index(field = "score"),
-        index(field = "active"),
-        fields(
-            field(name = "id", value(item(prim = "Nat64"))),
-            field(name = "active", value(item(prim = "Bool"))),
-            field(name = "code", value(item(prim = "Nat64"))),
-            field(name = "score", value(item(prim = "Nat64")))
-        )
-    )]
-    struct CodedRow {}
-
-    let fixture = ic_db::testing::Fixture::new("test.count.v1");
-    let mut db = fixture
-        .create(Schema::new(&[CodedRow::SCHEMA]).unwrap(), [1; 16])
-        .unwrap();
-    let mut batch = Batch::new();
-    for (id, code, score) in [(1, 7, 0), (2, 0, 1), (3, u64::MAX, 2)] {
-        batch
-            .insert(&CodedRow {
-                id,
-                code,
-                score,
-                active: id != 2,
-            })
-            .unwrap();
-    }
-    db.commit(batch).unwrap();
-
-    // The compound index sorts first by name. Only the unique index proves
-    // exhaustion immediately after visiting its single matching entry.
-    for (code, expected) in [(7_u64, 1), (8, 0)] {
-        let query = || db.query::<CodedRow>().eq("code", code).work_limit(1);
-        let count = query().count().unwrap();
-        assert_eq!(
-            (count.value, count.examined, count.fetched),
-            (expected as u64, expected, 0)
-        );
-        let checked = query().count_validated().unwrap();
-        assert_eq!(
-            (checked.value, checked.examined, checked.fetched),
-            (expected as u64, expected, expected)
-        );
-    }
-    // Counting a field scans rows; a unique index alone does not enable point probes.
-    let query = || {
-        db.query::<CodedRow>()
-            .filter_in(CodedRow::CODE, &[0_u64, u64::MAX])
-            .gte(CodedRow::SCORE, 2_u64)
-            .work_limit(2)
-    };
-    let count = query().count_field(CodedRow::ID).unwrap();
-    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
-    let checked = query().count_validated().unwrap();
-    assert_eq!(
-        (checked.value, checked.examined, checked.fetched),
-        (1, 2, 2)
-    );
-    // Both activity states cover the entire non-unique index. Only score narrows the scan.
-    let count = db
-        .query::<CodedRow>()
-        .filter_in(CodedRow::ACTIVE, &[true, false])
-        .gte(CodedRow::SCORE, 2_u64)
-        .work_limit(2)
-        .count_field(CodedRow::ID)
-        .unwrap();
-    assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
-}
-
-#[test]
-fn aggregate_unique_lookup_checks_remaining_filters_in_one_visit() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 1);
-    for (value, lower_id, expected, visited) in
-        [(8_u64, 2_u64, true, 1), (4, 5, false, 1), (9, 2, false, 0)]
-    {
-        let query = || {
-            db.query::<Entry>()
-                .eq("category", 0_u8)
-                .eq("maybe", value)
-                .filter("id", C::Ge, lower_id)
-                .work_limit(1)
-        };
-        let count = query().count().unwrap();
-        assert_eq!(
-            (count.value, count.examined, count.fetched),
-            (u64::from(expected), visited, visited)
-        );
-        let found = query().exists().unwrap();
-        assert_eq!(
-            (found.value, found.examined, found.fetched),
-            (expected, visited, visited)
-        );
-    }
-}
-
-#[test]
-fn aggregate_ranks_sparse_presence_below_a_narrow_range() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 1);
-    let query = || db.query::<Entry>();
-    for full_range in [
-        query().gte(Entry::MAYBE, 0_u64),
-        query().lte(Entry::MAYBE, u64::MAX),
-        query().ne(Entry::MAYBE, IndexValue::Absent),
-    ] {
-        let count = full_range
-            .gte(Entry::AMOUNT, 70_u64)
-            .work_limit(3)
-            .count_field(Entry::ID)
-            .unwrap();
-        assert_eq!((count.value, count.examined, count.fetched), (2, 2, 2));
-    }
-    let members = || query().filter_in(Entry::MAYBE, &[0_u64, u64::MAX]);
-    let scan = members()
-        .gte(Entry::AMOUNT, 70_u64)
-        .work_limit(3)
-        .count_field(Entry::ID)
-        .unwrap();
-    assert_eq!((scan.value, scan.examined, scan.fetched), (0, 2, 2));
-    let probes = members().work_limit(2).count_validated().unwrap();
-    assert_eq!((probes.value, probes.examined, probes.fetched), (0, 2, 0));
-    // Presence alone can still avoid the two rows omitted from the sparse index.
-    let present = query()
-        .ne(Entry::MAYBE, IndexValue::Absent)
-        .work_limit(7)
-        .count_field(Entry::ID)
-        .unwrap();
-    assert_eq!(
-        (present.value, present.examined, present.fetched),
-        (6, 6, 6)
-    );
-}
-
-#[test]
 fn full_primary_range_allows_a_narrow_sparse_scan() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);
@@ -842,46 +728,6 @@ fn full_primary_range_allows_a_narrow_sparse_scan() {
             .unwrap();
         assert_eq!((count.value, count.examined, count.fetched), (1, 1, 1));
     }
-}
-
-#[test]
-fn aggregate_owner_range_checks_residual_rows() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 1);
-    // Only IDs 6 and 8 lie in this category and range. The amount lives in
-    // the owner row and rejects ID 6. Three units also allow proving exhaustion.
-    let query = || {
-        db.query::<Entry>()
-            .eq("category", 0_u8)
-            .filter("id", C::Ge, 6_u64)
-            .filter("amount", C::Ge, 70_u64)
-            .work_limit(3)
-    };
-    for result in [query().count(), query().count_validated()] {
-        let count = result.unwrap();
-        assert_eq!((count.value, count.examined, count.fetched), (1, 2, 2));
-    }
-    let found = query().exists().unwrap();
-    assert_eq!((found.value, found.examined, found.fetched), (true, 2, 2));
-
-    // ID 2 matches the other OR branch, outside the ID >= 8 interval.
-    let alternatives = db
-        .query::<Entry>()
-        .eq("category", 0_u8)
-        .filter_any(&[
-            ("id", C::Ge, 8_u64.into()),
-            ("amount", C::Eq, 20_u64.into()),
-        ])
-        .count()
-        .unwrap();
-    assert_eq!(
-        (
-            alternatives.value,
-            alternatives.examined,
-            alternatives.fetched
-        ),
-        (2, 4, 4)
-    );
 }
 
 #[test]
@@ -1517,63 +1363,6 @@ fn optional_text_index_ranges_preserve_absence_escaped_bytes_and_duplicate_value
 struct WideRange {}
 
 #[test]
-fn secondary_ranges_intersect_valid_cursors_outside_the_selected_value_classes() {
-    let runtime = host(VectorMemory::default());
-    let (db, input) = text_rows(&runtime);
-    let query = || {
-        db.query::<TextRow>()
-            .using_index("text,id", &[])
-            .filter("text", C::Ge, "a")
-            .filter("text", C::Le, "ab")
-    };
-    for descending in [false, true] {
-        let mut q = query().limit(1);
-        if descending {
-            q = q.descending();
-        }
-        let target = q.fetch().unwrap().next.unwrap().to_bytes();
-        for after_range in [false, true] {
-            let mut donor = db.query::<TextRow>().using_index("text,id", &[]).limit(1);
-            if after_range {
-                donor = donor.descending();
-            }
-            let donor = donor.fetch().unwrap().next.unwrap().to_bytes();
-            for inclusive in [false, true] {
-                // Keep the admitted query identity but choose a valid logical position
-                // from the same index, as an older full-prefix scan could have done.
-                let mut bytes = target[..34].to_vec();
-                bytes[1] = u8::from(inclusive);
-                bytes.extend_from_slice(&donor[34..]);
-                let cursor = QueryCursor::from_bytes(&bytes).unwrap();
-                let mut q = query().after(&cursor);
-                if descending {
-                    q = q.descending();
-                }
-                let page = q.fetch().unwrap();
-                let mut expected: Vec<_> = input
-                    .iter()
-                    .filter(|r| {
-                        r.text.as_deref().is_some_and(|text| {
-                            after_range == descending && ("a"..="ab").contains(&text)
-                        })
-                    })
-                    .collect();
-                expected.sort_by_key(|r| (&r.text, r.id));
-                if descending {
-                    expected.reverse();
-                }
-                assert_eq!(
-                    page.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-                    expected.iter().map(|r| r.id).collect::<Vec<_>>()
-                );
-                assert_eq!(page.examined, expected.len());
-                assert!(page.next.is_none());
-            }
-        }
-    }
-}
-
-#[test]
 fn oversized_index_range_operands_fall_back_to_admitted_residual_comparison() {
     let runtime = host(VectorMemory::default());
     let mut db = Database::create(
@@ -1859,99 +1648,6 @@ fn primary_ranges_match_integer_oracle_and_only_examine_the_intersection() {
         .unwrap();
     assert_eq!(ids(&indexed.rows), [8, 7]);
     assert_eq!(indexed.examined, 8);
-}
-
-#[test]
-fn primary_range_pages_clamp_cursors_and_retry_byte_limited_rows() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 1);
-    let query = || {
-        db.query::<Entry>()
-            .filter("id", C::Ge, 3_u64)
-            .filter("id", C::Le, 6_u64)
-    };
-    for descending in [false, true] {
-        let mut cursor = None;
-        let mut actual = Vec::new();
-        for _ in 0..5 {
-            let mut q = query().work_limit(1);
-            if descending {
-                q = q.descending();
-            }
-            if let Some(c) = &cursor {
-                q = q.after(c);
-            }
-            let page = q.fetch().unwrap();
-            if page
-                .rows
-                .last()
-                .is_some_and(|r| r.id == if descending { 3 } else { 6 })
-            {
-                assert!(
-                    page.next.is_none(),
-                    "processed the inclusive end of the range"
-                );
-            }
-            actual.extend(ids(&page.rows));
-            assert_eq!(page.examined, page.rows.len());
-            cursor = page.next;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        assert!(cursor.is_none());
-        assert_eq!(
-            actual,
-            if descending {
-                vec![6, 5, 4, 3]
-            } else {
-                vec![3, 4, 5, 6]
-            }
-        );
-        let mut q = query().test_output_limit(row(1).encode().unwrap().len());
-        if descending {
-            q = q.descending();
-        }
-        let first = q.fetch().unwrap();
-        assert_eq!(first.rows.len(), 1);
-        let cursor = first.next.unwrap();
-        assert_eq!(cursor.to_bytes()[1], 1, "retry the unreturned candidate");
-        let mut q = query().after(&cursor);
-        if descending {
-            q = q.descending();
-        }
-        let rest = q.fetch().unwrap();
-        let mut actual = ids(&first.rows);
-        actual.extend(ids(&rest.rows));
-        assert_eq!(
-            actual,
-            if descending {
-                vec![6, 5, 4, 3]
-            } else {
-                vec![3, 4, 5, 6]
-            }
-        );
-
-        // Valid logical positions from an older full scan, or chosen by a caller,
-        // may be outside the newly narrowed interval. They cannot widen it.
-        for inclusive in [false, true] {
-            for position in [0_u64, 9_u64] {
-                let mut bytes = cursor.to_bytes();
-                bytes[1] = u8::from(inclusive);
-                let offset = bytes.len() - 8;
-                bytes[offset..].copy_from_slice(&position.to_be_bytes());
-                let cursor = QueryCursor::from_bytes(&bytes).unwrap();
-                let mut q = query().after(&cursor);
-                if descending {
-                    q = q.descending();
-                }
-                let page = q.fetch().unwrap();
-                let count = if (position == 0) != descending { 4 } else { 0 };
-                assert_eq!((page.rows.len(), page.examined), (count, count));
-                assert!(page.next.is_none());
-            }
-        }
-    }
 }
 
 ///
@@ -4147,266 +3843,6 @@ fn existence_admits_every_operand_and_refuses_incompatible_modifiers() {
         db.query::<Entry>().after(&cursor).exists(),
         Err(Error::InvalidQuery)
     ));
-}
-
-#[test]
-fn sparse_index_pages_progress_in_both_directions() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 1);
-    for descending in [false, true] {
-        let mut cursor = None;
-        let mut all = Vec::new();
-        let mut empty = 0;
-        let mut examined = 0;
-        loop {
-            let mut query = db
-                .query::<Entry>()
-                .using_index("category", &[1_u8.into()])
-                .filter("amount", C::Ge, 50_u64)
-                .limit(2)
-                .work_limit(1);
-            if descending {
-                query = query.descending();
-            }
-            if let Some(c) = &cursor {
-                query = query.after(c);
-            }
-            let page = query.fetch().unwrap();
-            assert!(page.examined <= 1);
-            assert_eq!(page.examined, page.fetched);
-            examined += page.examined;
-            if page.rows.is_empty() && page.next.is_some() {
-                empty += 1;
-            }
-            all.extend(ids(&page.rows));
-            cursor = page
-                .next
-                .map(|c| QueryCursor::from_bytes(&c.to_bytes()).unwrap());
-            if cursor.is_none() {
-                break;
-            }
-        }
-        assert_eq!(all, if descending { vec![7, 5] } else { vec![5, 7] });
-        assert_eq!(empty, 2);
-        assert_eq!(examined, 4);
-    }
-    let page = db
-        .query::<Entry>()
-        .filter("maybe", C::Eq, IndexValue::Absent)
-        .fetch()
-        .unwrap();
-    assert_eq!(ids(&page.rows), [3, 6]);
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .filter("maybe", C::Ne, IndexValue::Absent)
-            .fetch()
-            .unwrap()
-            .rows),
-        [1, 2, 4, 5, 7, 8]
-    );
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .filter("maybe", C::Le, 4_u64)
-            .fetch()
-            .unwrap()
-            .rows),
-        [1, 2, 4]
-    );
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .filter("maybe", C::Lt, 4_u64)
-            .fetch()
-            .unwrap()
-            .rows),
-        [1, 2]
-    );
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .using_index("maybe", &[4_u64.into()])
-            .fetch()
-            .unwrap()
-            .rows),
-        [4]
-    );
-    assert!(matches!(
-        db.query::<Entry>().using_index("maybe", &[]).fetch(),
-        Err(Error::InvalidQuery)
-    ));
-    // Duplicate secondary values use the primary owner suffix as a tie-breaker.
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .using_index("category", &[1_u8.into()])
-            .descending()
-            .fetch()
-            .unwrap()
-            .rows),
-        [7, 5, 3, 1]
-    );
-}
-
-#[test]
-fn output_budget_retries_the_matching_candidate_without_skipping_it() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 2);
-    let size = row(1).encode().unwrap().len();
-    let first = db
-        .query::<Entry>()
-        .test_output_limit(size * 2 - 1)
-        .fetch()
-        .unwrap();
-    assert_eq!(ids(&first.rows), [1]);
-    assert_eq!(first.examined, 2);
-    assert_eq!(first.output_bytes, size);
-    let cursor = first.next.unwrap();
-    let next = db
-        .query::<Entry>()
-        .after(&cursor)
-        .test_output_limit(4096)
-        .fetch()
-        .unwrap();
-    assert_eq!(ids(&next.rows), [2, 3, 4, 5, 6, 7, 8]);
-    assert!(next.next.is_none());
-    assert!(matches!(
-        db.query::<Entry>().test_output_limit(size - 1).fetch(),
-        Err(Error::RowTooLarge)
-    ));
-    let none = db
-        .query::<Entry>()
-        .filter("id", C::Gt, 20_u64)
-        .test_output_limit(1)
-        .fetch()
-        .unwrap();
-    assert!(none.rows.is_empty());
-    assert!(none.next.is_none());
-    let first = db
-        .query::<Entry>()
-        .descending()
-        .test_output_limit(size * 2 - 1)
-        .fetch()
-        .unwrap();
-    assert_eq!(ids(&first.rows), [8]);
-    assert_eq!(
-        ids(&db
-            .query::<Entry>()
-            .descending()
-            .after(first.next.as_ref().unwrap())
-            .fetch()
-            .unwrap()
-            .rows),
-        [7, 6, 5, 4, 3, 2, 1]
-    );
-}
-
-#[test]
-fn admission_and_cursors_refuse_before_data_access() {
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 3);
-    let cursor = db.query::<Entry>().limit(1).fetch().unwrap().next.unwrap();
-    assert!(matches!(
-        db.query::<Entry>().descending().after(&cursor).fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    assert!(matches!(
-        db.query::<Entry>()
-            .filter("amount", C::Ge, 0_u64)
-            .after(&cursor)
-            .fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    assert!(matches!(
-        db.query::<Entry>()
-            .using_index("amount,id", &[])
-            .after(&cursor)
-            .fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    assert!(matches!(
-        db.query::<Other>().after(&cursor).fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    let other_runtime = host(VectorMemory::default());
-    let other = create(&other_runtime, 4);
-    assert!(matches!(
-        other.query::<Entry>().after(&cursor).fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    let changed_runtime = host(VectorMemory::default());
-    let changed = Database::create(
-        changed_runtime
-            .open_memory(&StableKey::parse("test.db.v1").unwrap())
-            .unwrap(),
-        Schema::new(&[Entry::SCHEMA]).unwrap(),
-        [3; 16],
-    )
-    .unwrap();
-    assert!(matches!(
-        changed.query::<Entry>().after(&cursor).fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    for offset in [0, 1, 2, 34] {
-        let mut bytes = cursor.to_bytes();
-        bytes[offset] = 255;
-        if let Ok(bad) = QueryCursor::from_bytes(&bytes) {
-            assert!(matches!(
-                db.query::<Entry>().after(&bad).fetch(),
-                Err(Error::InvalidCursor)
-            ));
-        }
-    }
-    for size in [0, 1, 34, 547, 1000] {
-        assert!(QueryCursor::from_bytes(&vec![0; size]).is_err());
-    }
-    let mut trailing = cursor.to_bytes();
-    trailing.push(0);
-    assert!(matches!(
-        db.query::<Entry>()
-            .after(&QueryCursor::from_bytes(&trailing).unwrap())
-            .fetch(),
-        Err(Error::InvalidCursor)
-    ));
-    assert!(matches!(
-        db.query::<Entry>()
-            .filter("id", C::Eq, 0_u64)
-            .filter("amount", C::Eq, 1_u8)
-            .fetch(),
-        Err(Error::InvalidOperand)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().filter("payload", C::Eq, "x").fetch(),
-        Err(Error::InvalidOperand)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().filter("missing", C::Eq, 1_u64).fetch(),
-        Err(Error::InvalidQuery)
-    ));
-    assert!(matches!(
-        db.query::<Entry>()
-            .filter("maybe", C::Lt, IndexValue::Absent)
-            .fetch(),
-        Err(Error::InvalidOperand)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().limit(0).fetch(),
-        Err(Error::Limit)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().work_limit(513).fetch(),
-        Err(Error::Limit)
-    ));
-    assert!(matches!(
-        db.query::<Entry>().test_output_limit(0).fetch(),
-        Err(Error::Limit)
-    ));
-    let mut query = db.query::<Entry>();
-    for _ in 0..9 {
-        query = query.filter("id", C::Eq, 1_u64);
-    }
-    assert!(matches!(query.fetch(), Err(Error::Limit)));
 }
 
 #[test]
@@ -8015,62 +7451,6 @@ fn exact_counts_and_groups_complete_before_output_limits() {
     );
     assert_eq!(groups.value.iter().map(|g| g.count).sum::<u64>(), 8);
     assert_eq!(*backing.borrow(), before);
-}
-
-#[test]
-fn value_aggregates_seek_one_unique_owner_and_check_residuals() {
-    #[record(fields(field(name = "amount", value(item(prim = "Decimal", scale = 0)))))]
-    struct AverageAmount {}
-
-    let runtime = host(VectorMemory::default());
-    let db = create(&runtime, 21);
-    let query = |key: u64| db.query::<Entry>().eq(Entry::MAYBE, key).work_limit(1);
-    let sum = query(8).sum::<AmountOnly>().unwrap();
-    assert_eq!(
-        (sum.examined, sum.fetched, sum.value.unwrap().amount),
-        (1, 1, 80)
-    );
-    let groups = query(8).group_min::<CategoryOnly, AmountOnly>().unwrap();
-    assert_eq!(
-        (groups.examined, groups.fetched, groups.value.len()),
-        (1, 1, 1)
-    );
-    assert_eq!(groups.value[0].value.as_ref().unwrap().amount, 80);
-    let avg = query(8).avg::<AverageAmount>().unwrap();
-    assert_eq!(
-        (
-            avg.examined,
-            avg.fetched,
-            avg.value.unwrap().amount.to_string()
-        ),
-        (1, 1, "80".into())
-    );
-    let broad = db
-        .query::<Entry>()
-        .filter(Entry::CATEGORY, C::Ge, 0_u8)
-        .sum::<AmountOnly>()
-        .unwrap();
-    assert_eq!(
-        (broad.examined, broad.fetched, broad.value.unwrap().amount),
-        (8, 8, 360)
-    );
-    let miss = query(99).max::<AmountOnly>().unwrap();
-    assert_eq!((miss.examined, miss.fetched, miss.value), (0, 0, None));
-    let filtered = query(8)
-        .eq(Entry::CATEGORY, 1_u8)
-        .sum::<AmountOnly>()
-        .unwrap();
-    assert_eq!(
-        (filtered.examined, filtered.fetched, filtered.value),
-        (1, 1, None)
-    );
-    // Both absent rows lie outside the present-only unique index.
-    let absent = db
-        .query::<Entry>()
-        .filter_absent(Entry::MAYBE)
-        .sum::<AmountOnly>()
-        .unwrap();
-    assert_eq!(absent.value.unwrap().amount, 90);
 }
 
 #[test]

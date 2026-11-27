@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.33.1] - Unreleased
+
+### ✨ Added
+
+- Use `by_id(id)` with fluent projections and existence checks to select the entity’s declared primary key.
+- Chain optional equality filters with `eq_if_some(field, value)`. A supplied value uses ordinary equality and an omitted value adds no predicate.
+
+### ⚡ Performance
+
+- Validating a list-reference entry checks the target directly against its owner. A restricted delete with 32 links spanning 16 targets used 29.4% fewer instructions in the installed fixture. [List-reference measurements](qualification/README.md#list-reference-owner-checks)
+
+### 🧪 Testing
+
+- Qualification uses Canic 0.274.0. The mixed-lifecycle driver now passes Canic’s published limits directly to the shared Wire 0.31.1 codec.
+
 ## [0.33.0] - 2026-11-26
 
 ### 🔄 Changed

@@ -1612,7 +1612,7 @@ a divergent key. [Verifier](https://github.com/dragginzgame/icydb-legacy/blob/6d
 IC DB compares the visited entry’s namespace, encoded components and owner suffix
 directly. Stored-row inspection validates the fields before the canonical key
 encoder derives their components. The owner check compares those bytes with the
-visited entry. Entity-supplied index bytes undergo a separate framing check.
+visited entry. For a list-reference reverse entry, the verified owner suffix delimits the target key. Validation decodes it with the declared list item type and checks membership in the owner’s decoded links. Repeated references share one physical entry. Entity-supplied index bytes undergo a separate framing check.
 A scan reuses its index buffers for successive owners within one page.
 Reads still derive the component bytes of other indexes on the row and enforce the 512-byte
 complete-key limit, including the suffix on non-unique indexes. Only writes
@@ -2709,7 +2709,7 @@ replace any tenant/row checks required inside an application's typed handler.
 
 ### Application inspection
 
-Canic owns the inspection protocol, verified client and installed endpoint tests. Applications decide which callers can inspect a catalogue, selected schema and maintained count. IC DB supplies the schema and admission facts and qualifies bounded fluent listing semantics. The local `db` console operates on the fixture. Its count, schema and migration commands share typed request/reply framing over measured PocketIC calls. Command handlers interpret application errors and format results. Frozen IcyDB `6d421e3`, `icydb-cli/src/shell/call.rs`, also separates invocation from rendering. IC DB supplies its own fixture methods and Wire limits.
+Canic owns the inspection protocol, verified client and installed endpoint tests. Applications decide which callers can inspect a catalogue, selected schema and maintained count. IC DB supplies the schema and admission facts and qualifies bounded fluent listing semantics. The local `db` console operates on the fixture. Its count, schema, aggregate and migration commands share typed request/reply framing over measured PocketIC calls. Command handlers interpret application errors and format results. Frozen IcyDB `6d421e3`, `icydb-cli/src/shell/call.rs`, also separates invocation from rendering. IC DB supplies its own fixture methods and Wire limits.
 
 ### Current engine delivery and qualification
 

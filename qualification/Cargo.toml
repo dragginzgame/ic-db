@@ -27,7 +27,7 @@ publish = false
 
 [workspace.dependencies]
 accounts = { package = "ic-db-schema-owner-producer", path = "experiments/schema-owner/producer" }
-canic = { version = "0.273.0", default-features = false, features = ["endpoints"] }
+canic = { version = "0.274.0", default-features = false, features = ["endpoints"] }
 ic-db = { path = "../crates/ic-db" }
 ic-db-cli = { path = "../crates/ic-db-cli", default-features = false }
 ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }
@@ -44,7 +44,7 @@ serde = "1.0.229"
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 tokio = "1.54.1"
-toko-tooling = "=0.46.8"
+toko-tooling = "=0.46.9"
 wasmparser = { version = "0.263.0", default-features = false, features = ["std", "features", "validate"] }
 
 [workspace.lints.cargo]

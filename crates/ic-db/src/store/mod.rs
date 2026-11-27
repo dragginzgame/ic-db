@@ -1278,22 +1278,19 @@ fn validate_index_entry(
     if info.key != owner {
         return Err(Error::Corrupt);
     }
-    if key.first() == Some(&4) {
-        return index_entries(entity, info)?
-            .iter()
-            .any(|(entry, _)| entry.as_ref() == key)
-            .then_some(())
-            .ok_or(Error::Corrupt);
-    }
     let (header, payload) = key
         .split_at_checked(INDEX_PREFIX_BYTES)
         .ok_or(Error::Corrupt)?;
-    if header[0] != 3 || header[1..ENTITY_PREFIX_BYTES] != entity.id.to_be_bytes() {
+    let list_link = header[0] == 4;
+    if (!list_link && header[0] != 3) || header[1..ENTITY_PREFIX_BYTES] != entity.id.to_be_bytes() {
         return Err(Error::Corrupt);
     }
     let mut matches = false;
     let owner = owner.encode();
     visit_index_components(entity, info, |index, values| {
+        if list_link {
+            check_component_framing(entity, index, values)?;
+        }
         let suffix = if index.unique {
             &[][..]
         } else {
@@ -1302,12 +1299,38 @@ fn validate_index_entry(
         if INDEX_PREFIX_BYTES + values.len() + suffix.len() > crate::MAX_INDEX_KEY_BYTES {
             return Err(Error::Limit);
         }
-        if header[ENTITY_PREFIX_BYTES..] == index.id.to_be_bytes() {
+        if !list_link && header[ENTITY_PREFIX_BYTES..] == index.id.to_be_bytes() {
             matches = payload.strip_prefix(values) == Some(suffix);
         }
 
         Ok(())
     })?;
+    if list_link {
+        let index = u32::from_be_bytes(
+            header[ENTITY_PREFIX_BYTES..]
+                .try_into()
+                .map_err(|_| Error::Corrupt)?,
+        );
+        let item = entity
+            .fields
+            .iter()
+            .find_map(|field| match (field.reference, field.value) {
+                (Some(reference), FieldType::List { item, .. }) if reference.index == index => {
+                    Some(*item)
+                }
+                _ => None,
+            })
+            .ok_or(Error::Corrupt)?;
+        // Both components are bounded primary keys. Decode the target once even
+        // if the owner repeats a reference in its list.
+        let target = RowKey::decode(
+            payload
+                .strip_suffix(owner.as_slice())
+                .ok_or(Error::Corrupt)?,
+            item,
+        )?;
+        matches = info.list_links.contains(&(index, target));
+    }
     if !matches {
         return Err(Error::Corrupt);
     }

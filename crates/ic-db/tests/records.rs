@@ -373,6 +373,37 @@ fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
 }
 
 #[test]
+fn by_id_selects_the_declared_primary_key() {
+    let runtime = host(VectorMemory::default());
+    let mut db = Database::create(
+        runtime
+            .open_memory(&StableKey::parse("test.db.v1").unwrap())
+            .unwrap(),
+        Schema::new(&[CodecNames::SCHEMA]).unwrap(),
+        [1; 16],
+    )
+    .unwrap();
+    let row = CodecNames {
+        reader: 7,
+        writer: Some("writer".into()),
+        row: true,
+    };
+    let mut batch = Batch::new();
+    batch.insert(&row).unwrap();
+    db.commit(batch).unwrap();
+    let query = || db.query::<CodecNames>();
+    assert_eq!(
+        query()
+            .by_id(row.id())
+            .select(|r| r.writer)
+            .first()
+            .unwrap(),
+        Some(row.writer)
+    );
+    assert!(!query().by_id(8_u64).exists().unwrap().value);
+}
+
+#[test]
 fn owned_codec_refuses_incomplete_rows_and_unbounded_lengths() {
     // Authored names must not shadow the generated decoder's local variables.
     let named = CodecNames {

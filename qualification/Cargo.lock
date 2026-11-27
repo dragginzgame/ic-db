@@ -137,9 +137,9 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "blake3"
-version = "1.8.7"
+version = "1.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+checksum = "64c0e36294adc8db531500e3f2b8ec75c4af9177271e9c6d33f93609d56e57cd"
 dependencies = [
  "arrayvec 0.7.8",
  "cc",
@@ -227,13 +227,13 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.273.0"
+version = "0.274.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5f2f2d3e6c8633c0861116f798ee5abae0737daa1741b0c686806604d7b8c0e"
+checksum = "94ed48021b3584d801c1b38bbb2e8db3f3d5f8bb341cf8e5a0773a048b5ee63a"
 dependencies = [
  "canic-macros",
  "ic-blob-storage",
- "ic-db 0.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ic-db 0.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-entropy 0.7.0",
  "ic-jobs",
  "ic-logging",
@@ -241,15 +241,15 @@ dependencies = [
  "ic-platform-runtime 0.23.27",
  "ic-platform-types 0.21.6",
  "ic-timers",
- "ic-wire 0.30.2",
+ "ic-wire 0.31.1",
  "serde",
 ]
 
 [[package]]
 name = "canic-macros"
-version = "0.273.0"
+version = "0.274.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a729c229665ac051c43b27d95d1f452a063696b13bf1ceeda539889b485190f"
+checksum = "d580f7954528292ef538b1126065a2de8dd6c668758f632f3e255801bc079c04"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -259,9 +259,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.11.3"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02f0e023adb368345ce0ca6cdfc0f24a06554468d0e8503e14a0841de79bfa69"
+checksum = "95e45cf2980b2d467be49a9ed942c9179b701063a7ca3d037de7ee9bd67f8d66"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -337,9 +337,12 @@ checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.4.2"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+checksum = "144e7f1de087984240b7816d47f698b414979faa6f40839c5b86d6bd47db57b7"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "convert_case"
@@ -599,9 +602,9 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+checksum = "3e44f110d1777dc6559a51e7d45083945ded4f1bf3305494350f693b6d20b9c8"
 
 [[package]]
 name = "flate2"
@@ -889,15 +892,15 @@ dependencies = [
 
 [[package]]
 name = "ic-blob-storage"
-version = "0.112.0"
+version = "0.113.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "affe83bb2e8fb4e054a2c00dd6076ef7ad8127a51bd912981d60a9258e1531c9"
+checksum = "52c622bfca0dea2c7a275849182882980648f475ee9880e1aa1036e98390d764"
 dependencies = [
  "ic-logging",
  "ic-metrics",
  "ic-platform-types 0.21.6",
  "ic-storage 0.80.6",
- "ic-wire 0.30.2",
+ "ic-wire 0.31.1",
  "serde",
  "sha2 0.11.2",
 ]
@@ -934,13 +937,13 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1091017355e93c2c3aad2b8c6948df2c846c4b2f24060691406e0c06895178b7"
+checksum = "59e87131aa740b8627bb713deba600f4cac4d708d8358a48de8ed57d35183672"
 dependencies = [
  "ethnum",
  "getrandom 0.4.3",
- "ic-db-macros 0.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ic-db-macros 0.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-logging",
  "ic-metrics",
  "ic-platform-runtime 0.23.27",
@@ -1086,9 +1089,9 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0ce06dd85104e3614e26c35129bad294f30c911285f6e957d85ee6262786b71"
+checksum = "810126ec389cea0d7bf87c8cfb5efe401e9bfe4b1b5b045ebaca03e3b1e63014"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1193,9 +1196,9 @@ dependencies = [
 
 [[package]]
 name = "ic-jobs"
-version = "0.39.14"
+version = "0.39.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ad68a17f4edb4b8d65ebe7b1ac8b7bcc79509ae705553ca7def50fec20c5b2"
+checksum = "f397ba163fbefc4a268022917bca8325b5f7ff3e4e2550e20cf5ea896fceae87"
 dependencies = [
  "chrono",
  "ic-metrics",
@@ -1320,18 +1323,18 @@ dependencies = [
 
 [[package]]
 name = "ic-testkit"
-version = "0.110.5"
+version = "0.110.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f72c4ef2bc7cb1244d20e10d64416b8d8da4c5afda5018c476ae8253a75aadc6"
+checksum = "28d177dc996b7c6291506e41e3a648e1e517e445e8d9ec693a4968a97a3786c8"
 dependencies = [
  "pocket-ic",
 ]
 
 [[package]]
 name = "ic-timers"
-version = "0.46.17"
+version = "0.46.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91cec9fde24311ca80ef8193b303dde3d719a7aa92ab33efdeba4d797bc61147"
+checksum = "2d44deedc98a825c1214825417eb7efdc2577737bc09925cae2b7b0f7cfb9aa7"
 dependencies = [
  "ic-metrics",
  "ic-platform-runtime 0.23.27",
@@ -1360,18 +1363,6 @@ name = "ic-wire"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12f9ea1376af8b628c513c838043106a79d0c94c2946fe4a79b8fefbc595c250"
-dependencies = [
- "bytemuck",
- "postcard",
- "serde",
- "serde_bytes",
-]
-
-[[package]]
-name = "ic-wire"
-version = "0.30.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e0402f79c98770304fcae9c9e747342127d53a1210ed9c8eab3de10ade39331"
 dependencies = [
  "bytemuck",
  "postcard",
@@ -2954,9 +2945,9 @@ dependencies = [
 
 [[package]]
 name = "toko-tooling"
-version = "0.46.8"
+version = "0.46.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca949d2e86d8c3c6e208e744ae2a807e038afcac0145d148adb8b44bf42cf885"
+checksum = "42cc531ac13934abd2fff578d828bc36166edda0612dc9c6e5fdcbf8af1e6257"
 
 [[package]]
 name = "toml"

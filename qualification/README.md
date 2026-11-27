@@ -16,7 +16,7 @@ Package directories match their Cargo package names. Qualification callers use
 Wire 0.31.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.273.0 endpoints. Canic uses Wire 0.30.2 internally. The downstream schema inspection probe uses Wire 0.31.1. The frozen IcyDB comparison
+with Canic 0.274.0 endpoints. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -79,7 +79,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.273.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.274.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -3187,15 +3187,15 @@ generic remote CLI contract. Canic handles remote inspection.
 
 Rerun on Storage 0.78.0 with the 0.22.2 engine: at 512 rows the control's validated count of category 0 (129 matches) took 15,930,527 instructions. The candidate's explicit metadata lookup took 803,157. Mean insert cost across the first 32 inserts rose from 934,343 to 1,118,875 instructions. The read-modify-write that moved one row between categories rose from 1,219,344 to 1,695,795. Replacing a row within its category took 1,214,436 and 1,216,687 respectively. Reachable Wasm grew by 6,928 bytes, including 5,777 code bytes. The control and candidate use separate Wasm builds. Ordinary fluent counts in both builds still check each owner's row.
 
-Reproduce with `IC_DB_PREFIX_EVIDENCE_DIR="$PWD/qualification/target/evidence/prefix-count-078" make m2-prefix-candidate`. The candidate passed its native and count journeys. Its fault sweep hit the probe’s maximum write count before one replacement completed, so this run does not qualify candidate rollback at every write. Product index-entry counting uses no maintained prefix records. The receipt contains `native.log`, `control.log`, `candidate.log`, the exact applied patch, and source and artifact identities.
+The Storage 0.78 receipt was captured on v0.22.2 with its recorded working diff. The [v0.22.3 runner](https://github.com/dragginzgame/ic-db/blob/v0.22.3/scripts/measure-prefix-counts.sh) and its patch reproduce the native candidate from a clean checkout. Run `make m2-prefix-candidate` at that tag for the historical comparison. The candidate passed its native and count journeys. Its fault sweep hit the probe’s maximum write count before one replacement completed, so this run does not qualify candidate rollback at every write. Product index-entry counting uses no maintained prefix records. The receipt contains `native.log`, `control.log`, `candidate.log`, the exact applied patch, and source and artifact identities.
 
 Parked by maintainer sequencing: application integration and engine maturity take
 priority over further optimization. Retain this evidence without adopting the
 candidate format or its additional durable counter obligations.
 
-`make m2-prefix-candidate` copies the current source to an ignored evidence
-directory and applies the reviewed [candidate patch](experiments/prefix-counts.patch)
-only there. It builds a current control, the candidate and frozen IcyDB, then runs
+`make m2-prefix-candidate` at that tag copies its source to an ignored evidence
+directory and applies the reviewed [candidate patch](https://github.com/dragginzgame/ic-db/blob/v0.22.3/qualification/experiments/prefix-counts.patch)
+only there. It builds the tagged control, the candidate and frozen IcyDB, then runs
 native invariants, matched count/write journeys and real IC rollback checks.
 The existing engine under `crates/`, its format and public API remain unchanged.
 Source copies, exact patch, archives, locks, feature graphs and artifacts are
@@ -6541,10 +6541,10 @@ contained the experimental tree code. This is not a production growth result.
 Both installed paths trapped after commit, verified byte-identical stable memory
 against the pre-call snapshot, then retried successfully. The sparse case
 verified every surviving even row and absent odd row. The separate
-[native oracle](experiments/bulk-delete/main.rs) checked every reopened key and
+[native oracle](https://github.com/dragginzgame/ic-db/blob/v0.30.3/qualification/experiments/bulk-delete/main.rs) checked every reopened key and
 value against a Rust ordered map after each batch across 16 insertion-order and
 batch-size combinations, including overflow values, empty root and reinsertion.
-**Handoff for the next Storage engine.** The revised [tree prototype](experiments/bulk-delete/leaf-batch.patch)
+**Handoff for the next Storage engine.** The revised [tree prototype](https://github.com/dragginzgame/ic-db/blob/v0.30.3/qualification/experiments/bulk-delete/leaf-batch.patch)
 takes ownership of the ordered set IC DB already prepares. Set iteration supplies
 distinct keys in order with one key of lookahead, eliminating the extra vector
 of physical keys. The supplier removes existing entries and returns their count;
@@ -6570,8 +6570,8 @@ instructions respectively for the adjacent 255-child case. A new engine can use 
 the same count, reopen, sparse-neighbor and trap/retry cases and rerun the
 point-versus-bulk cost comparison before adoption.
 
-Run the [native oracle](experiments/bulk-delete/run-native.sh) and the
-[installed comparison](experiments/bulk-delete/run-pocketic.sh) from the IC DB v0.30.3 checkout.
+Run the [native oracle](https://github.com/dragginzgame/ic-db/blob/v0.30.3/qualification/experiments/bulk-delete/run-native.sh) and the
+[installed comparison](https://github.com/dragginzgame/ic-db/blob/v0.30.3/qualification/experiments/bulk-delete/run-pocketic.sh) from the IC DB v0.30.3 checkout.
 Pass the local source directories for the exact versions shown. Prepare PocketIC
 with `make m0-setup` first. The scripts patch disposable copies and the installed
 comparison uses the qualification Cargo target cache.
@@ -7544,3 +7544,15 @@ Post-open instructions for 32 projected lookups with a 64-byte unselected note:
 | One hit repeated | 232,264 | 232,340 | 229,155 | 1.34% |
 
 All 45 final instruction counts fell relative to the tagged build. The uncompressed measurement Wasms were 1,270,541, 1,270,097 and 1,270,007 bytes respectively. Charged cycles were unmeasured.
+
+### List-reference owner checks
+
+A matched PocketIC probe measured the commit of a refused delete after opening the store. Each build seeded 24 Nat64 targets and three owners, each with a secondary index and a list of target IDs. Each refusal returned `ReferenceViolation`, repeated at the same instruction count and preserved the complete stable-memory snapshot. The control assembled all physical index entries from the owner. The candidate decoded the visited target and checked its membership in the owner's list.
+
+| Owner's references | Control instructions | Direct membership instructions |
+| --- | ---: | ---: |
+| One target | 159,223 | 152,970 |
+| 32 entries cycling over 16 targets | 310,976 | 219,603 |
+| 32 entries repeating one target | 240,786 | 218,422 |
+
+The dedicated probe grew from 288,511 to 289,311 uncompressed Wasm bytes. In a separate matched `make m2-filter-costs` run including the predicate evaluator extraction, the query-measurements fixture fell from 1,251,250 to 1,250,253 bytes. Its 16 filter cases returned the same results and work counters, with instruction differences from −5 to +28 per call. These measurements cover handler instructions and complete module size. The local fixture sources, Wasm and results are retained under `qualification/target/evidence/list-owner-checks/`.

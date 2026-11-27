@@ -2,13 +2,13 @@
 
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
+#[path = "support/host.rs"]
+mod test_host;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
+use test_host::host;
 
 ///
 /// ListRow
@@ -220,19 +220,6 @@ fn an_empty_blob_needle_must_be_an_element_of_the_list() {
             assert_eq!(count.examined, 0);
         }
     }
-}
-
-fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let requests =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&requests, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
 }
 
 #[test]

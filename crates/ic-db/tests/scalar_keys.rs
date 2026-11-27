@@ -2,27 +2,15 @@
 
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
+#[path = "support/host.rs"]
+mod test_host;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
 use std::fmt::Debug;
+use test_host::host;
 
-fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let req =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&req, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
-}
 // Keep the independent oracle outside the generated declarations: raw literal
 // vectors below specify byte order; this helper never calls a product key encoder.
 fn exercise<E: Entity + Clone + PartialEq + Debug>(

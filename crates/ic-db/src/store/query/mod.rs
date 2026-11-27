@@ -8,6 +8,7 @@ mod distinct;
 mod get_many;
 pub use get_many::{GetMany, SelectedGetMany};
 mod order;
+mod predicate;
 mod probe;
 mod range;
 mod select;
@@ -26,7 +27,10 @@ use super::{
 };
 use crate::{
     Entity, EntitySchema, Error, FieldType, IndexSchema, IndexValue, TypeBody, TypeSchema, Value,
-    codec::Decoder, key, named_schema::TypeGraph, primary::RowKey,
+    codec::Decoder,
+    key,
+    named_schema::TypeGraph,
+    primary::{PrimaryKey, RowKey},
 };
 use ic_storage::Memory;
 use std::{
@@ -880,10 +884,29 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
+    /// Restrict this query to the entity's primary key. Accepts a raw key or its entity-typed ID.
+    #[must_use]
+    pub fn by_id(self, id: impl Into<crate::Id<E>>) -> Self {
+        self.eq(
+            E::SCHEMA.primary_key,
+            id.into().key().into_row_key().index_value(),
+        )
+    }
+
     /// Require an exact field value. Equivalent to `filter(field, Comparison::Eq, value)`.
     #[must_use]
     pub fn eq(self, field: &'a str, value: impl Into<IndexValue<'a>>) -> Self {
         self.filter(field, Comparison::Eq, value)
+    }
+
+    /// Apply equality when the caller supplies a filter value. `None` adds no predicate.
+    /// To select rows whose stored field is absent, use [`Self::filter_absent`].
+    #[must_use]
+    pub fn eq_if_some(self, field: &'a str, value: Option<impl Into<IndexValue<'a>>>) -> Self {
+        match value {
+            Some(value) => self.eq(field, value),
+            None => self,
+        }
     }
 
     /// Require a different value, including absent versus present.
@@ -2002,132 +2025,19 @@ fn execute_inner<M: Memory>(
         } else if row_key != owner {
             return Err(Error::Corrupt);
         }
-        let read = |position: usize, member: Option<crate::member::RecordMember>| {
-            if let Some(member) = member {
-                let (start, end) = spans[position];
-                member.read(
-                    &bytes[usize::from(start)..usize::from(end)],
-                    entity.fields[position].optional,
-                )
-            } else {
-                Ok(values[position])
-            }
-        };
-        let mut accepts = |term: &Term, supplied: &QueryOperand<'_>| -> Result<bool, Error> {
-            let mut value = values[term.position];
-            component.clear();
-            let (operand, optional) = match &term.operand {
-                TermOperand::Nested {
-                    member,
-                    literal,
-                    absent,
-                } => {
-                    value = read(term.position, Some(*member))?;
-                    if *absent {
-                        return Ok(term.comparison.accepts_absent(value == IndexValue::Absent));
-                    }
-                    (
-                        Some(literal.as_slice()),
-                        entity.fields[term.position].optional || member.field().optional,
-                    )
-                }
-                TermOperand::Literal { absent: true, .. } => {
-                    let absent = if plan.span_fields & (1 << term.position) != 0 {
-                        bytes[usize::from(spans[term.position].0)] == 0
-                    } else {
-                        value == IndexValue::Absent
-                    };
-
-                    return Ok(term.comparison.accepts_absent(absent));
-                }
-                TermOperand::Member { item, needle } => {
-                    let needle = match (needle, supplied) {
-                        (MemberNeedle::Literal(_), QueryOperand::Literal(value)) => *value,
-                        (MemberNeedle::Field(right, member), QueryOperand::Field(_)) => {
-                            read(*right, *member)?
-                        }
-                        _ => return Err(Error::Corrupt),
-                    };
-                    if needle == IndexValue::Absent {
-                        return Ok(false);
-                    }
-                    let (start, end) = spans[term.position];
-
-                    return contains_member(
-                        &bytes[usize::from(start)..usize::from(end)],
-                        entity.fields[term.position].optional,
-                        *item,
-                        needle,
-                    );
-                }
-                TermOperand::Length { member, threshold } => {
-                    let (start, end) = spans[term.position];
-                    let span = &bytes[usize::from(start)..usize::from(end)];
-                    let optional = entity.fields[term.position].optional;
-                    let actual = if let Some(member) = member {
-                        match member.read(span, optional)? {
-                            IndexValue::Absent => None,
-                            value => Some(scalar_bytes(value).ok_or(Error::Corrupt)?.len() as u32),
-                        }
-                    } else {
-                        crate::codec::validated_length(span, optional)
-                    };
-
-                    return Ok(term.comparison.accepts_length(actual, *threshold));
-                }
-                TermOperand::Literal {
-                    bytes,
-                    absent: false,
-                } => (
-                    Some(bytes.as_slice()),
-                    entity.fields[term.position].optional,
-                ),
-                TermOperand::Field {
-                    right,
-                    left_member,
-                    right_member,
-                } => {
-                    value = read(term.position, *left_member)?;
-                    let rhs = read(*right, *right_member)?;
-                    if value == IndexValue::Absent || rhs == IndexValue::Absent {
-                        return Ok(term.comparison.accepts_absent(value == rhs));
-                    }
-                    if let Some(matches) = term.comparison.accepts_values(value, rhs) {
-                        return Ok(matches);
-                    }
-                    right_component.clear();
-                    rhs.append_component(false, &mut right_component);
-
-                    (Some(right_component.as_slice()), false)
-                }
-            };
-            if let QueryOperand::Literal(right) = supplied
-                && let Some(matches) = term.comparison.accepts_values(value, *right)
-            {
-                return Ok(matches);
-            }
-            value.append_component(optional, &mut component);
-
-            Ok(term.comparison.accepts(
-                (value != IndexValue::Absent).then_some(component.as_slice()),
-                operand,
-                optional,
-            ))
-        };
-        let matches = 'matches: {
-            let mut clause_matches = false;
-            for (term, predicate) in plan.terms.iter().zip(&request.predicates) {
-                clause_matches = clause_matches || accepts(term, &predicate.operand)?;
-                if !term.or_next {
-                    if !clause_matches {
-                        break 'matches false;
-                    }
-                    clause_matches = false;
-                }
-            }
-
-            true
-        };
+        let matches = predicate::PredicateRow {
+            entity,
+            bytes: &bytes,
+            values: &values,
+            spans: &spans,
+            span_fields: plan.span_fields,
+        }
+        .matches(
+            &plan.terms,
+            &request.predicates,
+            &mut component,
+            &mut right_component,
+        )?;
         let boundary = distinct::boundary(entity, plan.index, plan.distinct, &stored_key)?;
         let duplicate = boundary.is_some_and(|key| previous.as_deref() == Some(key));
         if matches && let Some(accumulator) = aggregate.as_mut() {

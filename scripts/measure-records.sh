@@ -3,25 +3,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 workload="${1:-query-matrix}"
-unset IC_DB_KEYSET_COMPARISON IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_FLUENT_COMPARISON IC_DB_AGGREGATE_COMPARISON IC_DB_COUNT_COMPARISON IC_DB_COUNT_PROFILE IC_DB_AGGREGATE_PATHS IC_DB_PREFIX_CANDIDATE IC_DB_PREFIX_WRITE_PROFILE
+unset IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_AGGREGATE_PATHS
 case "$workload" in
     fluent)
         evidence="$PWD/qualification/target/evidence/fluent-comparison"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
-        export IC_DB_FLUENT_COMPARISON=1
         ;;
     keyset)
         evidence="$PWD/qualification/target/evidence/keyset-comparison-02313"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
-        export IC_DB_KEYSET_COMPARISON=1
         ;;
     aggregate)
         evidence="$PWD/qualification/target/evidence/aggregate-comparison"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
-        export IC_DB_AGGREGATE_COMPARISON=1
         ;;
     ranked-listing)
         evidence="$PWD/qualification/target/evidence/ranked-listing"
@@ -56,13 +53,11 @@ case "$workload" in
         evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-comparison}"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
-        export IC_DB_COUNT_COMPARISON=1
         ;;
     count-profile)
         evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-profile}"
         engines=(records-benchmark)
         test_name=records_comparison
-        export IC_DB_COUNT_COMPARISON=1 IC_DB_COUNT_PROFILE=1
         ;;
     growth)
         evidence="$PWD/qualification/target/evidence/entity-growth"
@@ -76,6 +71,7 @@ case "$workload" in
         ;;
     *) printf 'Expected ranked-listing, fluent, keyset, aggregate, aggregate-paths, query-matrix, exists, count-paths, count, count-profile, growth or queries workload\n' >&2; exit 2 ;;
 esac
+export IC_DB_COMPARISON_WORKLOAD="$workload"
 mkdir -p "$evidence"
 if [[ "$test_name" == query_matrix ]]; then
     # Preserve the driver even while this new benchmark is still untracked.
@@ -162,10 +158,7 @@ for engine in "${engines[@]}"; do
         --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics \
         > "$evidence/$engine-build.jsonl"
     artifact="$(jq -ers --arg target "${package//-/_}" \
-        '[.[] | select(.reason == "compiler-artifact" and .target.name == $target) |
-          .filenames[] | select(endswith(".wasm"))] |
-         if length == 1 then .[0] else error("expected one Wasm artifact") end' \
-        "$evidence/$engine-build.jsonl")"
+        -f scripts/wasm-artifact.jq "$evidence/$engine-build.jsonl")"
     cp "$artifact" "$evidence/$engine.wasm"
 done
 

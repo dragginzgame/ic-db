@@ -14,6 +14,7 @@ my $temp = abs_path(tempdir(CLEANUP => 1)) or die "resolve fixture directory: $!
 make_path("$temp/scripts", "$temp/vendor", "$temp/.tools/host/bin");
 system('cp', '-R', "$root/vendor/toko-tooling", "$temp/vendor/") == 0 or die 'copy tooling';
 copy('scripts/release.sh', "$temp/scripts/release.sh") or die $!;
+copy('scripts/wasm-artifact.jq', "$temp/scripts/wasm-artifact.jq") or die $!;
 copy('Makefile', "$temp/Consumer.mk") or die $!;
 
 sub write_file {

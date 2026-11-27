@@ -436,33 +436,28 @@ fn parse_blob(text: &str) -> Result<BlobArg, String> {
     let digits = text
         .strip_prefix("0x")
         .ok_or("Blob literals require a 0x prefix")?;
-    if digits.len() > 2048
-        || !digits.len().is_multiple_of(2)
-        || !digits.bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err("expected 0x followed by 0–1024 complete hexadecimal byte pairs".into());
-    }
-
-    (0..digits.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()
+    hex_bytes(digits, 0..=2048)
         .map(BlobArg)
+        .ok_or_else(|| "expected 0x followed by 0–1024 complete hexadecimal byte pairs".into())
 }
 
 fn parse_cursor(text: &str) -> Result<CursorArg, String> {
-    if !(70..=1092).contains(&text.len())
-        || !text.len().is_multiple_of(2)
-        || !text.bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err("expected a hexadecimal query cursor (70–1092 digits), not a row ID".into());
-    }
-
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()
+    hex_bytes(text, 70..=1092)
         .map(CursorArg)
+        .ok_or_else(|| "expected a hexadecimal query cursor (70–1092 digits), not a row ID".into())
+}
+
+fn hex_bytes(digits: &str, length: std::ops::RangeInclusive<usize>) -> Option<Vec<u8>> {
+    if !length.contains(&digits.len())
+        || !digits.len().is_multiple_of(2)
+        || !digits.bytes().all(|digit| digit.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    (0..digits.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).ok())
+        .collect()
 }
 
 fn help() {
@@ -825,31 +820,7 @@ async fn session(
                     filters.into_filters()?,
                     (order.order_by, order.desc),
                 );
-                let reply = calls.invoke(
-                    CallKind::Update,
-                    "aggregate_start",
-                    ic_wire::encode(
-                        &selection,
-                        Encoding::Frame {
-                            method: 120,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .map_err(|e| e.to_string())?,
-                )
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-                let handle: Result<Vec<u8>, String> = ic_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 120,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .map_err(|e| e.to_string())?;
-                let handle = handle?;
+                let handle = calls.framed::<Result<Vec<u8>, String>>(CallKind::Update, "aggregate_start", 120, &selection).await??;
                 println!("\n{} — {}", selection.0, selection.1);
                 let run = async {
                     let mut sequence = 0;
@@ -857,12 +828,10 @@ async fn session(
                     // At most six rows per entity and two groups. A finite host bound
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
-                        let reply = calls.invoke(CallKind::Update, "aggregate_resume",
-                            ic_wire::encode(&(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after), Encoding::Frame { method: 121, direction: Direction::Request }, LIMITS).map_err(|e| e.to_string())?)
-                            .await.map_err(|e| format!("{e:?}"))?;
                         type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
                         type Progress = (u64, String, u64, u64, u64, Output);
-                        let result: Result<Progress, String> = ic_wire::decode(&reply, Encoding::Frame { method: 121, direction: Direction::Response }, LIMITS).map_err(|e| e.to_string())?;
+                        let result: Result<Progress, String> = calls.framed(CallKind::Update, "aggregate_resume", 121,
+                            &(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after)).await?;
                         let (saved, phase, examined, input_bytes, output_bytes, (columns, rows, next)) = result?;
                         println!("Call {call}: {phase}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
                         sequence = saved;
@@ -883,34 +852,8 @@ async fn session(
                 }.await;
                 // Cleanup also runs after an output/resource refusal. No automatic
                 // restart, lost cursor, or client-side aggregation is hidden here.
-                let cleanup = async {
-                    let reply = calls.invoke(
-                        CallKind::Update,
-                        "aggregate_cancel",
-                        ic_wire::encode(
-                            &handle,
-                            Encoding::Frame {
-                                method: 122,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .map_err(|e| e.to_string())?,
-                    )
-                    .await
-                    .map_err(|e| format!("{e:?}"))?;
-
-                    ic_wire::decode::<Result<(), String>>(
-                        &reply,
-                        Encoding::Frame {
-                            method: 122,
-                            direction: Direction::Response,
-                        },
-                        LIMITS,
-                    )
-                    .map_err(|e| e.to_string())?
-                }
-                .await;
+                let cleanup = calls.framed::<Result<(), String>>(CallKind::Update, "aggregate_cancel", 122, &handle)
+                    .await.and_then(|result| result);
 
                 match (run, cleanup) {
                     (Ok(()), Ok(())) => {}

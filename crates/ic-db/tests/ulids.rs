@@ -2,14 +2,14 @@
 
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
+#[path = "support/host.rs"]
+mod test_host;
 use crate::raw_map::RawMap;
 use ic_db::design::prelude::*;
 use ic_db::{Batch, Database, Error, IndexValue};
-use ic_storage::{
-    AllocationGrants, GenericAllocationPolicy, MemoryAuthority, MemoryRequest, MemoryRuntime,
-    SealedDeclarationSnapshot, StableKey, VectorMemory,
-};
+use ic_storage::{StableKey, VectorMemory};
 use std::collections::{BTreeMap, BTreeSet};
+use test_host::host;
 
 ///
 /// UlidRow
@@ -62,18 +62,6 @@ struct Links {}
     )
 )]
 struct Collections {}
-fn host(backing: VectorMemory) -> MemoryRuntime<VectorMemory> {
-    let mut host = MemoryRuntime::new(backing).unwrap();
-    let req =
-        SealedDeclarationSnapshot::new(vec![MemoryRequest::new("test", "test.db.v1").unwrap()])
-            .unwrap();
-    let grants =
-        AllocationGrants::new(vec![MemoryAuthority::new("test", "test.").unwrap()]).unwrap();
-    host.bootstrap(&req, &grants, &GenericAllocationPolicy)
-        .unwrap();
-
-    host
-}
 
 fn values() -> [Ulid; 6] {
     // Includes randomness overflow into the next millisecond and the top bit.

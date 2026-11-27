@@ -103,6 +103,15 @@ let page = db.query::<Entry>()
     .fetch()?;
 ```
 
+Use `.by_id(id)` to compose a primary-key lookup with a projection or existence check,
+for example `db.query::<Entry>().by_id(id).select(|row| row.amount).first()?`.
+It accepts the raw key or an `Id<Entry>`. Use `db.get::<Entry>(id)?` for the whole row.
+
+For an optional request filter, use `.eq_if_some(Entry::CATEGORY, category)`.
+A supplied category uses the same equality predicate and cursor as `.eq()`.
+Omitting it leaves the query unrestricted by category. Use `.filter_absent()`
+when the stored field itself must be absent.
+
 For a scalar inside a named record, join the two generated field constants.
 The query checks the member against the entity's compiled schema before scanning.
 

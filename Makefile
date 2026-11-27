@@ -56,7 +56,6 @@ help:
 	  'make m2-ranked-listing          Check ordered project listings against SQLite' \
 	  'make m2-query-matrix            Compare broad query/selectivity/population matrix' \
 	  'make m2-aggregate-paths         Compare primary and explicit-index aggregates' \
-	  'make m2-prefix-candidate        Measure isolated maintained-prefix experiment' \
 	  'make db                         Install db; run db to open the console' \
 	  'make publish / publish-check     Upload tagged product crates / rehearse publication' \
 	  'make release-patch/minor/major   Qualify and deliver a public source release' \
@@ -146,10 +145,6 @@ m2-count-paths:
 m2-aggregate-paths:
 	bash scripts/measure-records.sh aggregate-paths
 
-.PHONY: m2-prefix-candidate
-m2-prefix-candidate:
-	bash scripts/measure-prefix-counts.sh
-
 m2-aggregate-comparison:
 	bash scripts/measure-records.sh aggregate
 
@@ -190,7 +185,7 @@ m2-query-growth:
 m0-core-artifact:
 	@mkdir -p qualification/target/evidence/m0
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/core-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_rollback_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/core-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m0_rollback_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m0/core-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m0/core.wasm
 
 # One artifact and server session, with the same four independent test binaries.
@@ -207,7 +202,7 @@ m0-endpoints: m0-core-artifact
 m0-aggregation:
 	@mkdir -p qualification/target/evidence/m0
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-aggregation-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m0/aggregation-build.jsonl
-	@IC_DB_M0_AGGREGATION_WASM="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_aggregation_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m0/aggregation-build.jsonl)" && \
+	@IC_DB_M0_AGGREGATION_WASM="$$(jq -ers --arg target ic_db_m0_aggregation_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m0/aggregation-build.jsonl)" && \
 	  export IC_DB_M0_AGGREGATION_WASM && \
 	  bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test aggregation revision_aggregation -- --nocapture
 
@@ -216,7 +211,7 @@ m2-float64-sum:
 	cargo test --locked -p ic-db --lib float_sum
 	@mkdir -p qualification/target/evidence/m2
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-aggregation-canister --example float64_sum --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/float64-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "float64_sum") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/float64-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target float64_sum -f scripts/wasm-artifact.jq qualification/target/evidence/m2/float64-build.jsonl)" && \
 	  IC_DB_FLOAT64_SUM_WASM="$$artifact" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test float64_sum -- --nocapture
 
 m0-batch: m0-core-artifact
@@ -227,7 +222,7 @@ m0-maintenance-artifacts:
 	  for variant in a b bprime bad; do \
 	    case "$$variant" in a) features='' ;; b) features=target ;; bprime) features=changed-transform ;; bad) features=bad-upgrade ;; esac; \
 	    cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-maintenance-canister --target wasm32-unknown-unknown --release --no-default-features --features "$$features" --message-format=json-render-diagnostics > "$$out/maintenance-$$variant.jsonl"; \
-	    artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m0_maintenance_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "$$out/maintenance-$$variant.jsonl")"; \
+	    artifact="$$(jq -ers --arg target ic_db_m0_maintenance_canister -f scripts/wasm-artifact.jq "$$out/maintenance-$$variant.jsonl")"; \
 	    cp "$$artifact" "$$out/maintenance-$$variant.wasm"; \
 	  done
 
@@ -241,7 +236,7 @@ m0-maintenance: m0-maintenance-artifacts
 m1-records-artifact:
 	@mkdir -p qualification/target/evidence/m1
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/records-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/records-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m1/records-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m1/records.wasm
 
 m1-records: schema-build-check
@@ -263,7 +258,7 @@ m2-queries: m1-records-artifact m2-sqlite-reference
 m2-sort-costs-artifact:
 	@mkdir -p qualification/target/evidence/m2
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features query-measurements --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/sort-costs-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/sort-costs-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m2/sort-costs-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m2/sort-costs.wasm
 
 m2-sort-costs: m2-sort-costs-artifact
@@ -305,7 +300,7 @@ m2-contention: m2-jobs-artifact
 m2-jobs-artifact:
 	@mkdir -p qualification/target/evidence/m2
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features aggregate-jobs --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/jobs-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/jobs-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m2/jobs-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m2/jobs.wasm
 
 .PHONY: m3-maintenance m3-maintenance-wasm
@@ -317,7 +312,7 @@ m3-maintenance-wasm:
 	@mkdir -p qualification/target/evidence/m3
 	@set -eu; for feature in maintenance maintenance-v2 maintenance-faults; do \
 	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features "$$feature" --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "qualification/target/evidence/m3/$$feature-build.jsonl"; \
-	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
+	  artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
 	  cp "$$artifact" "qualification/target/evidence/m3/$$feature.wasm"; \
 	done
 	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy --test product_capacity --test product_references -- --nocapture
@@ -327,7 +322,7 @@ m3-maintenance-wasm:
 m3-references:
 	@mkdir -p qualification/target/evidence/m3
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m3/references-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m3/references-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m3/references-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m3/maintenance-faults.wasm
 	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_references -- --nocapture
 
@@ -336,7 +331,7 @@ m3-jobs:
 	@mkdir -p qualification/target/evidence/m3
 	@set -eu; for feature in maintenance maintenance-v2; do \
 	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features "aggregate-jobs,$$feature" --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "qualification/target/evidence/m3/jobs-$$feature-build.jsonl"; \
-	  artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "qualification/target/evidence/m3/jobs-$$feature-build.jsonl")"; \
+	  artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq "qualification/target/evidence/m3/jobs-$$feature-build.jsonl")"; \
 	  cp "$$artifact" "qualification/target/evidence/m3/jobs-$$feature.wasm"; \
 	done
 	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test jobs_maintenance -- --nocapture
@@ -345,7 +340,7 @@ m3-jobs:
 m2-cli-artifact:
 	@mkdir -p qualification/target/evidence/m2
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features retained-console --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m2/console-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m2/console-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m2/console-build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/m2/console.wasm
 
 m2-cli: m2-cli-artifact
@@ -367,7 +362,7 @@ m1-write-envelope: m1-records-artifact
 m1-commit-failures:
 	@mkdir -p qualification/target/evidence/m1
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features fault-injection --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m1/fault-build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/m1/fault-build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m1/fault-build.jsonl)" && \
 	  IC_DB_M1_FAULT_WASM="$$artifact" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test commit_failures -- --nocapture
 
 .PHONY: m4-lifecycle
@@ -381,7 +376,7 @@ m4-lifecycle:
 	@cp qualification/ic-db-m1-records-canister/src/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/host.rs
 	@cp qualification/ic-db-m0-rollback-driver/tests/mixed_lifecycle.rs qualification/target/evidence/mixed-lifecycle/driver.rs
 	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features mixed-lifecycle --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/mixed-lifecycle/build.jsonl
-	@artifact="$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "ic_db_m1_records_canister") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' qualification/target/evidence/mixed-lifecycle/build.jsonl)" && \
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/mixed-lifecycle/build.jsonl)" && \
 	  cp "$$artifact" qualification/target/evidence/mixed-lifecycle/host.wasm
 	@if IC_DB_M4_WASM="$$PWD/qualification/target/evidence/mixed-lifecycle/host.wasm" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test mixed_lifecycle -- --nocapture > qualification/target/evidence/mixed-lifecycle/run.log 2>&1; then \
 	  cat qualification/target/evidence/mixed-lifecycle/run.log; \
@@ -439,7 +434,7 @@ m2-nested-path-costs:
 	for tier in 1 8 32 indexed member optional; do \
 	  count=$$tier; features=""; case "$$tier" in indexed) count=32; features=flat-index-control;; member) count=32; features=member-index-control;; optional) count=32; features=optional-member-index-control;; esac; \
 	  IC_DB_PATH_COUNT=$$count cargo build --features "$$features" --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-aggregation-canister --example nested_paths --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "$$out/nested-paths-build.jsonl"; \
-	  artifact=$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "nested_paths") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "$$out/nested-paths-build.jsonl"); \
+	  artifact=$$(jq -ers --arg target nested_paths -f scripts/wasm-artifact.jq "$$out/nested-paths-build.jsonl"); \
 	  cp "$$artifact" "$$out/nested-paths-$$tier.wasm"; \
 	done; \
 	IC_DB_NESTED_PATH_DIR="$$out" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test nested_paths -- --ignored --nocapture
@@ -449,7 +444,7 @@ m2-column-listing:
 	@set -eu; out="$(CURDIR)/qualification/target/evidence/m2"; mkdir -p "$$out"; \
 	for shape in entity named scalar tuple records with-scalar all; do \
 	  IC_DB_LISTING_SHAPE=$$shape cargo build --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-aggregation-canister --example column_listing --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "$$out/column-listing-build.jsonl"; \
-	  artifact=$$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "column_listing") | .filenames[] | select(endswith(".wasm"))] | if length == 1 then .[0] else error("expected one Wasm artifact") end' "$$out/column-listing-build.jsonl"); \
+	  artifact=$$(jq -ers --arg target column_listing -f scripts/wasm-artifact.jq "$$out/column-listing-build.jsonl"); \
 	  cp "$$artifact" "$$out/column-listing-$$shape.wasm"; \
 	done; \
 	IC_DB_LISTING_DIR="$$out" bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml -p ic-db-m0-rollback-driver --test column_listing -- --ignored --nocapture

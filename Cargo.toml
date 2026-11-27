@@ -44,7 +44,7 @@ tokio = "1.54.1"
 
 # Tests and tooling
 ic-db = { path = "crates/ic-db" }
-toko-tooling = "=0.46.8"
+toko-tooling = "=0.46.9"
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"
