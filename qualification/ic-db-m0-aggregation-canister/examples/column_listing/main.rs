@@ -118,9 +118,7 @@ fn listing((mode, sparse, after): (u8, bool, Option<Vec<u8>>)) -> Reply {
     if sparse {
         query = query.eq(Listing::READY, true);
     }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
+    let query = query.after(cursor.as_ref());
     match (option_env!("IC_DB_LISTING_SHAPE"), mode) {
         (None | Some("entity"), _) | (Some("records" | "with-scalar" | "all"), 0) => {
             finish(query.fetch().unwrap(), start, |r| {

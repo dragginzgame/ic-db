@@ -88,10 +88,10 @@ pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Pa
         ),
         "distinct-count:payload" => query
             .count_distinct::<Payload>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "distinct-count:optional" => query
             .count_distinct::<Optional>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "payload,count" => query
             .group_count::<Payload>()
             .map(|r| display_groups(r, "payload", |k| hex(&k.payload))),

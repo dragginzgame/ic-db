@@ -154,7 +154,7 @@ impl<M: Memory> AggregateJobs<M> {
             if *len != 0 {
                 let bytes = self.read_frame(index as u8 + 1, *len);
                 let record = Record::decode(&bytes)?;
-                if record.expires <= now && removed < limit {
+                if record.meta.expires <= now && removed < limit {
                     *len = 0;
                     removed += 1;
                 }
@@ -181,7 +181,7 @@ impl<M: Memory> AggregateJobs<M> {
         let generation = u64::from_le_bytes(counter)
             .checked_add(1)
             .ok_or(Error::Limit)?;
-        record.generation = generation;
+        record.meta.generation = generation;
         let bytes = record.encode()?;
         // No recoverable refusal after the first persistent write.
         self.memory
@@ -215,7 +215,7 @@ impl<M: Memory> AggregateJobs<M> {
         }
         let bytes = self.read_frame(handle.slot, len);
         let record = Record::decode(&bytes)?;
-        if record.generation != handle.generation {
+        if record.meta.generation != handle.generation {
             return Err(Error::InvalidJob);
         }
 
@@ -239,6 +239,13 @@ impl<M: Memory> AggregateJobs<M> {
 // The byte boundary has two representations: a validated borrowed frame for
 // inspection, and owned cursor/state for advancing a job. Execution stays shared.
 pub(super) struct Record<Bytes = Vec<u8>> {
+    pub meta: RecordMeta,
+    pub cursor: Bytes,
+    pub count: u64,
+    // Interpretation belongs to the query-bound accumulator, not the job store.
+    pub state: Bytes,
+}
+pub(super) struct RecordMeta {
     pub generation: u64,
     pub binding: [u8; 32],
     pub revision: u64,
@@ -248,23 +255,20 @@ pub(super) struct Record<Bytes = Vec<u8>> {
     pub examined: u64,
     pub input_bytes: u64,
     pub phase: JobOutcome<()>,
-    pub cursor: Bytes,
-    pub count: u64,
-    // Interpretation belongs to the query-bound accumulator, not the job store.
-    pub state: Bytes,
 }
+
 impl Record {
     fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut e = Encoder::with_byte_limit(MAX_JOB_BYTES);
-        e.nat64(self.generation)?;
-        e.bytes(&self.binding)?;
-        e.nat64(self.revision)?;
-        e.timestamp(self.expires)?;
-        e.timestamp(self.observed)?;
-        e.nat64(self.sequence)?;
-        e.nat64(self.examined)?;
-        e.nat64(self.input_bytes)?;
-        e.nat8(match self.phase {
+        e.nat64(self.meta.generation)?;
+        e.bytes(&self.meta.binding)?;
+        e.nat64(self.meta.revision)?;
+        e.timestamp(self.meta.expires)?;
+        e.timestamp(self.meta.observed)?;
+        e.nat64(self.meta.sequence)?;
+        e.nat64(self.meta.examined)?;
+        e.nat64(self.meta.input_bytes)?;
+        e.nat8(match self.meta.phase {
             JobOutcome::Running => 0,
             JobOutcome::Complete(()) => 1,
             JobOutcome::Invalidated => 2,
@@ -281,37 +285,39 @@ impl<'a> Record<&'a [u8]> {
     fn decode(bytes: &'a [u8]) -> Result<Self, Error> {
         let mut d = Decoder::with_byte_limit(bytes, MAX_JOB_BYTES)?;
         let record = Self {
-            generation: d.nat64()?,
-            binding: d.blob_ref(32)?.try_into().map_err(|_| Error::Corrupt)?,
-            revision: d.nat64()?,
-            expires: d.timestamp()?,
-            observed: d.timestamp()?,
-            sequence: d.nat64()?,
-            examined: d.nat64()?,
-            input_bytes: d.nat64()?,
-            phase: match d.nat8()? {
-                0 => JobOutcome::Running,
-                1 => JobOutcome::Complete(()),
-                2 => JobOutcome::Invalidated,
-                3 => JobOutcome::Expired,
-                _ => return Err(Error::Corrupt),
+            meta: RecordMeta {
+                generation: d.nat64()?,
+                binding: d.blob_ref(32)?.try_into().map_err(|_| Error::Corrupt)?,
+                revision: d.nat64()?,
+                expires: d.timestamp()?,
+                observed: d.timestamp()?,
+                sequence: d.nat64()?,
+                examined: d.nat64()?,
+                input_bytes: d.nat64()?,
+                phase: match d.nat8()? {
+                    0 => JobOutcome::Running,
+                    1 => JobOutcome::Complete(()),
+                    2 => JobOutcome::Invalidated,
+                    3 => JobOutcome::Expired,
+                    _ => return Err(Error::Corrupt),
+                },
             },
             cursor: d.blob_ref(QueryCursor::MAX_ENCODED_BYTES)?,
             count: d.nat64()?,
             state: d.blob_ref(MAX_JOB_BYTES)?,
         };
         d.finish()?;
-        if record.generation == 0
-            || record.examined > MAX_CANDIDATES
-            || record.count > record.examined
-            || record.sequence > record.examined + 2
-            || record.input_bytes
-                > record.examined
+        if record.meta.generation == 0
+            || record.meta.examined > MAX_CANDIDATES
+            || record.count > record.meta.examined
+            || record.meta.sequence > record.meta.examined + 2
+            || record.meta.input_bytes
+                > record.meta.examined
                     * super::super::super::candidate_byte_limit(crate::codec::MAX_ROW_BYTES) as u64
-            || (matches!(record.phase, JobOutcome::Complete(())) && !record.cursor.is_empty())
-            || (matches!(record.phase, JobOutcome::Running)
-                && (record.observed >= record.expires
-                    || (record.examined > 0 && record.cursor.is_empty())))
+            || (matches!(record.meta.phase, JobOutcome::Complete(())) && !record.cursor.is_empty())
+            || (matches!(record.meta.phase, JobOutcome::Running)
+                && (record.meta.observed >= record.meta.expires
+                    || (record.meta.examined > 0 && record.cursor.is_empty())))
         {
             return Err(Error::Corrupt);
         }
@@ -321,15 +327,7 @@ impl<'a> Record<&'a [u8]> {
 
     fn into_owned(self) -> Record {
         Record {
-            generation: self.generation,
-            binding: self.binding,
-            revision: self.revision,
-            expires: self.expires,
-            observed: self.observed,
-            sequence: self.sequence,
-            examined: self.examined,
-            input_bytes: self.input_bytes,
-            phase: self.phase,
+            meta: self.meta,
             cursor: self.cursor.to_vec(),
             count: self.count,
             state: self.state.to_vec(),

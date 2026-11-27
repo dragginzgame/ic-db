@@ -53,9 +53,7 @@ fn measured_listing(
     if shape == 1 {
         q = q.using_index("entry_id,score", &[1_u64.into()]);
     }
-    if let Some(cursor) = &cursor {
-        q = q.after(cursor);
-    }
+    let q = q.after(cursor.as_ref());
     let page = q.fetch_as::<IdOnly>().map_err(|e| format!("{e:?}"))?;
 
     Ok((
@@ -269,7 +267,7 @@ fn measured_ulid_listing(
             Timestamp::from_millis(start_ms)..Timestamp::from_millis(end_ms),
         )
         .order_desc(KeyRow::ID)
-        .after_optional(cursor.as_ref())
+        .after(cursor.as_ref())
         .limit(8);
     if ids_only {
         let page = query.select(|row| row.id).fetch().unwrap();

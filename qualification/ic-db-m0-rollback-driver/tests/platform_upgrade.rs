@@ -1,33 +1,10 @@
 //! Cross-runtime reopen: the predecessor writes real identity records; the new
 //! Platform cohort must preserve bytes, decoding, uniqueness and message rollback.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{ByteBuf, Direction, Encoding};
-use serde::{Serialize, de::DeserializeOwned};
-
-fn encode<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
-        value,
-        Encoding::Frame {
-            method,
-            direction: Direction::Request,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
-fn decode<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
-        bytes,
-        Encoding::Frame {
-            method,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
+use ic_wire::ByteBuf;
+use wire_frame::{request, response};
 
 fn wasm(variable: &str) -> Vec<u8> {
     std::fs::read(std::env::var_os(variable).expect("select both old/new Wasm explicitly")).unwrap()
@@ -49,11 +26,11 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
             canister,
             canister,
             "replace_principal_record",
-            encode(19, &(identities.clone(), false)),
+            request(19, &(identities.clone(), false)),
         )
         .await
         .unwrap();
-    assert_eq!(decode::<Result<(), u8>>(19, &reply), Ok(()));
+    assert_eq!(response::<Result<(), u8>>(19, &reply), Ok(()));
     type Account = (Vec<u8>, Option<[u8; 32]>);
     type Row = (u64, Option<Account>, [u8; 32], Account);
     let rows: Vec<Row> = vec![
@@ -65,21 +42,21 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
             canister,
             canister,
             "account_batch",
-            encode(49, &(rows, false)),
+            request(49, &(rows, false)),
         )
         .await
         .unwrap();
-    assert_eq!(decode::<Result<(), u8>>(49, &reply), Ok(()));
+    assert_eq!(response::<Result<(), u8>>(49, &reply), Ok(()));
     let principal = pic
-        .query_call(canister, canister, "principal_record", encode(18, &()))
+        .query_call(canister, canister, "principal_record", request(18, &()))
         .await
         .unwrap();
     assert_eq!(
-        decode::<((ByteBuf, Option<ByteBuf>), u64)>(18, &principal).0,
+        response::<((ByteBuf, Option<ByteBuf>), u64)>(18, &principal).0,
         identities
     );
     let accounts = pic
-        .query_call(canister, canister, "account_rows", encode(50, &false))
+        .query_call(canister, canister, "account_rows", request(50, &false))
         .await
         .unwrap();
     let backing = pic.get_stable_memory(canister).await;
@@ -92,13 +69,13 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
     );
     assert_eq!(
         principal,
-        pic.query_call(canister, canister, "principal_record", encode(18, &()))
+        pic.query_call(canister, canister, "principal_record", request(18, &()))
             .await
             .unwrap()
     );
     assert_eq!(
         accounts,
-        pic.query_call(canister, canister, "account_rows", encode(50, &false))
+        pic.query_call(canister, canister, "account_rows", request(50, &false))
             .await
             .unwrap()
     );
@@ -108,7 +85,7 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
             canister,
             canister,
             "replace_principal_record",
-            encode(19, &(changed.clone(), true)),
+            request(19, &(changed.clone(), true)),
         )
         .await
         .unwrap_err();
@@ -130,28 +107,28 @@ async fn platform_upgrade_preserves_owned_identity_bytes_and_atomicity() {
             canister,
             canister,
             "account_batch",
-            encode(49, &(duplicate, false)),
+            request(49, &(duplicate, false)),
         )
         .await
         .unwrap();
-    assert!(decode::<Result<(), u8>>(49, &reply).is_err());
+    assert!(response::<Result<(), u8>>(49, &reply).is_err());
     assert!(backing == pic.get_stable_memory(canister).await);
     let reply = pic
         .update_call(
             canister,
             canister,
             "replace_principal_record",
-            encode(19, &(changed.clone(), false)),
+            request(19, &(changed.clone(), false)),
         )
         .await
         .unwrap();
-    assert_eq!(decode::<Result<(), u8>>(19, &reply), Ok(()));
+    assert_eq!(response::<Result<(), u8>>(19, &reply), Ok(()));
     let reply = pic
-        .query_call(canister, canister, "principal_record", encode(18, &()))
+        .query_call(canister, canister, "principal_record", request(18, &()))
         .await
         .unwrap();
     assert_eq!(
-        decode::<((ByteBuf, Option<ByteBuf>), u64)>(18, &reply).0,
+        response::<((ByteBuf, Option<ByteBuf>), u64)>(18, &reply).0,
         changed
     );
     owned.drop().await;

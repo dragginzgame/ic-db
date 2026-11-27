@@ -296,7 +296,7 @@ outside the projection. Byte limits apply to the selected output after sorting;
 overflow refuses rather than returning a partial result. Without `order_by`,
 the existing primary/explicit-index order remains unchanged.
 
-Chain `order_asc(field)` and `order_desc(field)` in priority order. To replace the entire order, use `order_by(&fields)` for ascending fields or `order_by_each(&terms)` for individual directions. A later chained field appends to that order.
+Chain `order_asc(field)` and `order_desc(field)` in priority order. To replace the entire order, use `order_by(&fields)` for ascending fields or `order_by(&terms)` for individual directions. A later chained field appends to that order.
 Its implicit primary key is ascending; `.descending()` reverses the complete
 order. Constant fields may have different directions without preventing index
 traversal. Otherwise mixed directions use the same bounded complete sorter.
@@ -610,7 +610,7 @@ Pages enumerate the immutable completed result, so later source writes cannot
 move groups across pages. Page size may change. Byte exhaustion
 leaves the unreturned group for the next page; an oversized first group returns
 `RowTooLarge`. The 28-byte `GroupCursor` is bound to the job handle and a validated
-result position. Retrying it reads the same position, until expiry/cancellation.
+result position. Version 3 covers every position. When upgrading from 0.33.1, discard saved group cursors and resume the same completed job with `group_page(size, None)` to obtain a fresh first page. Retrying a current cursor reads the same position until expiry or cancellation.
 It is a logical position, not an authorization token or proof of prior enumeration.
 
 Retain at most 32 groups inside the 16 KiB **whole job frame**, including

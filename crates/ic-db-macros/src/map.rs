@@ -2,8 +2,8 @@
 
 use super::{
     declaration,
-    field::{Field, parse_value},
-    meta_items, once, text,
+    field::{Field, parse_item, parse_max_items, parse_value},
+    once, text,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -17,11 +17,11 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("key") {
-            once(&mut key, meta_items(&meta)?, &meta)?;
+            once(&mut key, parse_item(&meta)?, &meta)?;
         } else if meta.path().is_ident("value") {
             once(&mut value, parse_value(&meta)?, &meta)?;
         } else if meta.path().is_ident("max_items") {
-            once(&mut max, meta.clone(), &meta)?;
+            once(&mut max, parse_max_items(&meta)?, &meta)?;
         } else {
             return Err(syn::Error::new_spanned(
                 meta,
@@ -31,10 +31,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     }
     let key = key.ok_or_else(|| fail("map requires key(...)"))?;
     let max = max.ok_or_else(|| fail("map requires max_items"))?;
-    let (kind, optional, max) =
-        parse_value(&syn::parse_quote!(value(many, #max, item(#(#key),*))))?;
-    let max = max.expect("many requires max_items");
-    let key = Field::nested("key", kind, optional, None);
+    let key = Field::nested("key", key, false, None);
     let (kind, optional, many) = value.ok_or_else(|| fail("map requires value(...)"))?;
     let mut value = Field::nested("value", kind, optional, many);
     value.resolve_self(&item.ident);

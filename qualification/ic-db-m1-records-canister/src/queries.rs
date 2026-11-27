@@ -163,23 +163,13 @@ fn fluent_text_seek(
     let host = runtime();
     let db = open(&host);
     let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
-    let mut query = db
+    let query = db
         .query::<Document>()
         .using_index("published,title", &[false.into()])
         .filter(Document::TITLE, Comparison::StartsWith, &needle)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
-    if descending {
-        query = query.descending();
-    }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-
-    query
-        .fetch_as::<IdOnly>()
-        .map(id_page)
-        .map_err(|error| query_error(&error))
+    fetch_ids(query, descending, cursor.as_ref())
 }
 
 // fluent_primary_range
@@ -242,7 +232,7 @@ fn fluent_sparse_presence(
     let host = runtime();
     let db = open(&host);
     let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
-    let mut query = db
+    let query = db
         .query::<DecimalRow>()
         .filter_any(&[
             (DecimalRow::MAYBE, Comparison::Ne, ic_db::IndexValue::Absent),
@@ -259,17 +249,7 @@ fn fluent_sparse_presence(
         .order_asc(DecimalRow::MAYBE)
         .work_limit(1)
         .test_output_limit(bytes as usize);
-    if descending {
-        query = query.descending();
-    }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-
-    query
-        .fetch_as::<IdOnly>()
-        .map(id_page)
-        .map_err(|error| query_error(&error))
+    fetch_ids(query, descending, cursor.as_ref())
 }
 
 // fluent_list_presence
@@ -290,7 +270,7 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
     let db = open(&host);
     let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
     let query = db.query::<ListRow>().work_limit(1);
-    let mut query = match mode {
+    let query = match mode {
         0 => query.filter_absent(ListRow::LABELS),
         1 => query.filter_present(ListRow::LABELS),
         2 => query.filter_length(ListRow::LABELS, Comparison::Eq, 1),
@@ -301,14 +281,7 @@ fn fluent_list_presence((mode, after): (u8, Option<Vec<u8>>)) -> Result<IdPage, 
         7 => query.filter(ListRow::NUMBERS, Comparison::Contains, 1_u16),
         _ => return Err(1),
     };
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-
-    query
-        .fetch_as::<IdOnly>()
-        .map(id_page)
-        .map_err(|error| query_error(&error))
+    fetch_ids(query, false, cursor.as_ref())
 }
 
 // Same source, predicate, result and warm open; only materialization differs.
@@ -411,17 +384,7 @@ fn range_read(
     if let Some(prefix) = index_prefix {
         query = query.using_index("category,id", prefix);
     }
-    if descending {
-        query = query.descending();
-    }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-
-    query
-        .fetch_as::<IdOnly>()
-        .map(id_page)
-        .map_err(|error| query_error(&error))
+    fetch_ids(query, descending, cursor.as_ref())
 }
 
 fn text_match(
@@ -431,15 +394,13 @@ fn text_match(
     let host = runtime();
     let db = open(&host);
     let cursor = decode_cursor(after.as_deref()).map_err(|error| query_error(&error))?;
-    let mut query = db
+    let query = db
         .query::<Document>()
         .filter(Document::NOTE, comparison, &needle)
         .limit(1)
         .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
+        .test_output_limit(bytes as usize)
+        .after(cursor.as_ref());
     let page = query
         .fetch_as::<NoteOnly>()
         .map_err(|error| query_error(&error))?;
@@ -486,9 +447,7 @@ fn read(
     if descending {
         query = query.descending();
     }
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
+    let query = query.after(cursor.as_ref());
     let page = if !matches!(shape, Shape::Entity) {
         query.fetch_as::<Summary>()
     } else {
@@ -522,6 +481,22 @@ fn read(
         page.output_bytes as u32,
         counter() - start,
     ))
+}
+
+fn fetch_ids<'a, E: Entity>(
+    mut query: crate::handles::Query<'a, E>,
+    descending: bool,
+    cursor: Option<&'a QueryCursor>,
+) -> Result<IdPage, u8> {
+    if descending {
+        query = query.descending();
+    }
+
+    query
+        .after(cursor)
+        .fetch_as::<IdOnly>()
+        .map(id_page)
+        .map_err(|error| query_error(&error))
 }
 
 fn id_page(page: ic_db::QueryPage<IdOnly>) -> IdPage {

@@ -1343,6 +1343,37 @@ fn enum_decode(bytes: Vec<u8>) -> bool {
     schema::EnumRow::decode(&bytes).is_ok()
 }
 
+// Both fixtures use key 1. Mode 0 only reads; mode 3 traps after the commit.
+fn fixture_write<E: Entity<Key = u64>>(
+    mode: u8,
+    trap_message: &str,
+    build: impl FnOnce() -> Result<E, u8>,
+) -> Result<(Vec<u8>, u64), u8> {
+    let host = runtime();
+    let mut db = open(&host);
+    if mode != 0 {
+        let row = build()?;
+        let mut batch = Batch::new();
+        if mode == 1 {
+            batch.insert(&row)
+        } else {
+            batch.replace(&row)
+        }
+        .map_err(|_| 1_u8)?;
+        db.commit(batch).map_err(|_| 2_u8)?;
+        if mode == 3 {
+            crate::system::trap(trap_message);
+        }
+    }
+    Ok((
+        db.get::<E>(ic_db::Id::from_key(1))
+            .unwrap()
+            .map(|row| row.encode().unwrap())
+            .unwrap_or_default(),
+        db.revision::<E>().unwrap(),
+    ))
+}
+
 // nested_write
 // Exercise bounded nested encoding and storage for the requested fixture case.
 // guard  : validates the request frame for method 31.
@@ -1368,9 +1399,7 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
             })
         }
     }
-    let host = runtime();
-    let mut db = open(&host);
-    if mode != 0 {
+    fixture_write(mode, "after nested replacement", || {
         if size > 33 || (shape == 2 && size > 7) {
             return Err(1);
         }
@@ -1390,26 +1419,8 @@ fn nested_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8>
             meta: None,
             payload,
         };
-        let mut batch = Batch::new();
-        if mode == 1 {
-            batch.insert(&row)
-        } else {
-            batch.replace(&row)
-        }
-        .map_err(|_| 1_u8)?;
-        db.commit(batch).map_err(|_| 2_u8)?;
-        if mode == 3 {
-            crate::system::trap("after nested replacement");
-        }
-    }
-
-    Ok((
-        db.get::<NestedRow>(1)
-            .unwrap()
-            .map(|row| row.encode().unwrap())
-            .unwrap_or_default(),
-        db.revision::<NestedRow>().unwrap(),
-    ))
+        Ok(row)
+    })
 }
 
 // nested_decodes
@@ -1457,9 +1468,7 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
             },
         }
     }
-    let host = runtime();
-    let mut db = open(&host);
-    if mode != 0 {
+    fixture_write(mode, "after list replacement", || {
         if size > 33 || (shape == 3 && size > 7) {
             return Err(1);
         }
@@ -1483,26 +1492,8 @@ fn list_write((mode, shape, size): (u8, u8, u8)) -> Result<(Vec<u8>, u64), u8> {
             3 => row.trees = vec![tree(size)],
             _ => return Err(1),
         }
-        let mut batch = Batch::new();
-        if mode == 1 {
-            batch.insert(&row)
-        } else {
-            batch.replace(&row)
-        }
-        .map_err(|_| 1_u8)?;
-        db.commit(batch).map_err(|_| 2_u8)?;
-        if mode == 3 {
-            crate::system::trap("after list replacement");
-        }
-    }
-
-    Ok((
-        db.get::<ListRow>(1)
-            .unwrap()
-            .map(|row| row.encode().unwrap())
-            .unwrap_or_default(),
-        db.revision::<ListRow>().unwrap(),
-    ))
+        Ok(row)
+    })
 }
 
 // list_decodes

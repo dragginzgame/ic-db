@@ -155,7 +155,7 @@ fn ic_read(db: &Database, case: Read) -> ResultSet {
                 0 => q.order_by(&["id"]),
                 1 => q.order_by(&["id"]).descending(),
                 2 => q.order_by(&["category", "id"]),
-                3 => q.order_by_each(&[
+                3 => q.order_by(&[
                     ("amount", SortDirection::Descending),
                     ("id", SortDirection::Ascending),
                 ]),

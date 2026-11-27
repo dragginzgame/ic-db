@@ -3,68 +3,79 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 workload="${1:-query-matrix}"
-unset IC_DB_EXISTS_COMPARISON IC_DB_COUNT_PATHS IC_DB_AGGREGATE_PATHS
 case "$workload" in
     fluent)
+        default_features=fluent-comparison
         evidence="$PWD/qualification/target/evidence/fluent-comparison"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         ;;
     keyset)
+        default_features=keyset-comparison
         evidence="$PWD/qualification/target/evidence/keyset-comparison-02313"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         ;;
     aggregate)
+        default_features=aggregate-comparison
         evidence="$PWD/qualification/target/evidence/aggregate-comparison"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         ;;
     ranked-listing)
+        default_features=ranked-listing
         evidence="$PWD/qualification/target/evidence/ranked-listing"
         engines=(records-benchmark)
         test_name=ranked_listing
         ;;
     query-matrix)
+        default_features=query-matrix
         evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/query-matrix}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
         export IC_DB_QUERY_MATRIX_DIR="$evidence"
         ;;
     exists)
+        default_features=exists-comparison
         evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/exists-comparison}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
-        export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_EXISTS_COMPARISON=1
+        export IC_DB_QUERY_MATRIX_DIR="$evidence"
         ;;
     count-paths)
+        default_features=count-comparison
         evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-paths}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
-        export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_COUNT_PATHS=1
+        export IC_DB_QUERY_MATRIX_DIR="$evidence"
         ;;
     aggregate-paths)
+        default_features=query-matrix
         evidence="${IC_DB_QUERY_MATRIX_DIR:-$PWD/qualification/target/evidence/aggregate-paths}"
         engines=(records-benchmark icydb-baseline)
         test_name=query_matrix
-        export IC_DB_QUERY_MATRIX_DIR="$evidence" IC_DB_AGGREGATE_PATHS=1
+        export IC_DB_QUERY_MATRIX_DIR="$evidence"
         ;;
     count)
+        default_features=count-comparison
         evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-comparison}"
         engines=(records-benchmark icydb-baseline)
         test_name=records_comparison
         ;;
     count-profile)
+        default_features=count-profile
         evidence="${IC_DB_COUNT_EVIDENCE_DIR:-$PWD/qualification/target/evidence/count-profile}"
         engines=(records-benchmark)
         test_name=records_comparison
         ;;
     growth)
+        default_features=''
         evidence="$PWD/qualification/target/evidence/entity-growth"
         engines=(entities-1 entities-8 entities-32 retained-1 retained-8 retained-32)
         test_name=entity_growth
         ;;
     queries)
+        default_features=retained-host
         evidence="${IC_DB_QUERY_GROWTH_DIR:-$PWD/qualification/target/evidence/query-growth}"
         engines=(direct direct-entities direct-32 one one-8 one-32 shapes entities shapes-32 two-indexes maps)
         test_name=query_growth
@@ -99,29 +110,8 @@ printf 'RUSTFLAGS=%s\nCARGO_ENCODED_RUSTFLAGS=%s\n' \
 
 for engine in "${engines[@]}"; do
     package="ic-db-$engine-canister"
-    build_features=""
-    if [[ "$workload" == query-matrix || "$workload" == aggregate-paths ]]; then
-        build_features=query-matrix
-    fi
-    if [[ "$workload" == ranked-listing ]]; then
-        build_features=ranked-listing
-    fi
-    if [[ "$workload" == exists ]]; then
-        build_features=exists-comparison
-    fi
-    if [[ "$workload" == keyset ]]; then
-        build_features=keyset-comparison
-    fi
-    if [[ "$workload" == fluent ]]; then
-        build_features=fluent-comparison
-    fi
-    if [[ "$workload" == aggregate ]]; then
-        build_features=aggregate-comparison
-    fi
-    if [[ "$workload" == count || "$workload" == count-paths ]]; then
-        build_features="count-comparison"
-    fi
-    if [[ "$workload" == count-profile || ( "$workload" == count-paths && "$engine" == records-benchmark ) ]]; then
+    build_features="$default_features"
+    if [[ "$workload" == count-paths && "$engine" == records-benchmark ]]; then
         build_features="count-profile"
     fi
     if [[ "$workload" == growth ]]; then
@@ -136,7 +126,6 @@ for engine in "${engines[@]}"; do
     fi
     if [[ "$workload" == queries ]]; then
         package=ic-db-entity-growth-canister
-        build_features=retained-host
         case "$engine" in
             two-indexes) build_features+=,second-index ;;
             direct-entities) build_features+=,entities-8 ;;

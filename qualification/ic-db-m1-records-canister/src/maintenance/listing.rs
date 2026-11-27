@@ -162,12 +162,8 @@ fn listing_page<E: Entity<Key = u64>>(
     query: Query<'_, E>,
     after: Option<&[u8]>,
 ) -> Result<Page, Error> {
-    let mut query = query.descending().limit(2);
     let cursor = after.map(QueryCursor::from_bytes).transpose()?;
-    if let Some(cursor) = &cursor {
-        query = query.after(cursor);
-    }
-    let page = query.fetch()?;
+    let page = query.descending().limit(2).after(cursor.as_ref()).fetch()?;
 
     Ok((
         page.rows.iter().map(Entity::key).collect(),

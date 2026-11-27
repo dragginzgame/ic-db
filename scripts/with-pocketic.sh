@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # One command-scoped server owner; native callers only borrow its endpoint.
 set -euo pipefail
-if [[ ${1:-} == --console ]]; then
-  # Console and qualification use the launcher's maximum one-hour command budget.
-  shift
-fi
 if [[ $# == 0 ]]; then
-  echo 'Usage: with-pocketic.sh [--console] COMMAND [ARG ...]' >&2
+  echo 'Usage: with-pocketic.sh COMMAND [ARG ...]' >&2
   exit 2
 fi
 if [[ ${IC_TESTKIT_POCKET_IC_URL+x} ]]; then

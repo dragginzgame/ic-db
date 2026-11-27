@@ -310,9 +310,20 @@ async fn matched_query_matrix() {
     let directory = std::path::PathBuf::from(
         std::env::var_os("IC_DB_QUERY_MATRIX_DIR").expect("run make m2-query-matrix"),
     );
-    let count_paths = std::env::var_os("IC_DB_COUNT_PATHS").is_some();
-    let exists = std::env::var_os("IC_DB_EXISTS_COMPARISON").is_some();
-    let aggregate_paths = std::env::var_os("IC_DB_AGGREGATE_PATHS").is_some();
+    #[derive(PartialEq, Eq)]
+    enum Workload {
+        Matrix,
+        CountPaths,
+        Exists,
+        AggregatePaths,
+    }
+    let workload = match std::env::var("IC_DB_COMPARISON_WORKLOAD").as_deref() {
+        Ok("query-matrix") => Workload::Matrix,
+        Ok("count-paths") => Workload::CountPaths,
+        Ok("exists") => Workload::Exists,
+        Ok("aggregate-paths") => Workload::AggregatePaths,
+        _ => panic!("select a query matrix workload with scripts/measure-records.sh"),
+    };
     let mut samples = Vec::new();
     for (engine, variable, legacy) in [
         ("ic-db", "IC_DB_RECORDS_BENCHMARK_WASM", false),
@@ -336,7 +347,7 @@ async fn matched_query_matrix() {
             "canister_update insert",
             "canister_update read_modify_write",
         ];
-        if exists {
+        if workload == Workload::Exists {
             expected.push("canister_query category_exists");
             if !legacy {
                 expected.push("canister_query filtered_exists");
@@ -344,12 +355,12 @@ async fn matched_query_matrix() {
         } else {
             expected.push("canister_query count_rows");
         }
-        if !count_paths && !exists {
+        if matches!(workload, Workload::Matrix | Workload::AggregatePaths) {
             expected.extend([
                 "canister_query fluent_listing",
                 "canister_query grouped_aggregate",
             ]);
-        } else if count_paths && !legacy {
+        } else if workload == Workload::CountPaths && !legacy {
             expected.push("canister_query count_profile");
         }
         expected.sort_unstable();
@@ -422,7 +433,7 @@ async fn matched_query_matrix() {
                 eprintln!(
                     "{engine} {profile} inserts={first}..={population} handler_instructions={insert_instructions}"
                 );
-                let cases = if exists {
+                let cases = if workload == Workload::Exists {
                     [0_u64, 3, 99]
                         .into_iter()
                         .map(|category| {
@@ -439,10 +450,10 @@ async fn matched_query_matrix() {
                             }
                         })
                         .collect()
-                } else if count_paths {
+                } else if workload == Workload::CountPaths {
                     prefix_counts(&source, legacy)
                 } else {
-                    cases(&source, aggregate_paths)
+                    cases(&source, workload == Workload::AggregatePaths)
                 };
                 for phase in ["settled", "after-upgrade-settled"] {
                     if phase == "after-upgrade-settled" {
@@ -501,7 +512,7 @@ async fn matched_query_matrix() {
                             instructions,
                         });
                     }
-                    if exists && !legacy && population == 511 {
+                    if workload == Workload::Exists && !legacy && population == 511 {
                         let candidates: Vec<_> = source.iter().filter(|row| row.1 == 0).collect();
                         for amount in [candidates[0].2, candidates[63].2, 1001] {
                             let first = candidates.iter().position(|row| row.2 == amount);
@@ -538,7 +549,7 @@ async fn matched_query_matrix() {
                             }
                         }
                     }
-                    if count_paths && !legacy && population == 511 {
+                    if workload == Workload::CountPaths && !legacy && population == 511 {
                         // Bare count uses metadata. A category count must finish the
                         // index range within the default 128 candidates, across upgrade.
                         for category in [None, Some(0_u64), Some(3), Some(99)] {
@@ -576,7 +587,7 @@ async fn matched_query_matrix() {
                 }
             }
             // Sample writes after all read comparisons, on the settled 511-row fixture.
-            if aggregate_paths && profile == "skewed" {
+            if workload == Workload::AggregatePaths && profile == "skewed" {
                 assert_eq!(source[0], (1, 0, 370));
                 for (change, row) in [
                     ("cross-minimum", (1, 0, 990)),

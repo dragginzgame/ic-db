@@ -511,17 +511,7 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
         } else if matches!(&part, Meta::Path(path) if path.is_ident("many")) && !many {
             many = true;
         } else if part.path().is_ident("max_items") {
-            let Lit::Int(value) = literal(&part)? else {
-                return Err(syn::Error::new_spanned(part, "expected item count"));
-            };
-            let max: u32 = value.base10_parse()?;
-            if max > 256 {
-                return Err(syn::Error::new_spanned(
-                    part,
-                    "max_items must not exceed 256",
-                ));
-            }
-            once(&mut max_items, max, &part)?;
+            once(&mut max_items, parse_max_items(&part)?, &part)?;
         } else if part.path().is_ident("item") {
             once(&mut item, parse_item(&part)?, &part)?;
         } else {
@@ -545,7 +535,22 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
     ))
 }
 
-fn parse_item(meta: &Meta) -> syn::Result<Kind> {
+pub(super) fn parse_max_items(part: &Meta) -> syn::Result<u32> {
+    let Lit::Int(value) = literal(part)? else {
+        return Err(syn::Error::new_spanned(part, "expected item count"));
+    };
+    let max: u32 = value.base10_parse()?;
+    if max > 256 {
+        return Err(syn::Error::new_spanned(
+            part,
+            "max_items must not exceed 256",
+        ));
+    }
+
+    Ok(max)
+}
+
+pub(super) fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     let mut prim = None;
     let mut named = None;
     let mut indirect = false;

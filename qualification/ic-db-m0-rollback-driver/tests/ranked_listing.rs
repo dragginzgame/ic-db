@@ -1,8 +1,9 @@
 //! Check every returned ID against SQLite, including ties across page boundaries.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use rusqlite::{Connection, params};
+use wire_frame::{request, response};
 
 const BY_PROJECT: u8 = 0;
 const BY_TIME: u8 = 1;
@@ -13,30 +14,6 @@ const ID_BY_PROJECT: u8 = 5;
 const ID_BY_PRICE: u8 = 6;
 
 type Page = (Vec<u64>, Option<Vec<u8>>, usize, usize);
-
-fn request(method: u64, value: &impl serde::Serialize) -> Vec<u8> {
-    ic_wire::encode(
-        value,
-        Encoding::Frame {
-            method,
-            direction: Direction::Request,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
-fn response<T: serde::de::DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
-        bytes,
-        Encoding::Frame {
-            method,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
 
 #[tokio::test]
 async fn ranked_listing_matches_sqlite_on_each_layout() {

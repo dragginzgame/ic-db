@@ -25,101 +25,37 @@ use ic_db::{Batch, Comparison, GroupOrder, JobHandle, JobOutcome, JobStep};
     on_error = crate::transport::endpoint_error
 )]
 fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Vec<u8>, String> {
+    let now = Timestamp::from_millis(now);
+    let expires = Timestamp::from_millis(expires);
     let host = runtime();
     let db = open(&host);
     let mut jobs = open_jobs(&host);
     let query = query(&db, operation);
     faults::arm_job_write(fault);
     let result = match operation {
-        1 => query.start_sum::<Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        2 => query.start_avg::<AverageAmount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        0 | 18..=21 => query.start_count(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        3 | 14 | 15 => query.start_group_count::<Category>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        4 => query.start_group_sum::<Category, Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        5 => query.start_group_avg::<Category, AverageAmount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        6 => db.query::<Document>().start_count_field(
-            "note",
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        7 => db.query::<Document>().start_group_count_field::<EntryId>(
-            "note",
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        8 => query.start_count_distinct::<Category>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        9 => query.start_group_count_distinct::<Category, Category>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        16 | 22 => query.start_group_count_distinct::<Category, Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        17 => query.start_group_count_distinct::<Category, IdAmount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        10 => query.start_min::<Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        11 => query.start_max::<Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        12 => query.start_group_min::<Category, Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
-        13 => query.start_group_max::<Category, Amount>(
-            &mut jobs,
-            Timestamp::from_millis(now),
-            Timestamp::from_millis(expires),
-        ),
+        1 => query.start_sum::<Amount>(&mut jobs, now, expires),
+        2 => query.start_avg::<AverageAmount>(&mut jobs, now, expires),
+        0 | 18..=21 => query.start_count(&mut jobs, now, expires),
+        3 | 14 | 15 => query.start_group_count::<Category>(&mut jobs, now, expires),
+        4 => query.start_group_sum::<Category, Amount>(&mut jobs, now, expires),
+        5 => query.start_group_avg::<Category, AverageAmount>(&mut jobs, now, expires),
+        6 => db
+            .query::<Document>()
+            .start_count_field("note", &mut jobs, now, expires),
+        7 => db
+            .query::<Document>()
+            .start_group_count_field::<EntryId>("note", &mut jobs, now, expires),
+        8 => query.start_count_distinct::<Category>(&mut jobs, now, expires),
+        9 => query.start_group_count_distinct::<Category, Category>(&mut jobs, now, expires),
+        16 | 22 => query.start_group_count_distinct::<Category, Amount>(&mut jobs, now, expires),
+        17 => query.start_group_count_distinct::<Category, IdAmount>(&mut jobs, now, expires),
+        10 => query.start_min::<Amount>(&mut jobs, now, expires),
+        11 => query.start_max::<Amount>(&mut jobs, now, expires),
+        12 => query.start_group_min::<Category, Amount>(&mut jobs, now, expires),
+        13 => query.start_group_max::<Category, Amount>(&mut jobs, now, expires),
         23 => db
             .query::<TimeRow>()
-            .start_group_summary::<ObservationTime, Elapsed, Elapsed>(
-                &mut jobs,
-                Timestamp::from_millis(now),
-                Timestamp::from_millis(expires),
-            ),
+            .start_group_summary::<ObservationTime, Elapsed, Elapsed>(&mut jobs, now, expires),
         _ => Err(ic_db::Error::InvalidQuery),
     };
     faults::finish_job_write();
@@ -145,6 +81,7 @@ fn job_start((operation, now, expires, fault): (u8, i64, i64, u64)) -> Result<Ve
 fn job_advance(
     (bytes, operation, sequence, work, now, fault, trap_after): AdvanceRequest,
 ) -> Result<Response, String> {
+    let now = Timestamp::from_millis(now);
     let host = runtime();
     let db = open(&host);
     let mut jobs = open_jobs(&host);
@@ -153,45 +90,25 @@ fn job_advance(
     faults::arm_job_write(fault);
     let result = match operation {
         1 => query
-            .resume_sum::<Amount>(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
+            .resume_sum::<Amount>(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |value| value.map(|r| r.amount.to_string()))),
         2 => query
-            .resume_avg::<AverageAmount>(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
+            .resume_avg::<AverageAmount>(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |value| value.map(|r| r.amount.to_string()))),
         10 => query
-            .resume_min::<Amount>(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
+            .resume_min::<Amount>(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |value| value.map(|r| r.amount.to_string()))),
         11 => query
-            .resume_max::<Amount>(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
+            .resume_max::<Amount>(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |value| value.map(|r| r.amount.to_string()))),
         0 | 18..=21 => query
-            .resume_count(&mut jobs, &handle, sequence, Timestamp::from_millis(now))
+            .resume_count(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |n| Some(n.to_string()))),
         3 | 14 | 15 => query
-            .resume_group_count::<Category>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
-            .map(|s| {
-                progress(s, |rows| {
-                    Some(
-                        rows.rows
-                            .into_iter()
-                            .map(|row| format!("{}:{}", row.key.category, row.count))
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    )
-                })
-            }),
+            .resume_group_count::<Category>(&mut jobs, &handle, sequence, now)
+            .map(category_counts),
         4 => query
-            .resume_group_sum::<Category, Amount>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            .resume_group_sum::<Category, Amount>(&mut jobs, &handle, sequence, now)
             .map(|s| {
                 progress(s, |rows| {
                     Some(
@@ -206,12 +123,7 @@ fn job_advance(
                 })
             }),
         5 => query
-            .resume_group_avg::<Category, AverageAmount>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            .resume_group_avg::<Category, AverageAmount>(&mut jobs, &handle, sequence, now)
             .map(|s| {
                 progress(s, |rows| {
                     Some(
@@ -228,24 +140,12 @@ fn job_advance(
         6 => db
             .query::<Document>()
             .work_limit(work as usize)
-            .resume_count_field(
-                "note",
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            .resume_count_field("note", &mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |count| Some(count.to_string()))),
         7 => db
             .query::<Document>()
             .work_limit(work as usize)
-            .resume_group_count_field::<EntryId>(
-                "note",
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            .resume_group_count_field::<EntryId>("note", &mut jobs, &handle, sequence, now)
             .map(|s| {
                 progress(s, |rows| {
                     Some(
@@ -258,54 +158,25 @@ fn job_advance(
                 })
             }),
         8 => query
-            .resume_count_distinct::<Category>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            .resume_count_distinct::<Category>(&mut jobs, &handle, sequence, now)
             .map(|s| progress(s, |count| Some(count.to_string()))),
         9 | 16 | 17 | 22 => (if operation == 9 {
             query.resume_group_count_distinct::<Category, Category>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
+                &mut jobs, &handle, sequence, now,
             )
         } else if matches!(operation, 16 | 22) {
-            query.resume_group_count_distinct::<Category, Amount>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
-            )
+            query.resume_group_count_distinct::<Category, Amount>(&mut jobs, &handle, sequence, now)
         } else {
             query.resume_group_count_distinct::<Category, IdAmount>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
+                &mut jobs, &handle, sequence, now,
             )
         })
-        .map(|s| {
-            progress(s, |rows| {
-                Some(
-                    rows.rows
-                        .into_iter()
-                        .map(|row| format!("{}:{}", row.key.category, row.count))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                )
-            })
-        }),
+        .map(category_counts),
         23 => db
             .query::<TimeRow>()
             .work_limit(work as usize)
             .resume_group_summary::<ObservationTime, Elapsed, Elapsed>(
-                &mut jobs,
-                &handle,
-                sequence,
-                Timestamp::from_millis(now),
+                &mut jobs, &handle, sequence, now,
             )
             .map(|step| {
                 progress(step, |page| {
@@ -696,6 +567,18 @@ fn query(db: &Database, operation: u8) -> Query<'_, Entry> {
 type Response = (u64, u64, u64, u64, u8, Option<String>, u64);
 type AdvanceRequest = (Vec<u8>, u8, u64, u32, i64, u64, bool);
 type Progress = (u64, u64, u64, u64, u8, Option<String>);
+fn category_counts(step: JobStep<ic_db::GroupPage<ic_db::GroupCount<Category>>>) -> Progress {
+    progress(step, |page| {
+        Some(
+            page.rows
+                .into_iter()
+                .map(|row| format!("{}:{}", row.key.category, row.count))
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    })
+}
+
 fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
     let (phase, value) = match step.outcome {
         JobOutcome::Running => (0, None),

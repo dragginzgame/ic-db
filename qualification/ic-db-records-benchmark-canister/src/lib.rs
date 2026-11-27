@@ -236,7 +236,7 @@ fn fluent_listing(
             0 => query.order_by(&["id"]),
             1 => query.order_by(&["id"]).descending(),
             2 => query.order_by(&["category", "id"]),
-            3 => query.order_by_each(&[
+            3 => query.order_by(&[
                 ("amount", SortDirection::Descending),
                 ("id", SortDirection::Ascending),
             ]),

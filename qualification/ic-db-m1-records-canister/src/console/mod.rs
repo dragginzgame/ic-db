@@ -14,7 +14,7 @@ use crate::{
     queries::{IdOnly, Summary},
     runtime,
     schema::{DecimalRow, Document, Entry},
-    transport::RowFilters,
+    transport::{ConsolePage as Page, RowFilters},
 };
 use ic_db::design::prelude::*;
 use ic_db::{
@@ -444,15 +444,6 @@ type Request = (
         RowFilters,
     ),
 );
-type Page = (
-    Vec<String>,
-    Vec<Vec<String>>,
-    Option<Vec<u8>>,
-    u32,
-    u32,
-    u32,
-);
-
 fn parse_order(order: &[String]) -> Result<Vec<(&str, SortDirection)>, String> {
     order
         .iter()
@@ -482,12 +473,8 @@ fn configure<'a, E: Entity>(
         .limit(limit as usize)
         .work_limit(work as usize)
         .test_output_limit(bytes as usize);
-    query = apply_order(query, order, descending);
-    if let Some(cursor) = cursor {
-        query = query.after(cursor);
-    }
 
-    query
+    apply_order(query, order, descending).after(cursor)
 }
 
 fn apply_order<'a, E: Entity>(
@@ -496,7 +483,7 @@ fn apply_order<'a, E: Entity>(
     descending: bool,
 ) -> Query<'a, E> {
     if !order.is_empty() {
-        query = query.order_by_each(order);
+        query = query.order_by(order);
     }
     if descending {
         query = query.descending();
@@ -836,7 +823,7 @@ fn execute<'a, E: Entity>(
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "distinct-count:value" => query
             .count_distinct::<TotalDecimal>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "zone,distinct-count:value" => query
             .group_count_distinct::<ZoneOnly, TotalDecimal>()
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
@@ -845,24 +832,24 @@ fn execute<'a, E: Entity>(
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "distinct-count:maybe" => query
             .count_distinct::<OptionalDecimal>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "zone,distinct-count:maybe" => query
             .group_count_distinct::<ZoneOnly, OptionalDecimal>()
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
         "zone,count:maybe" => query
             .group_count_field::<ZoneOnly>("maybe")
             .map(|r| display_groups(r, "zone", |k| k.zone.to_string())),
-        "exists" => query.exists().map(|r| display_scalar(&r, "exists")),
-        "count" => query.count().map(|r| display_scalar(&r, "count")),
+        "exists" => query.exists().map(|r| display_scalar(r, "exists")),
+        "count" => query.count().map(|r| display_scalar(r, "count")),
         "distinct-count:category" => query
             .count_distinct::<CategoryOnly>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "distinct-count:amount" => query
             .count_distinct::<AmountOnly>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "distinct-count:note" => query
             .count_distinct::<NoteOnly>()
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         "category,distinct-count:amount" => query
             .group_count_distinct::<CategoryOnly, AmountOnly>()
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
@@ -877,7 +864,7 @@ fn execute<'a, E: Entity>(
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
         s if s.starts_with("count:") => query
             .count_field(&s[6..])
-            .map(|r| display_scalar(&r, "count")),
+            .map(|r| display_scalar(r, "count")),
         s if s.starts_with("category,count:") => query
             .group_count_field::<CategoryOnly>(&s[15..])
             .map(|r| display_groups(r, "category", |k| k.category.to_string())),
@@ -980,15 +967,23 @@ fn summary_table<T>(
 }
 
 fn display_summary<T>(r: Aggregate<Vec<T>>, key: &str, render: fn(T) -> Vec<String>) -> Page {
-    let (columns, rows) = summary_table(r.value, key, render);
-    (
+    aggregate_page(r, |groups| summary_table(groups, key, render))
+}
+
+fn aggregate_page<T>(
+    r: Aggregate<T>,
+    table: impl FnOnce(T) -> (Vec<String>, Vec<Vec<String>>),
+) -> Page {
+    let (columns, rows) = table(r.value);
+
+    Page {
         columns,
         rows,
-        None,
-        r.examined as u32,
-        r.fetched as u32,
-        r.output_bytes as u32,
-    )
+        next: None,
+        examined: r.examined as u32,
+        fetched: r.fetched as u32,
+        output_bytes: r.output_bytes as u32,
+    }
 }
 
 fn display_group_values<K, R>(
@@ -997,17 +992,15 @@ fn display_group_values<K, R>(
     key: fn(K) -> String,
     render: fn(R) -> String,
 ) -> Page {
-    (
-        columns.iter().map(|c| (*c).into()).collect(),
-        r.value
-            .into_iter()
-            .map(|g| vec![key(g.key), g.value.map_or_else(|| "—".into(), render)])
-            .collect(),
-        None,
-        r.examined as u32,
-        r.fetched as u32,
-        r.output_bytes as u32,
-    )
+    aggregate_page(r, |value| {
+        (
+            columns.iter().map(|c| (*c).into()).collect(),
+            value
+                .into_iter()
+                .map(|g| vec![key(g.key), g.value.map_or_else(|| "—".into(), render)])
+                .collect(),
+        )
+    })
 }
 
 fn extremum<E: Entity, R: Value>(
@@ -1026,53 +1019,41 @@ fn extremum<E: Entity, R: Value>(
 }
 
 fn display_value<R>(r: Aggregate<Option<R>>, column: &str, render: fn(R) -> String) -> Page {
-    (
-        vec![column.into()],
-        r.value
-            .into_iter()
-            .map(|value| vec![render(value)])
-            .collect(),
-        None,
-        r.examined as u32,
-        r.fetched as u32,
-        r.output_bytes as u32,
-    )
+    aggregate_page(r, |value| {
+        (
+            vec![column.into()],
+            value.into_iter().map(|value| vec![render(value)]).collect(),
+        )
+    })
 }
 
-fn display_scalar<T: ToString>(r: &Aggregate<T>, column: &str) -> Page {
-    (
-        vec![column.into()],
-        vec![vec![r.value.to_string()]],
-        None,
-        r.examined as u32,
-        r.fetched as u32,
-        r.output_bytes as u32,
-    )
+fn display_scalar<T: ToString>(r: Aggregate<T>, column: &str) -> Page {
+    aggregate_page(r, |value| {
+        (vec![column.into()], vec![vec![value.to_string()]])
+    })
 }
 
 fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) -> String) -> Page {
-    (
-        vec![column.into(), "count".into()],
-        r.value
-            .into_iter()
-            .map(|g| vec![key(g.key), g.count.to_string()])
-            .collect(),
-        None,
-        r.examined as u32,
-        r.fetched as u32,
-        r.output_bytes as u32,
-    )
+    aggregate_page(r, |value| {
+        (
+            vec![column.into(), "count".into()],
+            value
+                .into_iter()
+                .map(|g| vec![key(g.key), g.count.to_string()])
+                .collect(),
+        )
+    })
 }
 
 fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>) -> Page {
-    (
-        columns.iter().map(|c| (*c).to_owned()).collect(),
-        page.rows.into_iter().map(render).collect(),
-        page.next.map(|c| c.to_bytes()),
-        page.examined as u32,
-        page.fetched as u32,
-        page.output_bytes as u32,
-    )
+    Page {
+        columns: columns.iter().map(|c| (*c).to_owned()).collect(),
+        rows: page.rows.into_iter().map(render).collect(),
+        next: page.next.map(|c| c.to_bytes()),
+        examined: page.examined as u32,
+        fetched: page.fetched as u32,
+        output_bytes: page.output_bytes as u32,
+    }
 }
 
 fn optional(value: Option<impl ToString>) -> String {

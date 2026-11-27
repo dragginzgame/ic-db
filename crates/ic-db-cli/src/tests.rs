@@ -94,8 +94,8 @@ fn console_quotes_preserve_exact_fluent_operands() {
             .unwrap();
 
             match cli.command.unwrap() {
-                Command::Query { group_min, .. } | Command::Aggregate { group_min, .. } => {
-                    assert_eq!(group_min.as_deref(), Some(expected));
+                Command::Query { group_bounds, .. } | Command::Aggregate { group_bounds, .. } => {
+                    assert_eq!(group_bounds.group_min.as_deref(), Some(expected));
                 }
                 _ => panic!("wrong fluent command"),
             }

@@ -222,6 +222,17 @@ pub struct Aggregate<T> {
     pub output_bytes: usize,
 }
 
+impl Aggregate<u64> {
+    fn at_least(self, minimum: u64) -> Aggregate<bool> {
+        Aggregate {
+            value: self.value >= minimum,
+            examined: self.examined,
+            fetched: self.fetched,
+            output_bytes: 1,
+        }
+    }
+}
+
 /// One complete group. Absent optional key values belong to a group too.
 #[derive(Debug)]
 pub struct GroupCount<K> {
@@ -500,36 +511,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         observe!(query, {
             let mut plan = self.count_plan(None)?;
             self.select_aggregate_row_path(&mut plan, Some(MemberProbe::Exists))?;
-            if let Some(result) = probe_members(
-                &self.db,
-                E::SCHEMA,
-                &self.request,
-                &plan,
-                MemberProbe::Exists,
-                1,
-            )? {
-                return Ok(Aggregate {
-                    value: result.value != 0,
-                    examined: result.examined,
-                    fetched: result.fetched,
-                    output_bytes: 1,
-                });
-            }
-            let mut remaining = 1;
-            let page = execute(
-                &self.db.read()?.map,
-                E::SCHEMA,
-                &self.request,
-                &plan,
-                Some(Accumulator::Until(&mut remaining)),
-            )?;
-
-            Ok(Aggregate {
-                value: remaining == 0,
-                examined: page.examined,
-                fetched: page.fetched,
-                output_bytes: 1,
-            })
+            Ok(self
+                .count_matching_rows(&plan, MemberProbe::Exists, 1)?
+                .at_least(1))
         })
     }
 
@@ -564,15 +548,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns ordinary count admission errors and `Limit` if work runs out before
     /// either reaching the threshold or exhausting the input.
     pub fn has_at_least(self, minimum: u64) -> Result<Aggregate<bool>, Error> {
-        observe!(query, {
-            let result = self.count_until(minimum)?;
-            Ok(Aggregate {
-                value: result.value >= minimum,
-                examined: result.examined,
-                fetched: result.fetched,
-                output_bytes: 1,
-            })
-        })
+        observe!(query, { Ok(self.count_until(minimum)?.at_least(minimum)) })
     }
 
     fn count_until(self, stop: u64) -> Result<Aggregate<u64>, Error> {
@@ -620,14 +596,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         )? {
             return self.count_keys(&plan, stop);
         }
-        if let Some(count) = probe_members(
-            &self.db,
-            E::SCHEMA,
-            &self.request,
-            &plan,
-            MemberProbe::CountWithRows,
-            stop,
-        )? {
+        self.count_matching_rows(&plan, MemberProbe::CountWithRows, stop)
+    }
+
+    fn count_matching_rows(
+        &self,
+        plan: &Plan<'_>,
+        probe: MemberProbe,
+        stop: u64,
+    ) -> Result<Aggregate<u64>, Error> {
+        if let Some(count) = probe_members(&self.db, E::SCHEMA, &self.request, plan, probe, stop)? {
             return Ok(count);
         }
         let mut remaining = stop;
@@ -635,7 +613,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             &self.db.read()?.map,
             E::SCHEMA,
             &self.request,
-            &plan,
+            plan,
             Some(Accumulator::Until(&mut remaining)),
         )?;
         Ok(Aggregate {

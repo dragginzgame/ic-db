@@ -1,35 +1,13 @@
 //! Controlled write schedules and shared retained-job capacity, without hidden retries.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
+use wire_frame::{request, response};
 
 type Step = (u64, u64, u64, u64, u8, Option<String>, u64);
 
 #[tokio::test]
 async fn shared_jobs_preserve_isolation_capacity_and_stale_handle_refusal() {
-    fn request<T: serde::Serialize>(method: u64, value: &T) -> Vec<u8> {
-        ic_wire::encode(
-            value,
-            Encoding::Frame {
-                method,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    }
-
-    fn response<T: serde::de::DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-        ic_wire::decode(
-            bytes,
-            Encoding::Frame {
-                method,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    }
     let wasm =
         std::fs::read(std::env::var_os("IC_DB_M2_JOBS_WASM").expect("run make m2-contention"))
             .unwrap();
@@ -229,28 +207,12 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 canister,
                 canister,
                 "write",
-                ic_wire::encode(
-                    &(id, id % 2, amount, mode),
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                request(4, &(id, id % 2, amount, mode)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        response::<Result<(), u8>>(4, &reply)
     };
     let start = async || {
         let reply = pic
@@ -258,29 +220,12 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 canister,
                 canister,
                 "job_start",
-                ic_wire::encode(
-                    &(1_u8, 0_i64, 100_i64, 0_u64),
-                    Encoding::Frame {
-                        method: 110,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                request(110, &(1_u8, 0_i64, 100_i64, 0_u64)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Vec<u8>, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 110,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        response::<Result<Vec<u8>, String>>(110, &reply).unwrap()
     };
     let advance = async |handle: &[u8], sequence: u64, work: u32| {
         let reply = pic
@@ -288,58 +233,23 @@ async fn retained_sum_requires_a_quiet_source_boundary_not_a_quiet_database() {
                 canister,
                 canister,
                 "job_advance",
-                ic_wire::encode(
-                    &(handle, 1_u8, sequence, work, 1_i64, 0_u64, false),
-                    Encoding::Frame {
-                        method: 111,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                request(111, &(handle, 1_u8, sequence, work, 1_i64, 0_u64, false)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Step, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 111,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        response::<Result<Step, String>>(111, &reply)
     };
     let control = async |operation: u8, handle: &[u8]| {
         pic.update_call(
             canister,
             canister,
             "job_control",
-            ic_wire::encode(
-                &(operation, handle, 0_i64, 0_u32),
-                Encoding::Frame {
-                    method: 112,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            request(112, &(operation, handle, 0_i64, 0_u32)),
         )
         .await
     };
-    let controlled = |reply: Vec<u8>| {
-        ic_wire::decode::<Result<u64, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let controlled = |reply: Vec<u8>| response::<Result<u64, String>>(112, &reply).unwrap();
     for id in 7..=96 {
         assert_eq!(write(id, id * 10 + id % 2, 1).await, Ok(()));
     }

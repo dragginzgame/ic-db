@@ -510,7 +510,7 @@ fn embedded_time_bounds_seek_the_ulid_primary_key() {
             ));
         }
         let page = listing(window.clone())
-            .after_optional(cursor.as_ref())
+            .after(cursor.as_ref())
             .fetch()
             .unwrap();
         assert_eq!(page.rows.iter().map(|row| row.id).collect::<Vec<_>>(), ids);

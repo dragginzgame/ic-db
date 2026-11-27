@@ -5105,7 +5105,7 @@ fn completed_page_cursors_refuse_foreign_pending_and_out_of_range_jobs() {
         .query::<Row>()
         .start_group_count::<Flag>(&mut jobs, time(0), time(100))
         .unwrap();
-    let mut bytes = vec![1];
+    let mut bytes = vec![3];
     bytes.extend(handle.to_bytes());
     bytes.push(1);
     let pending = GroupCursor::from_bytes(&bytes).unwrap();

@@ -1,6 +1,6 @@
 //! Retained extrema over the synchronous comparator and shared job lifecycle.
 
-use super::{Accumulator, AggregateJobs, JobHandle, JobStep, binding, start};
+use super::{AggregateJobs, JobHandle, JobStep};
 use crate::{Entity, Error, GroupPage, GroupValue, Timestamp, Value, store::Query};
 use ic_storage::Memory;
 
@@ -105,7 +105,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_extremum::<R>(jobs, now, expires, false)
+            let admitted = self.extremum_plan::<R>(false)?;
+            self.start_value(jobs, now, expires, admitted)
         })
     }
 
@@ -122,7 +123,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_extremum::<R>(jobs, now, expires, true)
+            let admitted = self.extremum_plan::<R>(true)?;
+            self.start_value(jobs, now, expires, admitted)
         })
     }
 
@@ -168,24 +170,5 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
             self.resume_value(jobs, handle, sequence, now, (plan, reducer))
         })
-    }
-
-    fn start_extremum<R: Value>(
-        self,
-        jobs: &mut AggregateJobs<M>,
-        now: Timestamp,
-        expires: Timestamp,
-        maximum: bool,
-    ) -> Result<JobHandle, Error> {
-        let (plan, mut reducer) = self.extremum_plan::<R>(maximum)?;
-
-        start(
-            jobs,
-            binding(&plan, &reducer)?,
-            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
-            now,
-            expires,
-            &Accumulator::Scalar(&mut reducer),
-        )
     }
 }

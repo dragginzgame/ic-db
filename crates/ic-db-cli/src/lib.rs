@@ -1,8 +1,25 @@
-//! Request types shared by the local DB console and its fixture canister.
+//! Transport types shared by the local DB console and its fixture canister.
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "host")]
 pub mod host;
+
+/// A local query result, in the fixture's positional Wire field order.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct ConsolePage {
+    /// Display column names.
+    pub columns: Vec<String>,
+    /// Display cells in column order.
+    pub rows: Vec<Vec<String>>,
+    /// Encoded continuation for a paged read.
+    pub next: Option<Vec<u8>>,
+    /// Examined query candidates.
+    pub examined: u32,
+    /// Fetched source rows.
+    pub fetched: u32,
+    /// Encoded result bytes before transport framing.
+    pub output_bytes: u32,
+}
 
 /// Row predicates carried by the local query and retained-aggregate commands.
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -38,3 +55,47 @@ pub type RetainedSelection = (
     RowFilters,
     (Vec<String>, bool),
 );
+
+/// Display columns, rows and optional next cursor of a completed retained query.
+pub type RetainedOutput = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
+
+/// Progress reported by the local fixture after one retained query step.
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RetainedProgress {
+    /// Last saved step.
+    pub sequence: u64,
+    /// Candidates examined so far.
+    pub examined: u64,
+    /// Input bytes examined so far.
+    pub input_bytes: u64,
+    /// Encoded result bytes in this step.
+    pub output_bytes: u64,
+    /// Current phase and any completed result.
+    pub phase: RetainedPhase,
+}
+
+/// Only a completed job has output.
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RetainedPhase {
+    /// Additional input remains.
+    Running,
+    /// Completed rows and continuation.
+    Complete(RetainedOutput),
+    /// Source rows changed.
+    Invalidated,
+    /// Job lifetime elapsed.
+    Expired,
+}
+
+impl RetainedPhase {
+    /// Name used by console progress messages.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Running => "Running",
+            Self::Complete(_) => "Complete",
+            Self::Invalidated => "Invalidated",
+            Self::Expired => "Expired",
+        }
+    }
+}

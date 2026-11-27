@@ -159,8 +159,8 @@ impl Date {
 
         // Decode one strict fixed-width payload before calendar admission.
         let year = parse_ascii_i32(&bytes[0..4])?;
-        let month = parse_ascii_u8(&bytes[5..7])?;
-        let day = parse_ascii_u8(&bytes[8..10])?;
+        let month = two_digits(&bytes[5..7])?;
+        let day = two_digits(&bytes[8..10])?;
 
         Self::try_new(year, month, day)
     }
@@ -205,10 +205,9 @@ fn parse_ascii_i32(bytes: &[u8]) -> Option<i32> {
     })
 }
 
-fn parse_ascii_u8(bytes: &[u8]) -> Option<u8> {
-    bytes.iter().try_fold(0_u8, |value, byte| {
-        byte.checked_sub(b'0')
-            .filter(|digit| *digit <= 9)
-            .and_then(|digit| value.checked_mul(10)?.checked_add(digit))
-    })
+pub(crate) fn two_digits(bytes: &[u8]) -> Option<u8> {
+    match bytes {
+        [a @ b'0'..=b'9', b @ b'0'..=b'9'] => Some((a - b'0') * 10 + (b - b'0')),
+        _ => None,
+    }
 }

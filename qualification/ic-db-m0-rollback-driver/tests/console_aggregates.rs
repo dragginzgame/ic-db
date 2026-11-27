@@ -6,14 +6,15 @@ use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 use ic_db_qualification_transport::{RetainedSelection as Selection, RowFilters};
 use wire_call::call;
 
-type Step = (
-    u64,
-    String,
-    u64,
-    u64,
-    u64,
-    (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>),
-);
+use ic_db_qualification_transport::{RetainedOutput, RetainedPhase, RetainedProgress as Step};
+
+fn completed(step: &Step) -> &RetainedOutput {
+    let RetainedPhase::Complete(output) = &step.phase else {
+        panic!("expected completed output, got {:?}", step.phase);
+    };
+
+    output
+}
 
 #[tokio::test]
 async fn distinct_keys_page_past_32_after_upgrade() {
@@ -70,10 +71,13 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         .await
     };
     let prefix = advance_count(0, 32).await.unwrap();
-    assert_eq!((prefix.1.as_str(), prefix.2), ("Running", 32));
-    assert!(prefix.5.1.is_empty());
+    assert_eq!((prefix.phase.label(), prefix.examined), ("Running", 32));
+
     let checkpoint = pic.get_stable_memory(canister).await;
-    assert_eq!(advance_count(prefix.0, 1).await.unwrap_err(), "Limit");
+    assert_eq!(
+        advance_count(prefix.sequence, 1).await.unwrap_err(),
+        "Limit"
+    );
     assert_eq!(pic.get_stable_memory(canister).await, checkpoint);
     call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &refused)
         .await
@@ -126,9 +130,8 @@ async fn distinct_keys_page_past_32_after_upgrade() {
             )
             .await
             .unwrap();
-            sequence = step.0;
-            if step.1 == "Running" {
-                assert!(step.5.1.is_empty());
+            sequence = step.sequence;
+            if step.phase.label() == "Running" {
                 if order == Some("first") && sequence == 1 {
                     upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                         .await
@@ -136,21 +139,21 @@ async fn distinct_keys_page_past_32_after_upgrade() {
                 }
                 continue;
             }
-            assert_eq!(step.1, "Complete");
-            assert_eq!(step.2, 80);
+            assert_eq!(step.phase.label(), "Complete");
+            assert_eq!(step.examined, 80);
             let charged = before - pic.cycle_balance(canister).await;
             eprintln!(
                 "retained DISTINCT start={} rows={} charged_cycles={charged}",
                 output.len(),
-                step.5.1.len()
+                completed(&step).1.len()
             );
             output.extend(
-                step.5
+                completed(&step)
                     .1
-                    .into_iter()
+                    .iter()
                     .map(|row| row[0].parse::<u64>().unwrap()),
             );
-            cursor = step.5.2;
+            cursor = completed(&step).2.clone();
             if output.len() == 33 {
                 upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                     .await
@@ -179,9 +182,9 @@ async fn distinct_keys_page_past_32_after_upgrade() {
 }
 
 #[tokio::test]
-#[ignore = "requires the retained-console Wasm built from the v0.24.4 tag"]
-async fn canonical_distinct_resumes_running_and_completed_v0244_jobs() {
-    let old = std::fs::read(std::env::var_os("IC_DB_V0244_CONSOLE_WASM").unwrap()).unwrap();
+#[ignore = "requires the retained-console Wasm built from the v0.33.1 tag"]
+async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
+    let old = std::fs::read(std::env::var_os("IC_DB_V0331_CONSOLE_WASM").unwrap()).unwrap();
     let new = std::fs::read(std::env::var_os("IC_DB_M1_RECORDS_WASM").unwrap()).unwrap();
     let owned = instance().await.unwrap();
     let pic = &owned;
@@ -199,22 +202,28 @@ async fn canonical_distinct_resumes_running_and_completed_v0244_jobs() {
         RowFilters::default(),
         Default::default(),
     );
-    // The old fixture accepted seven selection fields. The eighth now carries input order.
-    let (entity, select, bounds, limit, filters, order, rows, _) = &selection;
-    let old_selection = (entity, select, bounds, limit, filters, order, rows);
+    type PreviousStep = (
+        u64,
+        String,
+        u64,
+        u64,
+        u64,
+        (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>),
+    );
+
     let mut saved = Vec::new();
     for work in [2_u32, 32] {
         let handle =
-            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &old_selection)
+            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
                 .unwrap();
-        let step = call::<Result<Step, String>>(
+        let step = call::<Result<PreviousStep, String>>(
             pic,
             canister,
             "aggregate_resume",
             121,
             &(
-                &old_selection,
+                &selection,
                 &handle,
                 0_u64,
                 work,
@@ -233,33 +242,36 @@ async fn canonical_distinct_resumes_running_and_completed_v0244_jobs() {
             assert_eq!(step.5.1, [["11"], ["20"]]);
             assert!(step.5.2.is_some());
         }
-        saved.push((handle, step.0, step.5.2));
+        saved.push((handle, step.0, step.5.2.is_some()));
     }
 
     upgrade_stopped(pic, canister, new, vec![], None)
         .await
         .unwrap();
-    for (handle, sequence, cursor) in saved {
-        let previously_complete = cursor.is_some();
-        let step = call::<Result<Step, String>>(
-            pic,
-            canister,
-            "aggregate_resume",
-            121,
-            &(
-                &selection, &handle, sequence, 32_u32, 4096_u32, 32_u32, &cursor,
-            ),
-        )
-        .await
-        .unwrap();
-        assert_eq!((step.1.as_str(), step.2), ("Complete", 6));
-        assert_eq!(step.0, sequence + u64::from(!previously_complete));
-        let expected = [["11"], ["20"], ["31"], ["40"], ["51"], ["60"]];
-        assert_eq!(
-            step.5.1,
-            expected[if previously_complete { 2 } else { 0 }..]
-        );
-        assert!(step.5.2.is_none());
+    for (handle, sequence, was_complete) in saved {
+        let resume = async |sequence: u64, after: Option<Vec<u8>>| {
+            call::<Result<Step, String>>(
+                pic,
+                canister,
+                "aggregate_resume",
+                121,
+                &(
+                    &selection, &handle, sequence, 32_u32, 4096_u32, 3_u32, after,
+                ),
+            )
+            .await
+            .unwrap()
+        };
+        let first = resume(sequence, None).await;
+        assert_eq!((first.phase.label(), first.examined), ("Complete", 6));
+        assert_eq!(first.sequence, sequence + u64::from(!was_complete));
+        assert_eq!(completed(&first).1, [["11"], ["20"], ["31"]]);
+        let cursor = completed(&first).2.clone().unwrap();
+        assert_eq!(cursor[0], 3);
+        let second = resume(first.sequence, Some(cursor)).await;
+        assert_eq!(second.sequence, first.sequence);
+        assert_eq!(completed(&second).1, [["40"], ["51"], ["60"]]);
+        assert!(completed(&second).2.is_none());
     }
     owned.drop().await;
 }
@@ -321,10 +333,10 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
         .await
         .unwrap();
         let scan_cycles = before_scan - pic.cycle_balance(canister).await;
-        assert_eq!(first.1, "Complete");
-        assert_eq!(first.2, keys);
-        assert_eq!(first.5.1, [["1"]]);
-        assert!(first.5.2.is_some());
+        assert_eq!(first.phase.label(), "Complete");
+        assert_eq!(first.examined, keys);
+        assert_eq!(completed(&first).1, [["1"]]);
+        assert!(completed(&first).2.is_some());
         let before = pic.cycle_balance(canister).await;
         let second = call::<Result<Step, String>>(
             pic,
@@ -332,16 +344,22 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
             "aggregate_resume",
             121,
             &(
-                &selection, &handle, first.0, 1_u32, 4096_u32, 1_u32, first.5.2,
+                &selection,
+                &handle,
+                first.sequence,
+                1_u32,
+                4096_u32,
+                1_u32,
+                completed(&first).2.clone(),
             ),
         )
         .await
         .unwrap();
         let charged = before - pic.cycle_balance(canister).await;
-        assert_eq!(second.1, "Complete");
-        assert_eq!((second.0, second.2), (first.0, keys));
-        assert_eq!(second.5.1, [["2"]]);
-        assert!(second.5.2.is_some());
+        assert_eq!(second.phase.label(), "Complete");
+        assert_eq!((second.sequence, second.examined), (first.sequence, keys));
+        assert_eq!(completed(&second).1, [["2"]]);
+        assert!(completed(&second).2.is_some());
         println!("distinct-scan-and-first-page,keys={keys},charged_cycles={scan_cycles}");
         println!("completed-distinct,keys={keys},page_size=1,offset=1,charged_cycles={charged}");
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -420,14 +438,13 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
             .unwrap();
             let charged = before - pic.cycle_balance(canister).await;
             println!("repeated-keys,select={select},step={index},charged_cycles={charged}");
-            sequence = step.0;
+            sequence = step.sequence;
             if index == 0 {
-                assert_eq!((step.1.as_str(), step.2), ("Running", 128));
-                assert!(step.5.1.is_empty());
+                assert_eq!((step.phase.label(), step.examined), ("Running", 128));
             } else {
-                assert_eq!((step.1.as_str(), step.2), ("Complete", 256));
-                assert_eq!(step.5.1, expected);
-                assert!(step.5.2.is_none());
+                assert_eq!((step.phase.label(), step.examined), ("Complete", 256));
+                assert_eq!(completed(&step).1, expected);
+                assert!(completed(&step).2.is_none());
             }
         }
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -524,34 +541,37 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
     };
     let handle = start().await;
     let first = resume(&original, &handle, 0).await.unwrap();
-    assert_eq!((first.0, first.1.as_str(), first.2), (1, "Running", 2));
-    assert!(first.5.1.is_empty());
+    assert_eq!(
+        (first.sequence, first.phase.label(), first.examined),
+        (1, "Running", 2)
+    );
+
     let before = pic.get_stable_memory(canister).await;
     upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(
-        resume(&selection("title"), &handle, first.0)
+        resume(&selection("title"), &handle, first.sequence)
             .await
             .unwrap_err(),
         "InvalidJob"
     );
     assert_eq!(pic.get_stable_memory(canister).await, before);
     assert_eq!(resume(&original, &handle, 0).await.unwrap(), first);
-    let second = resume(&original, &handle, first.0).await.unwrap();
-    assert_eq!((second.1.as_str(), second.2), ("Running", 4));
-    assert!(second.5.1.is_empty());
-    let complete = resume(&original, &handle, second.0).await.unwrap();
-    assert_eq!((complete.1.as_str(), complete.2), ("Complete", 6));
+    let second = resume(&original, &handle, first.sequence).await.unwrap();
+    assert_eq!((second.phase.label(), second.examined), ("Running", 4));
+
+    let complete = resume(&original, &handle, second.sequence).await.unwrap();
+    assert_eq!((complete.phase.label(), complete.examined), ("Complete", 6));
     // Empty needle in row 1, a suffix in 3, and two occurrences in 5 count once each.
-    assert_eq!(complete.5.1, [vec!["3"]]);
+    assert_eq!(completed(&complete).1, [vec!["3"]]);
 
     let handle = start().await;
     let first = resume(&original, &handle, 0).await.unwrap();
     set_note("missing").await;
-    let invalidated = resume(&original, &handle, first.0).await.unwrap();
-    assert_eq!(invalidated.1, "Invalidated");
-    assert!(invalidated.5.1.is_empty());
+    let invalidated = resume(&original, &handle, first.sequence).await.unwrap();
+    assert_eq!(invalidated.phase.label(), "Invalidated");
+
     owned.drop().await;
 }
 
@@ -684,10 +704,15 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             .await
             .unwrap();
             assert_eq!(
-                (first.0, first.1.as_str(), first.2, first.4),
+                (
+                    first.sequence,
+                    first.phase.label(),
+                    first.examined,
+                    first.output_bytes
+                ),
                 (1, "Running", 1, 0)
             );
-            assert!(first.5.1.is_empty() && first.5.2.is_none());
+
             jobs.push((selection, handle, grouped));
         }
         let before = pic.get_stable_memory(canister).await;
@@ -715,7 +740,12 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             .await
             .unwrap();
             assert_eq!(
-                (retry.0, retry.1.as_str(), retry.2, retry.4),
+                (
+                    retry.sequence,
+                    retry.phase.label(),
+                    retry.examined,
+                    retry.output_bytes
+                ),
                 (1, "Running", 1, 0)
             );
             let step: Step = call::<Result<Step, String>>(
@@ -726,7 +756,7 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 &(
                     &selection,
                     &handle,
-                    retry.0,
+                    retry.sequence,
                     2_u32,
                     4096_u32,
                     1_u32,
@@ -735,9 +765,12 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             )
             .await
             .unwrap();
-            assert_eq!((step.1.as_str(), step.2, step.4), ("Running", 3, 0));
-            assert!(step.5.1.is_empty());
-            let sequence = step.0;
+            assert_eq!(
+                (step.phase.label(), step.examined, step.output_bytes),
+                ("Running", 3, 0)
+            );
+
+            let sequence = step.sequence;
             if index == 0 {
                 let before = pic.get_stable_memory(canister).await;
                 let refusal: Result<Step, String> = call(
@@ -777,7 +810,11 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             .await
             .unwrap();
             assert_eq!(
-                (complete.1.as_str(), complete.2, complete.5.2),
+                (
+                    complete.phase.label(),
+                    complete.examined,
+                    completed(&complete).2.clone()
+                ),
                 ("Complete", 4, None)
             );
             let expected_rows = if grouped {
@@ -788,7 +825,8 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                     .unwrap_or_default()
             };
             assert_eq!(
-                complete.5.1, expected_rows,
+                completed(&complete).1,
+                expected_rows,
                 "case {index}, grouped={grouped}"
             );
             call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
@@ -899,8 +937,11 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                     .await
                     .unwrap();
             let first = advance(&selection, &handle, 0, 4096).await.unwrap();
-            assert_eq!((first.0, first.1.as_str(), first.2), (1, "Complete", 1));
-            assert_eq!(first.5.1, expected);
+            assert_eq!(
+                (first.sequence, first.phase.label(), first.examined),
+                (1, "Complete", 1)
+            );
+            assert_eq!(completed(&first).1, expected);
             jobs.push((selection, handle, expected));
         }
         let before = pic.get_stable_memory(canister).await;
@@ -918,9 +959,9 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 assert_eq!(pic.get_stable_memory(canister).await, before);
             }
             let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
-            assert_eq!((complete.1.as_str(), complete.2), ("Complete", 1));
-            assert_eq!(complete.5.1, expected, "{}", selection.1);
-            assert!(complete.5.2.is_none());
+            assert_eq!((complete.phase.label(), complete.examined), ("Complete", 1));
+            assert_eq!(completed(&complete).1, expected, "{}", selection.1);
+            assert!(completed(&complete).2.is_none());
             call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
                 .await
                 .unwrap();
@@ -1015,11 +1056,11 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 .unwrap();
         let first = advance(&selection, &handle, 0, 4096).await.unwrap();
         if empty_range {
-            assert_eq!((first.1.as_str(), first.2), ("Complete", 0));
-            assert_eq!(first.5.1, vec![vec!["0"]]);
+            assert_eq!((first.phase.label(), first.examined), ("Complete", 0));
+            assert_eq!(completed(&first).1, vec![vec!["0"]]);
         } else {
-            assert_eq!((first.1.as_str(), first.2), ("Complete", 1));
-            assert_eq!(first.5.1, [vec![if matches { "1" } else { "0" }]]);
+            assert_eq!((first.phase.label(), first.examined), ("Complete", 1));
+            assert_eq!(completed(&first).1, [vec![if matches { "1" } else { "0" }]]);
         }
         upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
             .await
@@ -1057,10 +1098,13 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         assert_eq!(pic.get_stable_memory(canister).await, before);
         let complete = advance(&selection, &handle, 1, 4096).await.unwrap();
         assert_eq!(
-            (complete.1.as_str(), complete.2),
+            (complete.phase.label(), complete.examined),
             ("Complete", u64::from(!empty_range))
         );
-        assert_eq!(complete.5.1, vec![vec![if matches { "1" } else { "0" }]]);
+        assert_eq!(
+            completed(&complete).1,
+            vec![vec![if matches { "1" } else { "0" }]]
+        );
         call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
             .await
             .unwrap();
@@ -1081,8 +1125,8 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
     // Mutate before the only candidate is consumed; the job is still running.
     replace(vec![1], None).await;
     let changed = advance(&selection, &handle, 0, 4096).await.unwrap();
-    assert_eq!(changed.1, "Invalidated");
-    assert!(changed.5.1.is_empty());
+    assert_eq!(changed.phase, RetainedPhase::Invalidated);
+
     call::<Result<(), String>>(pic, canister, "aggregate_cancel", 122, &handle)
         .await
         .unwrap();

@@ -41,7 +41,7 @@ fn decimal_sort_and_distinct_agree_with_integer_cents_and_grouping() {
             });
             let page = db
                 .query::<DecimalSale>()
-                .order_by_each(&[
+                .order_by(&[
                     ("price", if price_desc { Desc } else { Asc }),
                     ("id", if id_desc { Desc } else { Asc }),
                 ])
@@ -69,7 +69,7 @@ fn decimal_sort_and_distinct_agree_with_integer_cents_and_grouping() {
         for limit in [1, 4, 32] {
             let page = db
                 .query::<DecimalSale>()
-                .order_by_each(&[("price", if price_desc { Desc } else { Asc })])
+                .order_by(&[("price", if price_desc { Desc } else { Asc })])
                 .distinct()
                 .limit(limit)
                 .fetch_as::<OptionalPrice>()
@@ -105,7 +105,7 @@ fn decimal_sort_and_distinct_agree_with_integer_cents_and_grouping() {
         let page = db
             .query::<DecimalSale>()
             .filter("price", C::Eq, alias.parse::<ic_db::Decimal>().unwrap())
-            .order_by_each(&[("price", Desc), ("id", Desc)])
+            .order_by(&[("price", Desc), ("id", Desc)])
             .fetch()
             .unwrap();
         assert_eq!(page.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [7, 0]);
@@ -291,7 +291,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
             for distinct in [false, true] {
                 let mut query = db
                     .query::<Entry>()
-                    .order_by_each(&[("category", Asc), ("amount", Desc)])
+                    .order_by(&[("category", Asc), ("amount", Desc)])
                     .limit(limit)
                     .work_limit(512);
                 if reverse {
@@ -316,7 +316,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     }
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("category", Asc), ("amount", Desc)])
+            .order_by(&[("category", Asc), ("amount", Desc)])
             .limit(1)
             .work_limit(511)
             .fetch(),
@@ -328,7 +328,7 @@ fn bounded_selection_matches_full_sort_at_the_work_envelope() {
     db.commit(batch).unwrap();
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("category", Asc), ("amount", Desc)])
+            .order_by(&[("category", Asc), ("amount", Desc)])
             .limit(1)
             .work_limit(512)
             .fetch(),
@@ -476,7 +476,7 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
             });
             let page = db
                 .query::<SortRow>()
-                .order_by_each(&[
+                .order_by(&[
                     ("label", if label_desc { Desc } else { Asc }),
                     ("id", if id_desc { Desc } else { Asc }),
                 ])
@@ -497,7 +497,7 @@ fn complete_sort_uses_exact_text_keys_and_bounds_retained_buffers() {
     expected.reverse();
     let page = db
         .query::<SortRow>()
-        .order_by_each(&[("label", Desc)])
+        .order_by(&[("label", Desc)])
         .distinct()
         .fetch_as::<LabelOnly>()
         .unwrap();
@@ -646,7 +646,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
         let query = || {
             let query = db
                 .query::<Entry>()
-                .order_by_each(&[("category", Asc), ("amount", Desc)])
+                .order_by(&[("category", Asc), ("amount", Desc)])
                 .limit(3);
 
             if reverse { query.descending() } else { query }
@@ -676,12 +676,12 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
         vec![("missing", Desc)],
     ] {
         assert!(matches!(
-            db.query::<Entry>().order_by_each(&order).fetch(),
+            db.query::<Entry>().order_by(&order).fetch(),
             Err(Error::InvalidQuery)
         ));
     }
     assert!(matches!(
-        db.query::<Entry>().order_by_each(&[("id", Asc); 5]).fetch(),
+        db.query::<Entry>().order_by(&[("id", Asc); 5]).fetch(),
         Err(Error::Limit)
     ));
     // A fixed leading field contributes no direction; the varying amount/id
@@ -695,7 +695,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
         let query = db
             .query::<Entry>()
             .filter("category", C::Eq, 1_u8)
-            .order_by_each(&order)
+            .order_by(&order)
             .limit(2)
             .test_output_limit(16);
         let page = if let Some(cursor) = &cursor {
@@ -724,7 +724,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
     assert_eq!(
         ids(&db
             .query::<Entry>()
-            .order_by_each(&[("id", Asc)])
+            .order_by(&[("id", Asc)])
             .after(&ascending)
             .limit(1)
             .fetch()
@@ -735,7 +735,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
     assert_eq!(
         ids(&db
             .query::<Entry>()
-            .order_by_each(&[("id", Desc)])
+            .order_by(&[("id", Desc)])
             .descending()
             .limit(1)
             .fetch()
@@ -745,14 +745,14 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
     );
     let page = db
         .query::<Entry>()
-        .order_by_each(&[("amount", Desc), ("id", Desc)])
+        .order_by(&[("amount", Desc), ("id", Desc)])
         .limit(1)
         .fetch()
         .unwrap();
     let cursor = page.next.unwrap();
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("amount", Asc), ("id", Asc)])
+            .order_by(&[("amount", Asc), ("id", Asc)])
             .after(&cursor)
             .fetch(),
         Err(Error::InvalidCursor)
@@ -761,7 +761,7 @@ fn mixed_directions_sort_complete_results_and_retain_proven_live_paths() {
     assert_eq!(
         ids(&db
             .query::<Entry>()
-            .order_by_each(&order)
+            .order_by(&order)
             .order_by(&["id"])
             .fetch()
             .unwrap()
@@ -812,7 +812,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
         for limit in [1, 2, 32] {
             let query = db
                 .query::<Entry>()
-                .order_by_each(&[("amount", Desc), ("category", Asc)])
+                .order_by(&[("amount", Desc), ("category", Asc)])
                 .distinct()
                 .limit(limit);
             let page = if reverse { query.descending() } else { query }
@@ -834,7 +834,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     }
     let query = || {
         db.query::<Entry>()
-            .order_by_each(&[("amount", Desc), ("category", Asc)])
+            .order_by(&[("amount", Desc), ("category", Asc)])
             .distinct()
     };
     assert!(matches!(
@@ -865,7 +865,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     // Hidden ordering values and incomplete tuple order remain ambiguous/refused.
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("amount", Desc)])
+            .order_by(&[("amount", Desc)])
             .distinct()
             .fetch_as::<CategoryAmount>(),
         Err(Error::InvalidQuery)
@@ -886,7 +886,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     );
     let amounts = || {
         db.query::<Entry>()
-            .order_by_each(&[("amount", Desc), ("category", Asc)])
+            .order_by(&[("amount", Desc), ("category", Asc)])
             .distinct()
     };
     assert_eq!(
@@ -911,7 +911,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     );
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("category", Asc), ("amount", Desc)])
+            .order_by(&[("category", Asc), ("amount", Desc)])
             .distinct()
             .fetch_as::<super::AmountOnly>(),
         Err(Error::InvalidQuery)
@@ -919,7 +919,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     // A mandatory literal equality removes category from the varying tuple.
     let fixed = || db.query::<Entry>().filter("category", C::Eq, 1_u8);
     let tuples = fixed()
-        .order_by_each(&[("amount", Desc)])
+        .order_by(&[("amount", Desc)])
         .distinct()
         .fetch_as::<CategoryAmount>()
         .unwrap();
@@ -932,7 +932,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
         [(1, 20), (1, 10)]
     );
     let amounts = fixed()
-        .order_by_each(&[("category", Asc), ("amount", Desc)])
+        .order_by(&[("category", Asc), ("amount", Desc)])
         .distinct()
         .fetch_as::<super::AmountOnly>()
         .unwrap();
@@ -944,7 +944,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
         let page = db
             .query::<Entry>()
             .filter("category", C::Eq, category)
-            .order_by_each(&[("amount", Desc)])
+            .order_by(&[("amount", Desc)])
             .distinct()
             .fetch_as::<super::CategoryOnly>()
             .unwrap();
@@ -961,7 +961,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
                 ("category", C::Eq, 0_u8.into()),
                 ("category", C::Eq, 1_u8.into())
             ])
-            .order_by_each(&[("amount", Desc)])
+            .order_by(&[("amount", Desc)])
             .distinct()
             .fetch_as::<CategoryAmount>(),
         Err(Error::InvalidQuery)
@@ -984,7 +984,7 @@ fn sorted_distinct_selects_complete_tuples_before_limit_within_sort_bounds() {
     // Duplicate input no longer consumes a retained-row slot.
     let page = db
         .query::<Entry>()
-        .order_by_each(&[("amount", Desc), ("category", Asc)])
+        .order_by(&[("amount", Desc), ("category", Asc)])
         .distinct()
         .limit(1)
         .fetch_as::<CategoryAmount>()
@@ -1023,7 +1023,7 @@ fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
         for limit in [1, 7, 32] {
             let query = db
                 .query::<Entry>()
-                .order_by_each(&[("amount", Desc), ("category", Asc)])
+                .order_by(&[("amount", Desc), ("category", Asc)])
                 .distinct()
                 .limit(limit)
                 .test_output_limit(limit * 9)
@@ -1052,7 +1052,7 @@ fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
     }
     assert!(matches!(
         db.query::<Entry>()
-            .order_by_each(&[("amount", Desc), ("category", Asc)])
+            .order_by(&[("amount", Desc), ("category", Asc)])
             .distinct()
             .limit(1)
             .work_limit(127)
@@ -1069,7 +1069,7 @@ fn sorted_distinct_selects_best_tuples_across_the_complete_input() {
     let before = backing.borrow().clone();
     let page = db
         .query::<Entry>()
-        .order_by_each(&[("amount", Desc), ("category", Asc)])
+        .order_by(&[("amount", Desc), ("category", Asc)])
         .distinct()
         .limit(1)
         .work_limit(129)

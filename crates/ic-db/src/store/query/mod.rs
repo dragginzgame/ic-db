@@ -56,6 +56,22 @@ pub enum SortDirection {
     Descending,
 }
 
+/// An explicit sort field. A bare field name defaults to ascending order.
+#[derive(Clone, Copy)]
+pub struct OrderTerm<'a>(&'a str, SortDirection);
+
+impl<'a, T: AsRef<str> + ?Sized> From<&'a T> for OrderTerm<'a> {
+    fn from(field: &'a T) -> Self {
+        Self(field.as_ref(), SortDirection::Ascending)
+    }
+}
+
+impl<'a, T: AsRef<str> + ?Sized> From<(&'a T, SortDirection)> for OrderTerm<'a> {
+    fn from((field, direction): (&'a T, SortDirection)) -> Self {
+        Self(field.as_ref(), direction)
+    }
+}
+
 /// Exact comparison. Equality distinguishes absent values; ranges and pattern matches require presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -703,18 +719,7 @@ impl<'a> Request<'a> {
     }
 
     #[inline(never)]
-    fn order_by(&mut self, fields: &[&'a str]) {
-        self.order_descending = 0;
-
-        if fields.len() > 4 {
-            self.over_limit = true;
-        } else {
-            self.order = Some(fields.to_vec());
-        }
-    }
-
-    #[inline(never)]
-    fn order_by_each(&mut self, fields: &[(&'a str, SortDirection)]) {
+    fn order_by<T: Copy + Into<OrderTerm<'a>>>(&mut self, fields: &[T]) {
         if fields.len() > 4 {
             self.over_limit = true;
 
@@ -722,7 +727,8 @@ impl<'a> Request<'a> {
         }
         self.order = Some(Vec::with_capacity(fields.len()));
         self.order_descending = 0;
-        for &(field, direction) in fields {
+        for &term in fields {
+            let OrderTerm(field, direction) = term.into();
             self.append_order(field, direction);
         }
     }
@@ -1153,7 +1159,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     /// Append an ascending sort field. Earlier fields take precedence.
-    /// The same field, work and continuation rules as [`Self::order_by_each`] apply.
+    /// The same field, work and continuation rules as [`Self::order_by`] apply.
     #[must_use]
     pub fn order_asc(mut self, field: &'a str) -> Self {
         self.request.append_order(field, SortDirection::Ascending);
@@ -1172,8 +1178,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
 
     /// Replace the current order with 1..=4 distinct ordered scalar fields, then the primary key.
     /// A direct record member can be selected with [`crate::field_path!`].
-    /// An explicitly listed primary key must be last. All fields share one
-    /// direction, reversed by `descending`. Prefer a complete ordered path.
+    /// An explicitly listed primary key must be last. Bare names sort ascending. Pass (field, SortDirection) pairs for mixed directions.
+    /// An empty slice needs an element type, e.g. `&[] as &[&str]`, and refuses at execution.
+    /// `descending` reverses the entire order. Prefer a complete ordered path.
     /// Otherwise scan to completion while retaining the best `limit` rows within
     /// 128 KiB of key/output buffers, then sort them. Non-identity DISTINCT retains
     /// the best `limit` distinct tuples. Work exhaustion refuses; no
@@ -1181,19 +1188,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// or an order led by all varying projected fields. Equality terms may fix
     /// leading index components. With `using_index`, require that path's order.
     #[must_use]
-    pub fn order_by(mut self, fields: &[&'a str]) -> Self {
+    pub fn order_by(mut self, fields: &[impl Copy + Into<OrderTerm<'a>>]) -> Self {
         self.request.order_by(fields);
-
-        self
-    }
-
-    /// Replace the order with 1..=4 fields and their individual directions.
-    /// An explicit primary key must be last; otherwise append it ascending.
-    /// `descending()` reverses every direction, including that tie-breaker.
-    /// The same path proof and complete-sort bounds as `order_by` apply.
-    #[must_use]
-    pub fn order_by_each(mut self, fields: &[(&'a str, SortDirection)]) -> Self {
-        self.request.order_by_each(fields);
 
         self
     }
@@ -1237,16 +1233,11 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self
     }
 
-    /// Continue this query; page resource limits may change between calls.
+    /// Continue from a borrowed cursor or pass `None` for the first page.
+    /// Page resource limits may change between calls.
     #[must_use]
-    pub fn after(self, cursor: &'a QueryCursor) -> Self {
-        self.after_optional(Some(cursor))
-    }
-
-    /// Set the continuation cursor. Passing `None` selects the first page.
-    #[must_use]
-    pub fn after_optional(mut self, cursor: Option<&'a QueryCursor>) -> Self {
-        self.request.cursor = cursor;
+    pub fn after(mut self, cursor: impl Into<Option<&'a QueryCursor>>) -> Self {
+        self.request.cursor = cursor.into();
 
         self
     }

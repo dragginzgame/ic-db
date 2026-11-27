@@ -1,7 +1,7 @@
 //! Bounded pages over immutable completed groups; no additional durable state.
 
 use super::{
-    super::{Completed, GroupOrder, Groups, MAX_GROUPS, Reducer, admit_output},
+    super::{Completed, GroupOrder, Groups, Reducer, admit_output},
     JobHandle, JobOutcome,
     storage::Record,
 };
@@ -16,6 +16,19 @@ pub struct GroupPage<T> {
     pub next: Option<GroupCursor>,
 }
 
+impl<T> GroupPage<T> {
+    fn try_map<U>(self, decode: impl FnMut(T) -> Result<U, Error>) -> Result<GroupPage<U>, Error> {
+        Ok(GroupPage {
+            rows: self
+                .rows
+                .into_iter()
+                .map(decode)
+                .collect::<Result<_, _>>()?,
+            next: self.next,
+        })
+    }
+}
+
 /// Logical position in one completed retained job, not an authorization token.
 /// Positions are revalidated against the selected result; caller edits can skip
 /// rows intentionally but cannot change the result or advance input progress.
@@ -25,18 +38,12 @@ pub struct GroupCursor {
     position: u8,
 }
 impl GroupCursor {
-    fn version(position: u8) -> u8 {
-        if usize::from(position) > MAX_GROUPS {
-            2
-        } else {
-            1
-        }
-    }
+    const WIRE_VERSION: u8 = 3;
 
     /// Encode a fixed 28-byte transport cursor.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![Self::version(self.position)];
+        let mut bytes = vec![Self::WIRE_VERSION];
         bytes.extend(self.handle.to_bytes());
         bytes.push(self.position);
 
@@ -50,7 +57,7 @@ impl GroupCursor {
         let [version, handle @ .., position] = bytes else {
             return Err(Error::InvalidCursor);
         };
-        if *position == 0 || *version != Self::version(*position) {
+        if *position == 0 || *version != Self::WIRE_VERSION {
             return Err(Error::InvalidCursor);
         }
 
@@ -74,7 +81,10 @@ pub(super) fn admit(
 ) -> Result<(), Error> {
     if let Some(cursor) = page.and_then(|page| page.after)
         && (cursor.handle != *handle
-            || !matches!(record.phase, JobOutcome::Complete(()) | JobOutcome::Expired))
+            || !matches!(
+                record.meta.phase,
+                JobOutcome::Complete(()) | JobOutcome::Expired
+            ))
     {
         return Err(Error::InvalidCursor);
     }
@@ -93,33 +103,11 @@ pub(super) fn group_page<T>(
     if groups.selection.order == GroupOrder::FirstOccurrence {
         let keys = groups.first_occurrences()?;
         let (selected, used) = select(keys.into_iter(), |key| key.len(), bytes, page, handle)?;
-        let rows = selected
-            .rows
-            .into_iter()
-            .map(|key| decode(key, Completed::Key))
-            .collect::<Result<_, _>>()?;
-        return Ok((
-            GroupPage {
-                rows,
-                next: selected.next,
-            },
-            used,
-        ));
+        return Ok((selected.try_map(|key| decode(key, Completed::Key))?, used));
     }
     let (page, used) = select_rows(groups, limit, bytes, page, handle)?;
-    let rows = page
-        .rows
-        .into_iter()
-        .map(|(key, value)| decode(&key, value))
-        .collect::<Result<_, _>>()?;
 
-    Ok((
-        GroupPage {
-            rows,
-            next: page.next,
-        },
-        used,
-    ))
+    Ok((page.try_map(|(key, value)| decode(&key, value))?, used))
 }
 
 type EncodedPage = GroupPage<(Vec<u8>, Completed)>;

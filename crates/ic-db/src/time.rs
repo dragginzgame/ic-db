@@ -284,12 +284,6 @@ impl Timestamp {
         Self(millis)
     }
 
-    /// Convert signed milliseconds.
-    #[must_use]
-    pub const fn try_from_i64(millis: i64) -> Option<Self> {
-        Some(Self(millis))
-    }
-
     /// Convert unsigned milliseconds.
     #[must_use]
     pub fn try_from_u64(millis: u64) -> Option<Self> {
@@ -317,8 +311,6 @@ impl Timestamp {
     pub fn parse_rfc3339(input: &str) -> Result<Self, TimeParseError> {
         let bytes = input.as_bytes();
         if bytes.len() < 20
-            || bytes.get(4) != Some(&b'-')
-            || bytes.get(7) != Some(&b'-')
             || bytes.get(10) != Some(&b'T')
             || bytes.get(13) != Some(&b':')
             || bytes.get(16) != Some(&b':')
@@ -329,9 +321,12 @@ impl Timestamp {
             .get(..10)
             .and_then(Date::parse)
             .ok_or(TimeParseError::InvalidTimestamp)?;
-        let hour = parse_u8(&bytes[11..13])?;
-        let minute = parse_u8(&bytes[14..16])?;
-        let second = parse_u8(&bytes[17..19])?;
+        let hour =
+            crate::date::two_digits(&bytes[11..13]).ok_or(TimeParseError::InvalidTimestamp)?;
+        let minute =
+            crate::date::two_digits(&bytes[14..16]).ok_or(TimeParseError::InvalidTimestamp)?;
+        let second =
+            crate::date::two_digits(&bytes[17..19]).ok_or(TimeParseError::InvalidTimestamp)?;
 
         let mut cursor = 19;
         let nanoseconds = if bytes.get(cursor) == Some(&b'.') {
@@ -461,17 +456,6 @@ impl SubAssign<Duration> for Timestamp {
     }
 }
 
-fn parse_u8(bytes: &[u8]) -> Result<u8, TimeParseError> {
-    bytes
-        .iter()
-        .try_fold(0_u8, |value, byte| {
-            byte.checked_sub(b'0')
-                .filter(|digit| *digit <= 9)
-                .and_then(|digit| value.checked_mul(10)?.checked_add(digit))
-        })
-        .ok_or(TimeParseError::InvalidTimestamp)
-}
-
 fn parse_fractional_nanoseconds(bytes: &[u8]) -> Result<u32, TimeParseError> {
     let mut value = 0_u32;
     for byte in bytes.iter().take(9) {
@@ -498,8 +482,9 @@ fn parse_offset(bytes: &[u8]) -> Result<(i8, u8, u8), TimeParseError> {
         [b'Z'] => Ok((1, 0, 0)),
         [sign @ (b'+' | b'-'), hour0, hour1, b':', minute0, minute1] => Ok((
             if *sign == b'+' { 1 } else { -1 },
-            parse_u8(&[*hour0, *hour1])?,
-            parse_u8(&[*minute0, *minute1])?,
+            crate::date::two_digits(&[*hour0, *hour1]).ok_or(TimeParseError::InvalidTimestamp)?,
+            crate::date::two_digits(&[*minute0, *minute1])
+                .ok_or(TimeParseError::InvalidTimestamp)?,
         )),
         _ => Err(TimeParseError::InvalidTimestamp),
     }

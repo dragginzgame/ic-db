@@ -103,7 +103,7 @@ impl Record {
         limit: usize,
         finish: impl FnOnce() -> Result<(T, usize), Error>,
     ) -> Result<JobStep<T>, Error> {
-        let (outcome, output_bytes) = match self.phase {
+        let (outcome, output_bytes) = match self.meta.phase {
             JobOutcome::Running => (JobOutcome::Running, 0),
             JobOutcome::Invalidated => (JobOutcome::Invalidated, 0),
             JobOutcome::Expired => (JobOutcome::Expired, 0),
@@ -119,10 +119,10 @@ impl Record {
         jobs.save_if_changed(handle, self, changed)?;
 
         Ok(JobStep {
-            sequence: self.sequence,
-            source_revision: self.revision,
-            examined: self.examined,
-            input_bytes: self.input_bytes,
+            sequence: self.meta.sequence,
+            source_revision: self.meta.revision,
+            examined: self.meta.examined,
+            input_bytes: self.meta.input_bytes,
             output_bytes,
             outcome,
         })
@@ -321,7 +321,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_numeric::<R>(jobs, now, expires, Operation::Sum)
+            let admitted = self.numeric_plan::<R>(None, Operation::Sum)?;
+            self.start_value(jobs, now, expires, admitted)
         })
     }
 
@@ -360,7 +361,8 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_numeric::<R>(jobs, now, expires, Operation::Average)
+            let admitted = self.numeric_plan::<R>(None, Operation::Average)?;
+            self.start_value(jobs, now, expires, admitted)
         })
     }
 
@@ -385,14 +387,14 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         })
     }
 
-    fn start_numeric<R: Value>(
-        self,
+    fn start_value(
+        &self,
         jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
-        operation: Operation,
+        admitted: (Plan<'_>, Reducer),
     ) -> Result<JobHandle, Error> {
-        let (plan, mut reducer) = self.numeric_plan::<R>(None, operation)?;
+        let (plan, mut reducer) = admitted;
 
         start(
             jobs,
@@ -513,15 +515,17 @@ fn start<M: Memory>(
     let (count, state) = accumulator.checkpoint()?;
 
     jobs.insert(Record {
-        generation: 0,
-        binding,
-        revision,
-        expires,
-        observed: now,
-        sequence: 0,
-        examined: 0,
-        input_bytes: 0,
-        phase: JobOutcome::Running,
+        meta: storage::RecordMeta {
+            generation: 0,
+            binding,
+            revision,
+            expires,
+            observed: now,
+            sequence: 0,
+            examined: 0,
+            input_bytes: 0,
+            phase: JobOutcome::Running,
+        },
         cursor: Vec::new(),
         count,
         state,
@@ -545,30 +549,30 @@ fn prepare<M: Memory>(
     sequence: u64,
     now: Timestamp,
 ) -> Result<bool, Error> {
-    if record.binding != expected || sequence > record.sequence {
+    if record.meta.binding != expected || sequence > record.meta.sequence {
         return Err(Error::InvalidJob);
     }
-    if now < record.observed {
+    if now < record.meta.observed {
         return Err(Error::TimestampRegression);
     }
-    let saved_sequence = record.sequence;
+    let saved_sequence = record.meta.sequence;
     accumulator.restore(entity, record)?;
-    if now >= record.expires && !matches!(record.phase, JobOutcome::Expired) {
-        record.phase = JobOutcome::Expired;
-        record.sequence += 1;
-    } else if matches!(record.phase, JobOutcome::Running) {
-        if db.revision_by_id(entity.id)? != record.revision {
-            record.phase = JobOutcome::Invalidated;
-            record.sequence += 1;
-        } else if sequence == record.sequence {
+    if now >= record.meta.expires && !matches!(record.meta.phase, JobOutcome::Expired) {
+        record.meta.phase = JobOutcome::Expired;
+        record.meta.sequence += 1;
+    } else if matches!(record.meta.phase, JobOutcome::Running) {
+        if db.revision_by_id(entity.id)? != record.meta.revision {
+            record.meta.phase = JobOutcome::Invalidated;
+            record.meta.sequence += 1;
+        } else if sequence == record.meta.sequence {
             execute_chunk(&db.map, entity, request, plan, &mut accumulator, record)?;
-            record.sequence += 1;
+            record.meta.sequence += 1;
         }
     }
     // Every advance or phase transition increments the sequence. A later
     // observation also needs persistence to enforce monotonic time on retries.
-    let changed = record.sequence != saved_sequence || record.observed != now;
-    record.observed = now;
+    let changed = record.meta.sequence != saved_sequence || record.meta.observed != now;
+    record.meta.observed = now;
 
     Ok(changed)
 }
@@ -593,7 +597,7 @@ fn execute_chunk<M: Memory>(
         cursor: cursor.as_ref(),
         work: request
             .work
-            .min((MAX_CANDIDATES - record.examined) as usize),
+            .min((MAX_CANDIDATES - record.meta.examined) as usize),
         ..request
     };
     let mut bytes = 0;
@@ -606,13 +610,13 @@ fn execute_chunk<M: Memory>(
         Some(accumulator),
         Some(&mut bytes),
     )?;
-    record.examined += page.examined as u64;
-    record.input_bytes += bytes as u64;
+    record.meta.examined += page.examined as u64;
+    record.meta.input_bytes += bytes as u64;
     record.cursor = page
         .next
         .as_ref()
         .map_or_else(Vec::new, QueryCursor::to_bytes);
-    record.phase = if page.next.is_none() {
+    record.meta.phase = if page.next.is_none() {
         JobOutcome::Complete(())
     } else {
         JobOutcome::Running

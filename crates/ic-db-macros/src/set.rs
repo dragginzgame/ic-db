@@ -2,7 +2,7 @@
 
 use super::{
     declaration,
-    field::{Field, parse_value},
+    field::{Field, parse_item, parse_max_items},
     once, text,
 };
 use proc_macro2::TokenStream;
@@ -11,13 +11,15 @@ use quote::quote;
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let item = declaration(item, "set")?;
     let mut name = None;
-    let mut parts = Vec::new();
+    let (mut kind, mut max) = (None, None);
     let (wire, options) = crate::declaration_options(args)?;
     for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
-        } else if meta.path().is_ident("item") || meta.path().is_ident("max_items") {
-            parts.push(meta);
+        } else if meta.path().is_ident("item") {
+            once(&mut kind, parse_item(&meta)?, &meta)?;
+        } else if meta.path().is_ident("max_items") {
+            once(&mut max, parse_max_items(&meta)?, &meta)?;
         } else {
             return Err(syn::Error::new_spanned(
                 meta,
@@ -25,10 +27,11 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             ));
         }
     }
-    let (kind, optional, max) = parse_value(&syn::parse_quote!(value(many, #(#parts),*)))?;
+    let kind =
+        kind.ok_or_else(|| syn::Error::new_spanned(&item.ident, "set requires item(...)"))?;
+    let max = max.ok_or_else(|| syn::Error::new_spanned(&item.ident, "set requires max_items"))?;
     let name = super::declaration_name(name, &item.ident, "set")?;
-    let max = max.expect("many requires max_items");
-    let field = Field::nested("item", kind, optional, None);
+    let field = Field::nested("item", kind, false, None);
     let ty = field.rust_type();
     let description = field.type_description();
     let write = field.encode_with(&quote!(value));

@@ -2172,7 +2172,7 @@ Byte exhaustion returns a partial page and a position before the unreturned grou
 if the first group cannot fit, refuse `RowTooLarge` without changing progress.
 
 `GroupCursor` is a fixed 28-byte logical cursor containing the job handle and an
-ordinal in the at-most-32 completed selected groups. Validate framing, job identity,
+ordinal in the completed selection (up to 32 groups or 255 distinct keys). Transport tag 3 covers every ordinal. After a cursor-format cut, callers obtain a new first page from the retained job handle. Frozen IcyDB `6d421e3`, `db/cursor/token/codec/mod.rs`, likewise checks the transport version at decode. IC DB binds the ordinal to its completed job. Validate framing, job identity,
 completed phase and result bounds. Query admission still verifies the job's bound
 semantics. A caller can edit a position to skip rows, but cannot change results or
 advance input; host authorization remains separate. First-page requests can advance
@@ -3188,7 +3188,7 @@ As in Toko's typed query facade (`2f45ba193`) and frozen IcyDB's
 `6d421e3` `db/query/dynamic/mod.rs`, appending a sort field gives it lower
 priority than preceding fields. `order_asc(field)` and `order_desc(field)`
 append to the same order used by slice-based queries.
-`order_by_each(&[(field, SortDirection), ...])` replaces that field list with
+`order_by(&[(field, SortDirection), ...])` replaces that field list with
 individual ascending/descending directions. An omitted primary key is appended
 ascending; `descending()` reverses all components. A physical index remains
 eligible only when every varying component agrees with the primary tie-breaker's
@@ -3681,8 +3681,7 @@ sequence. Group checkpoint restore feeds each projected field directly from the
 row decoder to the same tuple-key builder used during accumulation. The 255-key and 16 KiB bounds also apply here. As in frozen IcyDB
 `6d421e3`'s projection materializer, later equal keys preserve the first
 representative. The retained checkpoint avoids replaying input for each page.
-Only projected record bytes count toward the output budget. Cursor positions above 32 use transport
-version 2; existing group cursor bytes retain version 1. A changed source
+Only projected record bytes count toward the output budget. The 0.25 release used transport version 2 above position 32 and version 1 below or at that boundary. A changed source
 invalidates an unfinished run. Completed pages keep their captured revision.
 The [release-boundary probe](../../qualification/README.md#ordered-distinct-release-compatibility)
 verified that the 0.25.0 candidate resumes both an unfinished canonical DISTINCT

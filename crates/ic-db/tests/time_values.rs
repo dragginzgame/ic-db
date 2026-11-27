@@ -154,10 +154,6 @@ fn timestamp_flexible_parser_accepts_integer_and_rfc3339_millis() {
 #[test]
 fn timestamp_fallible_integer_construction_enforces_unsigned_range() {
     assert_eq!(
-        Timestamp::try_from_i64(-1),
-        Some(Timestamp::from_millis(-1)),
-    );
-    assert_eq!(
         Timestamp::try_from_u64(i64::MAX.cast_unsigned()),
         Some(Timestamp::MAX),
     );

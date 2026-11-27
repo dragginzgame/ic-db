@@ -1,34 +1,11 @@
 //! Live index positions across writes and upgrades; a tuple oracle is independent
 //! of the engine's key codec and cursor decoder.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
+use wire_frame::{request, response};
 
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
-
-fn request<T: serde::Serialize>(method: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
-        value,
-        Encoding::Frame {
-            method,
-            direction: Direction::Request,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
-
-fn response<T: serde::de::DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
-        bytes,
-        Encoding::Frame {
-            method,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-}
 
 #[tokio::test]
 async fn live_order_and_filter_changes_resume_from_the_old_position_after_upgrade() {

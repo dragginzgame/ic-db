@@ -95,6 +95,62 @@ impl Reducer {
         Ok(())
     }
 
+    fn restore_group(
+        &mut self,
+        reader: &mut Decoder<'_>,
+        entity: &EntitySchema,
+        ordinal: u8,
+    ) -> Result<u64, Error> {
+        match self {
+            Self::Keys(key) => {
+                *key = ordinal;
+                Ok(1)
+            }
+            Self::Distinct {
+                mask,
+                seen,
+                key_bytes,
+            } => {
+                (*seen, *key_bytes) = read_distinct(reader, entity, *mask)?;
+                if seen.is_empty() {
+                    return Err(Error::Corrupt);
+                }
+
+                Ok(seen.len() as u64)
+            }
+            Self::Extremum { position, .. } => {
+                let present = reader.boolean()?;
+                if !present && !entity.fields[*position].optional {
+                    return Err(Error::Corrupt);
+                }
+                let winner = if present {
+                    reader.blob_ref(MAX_ROW_BYTES)?
+                } else {
+                    &[]
+                };
+                let count = u64::from(present);
+                self.restore_extremum(entity, count, winner)?;
+
+                Ok(count)
+            }
+            Self::Count { .. } | Self::Numeric(_) => {
+                let count = reader.nat64()?;
+                let total = if let Self::Numeric(state) = self {
+                    reader.blob_ref(state.total_bytes())?
+                } else {
+                    if count == 0 && matches!(self, Self::Count { presence: None, .. }) {
+                        return Err(Error::Corrupt);
+                    }
+
+                    &[0; 32]
+                };
+                self.restore_job(count, total)?;
+
+                Ok(count)
+            }
+        }
+    }
+
     fn with_job_state<T>(&self, write: impl FnOnce(u64, &[u8]) -> T) -> Result<T, Error> {
         match self {
             Self::Count { total, .. } => Ok(write(*total, &[0; 32])),
@@ -162,56 +218,14 @@ impl Groups {
     fn restore(&mut self, entity: &EntitySchema, record: &Record) -> Result<(), Error> {
         let mut reader = Decoder::with_byte_limit(&record.state, MAX_JOB_BYTES)?;
         let length = usize::from(reader.nat8()?);
-        if length > self.max_keys() || length as u64 > record.examined {
+        if length > self.max_keys() || length as u64 > record.meta.examined {
             return Err(Error::Corrupt);
         }
         let mut count = 0_u64;
         for position in 0..length {
             let bytes = reader.blob_ref(MAX_ROW_BYTES)?;
             let mut reducer = self.initial.clone();
-            let present = if let Reducer::Keys(ordinal) = &mut reducer {
-                *ordinal = position as u8;
-                1
-            } else if let Reducer::Distinct {
-                mask,
-                seen,
-                key_bytes,
-            } = &mut reducer
-            {
-                (*seen, *key_bytes) = read_distinct(&mut reader, entity, *mask)?;
-                if seen.is_empty() {
-                    return Err(Error::Corrupt);
-                }
-
-                seen.len() as u64
-            } else if let Reducer::Extremum { position, .. } = &reducer {
-                let present = reader.boolean()?;
-                if !present && !entity.fields[*position].optional {
-                    return Err(Error::Corrupt);
-                }
-                let winner = if present {
-                    reader.blob_ref(MAX_ROW_BYTES)?
-                } else {
-                    &[]
-                };
-                reducer.restore_extremum(entity, u64::from(present), winner)?;
-
-                u64::from(present)
-            } else {
-                let present = reader.nat64()?;
-                let total = if let Reducer::Numeric(state) = &reducer {
-                    reader.blob_ref(state.total_bytes())?
-                } else {
-                    if present == 0 && matches!(reducer, Reducer::Count { presence: None, .. }) {
-                        return Err(Error::Corrupt);
-                    }
-
-                    &[0; 32]
-                };
-                reducer.restore_job(present, total)?;
-
-                present
-            };
+            let present = reducer.restore_group(&mut reader, entity, position as u8)?;
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
             let mut fields = Decoder::new(bytes)?;
             let mut key = Vec::new();

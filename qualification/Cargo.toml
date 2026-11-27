@@ -27,7 +27,7 @@ publish = false
 
 [workspace.dependencies]
 accounts = { package = "ic-db-schema-owner-producer", path = "experiments/schema-owner/producer" }
-canic = { version = "0.274.0", default-features = false, features = ["endpoints"] }
+canic = { version = "0.275.0", default-features = false, features = ["endpoints"] }
 ic-db = { path = "../crates/ic-db" }
 ic-db-cli = { path = "../crates/ic-db-cli", default-features = false }
 ic-db-icydb-baseline-schema = { path = "ic-db-icydb-baseline-schema" }

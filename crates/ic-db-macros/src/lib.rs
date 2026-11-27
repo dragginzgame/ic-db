@@ -58,9 +58,7 @@ use field::Field;
 /// one batch captures one operation time for all managed fields.
 #[proc_macro_attribute]
 pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
-    expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(expand(args.into(), item.into()))
 }
 
 /// Declare a named enum using an empty struct and `variant(name = "...")` attributes.
@@ -71,17 +69,13 @@ pub fn entity(args: TokenStream, item: TokenStream) -> TokenStream {
 /// same canonical order. Any payload variant excludes the whole enum from indexes.
 #[proc_macro_attribute]
 pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
-    enumeration::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(enumeration::expand(args.into(), item.into()))
 }
 
 /// Declare a reusable ordered list with an item type and a shared maximum length.
 #[proc_macro_attribute]
 pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
-    wrapped::expand(args.into(), item.into(), true)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(wrapped::expand(args.into(), item.into(), true))
 }
 
 /// Declare a distinct Rust and schema type around one primitive, including its bounds.
@@ -89,9 +83,7 @@ pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
 /// A Principal newtype can use `validate(non_anonymous)` and be constructed via `TryFrom<Principal>`.
 #[proc_macro_attribute]
 pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
-    wrapped::expand(args.into(), item.into(), false)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(wrapped::expand(args.into(), item.into(), false))
 }
 
 /// Declare a bounded ordered set with `item(...)` and `max_items = N` (0..256).
@@ -99,9 +91,7 @@ pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
 /// wrapper contains a `BTreeSet<T>`. Decoding requires strictly increasing keys.
 #[proc_macro_attribute]
 pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
-    set::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(set::expand(args.into(), item.into()))
 }
 
 /// Declare a named `BTreeMap` wrapper using `key(...)`, `value(...)` and
@@ -109,33 +99,29 @@ pub fn set(args: TokenStream, item: TokenStream) -> TokenStream {
 /// ordinary optional/list/named field rules; stored duplicate keys refuse.
 #[proc_macro_attribute]
 pub fn map(args: TokenStream, item: TokenStream) -> TokenStream {
-    map::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(map::expand(args.into(), item.into()))
 }
 
 /// Declare a named stored record using attribute-owned fields and an empty struct.
 #[proc_macro_attribute]
 pub fn record(args: TokenStream, item: TokenStream) -> TokenStream {
-    record::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(record::expand(args.into(), item.into()))
 }
 
 /// Declare a logical database canister.
 #[proc_macro_attribute]
 pub fn canister(args: TokenStream, item: TokenStream) -> TokenStream {
-    ownership::expand(args.into(), item.into(), false)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(ownership::expand(args.into(), item.into(), false))
 }
 
 /// Declare a store with a typed canister owner and an IC Storage allocation key.
 #[proc_macro_attribute]
 pub fn store(args: TokenStream, item: TokenStream) -> TokenStream {
-    ownership::expand(args.into(), item.into(), true)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    finish(ownership::expand(args.into(), item.into(), true))
+}
+
+fn finish(result: syn::Result<Tokens>) -> TokenStream {
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
 }
 
 fn membership(name: &syn::Ident) -> Tokens {

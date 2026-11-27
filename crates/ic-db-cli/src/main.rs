@@ -7,8 +7,8 @@ mod terminal;
 mod tests;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use ic_db_cli::RowFilters;
 use ic_db_cli::host::{LIMITS, instance};
+use ic_db_cli::{ConsolePage, RetainedPhase, RetainedProgress, RowFilters};
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
 use ic_wire::{Direction, Encoding};
@@ -216,29 +216,13 @@ enum Command {
         select: String,
         #[command(flatten)]
         filters: FilterArgs,
-        /// Entry.amount >= VALUE.
-        #[arg(long = "min")]
-        minimum: Option<u64>,
-        /// Entry.category == VALUE.
-        #[arg(long)]
-        category: Option<u64>,
-        /// Document.entry_id == VALUE.
-        #[arg(long)]
-        entry_id: Option<u64>,
+        #[command(flatten)]
+        entity_filters: EntityFilterArgs,
         /// Maximum completed groups across all pages, not an input-row limit.
         #[arg(long, default_value_t=32, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
-        /// For grouped summaries, prefix each bound with count:, sum: or avg:.
-        /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
-        /// Signed sums accept negatives; Decimal results accept fractions at their scale.
-        /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
-        /// Integer results reject fractions; threshold text is bounded to 64 bytes.
-        #[arg(long, allow_hyphen_values = true)]
-        group_min: Option<String>,
-        /// Keep completed aggregate values <= VALUE; same exact types as --group-min.
-        /// Both bounds are inclusive and apply before ordering or output limits.
-        #[arg(long, allow_hyphen_values = true)]
-        group_max: Option<String>,
+        #[command(flatten)]
+        group_bounds: GroupBounds,
         /// For grouped summaries use count:asc, sum:desc, avg:desc or the opposite direction.
         /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
         #[arg(long, value_parser=["key", "key-desc", "first", "asc", "desc", "count:asc", "count:desc", "sum:asc", "sum:desc", "avg:asc", "avg:desc"])]
@@ -264,15 +248,8 @@ enum Command {
         after: Option<CursorArg>,
         #[arg(long, default_value_t=3, value_parser=clap::value_parser!(u32).range(1..=32))]
         limit: u32,
-        /// Entry.amount >= VALUE.
-        #[arg(long = "min")]
-        minimum: Option<u64>,
-        /// Entry.category == VALUE.
-        #[arg(long)]
-        category: Option<u64>,
-        /// Document.entry_id == VALUE.
-        #[arg(long)]
-        entry_id: Option<u64>,
+        #[command(flatten)]
+        entity_filters: EntityFilterArgs,
         #[command(flatten)]
         order: OrderArgs,
         #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..=512))]
@@ -303,17 +280,8 @@ enum Command {
         /// Deduplicate projections using live indexed pages or a bounded complete result.
         #[arg(long)]
         distinct: bool,
-        /// For grouped summaries, prefix each bound with count:, sum: or avg:.
-        /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
-        /// Signed sums accept negatives; Decimal results accept fractions at their scale.
-        /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
-        /// Integer results reject fractions; threshold text is bounded to 64 bytes.
-        #[arg(long, allow_hyphen_values = true)]
-        group_min: Option<String>,
-        /// Keep completed aggregate values <= VALUE; same exact types as --group-min.
-        /// Both bounds are inclusive and apply before ordering or output limits.
-        #[arg(long, allow_hyphen_values = true)]
-        group_max: Option<String>,
+        #[command(flatten)]
+        group_bounds: GroupBounds,
         /// For grouped summaries use count:asc, sum:desc, avg:desc or the opposite direction.
         /// Key/key-desc order group keys; asc/desc order aggregate values with ascending key ties.
         #[arg(long, value_parser=["key", "key-desc", "asc", "desc", "count:asc", "count:desc", "sum:asc", "sum:desc", "avg:asc", "avg:desc"])]
@@ -327,6 +295,34 @@ enum Command {
 }
 #[derive(Clone, Debug)]
 struct CursorArg(Vec<u8>);
+#[derive(clap::Args, Debug)]
+struct GroupBounds {
+    /// For grouped summaries, prefix each bound with count:, sum: or avg:.
+    /// Keep completed aggregate values >= VALUE, parsed as the exact result type.
+    /// Signed sums accept negatives; Decimal results accept fractions at their scale.
+    /// Note min/max bounds are literal text in UTF-8 byte order, without normalization.
+    /// Integer results reject fractions; threshold text is bounded to 64 bytes.
+    #[arg(long, allow_hyphen_values = true)]
+    group_min: Option<String>,
+    /// Keep completed aggregate values <= VALUE; same exact types as --group-min.
+    /// Both bounds are inclusive and apply before ordering or output limits.
+    #[arg(long, allow_hyphen_values = true)]
+    group_max: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
+struct EntityFilterArgs {
+    /// Entry.amount >= VALUE.
+    #[arg(long = "min")]
+    minimum: Option<u64>,
+    /// Entry.category == VALUE.
+    #[arg(long)]
+    category: Option<u64>,
+    /// Document.entry_id == VALUE.
+    #[arg(long)]
+    entry_id: Option<u64>,
+}
+
 #[derive(clap::Args, Debug)]
 struct OrderArgs {
     /// Comma-separated fields with optional :asc or :desc; primary key breaks ties.
@@ -447,6 +443,16 @@ fn parse_cursor(text: &str) -> Result<CursorArg, String> {
         .ok_or_else(|| "expected a hexadecimal query cursor (70–1092 digits), not a row ID".into())
 }
 
+fn lowercase_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(output, "{byte:02x}").expect("writing to String");
+    }
+
+    output
+}
+
 fn hex_bytes(digits: &str, length: std::ops::RangeInclusive<usize>) -> Option<Vec<u8>> {
     if !length.contains(&digits.len())
         || !digits.len().is_multiple_of(2)
@@ -511,7 +517,7 @@ fn print_schema_json(
         .collect();
     let document = json!({
         "source": "local_fixture",
-        "schema_fingerprint": fingerprint.map(|b| format!("{b:02x}")).concat(),
+        "schema_fingerprint": lowercase_hex(&fingerprint),
         "entities": entities,
         "types": types,
     });
@@ -633,14 +639,8 @@ fn print_status((schema, incarnation, revision, pages): Status) {
     let rows = vec![
         vec!["Format".into(), "ICDBMF02".into()],
         vec!["Schema admission".into(), "Exact match".into()],
-        vec![
-            "Schema fingerprint".into(),
-            schema.map(|b| format!("{b:02x}")).concat(),
-        ],
-        vec![
-            "Database incarnation".into(),
-            incarnation.map(|b| format!("{b:02x}")).concat(),
-        ],
+        vec!["Schema fingerprint".into(), lowercase_hex(&schema)],
+        vec!["Database incarnation".into(), lowercase_hex(&incarnation)],
         vec!["Entry revision".into(), revision.to_string()],
         vec![
             "Wasm linear memory".into(),
@@ -669,11 +669,8 @@ fn main() -> Result<(), String> {
             return Err("set IC_TESTKIT_POCKET_IC_URL to a prepared PocketIC server or install from the matching checkout with make db".into());
         }
         let mut launcher = std::process::Command::new("bash");
-        launcher.arg(runner);
-        if cli.command.is_none() {
-            launcher.arg("--console");
-        }
         launcher
+            .arg(runner)
             .arg(std::env::current_exe().map_err(|e| e.to_string())?)
             .args(std::env::args_os().skip(1));
         let interactive = io::stdin().is_terminal() && cli.command.is_none();
@@ -799,12 +796,9 @@ async fn session(
                 entity,
                 select,
                 filters,
-                minimum,
-                category,
-                entry_id,
+                entity_filters: EntityFilterArgs { minimum, category, entry_id },
                 limit,
-                group_min,
-                group_max,
+                group_bounds: GroupBounds { group_min, group_max },
                 group_order,
                 order,
                 work,
@@ -828,23 +822,21 @@ async fn session(
                     // At most six rows per entity and two groups. A finite host bound
                     // prevents transport/progress regressions from looping forever.
                     for call in 1..=32 {
-                        type Output = (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>);
-                        type Progress = (u64, String, u64, u64, u64, Output);
-                        let result: Result<Progress, String> = calls.framed(CallKind::Update, "aggregate_resume", 121,
+                        let result: Result<RetainedProgress, String> = calls.framed(CallKind::Update, "aggregate_resume", 121,
                             &(&selection, &handle, sequence, work, FIXTURE_OUTPUT_BYTES, page_size, &after)).await?;
-                        let (saved, phase, examined, input_bytes, output_bytes, (columns, rows, next)) = result?;
-                        println!("Call {call}: {phase}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
+                        let RetainedProgress { sequence: saved, phase, examined, input_bytes, output_bytes } = result?;
+                        let label = phase.label();
+                        println!("Call {call}: {label}; sequence {saved}; {examined} examined; {input_bytes} input bytes; {output_bytes} output bytes.");
                         sequence = saved;
 
-                        match phase.as_str() {
-                            "Running" => {},
-                            "Complete" => {
+                        match phase {
+                            RetainedPhase::Running => {},
+                            RetainedPhase::Complete((columns, rows, next)) => {
                                 println!("{}", bordered_table(&columns, &rows));
                                 if next.is_none() { return Ok(()); }
                                 after = next;
                             }
-                            "Expired" | "Invalidated" => return Err(format!("aggregate {phase}")),
-                            _ => return Err("unsupported aggregate progress".into()),
+                            RetainedPhase::Expired | RetainedPhase::Invalidated => return Err(format!("aggregate {label}")),
                         }
                     }
 
@@ -872,64 +864,31 @@ async fn session(
                 filters,
                 after,
                 limit,
-                minimum,
-                category,
-                entry_id,
+                entity_filters: EntityFilterArgs { minimum, category, entry_id },
                 order: OrderArgs { order_by, desc },
                 work,
                 select,
                 distinct,
-                group_min,
-                group_max,
+                group_bounds: GroupBounds { group_min, group_max },
                 group_order,
             } => {
-                let reply = calls.invoke(
-                    CallKind::Query,
-                    "query",
-                    ic_wire::encode(
-                        &(
-                            entity.as_str(),
-                            after.map(|cursor| cursor.0),
-                            limit,
-                            minimum,
-                            category,
-                            entry_id,
-                            order_by,
-                            desc,
-                            work,
-                            FIXTURE_OUTPUT_BYTES,
-                            select,
-                            (distinct, (group_min, group_max), group_order,
-                             filters.into_filters()?),
-                        ),
-                        Encoding::Frame {
-                            method: 3,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .map_err(|e| e.to_string())?,
-                )
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-                type Page = (
-                    Vec<String>,
-                    Vec<Vec<String>>,
-                    Option<Vec<u8>>,
-                    u32,
-                    u32,
-                    u32,
+                let request = (
+                    entity.as_str(),
+                    after.map(|cursor| cursor.0),
+                    limit,
+                    minimum,
+                    category,
+                    entry_id,
+                    order_by,
+                    desc,
+                    work,
+                    FIXTURE_OUTPUT_BYTES,
+                    select,
+                    (distinct, (group_min, group_max), group_order, filters.into_filters()?),
                 );
-                let result: Result<Page, String> = ic_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .map_err(|e| e.to_string())?;
-                let (columns, rows, next, examined, fetched, bytes) = result?;
+                let result: Result<ConsolePage, String> =
+                    calls.framed(CallKind::Query, "query", 3, &request).await?;
+                let ConsolePage { columns, rows, next, examined, fetched, output_bytes: bytes } = result?;
                 let count = rows.len();
                 println!("\n{entity}\n{}", bordered_table(&columns, &rows));
                 let noun = if count == 1 { "row" } else { "rows" };
@@ -940,7 +899,7 @@ async fn session(
                     "Next cursor: {}",
                     next.map_or_else(
                         || "none".into(),
-                        |c| c.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                        |c| lowercase_hex(&c)
                     )
                 );
             }

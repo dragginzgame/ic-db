@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.34.0] - Unreleased
+
+### 🔄 Changed
+
+- Use `after(cursor)` for both a borrowed cursor and an optional cursor. Replace `after_optional` with `after`. Use `order_by` for both ascending field names and explicit field/direction pairs. Replace `order_by_each` with `order_by`.
+- The local retained-aggregate fixture returns a typed progress response. Only a completed result carries table rows and a continuation. Update the fixture and CLI together.
+- Retained group and DISTINCT pages use one cursor format for every position. After upgrading, request a fresh first page with the existing job handle and sequence. Saved group cursors from earlier releases return `InvalidCursor`.
+- Use `Timestamp::from_millis(value)` for signed milliseconds. The infallible conversion now returns a timestamp directly through that constructor. `Timestamp::try_from_i64` has been removed.
+
+### 🧪 Testing
+
+- Qualification uses Canic 0.275.0 for the mounted canister endpoints.
+- The record benchmark defines each workload’s default build features alongside its fixtures, so maintainers can review the comparison in one place.
+- The local console and its fixture share a query response with named counters for examined candidates, fetched rows and encoded bytes. Existing fixture clients can read the same Wire payload.
+
 ## [0.33.1] - 2026-11-27
 
 ### ✨ Added

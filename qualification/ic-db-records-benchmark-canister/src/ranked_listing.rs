@@ -40,17 +40,14 @@ macro_rules! listing_entity {
             fn page(db: &Database, (shape, project): (ListingShape, u64), ceiling: Decimal, work: usize, limit: usize, after: Option<&QueryCursor>) -> Result<Page, Error> {
                 let prefix = [project.into(), true.into()];
                 let query = db.query::<Self>();
-                let mut query = match shape {
+                let query = match shape {
                     ListingShape::FixedOwner => query.using_index("project_id,open", &prefix)
                         .filter_fields(Self::ID, ic_db::Comparison::Eq, Self::PROJECT_ID),
                     ListingShape::Ranked => query.eq(Self::PROJECT_ID, project).eq(Self::OPEN, true)
                         .order_by(&[Self::UPDATED_AT, Self::ID]).descending(),
                     ListingShape::Id => query.eq(Self::PROJECT_ID, project).eq(Self::OPEN, true).order_by(&[Self::ID]),
                 }.lte(Self::PRICE, ceiling).limit(limit).work_limit(work);
-                if let Some(cursor) = after {
-                    query = query.after(cursor);
-                }
-                let page = query.fetch()?;
+                let page = query.after(after).fetch()?;
                 Ok((page.rows.into_iter().map(|item| item.id).collect(), page.next, page.examined, page.fetched))
             }
         }

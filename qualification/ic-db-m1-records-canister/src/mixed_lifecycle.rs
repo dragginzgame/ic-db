@@ -679,7 +679,7 @@ fn item_page<E: SelectColumns<Key = u64>>(
     let page = query
         .work_limit(usize::from(work))
         .limit(2)
-        .after_optional(cursor.as_ref())
+        .after(cursor.as_ref())
         .select(id)
         .fetch()?;
 

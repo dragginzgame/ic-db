@@ -12,14 +12,7 @@ type Page = (
     u32,
     u32,
 );
-type Progress = (
-    u64,
-    String,
-    u64,
-    u64,
-    u64,
-    (Vec<String>, Vec<Vec<String>>, Option<Vec<u8>>),
-);
+use ic_db_qualification_transport::{RetainedPhase, RetainedProgress as Progress};
 
 #[tokio::test]
 async fn text_bounds_preserve_exact_values_and_retained_progress() {
@@ -216,15 +209,15 @@ async fn text_bounds_preserve_exact_values_and_retained_progress() {
                 )
                 .unwrap()
                 .unwrap();
-                sequence = step.0;
-                if step.1 == "Complete" {
-                    assert_eq!(step.5.1, expected_rows);
-                    assert!(step.5.2.is_none());
+                sequence = step.sequence;
+                if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
+                    assert_eq!(page_rows, expected_rows);
+                    assert!(next.is_none());
                     complete = true;
                     break;
                 }
-                assert_eq!(step.1, "Running");
-                assert!(step.5.1.is_empty());
+                assert_eq!(step.phase, RetainedPhase::Running);
+
                 if note == Some(utf8.as_str()) {
                     let mut changed = selection.clone();
                     changed.4.0 = Some("different");
@@ -462,18 +455,18 @@ async fn descending_group_keys_survive_upgrade_and_page_in_selected_order() {
         )
         .unwrap()
         .unwrap();
-        sequence = step.0;
-        cursor = step.5.2;
-        if step.1 == "Complete" {
-            assert_eq!(step.5.1.len(), 1);
-            rows.extend(step.5.1);
+        sequence = step.sequence;
+        if let RetainedPhase::Complete((_, page_rows, next)) = step.phase {
+            cursor = next;
+            assert_eq!(page_rows.len(), 1);
+            rows.extend(page_rows);
             if cursor.is_none() {
                 finished = true;
                 break;
             }
         } else {
-            assert_eq!(step.1, "Running");
-            assert!(step.5.1.is_empty());
+            assert_eq!(step.phase, RetainedPhase::Running);
+
             assert!(cursor.is_none());
         }
         if step_number == 0 || cursor.is_some() {

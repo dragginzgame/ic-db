@@ -298,7 +298,7 @@ fn chained_sort_fields_preserve_precedence_and_page_bindings() {
     assert_eq!(ids(&page.rows), [8, 6]);
     let rest = q()
         .eq(Entry::CATEGORY, 0_u8)
-        .order_by_each(&[(Entry::CATEGORY, Ascending), (Entry::ID, Descending)])
+        .order_by(&[(Entry::CATEGORY, Ascending), (Entry::ID, Descending)])
         .after(&page.next.unwrap())
         .fetch()
         .unwrap();
@@ -604,10 +604,7 @@ fn default_equality_pages_preserve_primary_order() {
             if descending {
                 query = query.descending();
             }
-            let page = query
-                .after_optional(cursor.as_ref())
-                .fetch_as::<Summary>()
-                .unwrap();
+            let page = query.after(cursor.as_ref()).fetch_as::<Summary>().unwrap();
             assert_eq!(page.examined, page.rows.len());
             result.extend(page.rows.iter().map(|r| r.id));
             cursor = page.next;
@@ -753,20 +750,17 @@ fn field_comparisons_use_both_row_values_and_bind_the_right_field() {
             .work_limit(1)
     };
     let first = query("maybe").fetch().unwrap();
-    let optional = query("maybe").after_optional(None).fetch().unwrap();
+    let optional = query("maybe").after(None).fetch().unwrap();
     assert_eq!(ids(&optional.rows), ids(&first.rows));
     assert_eq!(optional.next, first.next);
     let cursor = first.next.unwrap();
     let resumed = query("maybe").after(&cursor).fetch().unwrap();
-    let optional = query("maybe")
-        .after_optional(Some(&cursor))
-        .fetch()
-        .unwrap();
+    let optional = query("maybe").after(Some(&cursor)).fetch().unwrap();
     assert_eq!(ids(&resumed.rows), [2]);
     assert_eq!(ids(&optional.rows), ids(&resumed.rows));
     assert_eq!(optional.next, resumed.next);
     assert!(matches!(
-        query("amount").after_optional(Some(&cursor)).fetch(),
+        query("amount").after(Some(&cursor)).fetch(),
         Err(Error::InvalidCursor)
     ));
     for (comparison, right) in [(C::Eq, "category"), (C::Eq, "missing"), (C::Contains, "id")] {

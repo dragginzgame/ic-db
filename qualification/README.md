@@ -16,7 +16,7 @@ Package directories match their Cargo package names. Qualification callers use
 Wire 0.31.1's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
 and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
 mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.274.0 endpoints. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
+with Canic 0.275.0 endpoints. The endpoints, driver and downstream schema inspection probe all use Wire 0.31.1. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 Probe schemas are synthetic examples of generic database invariants. Names such
@@ -79,7 +79,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.274.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.275.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -617,16 +617,23 @@ other has returned two keys and issued a page cursor. After upgrade the first
 returns all six canonical keys and the saved cursor returns the final four.
 Each call uses its fixture version's Wire request shape.
 
-To repeat the probe, set `IC_DB_V0244_CONSOLE_WASM` to the retained-console Wasm
-built from that tag and run:
+The [historical driver](https://github.com/dragginzgame/ic-db/blob/v0.25.0/qualification/ic-db-m0-rollback-driver/tests/console_aggregates.rs) records the original cursor-compatibility contract.
+
+For the current boundary, set `IC_DB_V0331_CONSOLE_WASM` to the retained-console Wasm built at `v0.33.1`. The upgraded fixture resumes an unfinished job and reopens the first page of a completed job. Both issue a current cursor for the second page.
 
 ```sh
 make m2-cli-artifact
 IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m2/console.wasm" \
   bash scripts/with-pocketic.sh cargo test --locked --manifest-path qualification/Cargo.toml \
   -p ic-db-m0-rollback-driver --test console_aggregates \
-  canonical_distinct_resumes_running_and_completed_v0244_jobs -- --ignored --exact
+  distinct_jobs_resume_from_v0331_with_fresh_page_cursors -- --ignored --exact
 ```
+
+#### Shared aggregate execution measurements
+
+The 0.33.1 control and cleanup candidate ran the same installed filter and retained-job fixtures with the same qualification lock. Uncompressed filter Wasm fell from 1,250,253 to 1,248,929 bytes. All 16 filter cases returned identical results and work counts. Thirteen instruction counts matched, empty-text count saved two instructions, and the early and late membership existence checks each added 64.
+
+Retained-job Wasm fell from 1,338,294 to 1,336,673 bytes. Each scalar operation started twice on a separate freshly installed canister per operation and build. Whole-update cycle differences were the same on both starts. Sum added 125 cycles, average added 123, and minimum and maximum each added 101, against approximately 7.63 million cycles per start. These module sizes include the qualification endpoint changes.
 
 #### Retained DISTINCT cycle measurements
 
@@ -3480,9 +3487,9 @@ two returned the same terminal top 20 across all three layouts.
 The write figures cover database open and the caller's read-modify-write for
 a publication toggle, taking the median of three rounds. Stable pages are
 64 KiB each. Reproduce the two alternative schemas with the existing
-[additive](experiments/listing-compound-index.patch) and
-[replacement](experiments/listing-replace-index.patch) experiments in a disposable
-checkout. Run `make m2-listing-costs` for each layout. The matched logs and
+[additive](https://github.com/dragginzgame/ic-db/blob/b1af5b983d0ea9906e2800e7a5d0ef9f5b270edb/qualification/experiments/listing-compound-index.patch) and
+[replacement](https://github.com/dragginzgame/ic-db/blob/v0.26.12/qualification/experiments/listing-replace-index.patch) experiments in a disposable
+`v0.26.12` checkout, applying the additive patch first. Run `make m2-listing-costs` for each layout. The matched logs and
 artifacts are under `qualification/target/evidence/compound-range-02612`.
 
 ### Filter costs before 0.26.11
@@ -3684,7 +3691,7 @@ Below are handler instructions after upgrade for 511 skewed rows. The dense cate
 
 At minimum 950 the automatic query used 92.1% fewer instructions with the extra index. At minimum zero it used 9.3% more. With no selected category and minimum 950, automatic execution used 8.08M instructions on the two-index host; forcing the compound index cost 67.38M. The leading equality makes the amount range useful. The extra index also increased total handler instructions for skewed inserts 129–511 from 571,378,930 to 696,765,101 (+21.9%). These are alternative schema costs on the same IC DB workload; legacy ran only its original schema. Keep this index a schema-author choice. The broad comparison and this probe measure instructions, not latency.
 
-Reproduce the release with `make m2-query-matrix`. Apply the [qualification-only index patch](experiments/group-category-amount-index.patch) in a disposable checkout and run `make m2-aggregate-paths` for the two-index host. Local run directories are `qualification/target/evidence/m4-query-matrix-0281` and `m4-group-range-0281`.
+Reproduce the release with `make m2-query-matrix`. Apply the [qualification-only index patch](https://github.com/dragginzgame/ic-db/blob/2191fc8c7dc35d8f77f49a0cf0f92a8741fed2dd/qualification/experiments/group-category-amount-index.patch) in a disposable checkout of `2191fc8` and run `make m2-aggregate-paths` for the two-index host. Local run directories are `qualification/target/evidence/m4-query-matrix-0281` and `m4-group-range-0281`.
 
 #### Replacing a row with a compound range index
 
@@ -3800,7 +3807,7 @@ The 0.28.2 worktree tested two ways to share code in the eight-shape IC DB host.
 
 Sharing initialization saved 3,006 bytes at 32 entities but added nine instructions to every warm shape there and 216–224 instructions at one entity. We kept the released initializer. Fetching once saved 11,944 bytes at 32 entities. Seven warm queries used 22 fewer instructions each, while the two-alternative OR filter used 189 more. The full read/replace journey measured 16,534,745 cycles against the control's 16,534,749. This gives applications with conditional listings a useful pattern when the branches return the same type. Separate operations remain valid, and the ordinary growth benchmark continues to exercise separate terminal calls.
 
-Both probes ran all eleven installed variants of `make m2-query-growth`, including result, post-upgrade and replacement checks. The prior release control used the same compiler and workload. To reproduce the caller experiment, apply the [qualification-only patch](experiments/shared-listing-terminal.patch) in a disposable checkout and run the same target. The 4,072-byte slope belongs to this IC DB growth fixture. The matched legacy workload above has different reachable call sites.
+Both probes ran all eleven installed variants of `make m2-query-growth`, including result, post-upgrade and replacement checks. The prior release control used the same compiler and workload. To reproduce the caller experiment, apply the [qualification-only patch](https://github.com/dragginzgame/ic-db/blob/2191fc8c7dc35d8f77f49a0cf0f92a8741fed2dd/qualification/experiments/shared-listing-terminal.patch) in a disposable checkout of that revision and run the same target. The 4,072-byte slope belongs to this IC DB growth fixture. The matched legacy workload above has different reachable call sites.
 
 ### Entity and named-type growth on 0.27.8
 
@@ -5441,7 +5448,7 @@ The 0.20 host on Storage 0.74.1 measured 2,660,405 instructions, 9,683,270 cycle
 
 The measured Wasm SHA-256 is `d4fc8e9cdfdd1ca8805bac65c397d5bb0afb3ee8fb8f63c44fb6bc2b2e28be61`. The local run log is `qualification/target/evidence/m4-near-limit-cleanup/run.log`.
 
-A [native map probe](experiments/job-cleanup/main.rs) isolates the supplier. It creates the same header and 16 slots in each version, reads all slots, then deletes them in ascending order. The table counts only backing writes during deletion. Reading all slots issued zero writes in every case. Run `bash qualification/experiments/job-cleanup/measure.sh` from the repository root with both supplier versions in the Cargo cache.
+A [native map probe](https://github.com/dragginzgame/ic-db/blob/v0.28.2/qualification/experiments/job-cleanup/main.rs) isolates the supplier. Reproduce it at `v0.28.2` with `bash qualification/experiments/job-cleanup/measure.sh`. It creates the same header and 16 slots in each version, reads all slots, then deletes them in ascending order. The table counts only backing writes during deletion. Reading all slots issued zero writes in every case. Run `bash qualification/experiments/job-cleanup/measure.sh` from the repository root with both supplier versions in the Cargo cache.
 
 | Value bytes per slot | Storage 0.74.1 writes / bytes | Storage 0.78.8 writes / bytes |
 | ---: | ---: | ---: |
@@ -7135,7 +7142,7 @@ Handler instructions for the skewed 511-row fixture after upgrade, using the sam
 
 Seeding the same 511 skewed rows took 711,873,832 handler instructions with the original index and 864,213,521 with both indexes, a 21.4% increase across the inserts. The compound index paid off most for late hits and misses. The original index already answered an early hit with one owner read. These are fixture measurements for one schema and data distribution.
 
-Reproduce the additional arm by applying the [schema and expected-work patch](experiments/exists-compound-index.patch) in a disposable checkout, then running the same existence comparison with a separate `IC_DB_QUERY_MATRIX_DIR`. The frozen engine retains its original category-only workload.
+Reproduce the additional arm by applying the [schema and expected-work patch](https://github.com/dragginzgame/ic-db/blob/ca15371e88f2f2060f2cacbc69901bc525f11e45/qualification/experiments/exists-compound-index.patch) in a disposable checkout of `ca15371`, then running the same existence comparison with a separate `IC_DB_QUERY_MATRIX_DIR`. The frozen engine retains its original category-only workload.
 
 ### Indexed existence (0.23.7)
 
@@ -7371,7 +7378,7 @@ same fetch count. The instrumented Wasm SHA-256 was
 
 ### Matching both equality filters in the listing index
 
-The [compound-index experiment](experiments/listing-compound-index.patch) adds
+The [compound-index experiment](https://github.com/dragginzgame/ic-db/blob/b1af5b983d0ea9906e2800e7a5d0ef9f5b270edb/qualification/experiments/listing-compound-index.patch) adds
 `(entry_id, published, score)` to the qualification schema alongside the existing
 `(entry_id, score)` index. Both indexes live in the same PocketIC canister and
 cover the same 130 documents. Fixing entry and publication state leaves score
@@ -7392,12 +7399,11 @@ and retry at a byte boundary. Reads preserved stable memory. Ordinary owner
 validation ran on each visited row. Bounded sorting cost 2.21M instructions
 for the first 20 at that cutoff and produced a terminal result.
 
-To repeat in a disposable checkout containing this experiment:
+To repeat in a disposable checkout of `b1af5b9`:
 
 ```sh
 git apply qualification/experiments/listing-compound-index.patch
 make m2-listing-costs
-git apply -R qualification/experiments/listing-compound-index.patch
 ```
 
 ### Write and storage cost of the additional listing index
@@ -7438,10 +7444,10 @@ their own comparison.
 
 ### Replacing the listing index
 
-The [replacement experiment](experiments/listing-replace-index.patch) removes
+The [replacement experiment](https://github.com/dragginzgame/ic-db/blob/v0.26.12/qualification/experiments/listing-replace-index.patch) removes
 `(entry_id, score)` and assigns the document reference to
 `(entry_id, published, score)`. Apply it on top of the compound-index patch
-in a disposable checkout and run `make m2-listing-costs`. Other fixture indexes
+in a disposable `v0.26.12` checkout and run `make m2-listing-costs`. Other fixture indexes
 stay in place. All three schemas used the same 130 documents and the same
 automatic queries. At ID cutoff 100, both listings request the top 20 by
 descending score and descending ID.
