@@ -3,7 +3,7 @@
     "rule": "cargo-exact",
     "file": "Cargo.toml",
     "subject": "ic-db-macros",
-    "value": "=0.38.0",
+    "value": "=0.39.0",
     "reason": "Generated code calls private runtime helpers that can change between patch releases. The published macro and runtime must match.",
     "evidence": "AGENTS.md#product-boundaries-and-contract-owners"
   }

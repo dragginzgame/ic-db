@@ -946,12 +946,12 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "ctor",
  "ethnum",
  "getrandom 0.4.3",
- "ic-db-macros 0.38.0",
+ "ic-db-macros 0.39.0",
  "ic-platform-runtime 0.23.28",
  "ic-platform-types 0.21.6",
  "ic-storage 0.80.6",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-cli"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "ic-testkit",
  "ic-wire 0.33.1",
@@ -997,7 +997,7 @@ dependencies = [
 name = "ic-db-entity-growth-canister"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.28",
  "ic-storage 0.80.6",
@@ -1008,7 +1008,7 @@ dependencies = [
 name = "ic-db-icydb-baseline-canister"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-icydb-baseline-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.28",
@@ -1030,7 +1030,7 @@ dependencies = [
 name = "ic-db-local-schema-test"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "toko-tooling",
 ]
 
@@ -1038,7 +1038,7 @@ dependencies = [
 name = "ic-db-m0-aggregation-canister"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.28",
  "ic-storage 0.80.6",
@@ -1090,7 +1090,7 @@ name = "ic-db-m1-records-canister"
 version = "0.0.0"
 dependencies = [
  "canic",
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-m1-records-schema",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.28",
@@ -1103,13 +1103,13 @@ dependencies = [
 name = "ic-db-m1-records-schema"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "toko-tooling",
 ]
 
 [[package]]
 name = "ic-db-macros"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1131,7 +1131,7 @@ dependencies = [
 name = "ic-db-qualification-transport"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-cli",
  "ic-platform-runtime 0.23.28",
  "ic-wire 0.33.1",
@@ -1144,7 +1144,7 @@ dependencies = [
 name = "ic-db-records-benchmark-canister"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.28",
  "ic-storage 0.80.6",
@@ -1155,7 +1155,7 @@ dependencies = [
 name = "ic-db-schema-owner-consumer"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-db-qualification-transport",
  "ic-db-schema-owner-producer",
  "ic-platform-runtime 0.23.28",
@@ -1166,7 +1166,7 @@ dependencies = [
 name = "ic-db-schema-owner-producer"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-storage 0.80.6",
  "toko-tooling",
 ]
@@ -1175,7 +1175,7 @@ dependencies = [
 name = "ic-db-sqlite-reference"
 version = "0.0.0"
 dependencies = [
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-storage 0.80.6",
  "rusqlite",
  "toko-tooling",
@@ -1186,7 +1186,7 @@ name = "ic-db-wire-schema-probe"
 version = "0.0.0"
 dependencies = [
  "canic",
- "ic-db 0.38.0",
+ "ic-db 0.39.0",
  "ic-wire 0.33.1",
  "postcard",
  "serde",
