@@ -142,7 +142,7 @@ fn envelope_raw((tag, after): (u8, Option<Vec<u8>>)) -> RawPage {
     raw.range((lower, Bound::Unbounded))
         .take_while(|entry| entry.key().starts_with(&prefix))
         .take(2)
-        .map(|entry| (entry.key().0.clone(), entry.value()))
+        .map(|entry| (entry.key().0.clone(), entry.value().into()))
         .collect()
 }
 
@@ -199,4 +199,4 @@ pub(super) fn write(
     db.commit(batch)
 }
 
-type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
+type RawPage = Vec<(Vec<u8>, ic_wire::ByteBuf)>;

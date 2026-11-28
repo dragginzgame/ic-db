@@ -9,7 +9,7 @@ use ic_wire::{Direction, Encoding};
 
 use std::collections::BTreeMap;
 
-type RawPage = Vec<(Vec<u8>, Vec<u8>)>;
+type RawPage = Vec<(Vec<u8>, ic_wire::ByteBuf)>;
 type Read = (Vec<u64>, u64, u64);
 
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                 assert!(entries.len() <= 2);
                 let next = entries.last().map(|(key, _)| key.clone());
                 for (key, value) in entries {
-                    assert!(actual.insert(key, value).is_none());
+                    assert!(actual.insert(key, value.into_vec()).is_none());
                 }
                 if next.is_none() {
                     break;

@@ -9,7 +9,7 @@ use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
 
 type Reply = (Result<(u64, bool), u8>, u64, u64, u64);
-type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
+type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
 
 #[tokio::test]
 async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_cleanup() {
@@ -274,7 +274,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
             .unwrap();
             for (key, value) in rows {
                 if matches!(key[0], 2 | 3) {
-                    assert!(actual.insert(key, value).is_none());
+                    assert!(actual.insert(key, value.into_vec()).is_none());
                 }
             }
             if next.is_none() {
