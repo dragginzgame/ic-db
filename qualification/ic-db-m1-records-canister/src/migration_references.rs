@@ -1,6 +1,6 @@
 //! Cross-chunk references during copy, validation, cancellation and publication.
 
-use crate::raw_map::RawMap;
+use crate::maintenance::{RawPage, raw_page};
 use crate::{
     faults,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
@@ -11,7 +11,6 @@ use ic_db::design::prelude::*;
 use ic_db::{Batch, Error, SchemaTransition};
 use ic_storage::StableKey;
 use records_schema::OptionalLink;
-use std::ops::Bound;
 
 type ReferenceReply = (Result<(u32, bool), u8>, u64, u64, [u64; 4]);
 
@@ -77,19 +76,7 @@ fn migration_references(
     on_error = crate::transport::endpoint_error
 )]
 fn migration_references_raw((target, after): (bool, Option<Vec<u8>>)) -> RawPage {
-    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
-    let host = runtime();
-    let key = if target { COPY_TARGET } else { COPY_SOURCE };
-    let raw = RawMap::load(host.open_memory(&StableKey::parse(key).unwrap()).unwrap());
-    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
-    let rows: Vec<_> = raw
-        .range((lower, Bound::Unbounded))
-        .take(16)
-        .map(|entry| (entry.key().0.clone(), entry.value()))
-        .collect();
-    let next = (rows.len() == 16).then(|| rows.last().unwrap().0.clone());
-
-    (rows, next)
+    raw_page(if target { COPY_TARGET } else { COPY_SOURCE }, after, 16)
 }
 
 ///
@@ -266,5 +253,3 @@ fn control(
         _ => panic!("unsupported reference migration control"),
     }
 }
-
-type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);

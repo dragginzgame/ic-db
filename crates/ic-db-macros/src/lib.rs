@@ -575,53 +575,40 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             }});
             continue;
         }
+        let invalid_components =
+            || fail("index requires 1..4 distinct supported scalar or unit-enum fields");
         let unique_fields: BTreeSet<_> = index.fields.iter().collect();
         if index.fields.is_empty()
             || index.fields.len() > 4
             || unique_fields.len() != index.fields.len()
-            || index.fields.iter().any(|name| {
-                !authored
-                    .iter()
-                    .any(|field| &field.name == name && field.many.is_none())
-            })
         {
-            return Err(fail(
-                "index requires 1..4 distinct supported scalar or unit-enum fields",
-            ));
+            return Err(invalid_components());
         }
-        let fields: Vec<syn::Ident> = index
+        let components = index
             .fields
             .iter()
-            .map(|name| syn::parse_str(name))
-            .collect::<syn::Result<_>>()?;
-        let has_optional = index.fields.iter().any(|name| {
-            authored
-                .iter()
-                .any(|field| &field.name == name && field.optional)
-        });
-        if (unique && has_optional && !present_only) || (present_only && (!unique || !has_optional))
-        {
+            .map(|name| {
+                let field = authored
+                    .iter()
+                    .find(|f| &f.name == name && f.many.is_none())
+                    .ok_or_else(invalid_components)?;
+                Ok((field, syn::parse_str::<syn::Ident>(name)?))
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let has_optional = components.iter().any(|(field, _)| field.optional);
+        if present_only != (unique && has_optional) {
             return Err(fail(
                 "optional unique indexes require present_only; present_only requires uniqueness and an optional component",
             ));
         }
-        let operands: Vec<_> = index
-            .fields
-            .iter()
-            .zip(&fields)
-            .map(|(name, ident)| {
-                let field = authored
-                    .iter()
-                    .find(|field| &field.name == name)
-                    .expect("admitted index field");
-                let value = field.index_value(ident);
-                let optional = field.optional;
+        let operands = components.iter().map(|(field, ident)| {
+            let value = field.index_value(ident);
+            let optional = field.optional;
 
-                quote!(::ic_db::__private::IndexComponent { value: #value, optional: #optional })
-            })
-            .collect();
+            quote!(::ic_db::__private::IndexComponent { value: #value, optional: #optional })
+        });
         if unique {
-            unique_keys.add(&item, index_name, &fields, &authored, &index.fields);
+            unique_keys.add(&item, index_name, &components, &index.fields);
         }
         encoded_indexes
             .push(quote! { ::ic_db::__private::encode_index(&[#(#operands),*], #present_only) });

@@ -63,7 +63,8 @@ use schema::{
     WideNumbers,
 };
 use transport::{
-    EntityView, FieldView, IndexView, SchemaResponse, Status, TypeMemberView, TypeView,
+    EntityView, FieldView, IndexView, ReferenceView, SchemaResponse, Status, TypeMemberView,
+    TypeView,
 };
 
 // initialize
@@ -240,25 +241,23 @@ fn schema(selected: Option<String>) -> SchemaResponse {
                         kind,
                         optional: field.optional,
                         info,
-                        reference: field.reference.map(|reference| {
-                            (
-                                {
-                                    let target = db
-                                        .schema()
-                                        .entities()
-                                        .iter()
-                                        .find(|target| target.id == reference.entity)
-                                        .unwrap();
-
-                                    format!("{}.{}", target.name, target.primary_key)
-                                },
-                                entity
-                                    .indexes
+                        reference: field.reference.map(|reference| ReferenceView {
+                            target: {
+                                let target = db
+                                    .schema()
+                                    .entities()
                                     .iter()
-                                    .find(|index| index.id == reference.index)
-                                    .map_or(field.name, |index| index.name)
-                                    .into(),
-                            )
+                                    .find(|target| target.id == reference.entity)
+                                    .unwrap();
+
+                                format!("{}.{}", target.name, target.primary_key)
+                            },
+                            index: entity
+                                .indexes
+                                .iter()
+                                .find(|index| index.id == reference.index)
+                                .map_or(field.name, |index| index.name)
+                                .into(),
                         }),
                     }
                 })

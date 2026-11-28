@@ -1,8 +1,7 @@
 //! Installed omission/default behavior, index maintenance, rollback and unchanged upgrade.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Row = (u64, u16, bool, Option<String>, Vec<u8>, Option<Vec<u8>>);
 type State = (Vec<Row>, Vec<u64>, u64);
@@ -21,57 +20,23 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
             canister,
             canister,
             "default_write",
-            fixture_wire::encode(
-                &(id, mode, trap),
-                Encoding::Frame {
-                    method: 80,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(80, &(id, mode, trap)),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<Row, u8>>(
-            &bytes,
-            Encoding::Frame {
-                method: 80,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<Row, u8>>(80, &bytes);
     let state = async || {
         let bytes = pic
             .query_call(
                 canister,
                 canister,
                 "default_rows",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 81,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(81, &()),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<State>(
-            &bytes,
-            Encoding::Frame {
-                method: 81,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<State>(81, &bytes)
     };
     assert_eq!(
         decode(call(1, 0, false).await.unwrap()).unwrap(),

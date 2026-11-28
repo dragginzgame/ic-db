@@ -13,7 +13,7 @@ try {
   await writeFile(join(dir, 'page.ts'), module);
   const { page } = await import(pathToFileURL(join(dir, 'page.ts')));
   const { id, next } = page.decodeResponse(Uint8Array.from(reply));
-  assert.equal(id, 1);
+  assert.deepEqual(Array.from(id), [...Array(15).fill(0), 1]);
   assert.ok(next.some instanceof Uint8Array);
   assert.throws(() => page.encodeRequest({ after: { some: new Uint8Array(547) } }));
   process.stdout.write(page.encodeRequest({ after: next }));

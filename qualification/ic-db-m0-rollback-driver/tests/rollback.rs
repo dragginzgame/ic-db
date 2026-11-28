@@ -1,18 +1,14 @@
 //! Actual Wasm rollback checks; raw stable bytes provide an oracle independent of row lookup.
 
-use ic_db_cli::fixture_wire;
+mod wire_frame;
 use ic_db_m0_rollback_driver as support;
-use ic_wire::{Direction, Encoding};
-
-use support::LIMITS;
 
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 #[tokio::test]
 async fn message_rollback() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-rollback")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::core_wasm();
     let owned = support::instance().await.unwrap();
     let pic = &owned;
     for mode in 0_u8..=8 {
@@ -21,15 +17,7 @@ async fn message_rollback() {
         pic.install_canister(canister, wasm.clone(), vec![], None)
             .await;
         let before = pic.get_stable_memory(canister).await;
-        let request = fixture_wire::encode(
-            &(mode, 7_u64, 11_u64),
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let request = wire_frame::request(1, &(mode, 7_u64, 11_u64));
         let response = pic.update_call(canister, canister, "mutate", request).await;
         let after = pic.get_stable_memory(canister).await;
         if matches!(mode, 2..=5 | 7) {
@@ -45,15 +33,7 @@ async fn message_rollback() {
                 "mode {mode}: raw backing, including allocator controls, must revert"
             );
         } else {
-            let result: Result<(), u8> = fixture_wire::decode(
-                &response.unwrap(),
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let result: Result<(), u8> = wire_frame::response(1, &response.unwrap());
             assert_eq!(
                 result,
                 match mode {
@@ -71,31 +51,10 @@ async fn message_rollback() {
             );
         }
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "inspect",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 2,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "inspect", wire_frame::request(2, &()))
             .await
             .unwrap();
-        let snapshot: Snapshot = fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 2,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let snapshot: Snapshot = wire_frame::response(2, &reply);
         let committed = matches!(mode, 0 | 6 | 8);
         if committed {
             assert!(after.len() > before.len(), "reservation must grow backing");
@@ -125,64 +84,21 @@ async fn message_rollback() {
         );
         if mode == 0 {
             // Uniqueness refusal must not change existing data or allocation controls.
-            let duplicate = fixture_wire::encode(
-                &(0_u8, 8_u64, 11_u64),
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let duplicate = wire_frame::request(1, &(0_u8, 8_u64, 11_u64));
             let reply = pic
                 .update_call(canister, canister, "mutate", duplicate)
                 .await
                 .unwrap();
-            assert_eq!(
-                fixture_wire::decode::<Result<(), u8>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 1,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
-                Err(1)
-            );
+            assert_eq!(wire_frame::response::<Result<(), u8>>(1, &reply), Err(1));
             assert!(after == pic.get_stable_memory(canister).await);
             ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
                 .await
                 .unwrap();
             let reply = pic
-                .query_call(
-                    canister,
-                    canister,
-                    "inspect",
-                    fixture_wire::encode(
-                        &(),
-                        Encoding::Frame {
-                            method: 2,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
-                )
+                .query_call(canister, canister, "inspect", wire_frame::request(2, &()))
                 .await
                 .unwrap();
-            assert_eq!(
-                fixture_wire::decode::<Snapshot>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 2,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
-                snapshot
-            );
+            assert_eq!(wire_frame::response::<Snapshot>(2, &reply), snapshot);
             assert!(after == pic.get_stable_memory(canister).await);
         }
     }

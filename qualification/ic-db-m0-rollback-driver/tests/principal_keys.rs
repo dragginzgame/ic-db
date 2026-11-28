@@ -1,9 +1,8 @@
 //! Length-framed Principal identity through the real product and IC rollback.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use ic_testkit::pocket_ic::ErrorCode;
-use ic_wire::{Direction, Encoding};
 
 type Row = (Vec<u8>, Option<Vec<u8>>, u64);
 type Page = (Vec<Row>, Option<Vec<u8>>, u64, Vec<Vec<u8>>);
@@ -22,57 +21,23 @@ async fn principal_identity_pages_references_and_upgrade() {
             canister,
             canister,
             "principal_keys_write",
-            fixture_wire::encode(
-                &(mode, rows, trap),
-                Encoding::Frame {
-                    method: 84,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(84, &(mode, rows, trap)),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<(), u8>>(
-            &bytes,
-            Encoding::Frame {
-                method: 84,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<(), u8>>(84, &bytes);
     let page = async |after: Option<Vec<u8>>, limit: u8, rank: u64| {
         let bytes = pic
             .query_call(
                 canister,
                 canister,
                 "principal_keys_page",
-                fixture_wire::encode(
-                    &(after, limit, rank),
-                    Encoding::Frame {
-                        method: 85,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(85, &(after, limit, rank)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Page>(
-            &bytes,
-            Encoding::Frame {
-                method: 85,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Page>(85, &bytes)
     };
     let ids = [vec![], vec![9], vec![1, 0], vec![255; 29]];
     let mut rows: Vec<Row> = ids

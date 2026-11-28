@@ -17,16 +17,13 @@ pub(super) async fn count(calls: &mut FixtureCalls<'_>, entity: &str) -> Result<
 pub(super) async fn schema(
     calls: &mut FixtureCalls<'_>,
     selected: Option<String>,
-    entity_summary: bool,
     json: bool,
 ) -> Result<(), String> {
     let ic_db_cli::SchemaResponse {
         status,
         entities,
         types,
-    } = calls
-        .framed(CallKind::Query, "schema", 2, &selected)
-        .await?;
+    } = fetch_schema(calls, &selected).await?;
     if entities.is_empty()
         && let Some(name) = selected
     {
@@ -36,35 +33,46 @@ pub(super) async fn schema(
         ));
     }
 
-    if entity_summary {
-        let mut summaries: Vec<_> = entities
-            .into_iter()
-            .map(|entity| (entity.name, entity.fields.len()))
-            .collect();
-        summaries.sort_by(|a, b| a.0.cmp(&b.0));
-
-        if json {
-            let rows: Vec<_> = summaries
-                .into_iter()
-                .map(|(name, columns)| serde_json::json!({"name": name, "columns": columns}))
-                .collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
-            );
-        } else {
-            let rows: Vec<_> = summaries
-                .into_iter()
-                .map(|(name, columns)| vec![name, columns.to_string()])
-                .collect();
-            println!("{}", bordered_table(&["Entity", "Columns"], &rows));
-        }
-    } else if json {
+    if json {
         print_schema_json(status.schema, &entities, &types)?;
     } else {
         print_schema(entities, types);
     }
 
+    Ok(())
+}
+
+async fn fetch_schema(
+    calls: &mut FixtureCalls<'_>,
+    selected: &Option<String>,
+) -> Result<ic_db_cli::SchemaResponse, String> {
+    calls.framed(CallKind::Query, "schema", 2, selected).await
+}
+
+pub(super) async fn entities(calls: &mut FixtureCalls<'_>, json: bool) -> Result<(), String> {
+    let entities = fetch_schema(calls, &None).await?.entities;
+    let mut summaries: Vec<_> = entities
+        .into_iter()
+        .map(|entity| (entity.name, entity.fields.len()))
+        .collect();
+    summaries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if json {
+        let rows: Vec<_> = summaries
+            .into_iter()
+            .map(|(name, columns)| serde_json::json!({"name": name, "columns": columns}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?
+        );
+    } else {
+        let rows: Vec<_> = summaries
+            .into_iter()
+            .map(|(name, columns)| vec![name, columns.to_string()])
+            .collect();
+        println!("{}", bordered_table(&["Entity", "Columns"], &rows));
+    }
     Ok(())
 }
 

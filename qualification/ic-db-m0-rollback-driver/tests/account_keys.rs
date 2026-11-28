@@ -1,9 +1,8 @@
 //! Canonical Account/Subaccount keys across cross-entity batches and IC messages.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use ic_testkit::pocket_ic::ErrorCode;
-use ic_wire::{Direction, Encoding};
 
 type Identity = (Vec<u8>, Option<[u8; 32]>);
 type AccountRow = (Identity, Option<[u8; 32]>, u64);
@@ -32,29 +31,11 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                 canister,
                 canister,
                 "account_keys_write",
-                fixture_wire::encode(
-                    &(mode, accounts, subs, trap),
-                    Encoding::Frame {
-                        method: 86,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(86, &(mode, accounts, subs, trap)),
             )
             .await
         };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<(), u8>>(
-            &bytes,
-            Encoding::Frame {
-                method: 86,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<(), u8>>(86, &bytes);
     let page =
         async |after: Option<Identity>, sub_after: Option<[u8; 32]>, limit: u8, rank: u64| {
             let bytes = pic
@@ -62,28 +43,12 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                     canister,
                     canister,
                     "account_keys_page",
-                    fixture_wire::encode(
-                        &(after, sub_after, limit, rank),
-                        Encoding::Frame {
-                            method: 87,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(87, &(after, sub_after, limit, rank)),
                 )
                 .await
                 .unwrap();
 
-            fixture_wire::decode::<Page>(
-                &bytes,
-                Encoding::Frame {
-                    method: 87,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
+            wire_frame::response::<Page>(87, &bytes)
         };
     let ids = [
         (vec![], None),

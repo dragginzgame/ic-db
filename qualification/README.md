@@ -13,11 +13,13 @@ In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a p
 Storage 0.80 records codec bounds in the map header. Raw DB probes use the physical 512-byte variable key bound and an unbounded byte value. Opening with different bounds refuses before writing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. The CLI and standalone qualification endpoints use
-Wire 0.33.0 sparse frames around their positional fixture bodies, with explicit
-directions, method IDs and resource limits. The downstream schema probe exercises
-derived application messages and a generated TypeScript cursor client. The
-mixed-lifecycle driver uses Canic 0.277.0’s own Wire 0.31.2 codec and limits
-for its inspection, query and write endpoints. The frozen IcyDB comparison
+Wire 0.33.1 sparse frames around their positional fixture bodies, with explicit
+directions, method IDs and resource limits. The mixed-lifecycle fixture uses
+Canic 0.278.0 and IC Platform Runtime 0.23.28. Its driver uses Canic’s Wire
+codec and limits for the mounted inspection, query and write endpoints. The
+archived-console upgrade test adapts the empty root extension block when
+exchanging frames with the v0.33.1 console before the upgrade.
+The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 With the named-struct worktree as the 0.275.0 control, the 0.276.0 adoption
@@ -60,6 +62,31 @@ cover the handler from open through result construction. They isolate the raw
 read call and its immediate wrapper, excluding B-tree routing and other guest
 work. Toko's token layout and ranking code are outside this fixture.
 
+## Qualification cleanup on the 0.38.0 worktree
+
+The control included the pending Canic 0.278.0 and Platform Runtime 0.23.28
+updates. Both arms used the same source directory, lockfiles, Rust toolchain
+and qualification Wasm release profile. The changes removed the historical
+codec and query models and consolidated fixture, CLI and macro code.
+
+| Installed fixture build | Uncompressed Wasm before → after (bytes) | Change | Code section before → after (bytes) | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Records | 1,185,924 → 1,185,954 | +30 | 1,129,055 → 1,129,085 | +30 |
+| Retained console | 1,406,444 → 1,406,474 | +30 | 1,346,730 → 1,346,760 | +30 |
+| Query measurements | 1,240,003 → 1,240,033 | +30 | 1,180,555 → 1,180,585 | +30 |
+| Maintenance faults | 1,339,276 → 1,337,441 | −1,835 | 1,276,350 → 1,274,583 | −1,767 |
+
+The SQLite-checked listing returned 440 rows over 23 pages in 76,163,770 IC
+instructions in both arms. All 15 measured writes matched instruction for
+instruction. Migration validation’s first page used 10,415,456 instructions
+and 17,770,330 charged cycles in both arms. These measurements cover query,
+write and migration work. They do not time the host-side schema macro or
+isolate the raw audit endpoint.
+
+Across both workspaces, `toko-cloc` counted 96,383 → 94,037 Rust code lines.
+Application/library code fell by 20 lines and tests by 2,326 lines. Benchmark
+code stayed at 352 lines.
+
 ## Application Wire schemas
 
 The [downstream probe](experiments/wire-schema/src/main.rs) checks API manifests,
@@ -68,8 +95,15 @@ endpoint field order differs from its storage order. `make m0-contracts` runs
 the host checks, including a generated TypeScript pagination method executed
 with Node.js (`--experimental-transform-types`, tested on Node 24). Rust emits
 the first page’s continuation, the client returns it as a bounded `Uint8Array`,
-and the database retrieves the second row. The probe compares framed requests
-and replies against the former byte-list encoding and checks Wire’s diagnostics.
+and the database retrieves the second row. The reply also carries an `Id<User>` backed by a ULID. Canic’s mounted method
+inspection resolves the typed ID to a 16-byte array and the optional cursor to
+at most 546 bytes in both directions. The sparse root changes the endpoint
+frame. The cursor field retains its existing length-prefixed bytes, and the DB
+continues to use its own codec for stored rows and keys.
+
+For [issue #37](https://github.com/dragginzgame/ic-db/issues/37), an isolated
+consumer ran all six inspection and payload tests against the crates.io releases
+of IC DB 0.38.0, IC Wire 0.33.1 and Canic 0.278.0.
 To run the byte checks compiled for Wasm from the repository root:
 
 ```sh
@@ -85,7 +119,7 @@ node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(proces
 | Native database fixture | `testing::Fixture` supplies vector-backed memory to the product's native `Database`. On Wasm that handle requires IC stable memory. |
 | ULID issuance | IC time, canister identity/version and the management entropy call come from Platform on Wasm. Native issuance needs the system clock and OS entropy. Both call the same generator. |
 | Fixture ingress, traps, time and measurements | Platform type-checks fixture dispatch on native and Wasm. A measured request requires the installed IC instruction meter; the native decoder reports that the meter is unavailable. Installed dispatch supplies the instruction meter to measured handlers and captures message time for retained console jobs. Native tests call database operations directly, supply fixed job timestamps and panic on traps. Its private handlers have no generated IC entrypoints on native, which accounts for the target-specific dead-code lint expectation. |
-| Mixed-lifecycle endpoints | Canic 0.277.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
+| Mixed-lifecycle endpoints | Canic 0.278.0 type-checks the mounted inspection, query and write handlers and their caller guard on native builds. PocketIC supplies the caller and instruction meter during installed execution. |
 | Frozen comparison fixture | The legacy actor macro supplies its own native test watchdog stub. The qualification shim supplies the watchdog in the other configurations. |
 
 ## External simulator ownership (0.19)
@@ -4724,66 +4758,19 @@ Wasm maintenance probes separately exercise admission and transformation recover
 
 ## Historical M0 row codec candidate
 
-The Wire candidate below is retained as historical experimental evidence. The M1
-product now owns scalar row codec version 3 and has no IC Wire dependency.
-Generated-record checks cover fixed-width decoding, truncation, trailing bytes,
-malformed lengths and unchanged refusal of version 1 and 2 manifests. Qualification endpoints
-still use Wire for messages, converting binary values at that transport boundary.
+The retired M0 candidates exercised positional row layouts and bounded recursive
+traversal with Wire. The final flat sample occupied 20 bytes, including a
+12-byte fixture header and an empty sparse root block. The recursive sample
+allowed eight nodes, three levels and a 512-byte payload. Neither layout was
+deployed. The original experiments remain in the release history.
 
-The design now specifies a finite compiled type graph, retaining recursive
-values under separate value-depth/node/count/byte bounds. Fields, named types
-and enum variants use schema names, not author-supplied numeric IDs. Stored enum
-ordinals derive from canonical variant-name order within the admitted contract.
-The existing identity witness now uses named variants (`ICDBM0C4`); its independent
-OpenSSL vector changed deliberately. No product format or retained data exists
-under either fixture encoding.
-
-`nested_row_codec` adds one handwritten recursive row projection, originally
-qualified with Wire 0.22.1 and now using Wire 0.24.0's payload API. It retains
-test-only Serde 1.0.229 (already transitive).
-The application struct and enum declaration orders deliberately differ from their
-storage traversal. A literal payload oracle checks canonical order; map/set
-construction order does not affect bytes, while list order and absent/empty
-values remain distinct. Decode admits entry sequences before constructing maps
-or sets, rejecting duplicates and noncanonical entry order rather than silently
-discarding entries. Unknown enum ordinals and payload mismatches also refuse.
-
-The sample permits eight recursive nodes, three levels, three entries per
-collection and eight UTF-8 bytes per string. An all-maximal sample with u64 maxima
-must round-trip under 512 payload bytes, 512 Wire visits, depth 32 and a 64-KiB
-allocation allowance. Wire's allowance conservatively charges traversal and is
-not actual heap allocation; the initial 8-KiB allowance refused otherwise valid
-sample values. Database limits remain separately enforced in both directions,
-and a low value of each Wire allowance refuses independently. These numbers are
-fixture limits, not proposed product budgets or IC instruction measurements.
-The fixed enum payload uses a tuple stand-in; it does not fix the product's
-variant framing or qualify a macro generator. Generated traversal, every retained
-type combination and reopen integration remain M1 obligations.
-
-For only these new/changed contracts:
-
-```sh
-cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test schema_identity --test nested_row_codec
-```
-
-`make m0-contracts` also runs `row_codec`, a fixed `(amount, id, note)` tuple in
-canonical field-name order. Wire 0.24.0 owns this fixture's payload serialization; a small
-database-owned frame and externally admitted schema identity precede decoding.
-The literal example occupies 19 bytes: 12 fixture framing bytes and 7 payload
-bytes, with no repeated field names. This is not a production overhead budget.
-
-Checks cover absent versus empty notes, u64 extremes, UTF-8 byte lengths,
-truncation, unsupported framing, length mismatch, extra payload bytes, invalid
-optional tags and refusal under each byte/allocation/node/depth limit. Database
-field limits also refuse a valid Wire string that exceeds its declared eight-byte
-bound. Fixture limits are 64 payload bytes, 2,048 traversal-allocation allowance,
-32 nodes and depth 8; the allowance is not an observed heap maximum.
-
-This does not qualify generated codecs, arbitrary Serde implementations, nested
-types, index ordering, checksums, persisted supplier integration or Wasm execution.
-Wire primitive decoding can accept noncanonical bytes; original-byte identity
-must not be reconstructed by decoding and re-encoding. The product must bind
-supported normalization and stored traversal to its versioned contract.
+The generated [nested row](../crates/ic-db/tests/nested.rs),
+[map](../crates/ic-db/tests/maps.rs) and [set](../crates/ic-db/tests/sets.rs)
+contracts now exercise stored byte order, truncation, invalid tags, duplicate
+keys and shared traversal limits. The [query](../crates/ic-db/tests/queries/main.rs)
+and [retained job](../crates/ic-db/tests/jobs.rs) suites exercise projection,
+group selection, empty inputs, absence and bounded accumulation through the engine.
+Wire transport limits remain covered by the downstream probe and installed endpoints.
 
 ## Live pages across writes and upgrades (0.22.2)
 
@@ -4833,45 +4820,13 @@ IC_DB_M1_RECORDS_WASM="$PWD/qualification/target/evidence/m1/records.wasm" bash 
 
 ## Query composition contracts
 
-`make m0-contracts` also runs the four-row examples from design section 5.
-These use two small native accumulators, not a builder, planner or general query
-representation. Exact expected outputs are literal, independently worked answers.
-Work budgets 1–4 produce the same completed result and expose no prefix result.
-
-Projection precedes DISTINCT: category has two distinct values, while the
-category/value tuple has three. Counting these gives two and three respectively,
-independently of output page size. Summing page-local distinct counts would give
-the wrong answer. Grouping completes before the group filter, aggregate ordering
-and output limit. Row filtering instead changes the input to the sums. Empty
-completed output is distinguished from incomplete work.
-
-Retained distinct keys and groups have independent cardinality bounds of at most
-four. Exceeding a bound refuses without returning a truncated answer or changing
-the native accumulator. Finalization and output collection visit at most four
-entries; this is a structural toy bound, not an IC instruction/byte qualification.
-Output offsets apply only to the fixed completed vector and are not live-page
-cursors. Projection, filters and capacities remain fixed by the test caller;
-there is no public resumable handle accepting changed query parameters.
-
-Three additional optional-aggregate examples check row versus present-field
-counts, distinct present-field count versus DISTINCT projection row count, empty
-versus all-absent versus present-zero inputs, and average accumulation across
-unequal chunks. Six inputs `[10, None, 30, 10, None, None]` give counts `6/3/2`,
-sum `50`, extrema `10/30` and mathematical mean `50/3`, regardless of work budget
-1–6. A six-row input cap makes a `u128` sum of `u64` operands exact; a literal
-above-`u64` total checks that no float or narrow intermediate is used. The exact
-average pair is a witness, not the public result representation. No supplier
-allocation behavior participates in these semantics.
-
-A grouped optional-input witness keeps one absent-key group, an all-absent
-aggregate group and a present-zero group distinct. Output pagination includes
-the all-absent group; only a subsequent explicit group predicate removes it.
-
-The examples do not qualify builder method-order admission, persistent DISTINCT
-state, authenticated result cursors, concurrent changes, general expressions,
-general aggregate arithmetic/rounding or production resource limits. Existing Wasm probes own
-durable job progress/retry and live keyset behavior. The retained product scope
-is unchanged, and no package, dependency or durable representation was added.
+The original four-row worked examples established the order of projection,
+DISTINCT, group filtering and paging. The optional six-row example
+`[10, None, 30, 10, None, None]` established counts of 6 rows, 3 present
+values and 2 distinct present values, with a sum of 50. The standalone
+accumulators have been retired. The current query and job suites exercise
+these semantics on the database, including bounded resumptions, exact widened
+totals and all-absent groups.
 
 ## Write rollback
 

@@ -22,6 +22,38 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_wire::Error> {
 }
 
 #[test]
+fn schema_reference_keeps_target_then_index_on_wire() {
+    let previous = ("Entry.id".to_owned(), "entry_id,score".to_owned());
+    let bytes = encode(&previous);
+    let named = decode::<ic_db_cli::ReferenceView>(&bytes).unwrap();
+    assert_eq!((&named.target, &named.index), (&previous.0, &previous.1));
+    assert_eq!(encode(&named), bytes);
+}
+
+#[test]
+fn fixture_decoder_enforces_each_wire_budget() {
+    use ic_wire::LimitKind;
+    let bytes = encode(&Some("oak"));
+    for (limits, kind) in [
+        (Limits { bytes: 1, ..LIMITS }, LimitKind::Bytes),
+        (
+            Limits {
+                allocation: 0,
+                ..LIMITS
+            },
+            LimitKind::Allocation,
+        ),
+        (Limits { nodes: 1, ..LIMITS }, LimitKind::Nodes),
+        (Limits { depth: 1, ..LIMITS }, LimitKind::Depth),
+    ] {
+        assert_eq!(
+            fixture_wire::decode::<Option<String>>(&bytes, Encoding::Payload, limits),
+            Err(ic_wire::Error::Limit(kind))
+        );
+    }
+}
+
+#[test]
 fn ulid_uses_a_fixed_array_inside_a_sparse_endpoint_payload() {
     let bytes = std::array::from_fn(|i| (i * 17) as u8);
     let id = Ulid::from_bytes(bytes);

@@ -1,8 +1,7 @@
 //! Executable admission and interrupted copy/cutover/cancellation against real Wasm.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 use std::path::PathBuf;
 
@@ -33,28 +32,12 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "command",
-                    fixture_wire::encode(
-                        &input,
-                        Encoding::Frame {
-                            method: 4,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(4, &input),
                 )
                 .await
                 .unwrap();
 
-            fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
+            wire_frame::response(4, &reply)
         };
         let read = async |after: u64, minimum: u64| -> Result<Page, u8> {
             let reply = pic
@@ -62,28 +45,12 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "query",
-                    fixture_wire::encode(
-                        &(after, 3_u64, minimum),
-                        Encoding::Frame {
-                            method: 3,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(3, &(after, 3_u64, minimum)),
                 )
                 .await
                 .unwrap();
 
-            fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 3,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
+            wire_frame::response(3, &reply)
         };
         let trap = async |operation: u8, boundary: u8| {
             let before = pic.get_stable_memory(canister).await;
@@ -92,15 +59,7 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "command",
-                    fixture_wire::encode(
-                        &(operation, 0_u64, 0_u64, boundary),
-                        Encoding::Frame {
-                            method: 4,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(4, &(operation, 0_u64, 0_u64, boundary)),
                 )
                 .await
                 .unwrap_err();
@@ -119,33 +78,14 @@ async fn identified_maintenance() {
                 canister,
                 canister,
                 "capacity_step",
-                fixture_wire::encode(
-                    &(start, width, failure),
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(5, &(start, width, failure)),
             )
             .await
         };
         let refuse_reuse = async || {
             let before = pic.get_stable_memory(canister).await;
             let reply = reuse(true, 8192, 0).await.unwrap();
-            assert_eq!(
-                fixture_wire::decode::<Result<(), u8>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
-                Err(3)
-            );
+            assert_eq!(wire_frame::response::<Result<(), u8>>(5, &reply), Err(3));
             assert!(before == pic.get_stable_memory(canister).await);
         };
         refuse_reuse().await;
@@ -300,27 +240,11 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "capacity_inspect",
-                    fixture_wire::encode(
-                        &(id, offset),
-                        Encoding::Frame {
-                            method: 6,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(6, &(id, offset)),
                 )
                 .await
                 .unwrap();
-            let result: Result<CapacityInspection, u8> = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let result: Result<CapacityInspection, u8> = wire_frame::response(6, &reply);
             let (status, bytes, index) = result.unwrap();
             assert_eq!(index, (1..=6).map(|id| (id, id)).collect::<Vec<_>>());
 
@@ -332,18 +256,7 @@ async fn identified_maintenance() {
             assert!(reuse(true, width, 1).await.is_err());
             assert!(before == pic.get_stable_memory(canister).await);
             let reply = reuse(true, width, 0).await.unwrap();
-            assert_eq!(
-                fixture_wire::decode::<Result<(), u8>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
-                Ok(())
-            );
+            assert_eq!(wire_frame::response::<Result<(), u8>>(5, &reply), Ok(()));
             let reset = inspect(0, 0).await.0;
             assert_eq!(&reset[2..], &[0, 0, 1]);
             if previous[0] != 0 {
@@ -351,18 +264,7 @@ async fn identified_maintenance() {
             }
             let before = pic.get_stable_memory(canister).await;
             let reply = reuse(true, width, 0).await.unwrap();
-            assert_eq!(
-                fixture_wire::decode::<Result<(), u8>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Response
-                    },
-                    LIMITS
-                )
-                .unwrap(),
-                Err(3)
-            );
+            assert_eq!(wire_frame::response::<Result<(), u8>>(5, &reply), Err(3));
             assert!(before == pic.get_stable_memory(canister).await);
             for chunk in 0..3 {
                 let before = pic.get_stable_memory(canister).await;
@@ -371,18 +273,7 @@ async fn identified_maintenance() {
                     assert!(before == pic.get_stable_memory(canister).await);
                 }
                 let reply = reuse(false, 0, 0).await.unwrap();
-                assert_eq!(
-                    fixture_wire::decode::<Result<(), u8>>(
-                        &reply,
-                        Encoding::Frame {
-                            method: 5,
-                            direction: Direction::Response
-                        },
-                        LIMITS
-                    )
-                    .unwrap(),
-                    Ok(())
-                );
+                assert_eq!(wire_frame::response::<Result<(), u8>>(5, &reply), Ok(()));
                 if chunk == 0 {
                     ic_db_m0_rollback_driver::upgrade_stopped(
                         pic,

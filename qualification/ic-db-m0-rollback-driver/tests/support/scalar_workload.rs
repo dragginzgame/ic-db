@@ -1,8 +1,8 @@
 //! One fixed scalar workload and independent tuple oracle for both engines.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+#[path = "../wire_frame/mod.rs"]
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Row = (u64, u64, u64);
 
@@ -103,27 +103,11 @@ pub async fn run(
                     canister,
                     canister,
                     "advance_startup",
-                    fixture_wire::encode(
-                        &(),
-                        Encoding::Frame {
-                            method: 1,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(1, &()),
                 )
                 .await
                 .unwrap();
-            let (ready, work): (bool, u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (ready, work): (bool, u64) = wire_frame::response(1, &reply);
             instructions += work;
             if ready {
                 return (
@@ -148,31 +132,10 @@ pub async fn run(
     };
     let insert = async |value: Row| {
         let reply = pic
-            .update_call(
-                canister,
-                canister,
-                "insert",
-                fixture_wire::encode(
-                    &value,
-                    Encoding::Frame {
-                        method: 2,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .update_call(canister, canister, "insert", wire_frame::request(2, &value))
             .await
             .unwrap();
-        let (accepted, _): (bool, u64) = fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 2,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let (accepted, _): (bool, u64) = wire_frame::response(2, &reply);
 
         accepted
     };
@@ -183,61 +146,24 @@ pub async fn run(
                 canister,
                 canister,
                 "read_modify_write",
-                fixture_wire::encode(
-                    &replacement,
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(4, &replacement),
             )
             .await
             .unwrap();
         let cycles = before
             .checked_sub(pic.cycle_balance(canister).await)
             .unwrap();
-        let (value, instructions): (Option<Row>, u64) = fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let (value, instructions): (Option<Row>, u64) = wire_frame::response(4, &reply);
 
         (value, instructions, cycles)
     };
     let lookup = async |id: u64| {
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "lookup",
-                fixture_wire::encode(
-                    &id,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "lookup", wire_frame::request(3, &id))
             .await
             .unwrap();
 
-        fixture_wire::decode::<(Option<Row>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Option<Row>, u64)>(3, &reply)
     };
     let listing = async |category: u64| {
         let reply = pic
@@ -245,28 +171,12 @@ pub async fn run(
                 canister,
                 canister,
                 "listing",
-                fixture_wire::encode(
-                    &category,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(5, &category),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<(Vec<Row>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 5,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<Row>, u64)>(5, &reply)
     };
     eprintln!(
         "{label} startup_steps_instructions_cycles={:?}",
@@ -293,31 +203,18 @@ pub async fn run(
         }
         assert_eq!(expected.len(), 10);
         let page = async |after: Option<u64>, category: u64, hinted: bool| {
-            let encoding = Encoding::Frame {
-                method: 11,
-                direction: Direction::Request,
-            };
             let request = if label == "ic-db" {
-                fixture_wire::encode(&(after, category, hinted), encoding, LIMITS)
+                wire_frame::request(11, &(after, category, hinted))
             } else {
                 assert!(!hinted);
 
-                fixture_wire::encode(&(after, category), encoding, LIMITS)
-            }
-            .unwrap();
+                wire_frame::request(11, &(after, category))
+            };
             let reply = pic
                 .query_call(canister, canister, "keyset_listing", request)
                 .await
                 .unwrap();
-            let (rows, instructions): (Vec<Row>, u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 11,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (rows, instructions): (Vec<Row>, u64) = wire_frame::response(11, &reply);
 
             (rows, instructions)
         };
@@ -476,27 +373,12 @@ pub async fn run(
                     canister,
                     canister,
                     "fluent_listing",
-                    fixture_wire::encode(
-                        &(mode, category, minimum, limit),
-                        Encoding::Frame {
-                            method: 6,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(6, &(mode, category, minimum, limit)),
                 )
                 .await
                 .unwrap();
-            let (result, instructions): (Result<Vec<Row>, u16>, u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (result, instructions): (Result<Vec<Row>, u16>, u64) =
+                wire_frame::response(6, &reply);
             if label == "icydb" && mode == 3 {
                 // PublicRead forbids this materialized order. Do not silently
                 // switch to a trusted lane or count refusal as query savings.
@@ -553,27 +435,12 @@ pub async fn run(
                         canister,
                         canister,
                         "grouped_aggregate",
-                        fixture_wire::encode(
-                            &(operation, category, minimum),
-                            Encoding::Frame {
-                                method: 7,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
+                        wire_frame::request(7, &(operation, category, minimum)),
                     )
                     .await
                     .unwrap();
-                let (result, instructions): (Vec<(u64, u64)>, u64) = fixture_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 7,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let (result, instructions): (Vec<(u64, u64)>, u64) =
+                    wire_frame::response(7, &reply);
                 assert_eq!(
                     result, expected,
                     "{label}: {phase}, aggregate {operation}, category {category:?}, minimum {minimum}"
@@ -591,28 +458,12 @@ pub async fn run(
                 canister,
                 canister,
                 "count_profile",
-                fixture_wire::encode(
-                    &(mode, operand),
-                    Encoding::Frame {
-                        method: 9,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(9, &(mode, operand)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<(Option<u64>, u64, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 9,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Option<u64>, u64, u64)>(9, &reply)
     };
     let compare_counts = async |phase: &str, expected_rows: &[Row]| {
         if !counts {
@@ -629,27 +480,11 @@ pub async fn run(
                     canister,
                     canister,
                     "count_rows",
-                    fixture_wire::encode(
-                        &category,
-                        Encoding::Frame {
-                            method: 8,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(8, &category),
                 )
                 .await
                 .unwrap();
-            let (result, instructions): (Option<u64>, u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 8,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (result, instructions): (Option<u64>, u64) = wire_frame::response(8, &reply);
             let expected_result = Some(expected);
             assert_eq!(
                 result, expected_result,

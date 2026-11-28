@@ -1,8 +1,7 @@
 //! Final-state batch constraints checked against independent complete row/index expectations.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Command = (u8, u64, u64, u64);
 type Entries = Vec<(u64, u64)>;
@@ -10,8 +9,7 @@ type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
 #[tokio::test]
 async fn final_state_batches() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-batch")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::core_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -24,28 +22,12 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                fixture_wire::encode(
-                    &(commands, 0_u8),
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &(commands, 0_u8)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response(3, &reply)
     };
     let refuse = async |commands: Vec<Command>, expected: u8| {
         let before = pic.get_stable_memory(canister).await;
@@ -57,31 +39,10 @@ async fn final_state_batches() {
     };
     let check = async |users: &[u64], mappings: &[(u64, u64, u64)]| {
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "inspect",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 2,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "inspect", wire_frame::request(2, &()))
             .await
             .unwrap();
-        let snapshot: Snapshot = fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 2,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let snapshot: Snapshot = wire_frame::response(2, &reply);
         // Full expected contents, not lookups through the fixture's admission algorithm.
         let mut rows: Vec<_> = users.iter().map(|id| (*id, 0)).collect();
         rows.extend(
@@ -136,15 +97,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                fixture_wire::encode(
-                    &(swap.clone(), boundary),
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &(swap.clone(), boundary)),
             )
             .await
             .unwrap_err();
@@ -189,15 +142,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                fixture_wire::encode(
-                    &(transfer.clone(), boundary),
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request
-                    },
-                    LIMITS
-                )
-                .unwrap(),
+                wire_frame::request(3, &(transfer.clone(), boundary)),
             )
             .await
             .is_err()

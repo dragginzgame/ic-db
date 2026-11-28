@@ -139,7 +139,16 @@ pub struct FieldView {
     /// Constraints and metadata.
     pub info: String,
     /// Reference target and index.
-    pub reference: Option<(String, String)>,
+    pub reference: Option<ReferenceView>,
+}
+
+/// Target and supporting index of an inspected reference.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct ReferenceView {
+    /// Qualified target field.
+    pub target: String,
+    /// Supporting index name.
+    pub index: String,
 }
 
 ///

@@ -1,8 +1,7 @@
 //! Actual IC issuance consumption, message rollback and explicit upgrade restoration.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Row = ([u8; 16], Option<u64>, u64);
 type Page = (Vec<Row>, Option<[u8; 16]>, u64);
@@ -21,15 +20,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "issue_key",
-            fixture_wire::encode(
-                &(time, [0_u8; 10], value, mode),
-                Encoding::Frame {
-                    method: 77,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(77, &(time, [0_u8; 10], value, mode)),
         )
         .await
     };
@@ -39,40 +30,14 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
                 canister,
                 canister,
                 "last_issued_key",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 78,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(78, &()),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Option<[u8; 16]>>(
-            &reply,
-            Encoding::Frame {
-                method: 78,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Option<[u8; 16]>>(78, &reply)
     };
-    let result = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<[u8; 16], u8>>(
-            &bytes,
-            Encoding::Frame {
-                method: 77,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |bytes: Vec<u8>| wire_frame::response::<Result<[u8; 16], u8>>(77, &bytes);
     assert_eq!(last().await, None);
     let first = result(issue(1000, 1, 0).await.unwrap()).unwrap();
     assert_eq!(u128::from_be_bytes(first), 1000_u128 << 80);
@@ -118,29 +83,11 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "restore_issuer",
-            fixture_wire::encode(
-                &checkpoint,
-                Encoding::Frame {
-                    method: 79,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(79, &checkpoint),
         )
         .await
         .unwrap();
-    assert!(
-        fixture_wire::decode::<bool>(
-            &reply,
-            Encoding::Frame {
-                method: 79,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap()
-    );
+    assert!(wire_frame::response::<bool>(79, &reply));
     let resumed = result(issue(999, 3, 0).await.unwrap()).unwrap();
     assert_eq!(
         u128::from_be_bytes(resumed),
@@ -152,27 +99,11 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "key_page",
-            fixture_wire::encode(
-                &(None::<[u8; 16]>, 10_u8),
-                Encoding::Frame {
-                    method: 71,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(71, &(None::<[u8; 16]>, 10_u8)),
         )
         .await
         .unwrap();
-    let page: Page = fixture_wire::decode(
-        &reply,
-        Encoding::Frame {
-            method: 71,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap();
+    let page: Page = wire_frame::response(71, &reply);
     assert_eq!(
         page.0,
         vec![(first, None, 1), (second, None, 2), (resumed, None, 3)]
@@ -183,27 +114,11 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "key_lookup",
-            fixture_wire::encode(
-                &(resumed, 3_u64),
-                Encoding::Frame {
-                    method: 72,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(72, &(resumed, 3_u64)),
         )
         .await
         .unwrap();
-    let lookup: (Option<Row>, Vec<Row>) = fixture_wire::decode(
-        &reply,
-        Encoding::Frame {
-            method: 72,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap();
+    let lookup: (Option<Row>, Vec<Row>) = wire_frame::response(72, &reply);
     assert_eq!(lookup, (Some((resumed, None, 3)), vec![(resumed, None, 3)]));
     // Unlike the explicit issuer above, the convenience stream is heap-local.
     pic.set_time(ic_testkit::pocket_ic::Time::from_nanos_since_unix_epoch(

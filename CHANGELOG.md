@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.39.0] - Unreleased
+
+### ⚠️ Breaking
+
+- In the CLI fixture API, `FieldView::reference` now exposes `ReferenceView { target, index }`. Rust callers can use the named fields in place of tuple positions. The Wire field order and the JSON printed by `db schema --json` are preserved.
+
+### 🔄 Changed
+
+- Resolve schema index fields once during macro expansion. Qualification now uses Canic 0.278.0 and IC Platform Runtime 0.23.28, and verifies typed IDs and cursor pagination against published IC DB contracts.
+- Remove the standalone qualification query and codec models and consolidate fixture framing and maintenance audits. [Cleanup measurements](qualification/README.md#qualification-cleanup-on-the-0380-worktree)
+
 ## [0.38.0] - 2026-11-28
 
 ### ⚠️ Breaking

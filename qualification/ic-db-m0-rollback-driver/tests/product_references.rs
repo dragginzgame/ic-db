@@ -1,12 +1,11 @@
 //! Cross-chunk migration integrity; literal row/index bytes remain independent.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use std::collections::BTreeMap;
 
 type Reply = (Result<(u32, bool), u8>, u64, u64, [u64; 4]);
-type RawPage = (Vec<(Vec<u8>, Vec<u8>)>, Option<Vec<u8>>);
+type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
 type Entries = BTreeMap<Vec<u8>, Vec<u8>>;
 
 // Independently calculated logical-name handles. No product schema or codec imports.
@@ -70,29 +69,11 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                 canister,
                 canister,
                 "migration_references",
-                fixture_wire::encode(
-                    &(operation, first, limit, bad, stop),
-                    Encoding::Frame {
-                        method: 144,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(144, &(operation, first, limit, bad, stop)),
             )
             .await
         };
-        let decode = |reply: Vec<u8>| {
-            fixture_wire::decode::<Reply>(
-                &reply,
-                Encoding::Frame {
-                    method: 144,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
-        };
+        let decode = |reply: Vec<u8>| wire_frame::response::<Reply>(144, &reply);
         let raw = async |target: bool| {
             let mut result = Entries::new();
             let mut after: Option<Vec<u8>> = None;
@@ -102,29 +83,13 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                         canister,
                         canister,
                         "migration_references_raw",
-                        fixture_wire::encode(
-                            &(target, &after),
-                            Encoding::Frame {
-                                method: 145,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
+                        wire_frame::request(145, &(target, &after)),
                     )
                     .await
                     .unwrap();
-                let (rows, next): RawPage = fixture_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 145,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let (rows, next): RawPage = wire_frame::response(145, &reply);
                 for (key, value) in rows {
-                    assert!(result.insert(key, value).is_none());
+                    assert!(result.insert(key, value.into_vec()).is_none());
                 }
                 if next.is_none() {
                     return result;

@@ -1,9 +1,8 @@
 //! Failures inside the delivered commit path, using the real IC rollback boundary.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use ic_testkit::pocket_ic::ErrorCode;
-use ic_wire::{Direction, Encoding};
 
 type Status = ([u8; 32], [u8; 16], u64, u64, u64, u64);
 
@@ -25,28 +24,12 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "fault_status",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 240,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(240, &()),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Status>(
-            &reply,
-            Encoding::Frame {
-                method: 240,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Status>(240, &reply)
     };
     let category = async |category: u64| {
         let reply = pic
@@ -54,43 +37,19 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "category",
-                fixture_wire::encode(
-                    &category,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(5, &category),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Vec<(u64, u64)>>(
-            &reply,
-            Encoding::Frame {
-                method: 5,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Vec<(u64, u64)>>(5, &reply)
     };
     let batch = async |first: u64, stop_after: u64, deny_growth: bool, exhaust: bool| {
         pic.update_call(
             canister,
             canister,
             "fault_batch",
-            fixture_wire::encode(
-                &(first, stop_after, deny_growth, exhaust),
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(6, &(first, stop_after, deny_growth, exhaust)),
         )
         .await
     };
@@ -103,28 +62,12 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "document_reference",
-                fixture_wire::encode(
-                    &1_u64,
-                    Encoding::Frame {
-                        method: 9,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(9, &1_u64),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Option<u64>>(
-            &reply,
-            Encoding::Frame {
-                method: 9,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Option<u64>>(9, &reply)
     };
     let before = pic.get_stable_memory(canister).await;
     // Exercise the real IC meter, not a synthetic counter or an explicit trap.
@@ -168,15 +111,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 assert!(category(9).await.is_empty());
             }
             Ok(reply) => {
-                let (writes, grows): (u64, u64) = fixture_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 6,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let (writes, grows): (u64, u64) = wire_frame::response(6, &reply);
                 assert_eq!(writes + 1, stop_after);
                 assert!(writes > 1);
                 assert_eq!(status().await.2, original.2 + 1);
@@ -212,15 +147,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
 
         match batch(first, 0, true, false).await {
             Ok(reply) => {
-                let (_, grows): (u64, u64) = fixture_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 6,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let (_, grows): (u64, u64) = wire_frame::response(6, &reply);
                 assert_eq!(grows, 0, "grow refusal must not be ignored");
                 assert_eq!(status().await.2, prior.2 + 1);
                 assert_eq!(
@@ -241,15 +168,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 let reply = batch(first, 0, false, false)
                     .await
                     .expect("same batch must complete when growth is allowed");
-                let (writes, grows): (u64, u64) = fixture_wire::decode(
-                    &reply,
-                    Encoding::Frame {
-                        method: 6,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let (writes, grows): (u64, u64) = wire_frame::response(6, &reply);
                 assert!(
                     grows > 0,
                     "failed batch must really cross a growth boundary"
@@ -265,7 +184,8 @@ async fn backing_writes_and_growth_failures_roll_back() {
                         canister,
                         canister,
                         "fluent_query",
-                        fixture_wire::encode(
+                        wire_frame::request(
+                            95,
                             &(
                                 None::<Vec<u8>>,
                                 true,
@@ -275,27 +195,12 @@ async fn backing_writes_and_growth_failures_roll_back() {
                                 3_u32,
                                 4096_u32,
                             ),
-                            Encoding::Frame {
-                                method: 95,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
+                        ),
                     )
                     .await
                     .unwrap();
                 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
-                let page = fixture_wire::decode::<Result<Page, u8>>(
-                    &reply,
-                    Encoding::Frame {
-                        method: 95,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap()
-                .unwrap();
+                let page = wire_frame::response::<Result<Page, u8>>(95, &reply).unwrap();
                 assert_eq!(
                     page.0,
                     vec![

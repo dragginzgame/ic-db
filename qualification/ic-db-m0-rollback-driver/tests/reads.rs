@@ -1,8 +1,7 @@
 //! Independent complete-sort/projection oracles for bounded live reads and ordered DISTINCT.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Cursor = (Vec<u8>, [u64; 5]);
 type Row = (u64, Option<u64>, u64);
@@ -11,8 +10,7 @@ type Request = (u64, u64, u64, Option<Cursor>, u64, u64, u64);
 
 #[tokio::test]
 async fn bounded_reads() {
-    let wasm =
-        std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-reads")).unwrap();
+    let wasm = ic_db_m0_rollback_driver::core_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
@@ -25,28 +23,12 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "seed_reads",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(4, &()),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response(4, &reply)
     };
     let page = async |request: Request| -> (Result<Page<Row>, u8>, usize) {
         let reply = pic
@@ -54,31 +36,12 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "bounded_page",
-                fixture_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 6,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(6, &request),
             )
             .await
             .unwrap();
 
-        (
-            fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-            reply.len(),
-        )
+        (wire_frame::response(6, &reply), reply.len())
     };
     let distinct = async |token: Option<Cursor>| -> Page<Option<u64>> {
         let reply = pic
@@ -86,29 +49,12 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "distinct_page",
-                fixture_wire::encode(
-                    &(token, 1_u64, 1_u64),
-                    Encoding::Frame {
-                        method: 7,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(7, &(token, 1_u64, 1_u64)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<Page<Option<u64>>, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 7,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<Page<Option<u64>>, u8>>(7, &reply).unwrap()
     };
     let change = async |id: u64, value: Option<(u64, u64)>| {
         let reply = pic
@@ -116,30 +62,11 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "change_read_row",
-                fixture_wire::encode(
-                    &(id, value),
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(5, &(id, value)),
             )
             .await
             .unwrap();
-        assert_eq!(
-            fixture_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 5,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(5, &reply), Ok(()));
     };
     seed().await;
     let source: Vec<Row> = vec![
@@ -286,28 +213,16 @@ async fn bounded_reads() {
     pic.add_cycles(other, 2_000_000_000_000).await;
     pic.install_canister(other, wasm.clone(), vec![], None)
         .await;
-    pic.update_call(
-        other,
-        other,
-        "seed_reads",
-        fixture_wire::encode(
-            &(),
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
+    pic.update_call(other, other, "seed_reads", wire_frame::request(4, &()))
+        .await
+        .unwrap();
     let reply = pic
         .query_call(
             other,
             other,
             "bounded_page",
-            fixture_wire::encode(
+            wire_frame::request(
+                6,
                 &(
                     0_u64,
                     0_u64,
@@ -317,26 +232,12 @@ async fn bounded_reads() {
                     8_u64,
                     1024_u64,
                 ),
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
         .unwrap();
     assert_eq!(
-        fixture_wire::decode::<Result<Page<Row>, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 6,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
+        wire_frame::response::<Result<Page<Row>, u8>>(6, &reply),
         Err(2)
     );
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)

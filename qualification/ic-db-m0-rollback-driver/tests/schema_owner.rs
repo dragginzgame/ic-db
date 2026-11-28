@@ -1,8 +1,7 @@
 //! Execute the producer-owned schema for each separately built contract.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 #[tokio::test]
 async fn selected_schema_on_replica() {
@@ -16,27 +15,11 @@ async fn selected_schema_on_replica() {
         pic.install_canister(id, std::fs::read(path).unwrap(), vec![], None)
             .await;
         for (hub, size) in [(true, expected), (false, Some(1))] {
-            let request = fixture_wire::encode(
-                &hub,
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let request = wire_frame::request(1, &hub);
             let reply = pic.query_call(id, id, "schema_size", request).await;
 
             if let Some(size) = size {
-                let result: u64 = fixture_wire::decode(
-                    &reply.unwrap(),
-                    Encoding::Frame {
-                        method: 1,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let result: u64 = wire_frame::response(1, &reply.unwrap());
                 assert_eq!(result, size, "{artifact}");
             } else {
                 assert!(
@@ -69,27 +52,11 @@ async fn wide_store_on_replica() {
                 .await
                 .unwrap();
         }
-        let request = fixture_wire::encode(
-            &create,
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let request = wire_frame::request(1, &create);
         let before = pic.cycle_balance(id).await;
         let reply = pic.update_call(id, id, "exercise", request).await.unwrap();
         let cycles = before - pic.cycle_balance(id).await;
-        let (observed, work): (u64, [u64; 6]) = fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let (observed, work): (u64, [u64; 6]) = wire_frame::response(1, &reply);
         assert_eq!(observed, width);
         eprintln!("width={width} create={create} instructions={work:?} update_cycles={cycles}");
     }

@@ -3,10 +3,9 @@
 mod artifact;
 mod wire_call;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_m0_rollback_driver::instance;
 use ic_db_qualification_transport::RowFilters;
-use ic_wire::{Direction, Encoding};
+use wire_call::wire_frame;
 
 type Page = (
     Vec<String>,
@@ -47,30 +46,11 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             canister,
             canister,
             "decimal_batch",
-            fixture_wire::encode(
-                &(rows, false),
-                Encoding::Frame {
-                    method: 67,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(67, &(rows, false)),
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 67,
-                direction: Direction::Response,
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(67, &reply), Ok(()));
     let query = async |select: &str, order: &str, distinct: bool, work: u32, bytes: u32| {
         let request = (
             "DecimalRow",
@@ -96,28 +76,12 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
                 canister,
                 canister,
                 "query",
-                fixture_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<Page, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, String>>(3, &reply)
     };
     let ascending = [values[6], "-0.01", "0", "0.01", "1", values[7]];
     for upgraded in [false, true] {
@@ -241,30 +205,15 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                     canister,
                     canister,
                     "measured_query",
-                    fixture_wire::encode(
-                        &request,
-                        Encoding::Frame {
-                            method: 147,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(147, &request),
                 )
                 .await
                 .unwrap();
             let cycles = before
                 .checked_sub(pic.cycle_balance(canister).await)
                 .unwrap();
-            let (result, instructions): (Result<Page, String>, u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 147,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (result, instructions): (Result<Page, String>, u64) =
+                wire_frame::response(147, &reply);
             assert_eq!(pic.get_stable_memory(canister).await, backing);
             eprintln!(
                 "sort-cost order={order} reverse={descending} min={minimum:?} limit={limit} work={work} bytes={bytes} distinct={distinct} result={:?} instructions={instructions} cycles={cycles}",
@@ -280,28 +229,12 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 canister,
                 canister,
                 "query",
-                fixture_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<Page, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, String>>(3, &reply)
     };
     let backing = pic.get_stable_memory(canister).await;
     let page = query("amount", true, None, 2, 128, 32, None, false)
@@ -470,30 +403,11 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 canister,
                 canister,
                 "write",
-                fixture_wire::encode(
-                    &(id, category, amount, mode),
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(4, &(id, category, amount, mode)),
             )
             .await
             .unwrap();
-        assert_eq!(
-            fixture_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(4, &reply), Ok(()));
     };
     for id in 7_u64..=512 {
         write(id, id % 2, id * 10, 1).await;

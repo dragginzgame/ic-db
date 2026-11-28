@@ -15,6 +15,25 @@ use ic_db::design::prelude::*;
 use ic_db::{Batch, EntitySchema, Error, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableCell};
 
+#[cfg(feature = "maintenance-faults")]
+pub(super) type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
+
+#[cfg(feature = "maintenance-faults")]
+pub(super) fn raw_page(key: &str, after: Option<Vec<u8>>, limit: usize) -> RawPage {
+    use std::ops::Bound;
+    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
+    let host = runtime();
+    let raw = RawMap::load(host.open_memory(&StableKey::parse(key).unwrap()).unwrap());
+    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
+    let rows: Vec<_> = raw
+        .range((lower, Bound::Unbounded))
+        .take(limit)
+        .map(|entry| (entry.key().0.clone(), entry.value().into()))
+        .collect();
+    let next = (rows.len() == limit).then(|| rows.last().unwrap().0.clone());
+    (rows, next)
+}
+
 // maintenance_control
 // Start, cancel or inspect the selected maintenance transition.
 // guard  : validates the request frame for method 133.

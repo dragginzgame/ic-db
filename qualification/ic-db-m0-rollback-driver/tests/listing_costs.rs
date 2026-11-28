@@ -2,9 +2,9 @@
 
 mod wire_call;
 
-use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::instance;
 use wire_call::call;
+use wire_call::wire_frame;
 
 #[tokio::test]
 #[ignore = "requires the query-measurements Wasm; run make m2-listing-costs"]
@@ -462,8 +462,6 @@ async fn measured_membership_and_empty_text_return_expected_counts() {
 #[tokio::test]
 #[ignore = "requires the query-measurements Wasm; run make m2-listing-costs"]
 async fn ulid_time_listing_resumes_inside_a_millisecond() {
-    use ic_db_m0_rollback_driver::LIMITS;
-    use ic_wire::{Direction, Encoding};
     type Sample = (Vec<[u8; 16]>, Option<Vec<u8>>, u32, u32, u32, u64, u64);
     let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
@@ -499,22 +497,13 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
     for ids_only in [true, false] {
         let mut cursor: Option<Vec<u8>> = None;
         for ids in expected.chunks(8) {
-            let frame = |direction| Encoding::Frame {
-                method: 246,
-                direction,
-            };
-            let request = fixture_wire::encode(
-                &(100_i64, 102_i64, cursor, ids_only),
-                frame(Direction::Request),
-                LIMITS,
-            )
-            .unwrap();
+            let request = wire_frame::request(246, &(100_i64, 102_i64, cursor, ids_only));
             let reply = pic
                 .query_call(canister, canister, "measured_ulid_listing", request)
                 .await
                 .unwrap();
             let (actual, next, examined, fetched, bytes, open, query): Sample =
-                fixture_wire::decode(&reply, frame(Direction::Response), LIMITS).unwrap();
+                wire_frame::response(246, &reply);
             assert_eq!(actual, ids);
             assert_eq!(examined as usize, ids.len());
             assert_eq!(fetched, examined);

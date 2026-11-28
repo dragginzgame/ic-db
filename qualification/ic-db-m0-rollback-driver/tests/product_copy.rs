@@ -2,9 +2,8 @@
 
 mod wire_call;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
+use wire_call::wire_frame;
 
 type Entries = (bool, Vec<(Vec<u8>, Vec<u8>)>);
 
@@ -35,57 +34,23 @@ async fn exercise(publish: bool) {
             canister,
             canister,
             "maintenance_copy",
-            fixture_wire::encode(
-                &(operation, limit, trap),
-                Encoding::Frame {
-                    method: 135,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(135, &(operation, limit, trap)),
         )
         .await
     };
-    let decode = |reply: Vec<u8>| {
-        fixture_wire::decode::<Result<(u64, bool), String>>(
-            &reply,
-            Encoding::Frame {
-                method: 135,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: Vec<u8>| wire_frame::response::<Result<(u64, bool), String>>(135, &reply);
     let entries = async |target: bool| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "maintenance_copy_entries",
-                fixture_wire::encode(
-                    &target,
-                    Encoding::Frame {
-                        method: 136,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(136, &target),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Entries>(
-            &reply,
-            Encoding::Frame {
-                method: 136,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Entries>(136, &reply)
     };
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
@@ -277,30 +242,12 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
             canister,
             canister,
             "maintenance_managed_copy",
-            fixture_wire::encode(
-                &(operation, trap),
-                Encoding::Frame {
-                    method: 137,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(137, &(operation, trap)),
         )
         .await
     };
     type Reply = (bool, Vec<(u64, String, i64, i64)>);
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<Reply, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 137,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<Reply, String>>(137, &bytes);
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
@@ -348,20 +295,27 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
 
 #[tokio::test]
 async fn successive_whole_database_copies_preserve_intervening_writes_and_cleanup() {
-    whole_database_copy(false, false).await;
+    whole_database_copy(CopyScenario::PublishBoth).await;
 }
 
 #[tokio::test]
 async fn whole_database_invalid_reference_cancels_to_preserved_source() {
-    whole_database_copy(true, false).await;
+    whole_database_copy(CopyScenario::InvalidReference).await;
 }
 
 #[tokio::test]
 async fn second_migration_cancellation_restores_latest_source_not_original_database() {
-    whole_database_copy(false, true).await;
+    whole_database_copy(CopyScenario::CancelSecond).await;
 }
 
-async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopyScenario {
+    PublishBoth,
+    InvalidReference,
+    CancelSecond,
+}
+
+async fn whole_database_copy(scenario: CopyScenario) {
     let directory = std::path::PathBuf::from(std::env::var_os("IC_DB_M3_DIR").unwrap());
     let wasm = std::fs::read(directory.join("maintenance.wasm")).unwrap();
     let changed = std::fs::read(directory.join("maintenance-v2.wasm")).unwrap();
@@ -376,30 +330,12 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             canister,
             canister,
             "maintenance_whole_copy",
-            fixture_wire::encode(
-                &(operation, trap),
-                Encoding::Frame {
-                    method: 138,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(138, &(operation, trap)),
         )
         .await
     };
     type Reply = (bool, Option<String>, Vec<(u64, u64, u128)>);
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<Reply, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 138,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<Reply, String>>(138, &bytes);
     let upgrade = async |code: &Vec<u8>| {
         pic.advance_time(std::time::Duration::from_secs(600)).await;
         pic.tick().await;
@@ -416,7 +352,11 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
     assert!(decode(call(4, false).await.unwrap()).is_err()); // no early validation
     assert!(call(1, true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    let mapping_op = if invalid_reference { 8 } else { 1 };
+    let mapping_op = if scenario == CopyScenario::InvalidReference {
+        8
+    } else {
+        1
+    };
     assert_eq!(
         decode(call(mapping_op, false).await.unwrap())
             .unwrap()
@@ -444,30 +384,11 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
                 canister,
                 canister,
                 "maintenance_copy",
-                fixture_wire::encode(
-                    &(2_u8, 2_u8, false),
-                    Encoding::Frame {
-                        method: 135,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(135, &(2_u8, 2_u8, false)),
             )
             .await
             .unwrap();
-        assert!(
-            fixture_wire::decode::<Result<(u64, bool), String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 135,
-                    direction: Direction::Response,
-                },
-                LIMITS
-            )
-            .unwrap()
-            .is_err()
-        );
+        assert!(wire_frame::response::<Result<(u64, bool), String>>(135, &reply).is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     upgrade(&wasm).await;
@@ -490,13 +411,13 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
 
         match decode(call(4, false).await.unwrap()) {
             Ok((true, _, _)) => {
-                assert!(!invalid_reference);
+                assert!(scenario != CopyScenario::InvalidReference);
                 finished = true;
                 break;
             }
             Ok(_) => {}
             Err(_) => {
-                assert!(invalid_reference);
+                assert!(scenario == CopyScenario::InvalidReference);
                 assert_eq!(pic.get_stable_memory(canister).await, before);
                 assert!(decode(call(5, false).await.unwrap()).is_err());
                 finished = true;
@@ -505,7 +426,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         }
     }
     assert!(finished);
-    if invalid_reference {
+    if scenario == CopyScenario::InvalidReference {
         let before = pic.get_stable_memory(canister).await;
         assert!(call(7, true).await.is_err());
         assert_eq!(pic.get_stable_memory(canister).await, before);
@@ -538,29 +459,12 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
                 canister,
                 canister,
                 "maintenance_next_copy",
-                fixture_wire::encode(
-                    &(operation, trap),
-                    Encoding::Frame {
-                        method: 139,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(139, &(operation, trap)),
             )
             .await
         };
-        let decode_next = |bytes: Vec<u8>| {
-            fixture_wire::decode::<Result<Reply, String>>(
-                &bytes,
-                Encoding::Frame {
-                    method: 139,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
-        };
+        let decode_next =
+            |bytes: Vec<u8>| wire_frame::response::<Result<Reply, String>>(139, &bytes);
         decode_next(next(0, false).await.unwrap()).unwrap(); // ordinary B writes
         assert_eq!(
             decode_next(next(13, false).await.unwrap()).unwrap().2,
@@ -606,7 +510,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
         }
         assert!(cleaned_a);
         let after_a_cleanup_bytes = pic.get_stable_memory(canister).await.len();
-        if cancel_second {
+        if scenario == CopyScenario::CancelSecond {
             let before = pic.get_stable_memory(canister).await;
             assert!(next(9, true).await.is_err());
             assert_eq!(pic.get_stable_memory(canister).await, before);

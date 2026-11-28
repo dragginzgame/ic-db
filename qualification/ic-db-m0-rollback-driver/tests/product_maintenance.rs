@@ -1,8 +1,7 @@
 //! Real product manifest gate, exact executable identity and IC rollback boundary.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type SourcePage = (Vec<(u64, u64, u64)>, Option<Vec<u8>>);
@@ -37,33 +36,10 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             .unwrap();
     };
     let inspect = async || {
-        pic.query_call(
-            canister,
-            canister,
-            "inspect",
-            fixture_wire::encode(
-                &(),
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
+        pic.query_call(canister, canister, "inspect", wire_frame::request(1, &()))
+            .await
     };
-    let decode_status = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Status>(
-            &bytes,
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode_status = |bytes: Vec<u8>| wire_frame::response::<Status>(1, &bytes);
     let original = decode_status(inspect().await.unwrap());
     upgrade(&wasm).await;
     let call = async |operation: u8, inputs: Vec<u8>, trap: bool| {
@@ -71,57 +47,23 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             canister,
             canister,
             "maintenance_control",
-            fixture_wire::encode(
-                &(operation, inputs, trap),
-                Encoding::Frame {
-                    method: 133,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(133, &(operation, inputs, trap)),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<(), String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 133,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<(), String>>(133, &bytes);
     let page = async |after: Option<Vec<u8>>, rows: u8, bytes: u32| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "maintenance_source",
-                fixture_wire::encode(
-                    &(after, rows, bytes),
-                    Encoding::Frame {
-                        method: 134,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(134, &(after, rows, bytes)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<SourcePage, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 134,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<SourcePage, String>>(134, &reply)
     };
     let before = pic.get_stable_memory(canister).await;
     assert!(call(0, vec![9], true).await.is_err());
@@ -167,15 +109,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
                 canister,
                 canister,
                 "write",
-                fixture_wire::encode(
-                    &(1_u64, 1_u64, 99_u64, 0_u8),
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request
-                    },
-                    LIMITS
-                )
-                .unwrap()
+                wire_frame::request(4, &(1_u64, 1_u64, 99_u64, 0_u8))
             )
             .await
             .is_err()
@@ -210,30 +144,11 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             canister,
             canister,
             "write",
-            fixture_wire::encode(
-                &(1_u64, 1_u64, 99_u64, 0_u8),
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(4, &(1_u64, 1_u64, 99_u64, 0_u8)),
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(4, &reply), Ok(()));
     upgrade(&wasm).await;
     decode(call(0, vec![9], false).await.unwrap()).unwrap();
     let frozen = pic.get_stable_memory(canister).await;

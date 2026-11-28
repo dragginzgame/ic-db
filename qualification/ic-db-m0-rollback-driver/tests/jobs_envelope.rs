@@ -3,12 +3,11 @@
 mod artifact;
 mod wire_call;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
+use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, nonblocking::PocketIc};
-use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
 use wire_call::call;
+use wire_call::wire_frame;
 
 mod job_step;
 use job_step::Step;
@@ -471,30 +470,15 @@ async fn full_jobs_cleanup(pic: &PocketIc, canister: CanisterId, wasm: &[u8], re
                 canister,
                 canister,
                 "job_control_cost",
-                fixture_wire::encode(
-                    &((operation, handle, now, limit), fault, trap),
-                    Encoding::Frame {
-                        method: 117,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(117, &((operation, handle, now, limit), fault, trap)),
             )
             .await;
         let cycles = before
             .checked_sub(pic.cycle_balance(canister).await)
             .unwrap();
         let bytes = reply?;
-        let (result, instructions, writes): (Result<u64, String>, u64, u64) = fixture_wire::decode(
-            &bytes,
-            Encoding::Frame {
-                method: 117,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let (result, instructions, writes): (Result<u64, String>, u64, u64) =
+            wire_frame::response(117, &bytes);
         eprintln!(
             "job-lifecycle op={operation} now={now} limit={limit} result={result:?} instructions={instructions} cycles={cycles} writes={writes}"
         );

@@ -1,6 +1,6 @@
 //! Bounded migration envelope and real supplier growth refusal, fixture-only.
 
-use crate::raw_map::RawMap;
+use crate::maintenance::{RawPage, raw_page};
 use crate::{
     faults,
     handles::{Database, Maintenance, RetiredSource, SchemaCopy},
@@ -11,7 +11,6 @@ use ic_db::design::prelude::*;
 use ic_db::{Batch, Error, SchemaTransition};
 use ic_storage::StableKey;
 use records_schema::EnvelopeRow;
-use std::ops::Bound;
 
 // Counts include host reopen/allocation admission, product work and supplier calls.
 // Typed refusal is returned normally; it must not be turned into a trap by the probe.
@@ -61,22 +60,7 @@ fn migration_capacity(
     on_error = crate::transport::endpoint_error
 )]
 fn migration_capacity_raw((second, after): (bool, Option<Vec<u8>>)) -> RawPage {
-    assert!(after.as_ref().is_none_or(|key| key.len() <= 512));
-    let host = runtime();
-    let raw = RawMap::load(
-        host.open_memory(&StableKey::parse(if second { COPY_NEXT } else { COPY_TARGET }).unwrap())
-            .unwrap(),
-    );
-    let lower = after.map_or(Bound::Unbounded, Bound::Excluded);
-    // Match the existing write-envelope inspector: two maximal rows fit Wire.
-    let rows: Vec<_> = raw
-        .range((lower, Bound::Unbounded))
-        .take(2)
-        .map(|entry| (entry.key().0.clone(), entry.value().into()))
-        .collect();
-    let next = (rows.len() == 2).then(|| rows.last().unwrap().0.clone());
-
-    (rows, next)
+    raw_page(if second { COPY_NEXT } else { COPY_TARGET }, after, 2)
 }
 
 ///
@@ -275,4 +259,3 @@ fn control(
 }
 
 type CapacityRequest = ((bool, u8), u16, u8, u32, bool, u64);
-type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);

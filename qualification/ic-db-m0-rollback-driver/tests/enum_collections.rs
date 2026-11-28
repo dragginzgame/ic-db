@@ -1,8 +1,7 @@
 //! Literal enum collection frames survive message rollback and upgrade.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 #[tokio::test]
 async fn enum_collections_preserve_bytes_and_atomicity() {
@@ -18,56 +17,22 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
             canister,
             canister,
             "enum_collections",
-            fixture_wire::encode(
-                &(mode, bytes),
-                Encoding::Frame {
-                    method: 94,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(94, &(mode, bytes)),
         )
         .await
     };
     // Reply order is Archived, Draft, Ready. Expected values below come
     // directly from the literal stored frames, independently of DB decoding.
     let membership = async || {
-        let request = fixture_wire::encode(
-            &(),
-            Encoding::Frame {
-                method: 150,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let request = wire_frame::request(150, &());
         let reply = pic
             .query_call(canister, canister, "enum_set_membership", request)
             .await
             .unwrap();
 
-        fixture_wire::decode::<[bool; 3]>(
-            &reply,
-            Encoding::Frame {
-                method: 150,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<[bool; 3]>(150, &reply)
     };
-    let decode = |bytes: &[u8]| {
-        fixture_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            bytes,
-            Encoding::Frame {
-                method: 94,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(94, bytes);
     // counts: Draft/absent, Ready/256; id=1; states: Archived, Ready.
     // Draft appears only in the map. Set membership must still reject it.
     let golden = vec![

@@ -21,7 +21,7 @@ help:
 	  'make schema-build-check        Check schema producer and consumer ownership' \
 	  'make docs-check                  Check local documentation links' \
 	  'make m0-setup                    Explicitly prepare M0 PocketIC server' \
-	  'make m0-contracts                Check native numeric/schema/row/query contracts' \
+	  'make m0-contracts                Check native numeric, schema and Wire contracts' \
 	  'make m0-rollback                 Run only the Wasm write-rollback probe' \
 	  'make m0-endpoints                Check standalone hooks and reply rollback' \
 	  'make m0-batch                    Run final-state batch constraint probe' \
@@ -119,7 +119,7 @@ m0-contracts:
 	cargo run --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe --features inspection
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-qualification-transport --test schema_serde
-	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity --test row_codec --test nested_row_codec --test query_composition -- --nocapture
+	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity -- --nocapture
 
 .PHONY: m2-fluent-comparison m2-aggregate-comparison m2-count-comparison m2-count-profile
 m2-fluent-comparison:
@@ -308,22 +308,20 @@ m3-maintenance:
 	cargo test --locked -p ic-db --test maintenance --test schema_copy
 	$(MAKE) m3-maintenance-wasm
 
-m3-maintenance-wasm:
+M3_ARTIFACTS := m3-artifact-maintenance m3-artifact-maintenance-v2 m3-artifact-maintenance-faults
+.PHONY: $(M3_ARTIFACTS)
+$(M3_ARTIFACTS): m3-artifact-%:
 	@mkdir -p qualification/target/evidence/m3
-	@set -eu; for feature in maintenance maintenance-v2 maintenance-faults; do \
-	  cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features "$$feature" --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > "qualification/target/evidence/m3/$$feature-build.jsonl"; \
-	  artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq "qualification/target/evidence/m3/$$feature-build.jsonl")"; \
-	  cp "$$artifact" "qualification/target/evidence/m3/$$feature.wasm"; \
-	done
+	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features $* --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m3/$*-build.jsonl
+	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m3/$*-build.jsonl)" && \
+	  cp "$$artifact" qualification/target/evidence/m3/$*.wasm
+
+m3-maintenance-wasm: $(M3_ARTIFACTS)
 	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_maintenance --test product_copy --test product_capacity --test product_references -- --nocapture
 	$(MAKE) m3-jobs
 
 .PHONY: m3-references
-m3-references:
-	@mkdir -p qualification/target/evidence/m3
-	cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-m1-records-canister --features maintenance-faults --target wasm32-unknown-unknown --release --message-format=json-render-diagnostics > qualification/target/evidence/m3/references-build.jsonl
-	@artifact="$$(jq -ers --arg target ic_db_m1_records_canister -f scripts/wasm-artifact.jq qualification/target/evidence/m3/references-build.jsonl)" && \
-	  cp "$$artifact" qualification/target/evidence/m3/maintenance-faults.wasm
+m3-references: m3-artifact-maintenance-faults
 	IC_DB_M3_DIR="$(CURDIR)/qualification/target/evidence/m3" bash scripts/with-pocketic.sh cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test product_references -- --nocapture
 
 .PHONY: m3-jobs

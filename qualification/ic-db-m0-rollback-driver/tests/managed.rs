@@ -1,8 +1,7 @@
 //! Managed field/index/revision behavior across real IC execution and upgrades.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type State = (Vec<(u64, String, i64, i64)>, Vec<u64>, u64);
 
@@ -20,57 +19,23 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
             canister,
             canister,
             "managed_write",
-            fixture_wire::encode(
-                &(id, body.to_string(), time, mode, trap),
-                Encoding::Frame {
-                    method: 82,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(82, &(id, body.to_string(), time, mode, trap)),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Result<(), u8>>(
-            &bytes,
-            Encoding::Frame {
-                method: 82,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Result<(), u8>>(82, &bytes);
     let state = async |time: i64| {
         let bytes = pic
             .query_call(
                 canister,
                 canister,
                 "managed_rows",
-                fixture_wire::encode(
-                    &time,
-                    Encoding::Frame {
-                        method: 83,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(83, &time),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<State>(
-            &bytes,
-            Encoding::Frame {
-                method: 83,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<State>(83, &bytes)
     };
     decode(call(1, "first", 100, 5, false).await.unwrap()).unwrap();
     assert_eq!(

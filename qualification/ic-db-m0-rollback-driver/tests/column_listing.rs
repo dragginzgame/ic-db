@@ -1,10 +1,9 @@
 //! Compare four installed projection shapes with the same bounded SQLite listing.
 mod artifact;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
+mod wire_frame;
+use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, RejectResponse, nonblocking::PocketIc};
-use ic_wire::{Direction, Encoding};
 use rusqlite::Connection;
 use std::{fs::File, path::PathBuf};
 
@@ -18,16 +17,11 @@ async fn listing(
     sparse: bool,
     cursor: Option<&[u8]>,
 ) -> Result<Reply, RejectResponse> {
-    let frame = |direction| Encoding::Frame {
-        method: 1,
-        direction,
-    };
-    let request =
-        fixture_wire::encode(&(mode, sparse, cursor), frame(Direction::Request), LIMITS).unwrap();
+    let request = wire_frame::request(1, &(mode, sparse, cursor));
     let bytes = pic
         .query_call(canister, canister, "listing", request)
         .await?;
-    Ok(fixture_wire::decode(&bytes, frame(Direction::Response), LIMITS).unwrap())
+    Ok(wire_frame::response(1, &bytes))
 }
 
 #[derive(Debug, Default)]

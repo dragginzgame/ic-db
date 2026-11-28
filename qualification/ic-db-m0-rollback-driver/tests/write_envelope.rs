@@ -2,10 +2,9 @@
 
 mod envelope_support;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 use ic_testkit::pocket_ic::ErrorCode;
-use ic_wire::{Direction, Encoding};
 
 use std::collections::BTreeMap;
 
@@ -28,15 +27,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                 canister,
                 canister,
                 "envelope_write",
-                fixture_wire::encode(
-                    &(mode, count, generation, oversized, trap),
-                    Encoding::Frame {
-                        method: 88,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(88, &(mode, count, generation, oversized, trap)),
             )
             .await;
         let cycles = before
@@ -45,45 +36,19 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
 
         (reply, cycles)
     };
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<(Result<(), u8>, u64)>(
-            &bytes,
-            Encoding::Frame {
-                method: 88,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<(Result<(), u8>, u64)>(88, &bytes);
     let read = async |index: u8, generation: u8| {
         let bytes = pic
             .query_call(
                 canister,
                 canister,
                 "envelope_read",
-                fixture_wire::encode(
-                    &(index, generation),
-                    Encoding::Frame {
-                        method: 89,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(89, &(index, generation)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Read>(
-            &bytes,
-            Encoding::Frame {
-                method: 89,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Read>(89, &bytes)
     };
     let audit = async |generation: Option<u8>| {
         let mut actual = BTreeMap::new();
@@ -95,27 +60,11 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                         canister,
                         canister,
                         "envelope_raw",
-                        fixture_wire::encode(
-                            &(tag, &after),
-                            Encoding::Frame {
-                                method: 90,
-                                direction: Direction::Request,
-                            },
-                            LIMITS,
-                        )
-                        .unwrap(),
+                        wire_frame::request(90, &(tag, &after)),
                     )
                     .await
                     .unwrap();
-                let entries: RawPage = fixture_wire::decode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 90,
-                        direction: Direction::Response,
-                    },
-                    LIMITS,
-                )
-                .unwrap();
+                let entries: RawPage = wire_frame::response(90, &bytes);
                 assert!(entries.len() <= 2);
                 let next = entries.last().map(|(key, _)| key.clone());
                 for (key, value) in entries {
@@ -148,27 +97,11 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
             canister,
             canister,
             "envelope_comparison_write",
-            fixture_wire::encode(
-                &(0_u8, 0_u8, 61_u16),
-                Encoding::Frame {
-                    method: 93,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(93, &(0_u8, 0_u8, 61_u16)),
         )
         .await
         .unwrap();
-    let (result, _): (Result<(), u16>, u64) = fixture_wire::decode(
-        &bytes,
-        Encoding::Frame {
-            method: 93,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap();
+    let (result, _): (Result<(), u16>, u64) = wire_frame::response(93, &bytes);
     assert_eq!(result, Err(1));
     assert!(pic.get_stable_memory(canister).await == original);
     for (count, oversized) in [(33, false), (1, true)] {

@@ -203,21 +203,19 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
         method: u64,
         body: &impl serde::Serialize,
     ) -> T {
-        use ic_wire_positional::{self as wire, Direction, Encoding};
-        let current = ic_db_m0_rollback_driver::LIMITS;
-        let limits = wire::Limits {
-            bytes: current.bytes,
-            allocation: current.allocation,
-            nodes: current.nodes,
-            depth: current.depth,
-        };
+        use ic_db_cli::fixture_wire;
+        use ic_db_m0_rollback_driver::LIMITS;
+        use ic_wire::{Direction, Encoding};
         let frame = |direction| Encoding::Frame { method, direction };
-        let request = wire::encode(body, frame(Direction::Request), limits).unwrap();
-        let reply = pic
+        // The old positional body omits the empty root extension block.
+        let mut request = fixture_wire::encode(body, frame(Direction::Request), LIMITS).unwrap();
+        assert_eq!(request.pop(), Some(0));
+        let mut reply = pic
             .update_call(canister, canister, name, request)
             .await
             .unwrap();
-        wire::decode(&reply, frame(Direction::Response), limits).unwrap()
+        reply.push(0);
+        fixture_wire::decode(&reply, frame(Direction::Response), LIMITS).unwrap()
     }
     let old = std::fs::read(std::env::var_os("IC_DB_V0331_CONSOLE_WASM").unwrap()).unwrap();
     let new = ic_db_m0_rollback_driver::records_wasm();

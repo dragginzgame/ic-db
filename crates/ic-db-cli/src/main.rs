@@ -542,7 +542,7 @@ fn print_schema(entities: Vec<EntityView>, types: Vec<TypeView>) {
                     ];
                     if references {
                         row.extend(match reference {
-                            Some((target, index)) => {
+                            Some(ic_db_cli::ReferenceView { target, index }) => {
                                 [target, format!("({})", index.replace(',', ", "))]
                             }
                             None => ["-".into(), "-".into()],
@@ -856,8 +856,8 @@ async fn session(
                 }
             }
             Command::Count { entity } => commands::count(&mut calls, &entity).await?,
-            Command::Schema { entity, json } => commands::schema(&mut calls, entity, false, json).await?,
-            Command::Entities { json } => commands::schema(&mut calls, None, true, json).await?,
+            Command::Schema { entity, json } => commands::schema(&mut calls, entity, json).await?,
+            Command::Entities { json } => commands::entities(&mut calls, json).await?,
             Command::Status => print_status(calls.framed(CallKind::Query, "inspect", 1, &()).await?),
             Command::Query {
                 entity,

@@ -3,9 +3,8 @@
 #[path = "artifact/growth.rs"]
 mod growth;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Row = (u64, u64, u64);
 type Observation = (Option<Row>, Vec<Row>, Vec<Row>, u64, u8);
@@ -113,30 +112,15 @@ async fn exercise<'a>(
                     canister,
                     canister,
                     "exercise",
-                    fixture_wire::encode(
-                        &(entity, mode, row),
-                        Encoding::Frame {
-                            method: 1,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(1, &(entity, mode, row)),
                 )
                 .await
                 .unwrap();
             let cycles = before
                 .checked_sub(pic.cycle_balance(canister).await)
                 .unwrap();
-            let (observation, opening, work): (Observation, [u64; 4], u64) = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 1,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (observation, opening, work): (Observation, [u64; 4], u64) =
+                wire_frame::response(1, &reply);
 
             (observation, opening, work, cycles)
         };

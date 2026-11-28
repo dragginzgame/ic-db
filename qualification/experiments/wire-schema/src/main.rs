@@ -122,8 +122,59 @@ mod tests {
 
     #[derive(Serialize, Deserialize, Wire)]
     struct PageReply {
-        id: u8,
+        id: ic_db::Id<User>,
         next: Option<ic_db::QueryCursor>,
+    }
+
+    // Canic supplies the sparse root around a mounted method's Serde body.
+    #[derive(Serialize, Deserialize, ic_wire::WireSchema)]
+    struct MountedPage {
+        id: ic_db::Id<User>,
+        after: Option<ic_db::QueryCursor>,
+    }
+
+    #[canic::query]
+    fn mounted_page(page: MountedPage) -> MountedPage {
+        page
+    }
+
+    #[test]
+    fn mounted_page_inspects_the_typed_id_and_bounded_cursor() {
+        let methods =
+            canic::inspection::methods(env!("CARGO_CRATE_NAME"), &Default::default()).unwrap();
+        let method = &methods["mounted_page"];
+        assert_eq!(method.request.schema, method.reply.schema);
+        let graph = &method.request.schema;
+        fn resolve<'a>(
+            graph: &'a serde_json::Value,
+            mut node: &'a serde_json::Value,
+        ) -> &'a serde_json::Value {
+            for _ in 0..graph.as_object().unwrap().len() {
+                if node["k"] != "ref" {
+                    return node;
+                }
+                node = &graph[node["name"].as_str().unwrap()];
+            }
+            panic!("cyclic schema reference");
+        }
+        let root = &graph["Root"];
+        assert_eq!(root["k"], "extension-tuple");
+        let fields = &resolve(graph, &root["items"][0])["fields"];
+        assert_eq!(fields[0]["name"], "id");
+        let id = resolve(graph, &fields[0]["value"]);
+        assert_eq!(id["k"], "array");
+        assert_eq!(id["max"], 16);
+        assert_eq!(
+            resolve(graph, &id["item"]),
+            &serde_json::json!({"k":"u","bits":8})
+        );
+        assert_eq!(fields[1]["name"], "after");
+        let cursor = resolve(graph, &fields[1]["value"]);
+        assert_eq!(cursor["k"], "option");
+        assert_eq!(
+            resolve(graph, &cursor["item"]),
+            &serde_json::json!({"k":"bytes","max":ic_db::QueryCursor::MAX_ENCODED_BYTES})
+        );
     }
 
     #[test]
@@ -175,7 +226,7 @@ mod tests {
         let first = query().fetch().unwrap();
         let cursor = first.next.unwrap();
         assert_eq!(first.rows[0].id, Ulid::from_u128(1));
-        let id = first.rows[0].id.to_bytes()[15];
+        let id = first.rows[0].id;
         let json = serde_json::to_value(cursor.to_bytes()).unwrap();
         assert_eq!(serde_json::to_value(&cursor).unwrap(), json);
         assert_eq!(serde_json::from_value::<QueryCursor>(json).unwrap(), cursor);
@@ -248,14 +299,17 @@ mod tests {
             ic_wire::encode(&Message(None::<Vec<u8>>), request, LIMITS).unwrap()
         );
         let byte_vector_reply = ic_wire::encode(
-            &Message((id, Some(ic_wire::ByteBuf::from(cursor.to_bytes())))),
+            &Message((
+                id.to_bytes(),
+                Some(ic_wire::ByteBuf::from(cursor.to_bytes())),
+            )),
             response,
             LIMITS,
         )
         .unwrap();
         let first_reply = ic_wire::encode(
             &PageReply {
-                id,
+                id: ic_db::Id::from_key(id),
                 next: Some(cursor.clone()),
             },
             response,
@@ -424,7 +478,8 @@ mod tests {
 }
 
 mod checked_text {
-    use super::*;
+    use super::payload;
+    use ic_db::design::prelude::*;
 
     #[newtype(
         wire,

@@ -8,17 +8,19 @@ use ic_wire::{ByteBuf, Direction, Encoding};
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 2]);
 
-fn wasm() -> Vec<u8> {
-    std::fs::read(std::env::var_os("IC_DB_M0_WASM").expect("run make m0-endpoints")).unwrap()
-}
-
 #[tokio::test]
 async fn admission_and_decode_refuse_before_dispatch() {
     let owned = instance().await.unwrap();
     let pic = &owned;
     let canister = pic.create_canister().await;
     pic.add_cycles(canister, 2_000_000_000_000).await;
-    pic.install_canister(canister, wasm(), vec![], None).await;
+    pic.install_canister(
+        canister,
+        ic_db_m0_rollback_driver::core_wasm(),
+        vec![],
+        None,
+    )
+    .await;
     let before = pic.get_stable_memory(canister).await;
     let valid = fixture_wire::encode(
         &(0_u8, 7_u64, 11_u64),
@@ -150,7 +152,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
 
 #[tokio::test]
 async fn reply_failure_rolls_back_only_the_current_execution() {
-    let wasm = wasm();
+    let wasm = ic_db_m0_rollback_driver::core_wasm();
     let owned = instance().await.unwrap();
     let pic = &owned;
     for (method, id, asynchronous) in [("endpoint_sync", 8, false), ("endpoint_async", 10, true)] {

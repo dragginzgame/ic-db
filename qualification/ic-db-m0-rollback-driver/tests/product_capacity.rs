@@ -3,10 +3,9 @@
 mod envelope_support;
 mod wire_call;
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
 use std::collections::BTreeMap;
+use wire_call::wire_frame;
 
 type Reply = (Result<(u64, bool), u8>, u64, u64, u64);
 type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
@@ -27,31 +26,13 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                 canister,
                 canister,
                 "migration_capacity",
-                fixture_wire::encode(
-                    &((second, op), first, limit, bytes, deny, stop),
-                    Encoding::Frame {
-                        method: 140,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(140, &((second, op), first, limit, bytes, deny, stop)),
             )
             .await
         };
     let call =
         |op, first, limit, bytes, deny, stop| migration(false, op, first, limit, bytes, deny, stop);
-    let decode = |bytes: Vec<u8>| {
-        fixture_wire::decode::<Reply>(
-            &bytes,
-            Encoding::Frame {
-                method: 140,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |bytes: Vec<u8>| wire_frame::response::<Reply>(140, &bytes);
     decode(call(0, 0, 32, 131072, false, 0).await.unwrap())
         .0
         .unwrap();
@@ -251,27 +232,11 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                     canister,
                     canister,
                     "migration_capacity_raw",
-                    fixture_wire::encode(
-                        &(second, after.clone()),
-                        Encoding::Frame {
-                            method: 141,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(141, &(second, after.clone())),
                 )
                 .await
                 .unwrap();
-            let (rows, next): RawPage = fixture_wire::decode(
-                &reply,
-                Encoding::Frame {
-                    method: 141,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let (rows, next): RawPage = wire_frame::response(141, &reply);
             for (key, value) in rows {
                 if matches!(key[0], 2 | 3) {
                     assert!(actual.insert(key, value.into_vec()).is_none());

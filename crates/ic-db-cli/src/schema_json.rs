@@ -63,7 +63,7 @@ struct Field<'a> {
     r#type: &'a str,
     optional: bool,
     info: &'a str,
-    reference: Option<Reference<'a>>,
+    reference: Option<&'a ic_db_cli::ReferenceView>,
 }
 
 impl<'a> From<&'a FieldView> for Field<'a> {
@@ -73,20 +73,7 @@ impl<'a> From<&'a FieldView> for Field<'a> {
             r#type: &view.kind,
             optional: view.optional,
             info: &view.info,
-            reference: view
-                .reference
-                .as_ref()
-                .map(|(target, index)| Reference { target, index }),
+            reference: view.reference.as_ref(),
         }
     }
-}
-
-///
-/// Reference
-/// Named target entity and reference index.
-///
-#[derive(Serialize)]
-struct Reference<'a> {
-    target: &'a str,
-    index: &'a str,
 }

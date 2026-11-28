@@ -1,10 +1,7 @@
 //! Bounded aggregation with an independent full-input oracle and raw rollback checks.
 
-use ic_db_cli::fixture_wire;
+mod wire_frame;
 use ic_db_m0_rollback_driver as support;
-use ic_wire::{Direction, Encoding};
-
-use support::LIMITS;
 
 type Response = (u64, u64, u64, u64, u64, Vec<(u64, u64)>);
 
@@ -27,57 +24,20 @@ async fn revision_aggregation() {
                 canister,
                 canister,
                 "command",
-                fixture_wire::encode(
-                    &input,
-                    Encoding::Frame {
-                        method: 1,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(1, &input),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response(1, &reply)
     };
     let inspect = async || -> Response {
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "inspect",
-                fixture_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 2,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "inspect", wire_frame::request(2, &()))
             .await
             .unwrap();
 
-        fixture_wire::decode(
-            &reply,
-            Encoding::Frame {
-                method: 2,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response(2, &reply)
     };
     let finish = async |job: u64, mut sequence: u64| -> Response {
         for _ in 0..5 {
@@ -131,15 +91,7 @@ async fn revision_aggregation() {
 
     // No persistent changes survive any accumulator/progress boundary failure.
     for boundary in 1..=3_u8 {
-        let request = fixture_wire::encode(
-            &(1_u8, job, 1_u64, boundary),
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let request = wire_frame::request(1, &(1_u8, job, 1_u64, boundary));
         let rejection = pic
             .update_call(canister, canister, "command", request)
             .await
@@ -155,15 +107,7 @@ async fn revision_aggregation() {
     assert_eq!(call((2, 13, 1, 0)).await, Err(1));
     assert_eq!(call((2, 1, 1001, 0)).await, Err(1));
     for boundary in 1..=2_u8 {
-        let request = fixture_wire::encode(
-            &(2_u8, 1_u64, 99_u64, boundary),
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let request = wire_frame::request(1, &(2_u8, 1_u64, 99_u64, boundary));
         let rejection = pic
             .update_call(canister, canister, "command", request)
             .await

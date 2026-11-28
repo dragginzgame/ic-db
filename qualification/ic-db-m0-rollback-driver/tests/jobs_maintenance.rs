@@ -1,8 +1,6 @@
 //! Maintenance gates aggregate reads; independent job custody still permits cleanup.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
 
 mod job_step;
 mod wire_frame;
@@ -54,57 +52,23 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
                 canister,
                 canister,
                 "job_control",
-                fixture_wire::encode(
-                    &(operation, handle, now, limit),
-                    Encoding::Frame {
-                        method: 112,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(112, &(operation, handle, now, limit)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<u64, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<u64, String>>(112, &reply)
     };
     let maintenance = async |operation: u8, trap: bool| {
         pic.update_call(
             canister,
             canister,
             "maintenance_control",
-            fixture_wire::encode(
-                &(operation, vec![9_u8], trap),
-                Encoding::Frame {
-                    method: 133,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(133, &(operation, vec![9_u8], trap)),
         )
         .await
     };
-    let admitted = |reply: Vec<u8>| {
-        fixture_wire::decode::<Result<(), String>>(
-            &reply,
-            Encoding::Frame {
-                method: 133,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let admitted = |reply: Vec<u8>| wire_frame::response::<Result<(), String>>(133, &reply);
 
     let running = handle(start(1000).await.unwrap());
     let cancelled = handle(start(1000).await.unwrap());
@@ -253,29 +217,13 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "maintenance_whole_copy",
-                fixture_wire::encode(
-                    &(operation, trap),
-                    Encoding::Frame {
-                        method: 138,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(138, &(operation, trap)),
             )
             .await?;
 
-        Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
-            fixture_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 138,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
+        Ok::<_, ic_testkit::pocket_ic::RejectResponse>(wire_frame::response::<
+            Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>,
+        >(138, &reply))
     };
     let job = async |operation: u8, target: bool, bytes: &[u8], sequence: u64, work: u32| {
         let reply = pic
@@ -283,28 +231,12 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "maintenance_job",
-                fixture_wire::encode(
-                    &(operation, target, bytes, sequence, work),
-                    Encoding::Frame {
-                        method: 146,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(146, &(operation, target, bytes, sequence, work)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(
-            &reply,
-            Encoding::Frame {
-                method: 146,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(146, &reply)
     };
     let cleanup = async |operation: u8, bytes: &[u8], now: i64| {
         let reply = pic
@@ -312,28 +244,12 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "job_control",
-                fixture_wire::encode(
-                    &(operation, bytes, now, 1_u32),
-                    Encoding::Frame {
-                        method: 112,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(112, &(operation, bytes, now, 1_u32)),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<u64, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<u64, String>>(112, &reply)
     };
 
     copy(10, false).await.unwrap().unwrap();

@@ -18,8 +18,7 @@ impl Keys {
         &mut self,
         item: &ItemStruct,
         index: &str,
-        ids: &[Ident],
-        authored: &[Field],
+        components: &[(&Field, Ident)],
         fields: &[String],
     ) {
         // Equivalent named indexes share a lookup shape. Indexes arrive in logical name order.
@@ -55,19 +54,10 @@ impl Keys {
         }
         let key = format_ident!("{name}");
         let vis = &item.vis;
-        let components: Vec<_> = fields
-            .iter()
-            .map(|name| {
-                authored
-                    .iter()
-                    .find(|f| &f.name == name)
-                    .expect("admitted index field")
-            })
-            .collect();
-        let types = components.iter().map(|field| field.item_type());
+        let ids = components.iter().map(|(_, id)| id);
+        let types = components.iter().map(|(field, _)| field.item_type());
         let operands = components
             .iter()
-            .zip(ids)
             .map(|(field, id)| field.index_operand(id, false));
         let doc = format!("\n{key}\nNamed key for the unique index `{index}` on `{entity}`.\n");
         self.declarations.push(quote! {

@@ -1,8 +1,7 @@
 //! Local demo uses actual maintenance gates and survives a real executable upgrade.
 
-use ic_db_cli::fixture_wire;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
+use ic_db_m0_rollback_driver::instance;
 
 type Reply = (bool, Vec<Vec<String>>);
 
@@ -23,28 +22,12 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
                 canister,
                 canister,
                 "migration_demo",
-                fixture_wire::encode(
-                    &action,
-                    Encoding::Frame {
-                        method: 142,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(142, &action),
             )
             .await
             .unwrap();
 
-        fixture_wire::decode::<Result<Reply, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 142,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Reply, String>>(142, &reply)
     };
     let expected: Vec<Vec<String>> = (1..=6)
         .map(|id| vec![id.to_string(), (id * 10).to_string()])
@@ -58,15 +41,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
             canister,
             canister,
             "migration_demo",
-            fixture_wire::encode(
-                &7_u8,
-                Encoding::Frame {
-                    method: 123,
-                    direction: Direction::Request
-                },
-                LIMITS
-            )
-            .unwrap()
+            wire_frame::request(123, &7_u8)
         )
         .await
         .is_err()
