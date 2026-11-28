@@ -11,12 +11,13 @@ pub use pages::{GroupCursor, GroupPage};
 pub use storage::AggregateJobs;
 
 use super::{
-    super::{Database, Map, Plan, Query, QueryCursor, Request, execute_inner},
-    Accumulator, Reducer,
+    super::{Map, Plan, Query, QueryCursor, Request, execute_inner},
+    Accumulator, CountInput, Reducer,
     numeric::Operation,
     scalar_output,
 };
-use crate::{Entity, EntitySchema, Error, Timestamp, TypeSchema, Value};
+use crate::store::read_revision;
+use crate::{Entity, EntitySchema, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
 use storage::Record;
@@ -139,26 +140,6 @@ impl Record {
 }
 
 ///
-/// CountInput
-/// Selects what contributes to a retained scalar count.
-///
-#[derive(Clone, Copy)]
-enum CountInput<'a> {
-    Rows,
-    Field(&'a str),
-    Distinct(&'static TypeSchema),
-}
-
-impl CountInput<'_> {
-    fn projection(self) -> Option<&'static TypeSchema> {
-        match self {
-            Self::Distinct(projection) => Some(projection),
-            _ => None,
-        }
-    }
-}
-
-///
 /// ResumePoint
 /// Caller-supplied retry sequence and message time for a scalar job advance.
 ///
@@ -223,7 +204,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             expected,
-            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
+            read_revision(&self.db.read()?.map, E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
@@ -235,19 +216,16 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         plan: &Plan<'_>,
         input: CountInput<'_>,
     ) -> Result<(Reducer, [u8; 32]), Error> {
-        let field = match input {
-            CountInput::Rows => None,
-            CountInput::Field(name) => Some(name),
-            CountInput::Distinct(_) => {
-                let mut hash = Sha256::new();
-                hash.update(b"ic-db:distinct-count-job:v1\0");
-                hash.update(plan.binding);
-                return Ok((
-                    Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?),
-                    hash.finalize().into(),
-                ));
-            }
-        };
+        if let CountInput::Distinct(_) = input {
+            let mut hash = Sha256::new();
+            hash.update(b"ic-db:distinct-count-job:v1\0");
+            hash.update(plan.binding);
+            return Ok((
+                Reducer::distinct(plan.projection.ok_or(Error::InvalidQuery)?),
+                hash.finalize().into(),
+            ));
+        }
+        let field = input.field();
         let reducer = self.count_reducer(field)?;
         let expected = field_binding(binding(plan, &reducer)?, field);
 
@@ -351,7 +329,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         observe!(resume, {
-            self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Sum)
+            let admitted = self.numeric_plan::<R>(None, Operation::Sum)?;
+
+            self.resume_value(jobs, handle, sequence, now, admitted)
         })
     }
 
@@ -392,7 +372,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         observe!(resume, {
-            self.resume_numeric::<R>(jobs, handle, sequence, now, Operation::Average)
+            let admitted = self.numeric_plan::<R>(None, Operation::Average)?;
+
+            self.resume_value(jobs, handle, sequence, now, admitted)
         })
     }
 
@@ -408,24 +390,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             binding(&plan, &reducer)?,
-            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
+            read_revision(&self.db.read()?.map, E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Scalar(&mut reducer),
         )
-    }
-
-    fn resume_numeric<R: Value>(
-        self,
-        jobs: &mut AggregateJobs<M>,
-        handle: &JobHandle,
-        sequence: u64,
-        now: Timestamp,
-        operation: Operation,
-    ) -> Result<JobStep<Option<R>>, Error> {
-        let (plan, reducer) = self.numeric_plan::<R>(None, operation)?;
-
-        self.resume_value(jobs, handle, sequence, now, (plan, reducer))
     }
 
     fn resume_value<R: Value>(
@@ -463,7 +432,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         let (mut reducer, expected) = state(&self, plan)?;
         let limit = self.request.bytes;
         let changed = prepare(
-            &*self.db.read()?,
+            &self.db.read()?.map,
             E::SCHEMA,
             self.request,
             plan,
@@ -568,7 +537,7 @@ fn start<M: Memory>(
     reason = "explicit admitted query and checkpoint inputs keep the shared resume boundary local"
 )]
 fn prepare<M: Memory>(
-    db: &Database<M>,
+    map: &Map<M>,
     entity: &EntitySchema,
     request: Request<'_>,
     plan: &Plan<'_>,
@@ -590,11 +559,11 @@ fn prepare<M: Memory>(
         record.meta.phase = JobOutcome::Expired;
         record.meta.sequence += 1;
     } else if matches!(record.meta.phase, JobOutcome::Running) {
-        if db.revision_by_id(entity.id)? != record.meta.revision {
+        if read_revision(map, entity.id)? != record.meta.revision {
             record.meta.phase = JobOutcome::Invalidated;
             record.meta.sequence += 1;
         } else if sequence == record.meta.sequence {
-            execute_chunk(&db.map, entity, request, plan, &mut accumulator, record)?;
+            execute_chunk(map, entity, request, plan, &mut accumulator, record)?;
             record.meta.sequence += 1;
         }
     }

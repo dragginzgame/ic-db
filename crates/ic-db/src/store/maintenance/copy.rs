@@ -4,12 +4,11 @@ use super::{Maintenance, SchemaTransition, decode as decode_source};
 use crate::{
     Batch, Entity, EntitySchema, Error, PrimaryKey, QueryCursor, Schema,
     codec::{Decoder, Encoder},
-    primary::RowKey,
     schema::MAX_ENTITIES,
     store::Database,
     store::{
-        Map, collect_references, entity_state_key, index_entries, live_manifest, manifest_key,
-        read_entity_state, read_index_owner, row_key, validate_index_entry,
+        ENTITY_PREFIX_BYTES, Map, collect_references, entity_state_key, index_entries,
+        live_manifest, manifest_key, read_entity_state, row_key, validate_index_owner,
         validate_reference_target,
     },
     store_key::StoreKey,
@@ -38,10 +37,20 @@ pub(super) enum TargetProgress {
     Copied,
     Cancelling,
     Cancelled,
-    ValidatingSource(Option<StoreKey>),
-    ValidatingTarget(Option<StoreKey>),
+    Validating(ValidationPass, Option<StoreKey>),
     Ready,
 }
+
+///
+/// ValidationPass
+/// Frozen allocation being checked against its peer in a copy checkpoint.
+///
+#[derive(Clone, Copy)]
+pub(super) enum ValidationPass {
+    Source = 5,
+    Target = 6,
+}
+
 impl Identity {
     fn encode(&self, role: AllocationRole<&TargetProgress>) -> Result<Vec<u8>, Error> {
         let mut writer = Encoder::new();
@@ -63,13 +72,8 @@ impl Identity {
                 TargetProgress::Copied => writer.nat8(2)?,
                 TargetProgress::Cancelling => writer.nat8(3)?,
                 TargetProgress::Cancelled => writer.nat8(4)?,
-                TargetProgress::ValidatingSource(cursor)
-                | TargetProgress::ValidatingTarget(cursor) => {
-                    writer.nat8(if matches!(phase, TargetProgress::ValidatingSource(_)) {
-                        5
-                    } else {
-                        6
-                    })?;
+                TargetProgress::Validating(pass, cursor) => {
+                    writer.nat8(*pass as u8)?;
                     writer.bytes(cursor.as_ref().map_or(&[], |key| &key[..]))?;
                 }
                 TargetProgress::Ready => writer.nat8(7)?,
@@ -130,11 +134,13 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Identity, AllocationRole<TargetPro
                 Some(StoreKey::new(bytes.to_vec())?)
             };
 
-            AllocationRole::Target(if tag == 5 {
-                TargetProgress::ValidatingSource(cursor)
+            let pass = if tag == 5 {
+                ValidationPass::Source
             } else {
-                TargetProgress::ValidatingTarget(cursor)
-            })
+                ValidationPass::Target
+            };
+
+            AllocationRole::Target(TargetProgress::Validating(pass, cursor))
         }
         7 => AllocationRole::Target(TargetProgress::Ready),
         8 => AllocationRole::Retired,
@@ -316,9 +322,7 @@ impl<M: Memory> SchemaCopy<M> {
             TargetProgress::Copying(entity, _) => {
                 CopyStatus::Copying(self.source_schema.entities()[usize::from(*entity)].name)
             }
-            TargetProgress::Copied
-            | TargetProgress::ValidatingSource(_)
-            | TargetProgress::ValidatingTarget(_) => CopyStatus::Validating,
+            TargetProgress::Copied | TargetProgress::Validating(..) => CopyStatus::Validating,
             TargetProgress::Ready => CopyStatus::ReadyToPublish,
             TargetProgress::Cancelling => CopyStatus::Cancelling,
             TargetProgress::Cancelled => CopyStatus::Cancelled,
@@ -480,42 +484,24 @@ impl<M: Memory> SchemaCopy<M> {
     /// Supplier failures trap; an IC trap rolls back checkpoint advancement.
     pub fn validate_next(&mut self, limit: usize) -> Result<bool, Error> {
         validate_limit(limit)?;
-        let phase = match &self.phase {
-            TargetProgress::Copied | TargetProgress::ValidatingSource(_) => {
-                let cursor = if let TargetProgress::ValidatingSource(cursor) = &self.phase {
-                    cursor.as_ref()
-                } else {
-                    None
-                };
-                let next = validate_page(
-                    &self.source,
-                    &self.source_schema,
-                    (&self.target.map, &self.target.schema),
-                    cursor,
-                    limit,
-                )?;
-
-                match next {
-                    Some(key) => TargetProgress::ValidatingSource(Some(key)),
-                    None => TargetProgress::ValidatingTarget(None),
-                }
-            }
-            TargetProgress::ValidatingTarget(cursor) => {
-                let next = validate_page(
-                    &self.target.map,
-                    &self.target.schema,
-                    (&self.source, &self.source_schema),
-                    cursor.as_ref(),
-                    limit,
-                )?;
-
-                match next {
-                    Some(key) => TargetProgress::ValidatingTarget(Some(key)),
-                    None => TargetProgress::Ready,
-                }
-            }
+        let (pass, cursor) = match &self.phase {
+            TargetProgress::Copied => (ValidationPass::Source, None),
+            TargetProgress::Validating(pass, cursor) => (*pass, cursor.as_ref()),
             TargetProgress::Ready => return Ok(true),
             _ => return Err(Error::InvalidTransition),
+        };
+        let source = (&self.source, &self.source_schema);
+        let target = (&self.target.map, &self.target.schema);
+        let (current, peer) = match pass {
+            ValidationPass::Source => (source, target),
+            ValidationPass::Target => (target, source),
+        };
+        let phase = match validate_page(current, peer, cursor, limit)? {
+            Some(key) => TargetProgress::Validating(pass, Some(key)),
+            None => match pass {
+                ValidationPass::Source => TargetProgress::Validating(ValidationPass::Target, None),
+                ValidationPass::Target => TargetProgress::Ready,
+            },
         };
         let checkpoint = self.identity.encode(AllocationRole::Target(&phase))?;
         let complete = matches!(phase, TargetProgress::Ready);
@@ -625,13 +611,11 @@ fn cleanup_keys<M: Memory>(map: &Map<M>, limit: usize) -> (Vec<StoreKey>, bool) 
 // Validate the physical collection in both directions. Forward row checks find
 // missing/wrong-owner indexes; reverse index checks find stale/extra entries.
 fn validate_page<M: Memory>(
-    map: &Map<M>,
-    schema: &Schema,
-    peer: (&Map<M>, &Schema),
+    (map, schema): (&Map<M>, &Schema),
+    (peer_map, peer_schema): (&Map<M>, &Schema),
     after: Option<&StoreKey>,
     limit: usize,
 ) -> Result<Option<StoreKey>, Error> {
-    let (peer_map, peer_schema) = peer;
     // Check every declared entity for missing metadata and equal counts for this
     // key-preserving copy; target counts were rebuilt by atomic private inserts.
     // Frozen allocations cannot change mid-pass.
@@ -656,7 +640,7 @@ fn validate_page<M: Memory>(
         if *key != manifest {
             let bytes = entry.value();
             let id = u32::from_be_bytes(
-                key.get(1..crate::store::ENTITY_PREFIX_BYTES)
+                key.get(1..ENTITY_PREFIX_BYTES)
                     .ok_or(Error::Corrupt)?
                     .try_into()
                     .map_err(|_| Error::Corrupt)?,
@@ -686,9 +670,10 @@ fn validate_page<M: Memory>(
                     } else if !peer_map.contains_key(key) {
                         return Err(Error::Corrupt);
                     }
+                    // The row-key check above established the canonical owner bytes.
+                    let encoded_owner = &key[ENTITY_PREFIX_BYTES..];
                     for (index, _) in index_entries(entity, &info)? {
-                        let stored = map.get(&index).ok_or(Error::Corrupt)?;
-                        if RowKey::decode(&stored, entity.key_type()?)? != owner {
+                        if map.get(&index).as_deref() != Some(encoded_owner) {
                             return Err(Error::Corrupt);
                         }
                     }
@@ -699,9 +684,7 @@ fn validate_page<M: Memory>(
                     }
                 }
                 Some(3 | 4) => {
-                    let (owner, row) =
-                        read_index_owner(map, entity.id, entity.key_type()?, &bytes)?;
-                    validate_index_entry(entity, &entity.inspect_row(&row)?, owner, key)?;
+                    validate_index_owner(map, entity, key, &bytes)?;
                 }
                 _ => return Err(Error::Corrupt),
             }

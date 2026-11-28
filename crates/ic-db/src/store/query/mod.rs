@@ -319,12 +319,15 @@ pub struct QueryPage<T> {
 
 impl QueryPage<Vec<u8>> {
     #[inline(never)]
-    pub(super) fn decode_entities<E: Entity>(self) -> Result<QueryPage<E>, Error> {
+    pub(super) fn decode_rows<R>(
+        self,
+        decode: impl Fn(&[u8]) -> Result<R, Error>,
+    ) -> Result<QueryPage<R>, Error> {
         Ok(QueryPage {
             rows: self
                 .rows
                 .iter()
-                .map(|bytes| E::decode(bytes))
+                .map(|bytes| decode(bytes))
                 .collect::<Result<_, _>>()?,
             next: self.next,
             examined: self.examined,
@@ -332,31 +335,20 @@ impl QueryPage<Vec<u8>> {
             output_bytes: self.output_bytes,
         })
     }
+}
 
-    #[inline(never)]
-    fn decode_with<R>(
-        self,
-        decode: impl Fn(&mut Decoder<'_>) -> Result<R, Error>,
-    ) -> Result<QueryPage<R>, Error> {
-        Ok(QueryPage {
-            rows: self
-                .rows
-                .iter()
-                .map(|bytes| {
-                    let mut reader = Decoder::new(bytes)?;
-                    // Output records replace the entity root, not an extra nested value.
-                    let row = decode(&mut reader)?;
-                    reader.finish()?;
+fn decode_exact<R>(
+    bytes: &[u8],
+    decode: impl FnOnce(&mut Decoder<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    let mut reader = Decoder::new(bytes)?;
+    let value = decode(&mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
 
-                    Ok(row)
-                })
-                .collect::<Result<_, Error>>()?,
-            next: self.next,
-            examined: self.examined,
-            fetched: self.fetched,
-            output_bytes: self.output_bytes,
-        })
-    }
+fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
+    decode_exact(bytes, R::decode_from)
 }
 
 /// A literal, row field or length threshold in a fluent predicate.
@@ -1238,7 +1230,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     }
 
     fn entity_page(self) -> Result<QueryPage<E>, Error> {
-        fetch_rows(&*self.db.read()?, E::SCHEMA, self.request, None)?.decode_entities()
+        fetch_rows(&*self.db.read()?, E::SCHEMA, self.request, None)?.decode_rows(E::decode)
     }
 
     /// Return the first matching entity in query order, or `None` on a proven miss.
@@ -1318,7 +1310,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             Some(Projection::Record(R::definition())),
         )?;
 
-        raw.decode_with(R::decode_from)
+        raw.decode_rows(decode_record)
     }
 }
 
@@ -1596,6 +1588,8 @@ struct Plan<'a> {
     primary: usize,
     index: Option<&'a IndexSchema>,
     prefix: Vec<u8>,
+    // Bind cursors to the admitted path before filter equalities extend its seek.
+    cursor_prefix_len: usize,
     fixed_components: usize,
     terms: Vec<Term>,
     selected: u32,
@@ -1614,6 +1608,7 @@ impl<'a> Plan<'a> {
 
     fn use_index(&mut self, entity: &EntitySchema, path: order::IndexPath<'a>) {
         self.index = Some(path.index);
+        self.cursor_prefix_len = path.prefix.len();
         self.prefix = path.prefix;
         self.fixed_components = path.fixed;
         self.selected |= entity.key_fields();
@@ -1654,6 +1649,7 @@ impl<'a> Plan<'a> {
             primary,
             index: None,
             prefix: prefix(2, entity.id, &[]),
+            cursor_prefix_len: ENTITY_PREFIX_BYTES,
             fixed_components: 0,
             terms: Vec::new(),
             selected: 1 << primary,
@@ -1820,6 +1816,26 @@ impl<'a> Plan<'a> {
                 distinct::Strategy::FirstMatch => plan.sort = None,
                 distinct::Strategy::Complete { key_fields } => plan.selected |= key_fields,
                 _ => {}
+            }
+        }
+        // Automatic paths already carry their leading equalities. An explicit path
+        // can acquire more from its filters after admitting the requested order.
+        if request.index.is_some()
+            && !request.predicates.is_empty()
+            && let Some(index) = plan.index
+        {
+            for field in &index.fields[plan.fixed_components..] {
+                let Some(value) = order::equality(entity, request, field) else {
+                    break;
+                };
+                let schema = entity.index_field(field).ok_or(Error::InvalidSchema)?;
+                let len = plan.prefix.len();
+                value.append_component(schema.optional, &mut plan.prefix);
+                if plan.prefix.len() > crate::MAX_INDEX_KEY_BYTES {
+                    plan.prefix.truncate(len);
+                    break;
+                }
+                plan.fixed_components += 1;
             }
         }
         // Immediate counts and cursorless single-result reads have no continuation.

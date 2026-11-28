@@ -371,13 +371,11 @@ fn scalar(label: &str, value: Option<String>) -> DisplayPage {
 }
 
 fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> DisplayPage {
+    let (columns, rows) = super::count_table(page.rows, column, key);
+
     DisplayPage {
-        columns: vec![column.into(), "count".into()],
-        rows: page
-            .rows
-            .into_iter()
-            .map(|r| vec![key(r.key), r.count.to_string()])
-            .collect(),
+        columns,
+        rows,
         next: page.next.map(|c| c.to_bytes()),
     }
 }
@@ -388,13 +386,11 @@ fn values<K, R>(
     key: fn(K) -> String,
     render: fn(R) -> String,
 ) -> DisplayPage {
+    let (columns, rows) = super::value_table(page.rows, &columns, key, render);
+
     DisplayPage {
-        columns: columns.into_iter().map(String::from).collect(),
-        rows: page
-            .rows
-            .into_iter()
-            .map(|r| vec![key(r.key), optional(r.value.map(render))])
-            .collect(),
+        columns,
+        rows,
         next: page.next.map(|c| c.to_bytes()),
     }
 }

@@ -2,35 +2,21 @@
 
 use super::{
     declaration,
-    field::{Field, parse_item, parse_max_items},
-    once, text,
+    field::{Field, parse_max_items},
+    wrapped::{WrapperOptions, options},
 };
 use proc_macro2::TokenStream;
 use quote::quote;
 
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let item = declaration(item, "set")?;
-    let mut name = None;
-    let (mut kind, mut max) = (None, None);
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
-        if meta.path().is_ident("name") {
-            once(&mut name, text(&meta)?, &meta)?;
-        } else if meta.path().is_ident("item") {
-            once(&mut kind, parse_item(&meta)?, &meta)?;
-        } else if meta.path().is_ident("max_items") {
-            once(&mut max, parse_max_items(&meta)?, &meta)?;
-        } else {
-            return Err(syn::Error::new_spanned(
-                meta,
-                "set accepts name, item and max_items",
-            ));
-        }
-    }
-    let kind =
-        kind.ok_or_else(|| syn::Error::new_spanned(&item.ident, "set requires item(...)"))?;
+    let WrapperOptions {
+        wire,
+        name,
+        kind,
+        extra: max,
+    } = options(args, &item.ident, "set", "max_items", parse_max_items)?;
     let max = max.ok_or_else(|| syn::Error::new_spanned(&item.ident, "set requires max_items"))?;
-    let name = super::declaration_name(name, &item.ident, "set")?;
     let field = Field::nested("item", kind, false, None);
     let ty = field.rust_type();
     let description = field.type_description();

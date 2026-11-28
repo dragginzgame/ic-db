@@ -1,5 +1,7 @@
 //! First public journey: real generated records, governed storage and final-state batches.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/host.rs"]
 mod test_host;
 use test_host::host;
@@ -505,9 +507,9 @@ fn generated_codec_and_identity_ignore_declaration_order_but_not_names() {
     let one = Schema::new(&[Entry::SCHEMA]).unwrap();
     // Independent literal grammar assembled with Node framing/UTF-8 lengths;
     // digest verified independently, not the product's schema serializer.
-    assert_eq!(
-        one.fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "1e819d3b58989a2b49522f2235ce68a844ac66ad746ab90c2363388d95e5d39f"
+    fingerprint::check(
+        one.fingerprint(),
+        "1e819d3b58989a2b49522f2235ce68a844ac66ad746ab90c2363388d95e5d39f",
     );
     assert_eq!(
         one.fingerprint(),
@@ -581,12 +583,9 @@ fn signed_values_preserve_exact_boundaries_and_absence_across_reopen() {
 
     let contract = || Schema::new(&[SignedRow::SCHEMA]).unwrap();
     // Independent Node byte framing and SHA-256 schema vector.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "3ea550d57a9fa9d9fba8c1cefe8d2a67b644360ba7282ecbb16326e27a716d6b"
+    fingerprint::check(
+        contract().fingerprint(),
+        "3ea550d57a9fa9d9fba8c1cefe8d2a67b644360ba7282ecbb16326e27a716d6b",
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -703,12 +702,9 @@ fn wide_integers_preserve_all_bits_and_require_exact_widths() {
 
     let contract = || Schema::new(&[WideRow::SCHEMA]).unwrap();
     // Independent Node byte framing + SHA-256 contract vector.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "4b321fef6fad2098296767ab372a5bbdfb6749d60ad94044f787ee6373317a6f"
+    fingerprint::check(
+        contract().fingerprint(),
+        "4b321fef6fad2098296767ab372a5bbdfb6749d60ad94044f787ee6373317a6f",
     );
     let values = [
         (i128::MIN, u128::MAX),
@@ -850,9 +846,9 @@ fn mixed_values_preserve_absence_and_enforce_bytes_on_write_and_reopen() {
     let fingerprint = contract().fingerprint();
     // Mixed-type contract assembled independently with independent Node byte framing, UTF-8
     // name lengths and OpenSSL SHA-256, alongside the unchanged Nat64 vector.
-    assert_eq!(
-        fingerprint.map(|b| format!("{b:02x}")).concat(),
-        "af636e1c110a8a273284db8280ef39603ad9f97430d69cce14b4a8a8a3f359aa"
+    fingerprint::check(
+        fingerprint,
+        "af636e1c110a8a273284db8280ef39603ad9f97430d69cce14b4a8a8a3f359aa",
     );
     for variant in 0..3 {
         let mut fields = Document::SCHEMA.fields.to_vec();
@@ -1134,13 +1130,11 @@ fn references_use_final_batch_state_and_restricted_indexed_deletion() {
     use ic_db::EntitySchema;
     // Independent Node byte framing + SHA-256 vector, including the reference tag,
     // target identity and reverse-index identity. Existing scalar vectors stay fixed.
-    assert_eq!(
+    fingerprint::check(
         Schema::new(&[Parent::SCHEMA, Child::SCHEMA])
             .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "5537d29d1915ec0e07442405c929c64e5b0e874c37927ef2076b73ecda1cfc06"
+            .fingerprint(),
+        "5537d29d1915ec0e07442405c929c64e5b0e874c37927ef2076b73ecda1cfc06",
     );
     assert!(matches!(
         Schema::new(&[Child::SCHEMA]),
@@ -1545,12 +1539,9 @@ fn narrow_integers_preserve_width_signedness_and_absence_across_reopen() {
     assert_eq!(NarrowRow::decode(&golden).unwrap(), row);
     let contract = || Schema::new(&[NarrowRow::SCHEMA]).unwrap();
     // Independent Node byte framing + SHA-256 contract vector.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "ea70133ec027f1a8c83b882b44378a8aba56a40a0c7814424985e5bb71d97585"
+    fingerprint::check(
+        contract().fingerprint(),
+        "ea70133ec027f1a8c83b882b44378a8aba56a40a0c7814424985e5bb71d97585",
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1774,12 +1765,9 @@ fn binary_values_keep_framing_bounds_and_absence_without_text_conversion() {
 
     let contract = || Schema::new(&[BinaryRow::SCHEMA]).unwrap();
     // Independent Node byte framing + SHA-256 schema vector.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "26b521b53ff6efb90f3cc9f0ffb6367fb206a80b4fd1891add8c7bbd9625a84d"
+    fingerprint::check(
+        contract().fingerprint(),
+        "26b521b53ff6efb90f3cc9f0ffb6367fb206a80b4fd1891add8c7bbd9625a84d",
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -1853,12 +1841,9 @@ fn principals_preserve_raw_identity_absence_and_reject_corrupt_storage() {
     assert_eq!(PrincipalRow::decode(&golden).unwrap(), row);
     let contract = || Schema::new(&[PrincipalRow::SCHEMA]).unwrap();
     // Independent Node byte framing and SHA-256 contract vector.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "6d1c7f5df447067a6115cc362617cb5011c327dbed46829f808ed7664d6f9300"
+    fingerprint::check(
+        contract().fingerprint(),
+        "6d1c7f5df447067a6115cc362617cb5011c327dbed46829f808ed7664d6f9300",
     );
 
     let backing = VectorMemory::default();
@@ -3142,12 +3127,9 @@ fn optional_references_distinguish_absence_from_zero_and_validate_final_state() 
 fn optional_reference_keys_and_corruption_are_checked_without_mutation() {
     let contract = || Schema::new(&[OptionalLink::SCHEMA]).unwrap();
     // Independently assembled with Node byte framing and SHA-256.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "dc4ff9025d100b68cb39ea27e8238befbdeed61f30c021cf4ed299420f32fa8d"
+    fingerprint::check(
+        contract().fingerprint(),
+        "dc4ff9025d100b68cb39ea27e8238befbdeed61f30c021cf4ed299420f32fa8d",
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());
@@ -3511,12 +3493,9 @@ fn named_enums_use_canonical_ordinals_and_exact_admission() {
     }
     let contract = || Schema::new(&[EnumRow::SCHEMA]).unwrap();
     // Independent literal framing and Node SHA-256; shared enum definition occurs once.
-    assert_eq!(
-        contract()
-            .fingerprint()
-            .map(|byte| format!("{byte:02x}"))
-            .concat(),
-        "a18b6361e6432e3b7c6e84378bfdd212d3f03a76d96fdf1c2a2cae4a10a8c306"
+    fingerprint::check(
+        contract().fingerprint(),
+        "a18b6361e6432e3b7c6e84378bfdd212d3f03a76d96fdf1c2a2cae4a10a8c306",
     );
     assert_eq!(
         contract().fingerprint(),

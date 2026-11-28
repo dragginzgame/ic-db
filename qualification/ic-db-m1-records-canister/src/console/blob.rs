@@ -6,8 +6,8 @@ use crate::{
     schema::BinaryObject,
     transport::{EntityFilters, PayloadFilters},
 };
+use ic_db::Comparison;
 use ic_db::design::prelude::*;
-use ic_db::{Comparison, Error};
 
 ///
 /// Payload
@@ -62,7 +62,7 @@ pub(super) fn filter<'a, E: Entity>(
     Ok(query)
 }
 
-pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Page, Error> {
+pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Page, String> {
     match select {
         "payload" => query
             .fetch_as::<Payload>()
@@ -99,6 +99,7 @@ pub(super) fn execute<E: Entity>(query: Query<'_, E>, select: &str) -> Result<Pa
         "optional,count:optional" => query
             .group_count_field::<Optional>("optional")
             .map(|r| display_groups(r, "optional", |k| optional_hex(k.optional))),
-        _ => Err(Error::InvalidQuery),
+        _ => return Err("unsupported projection or aggregate".into()),
     }
+    .map_err(super::message)
 }

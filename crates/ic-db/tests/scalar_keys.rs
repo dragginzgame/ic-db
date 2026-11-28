@@ -1,5 +1,7 @@
 //! Scalar primary keys share ordering, references and corruption checks.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -642,13 +644,11 @@ struct WrongSignedness {}
 struct WrongWidth {}
 #[test]
 fn reference_types_are_exact_and_schema_identity_is_independent() {
-    assert_eq!(
+    fingerprint::check(
         Schema::new(&[SignedKey::SCHEMA, WideKey::SCHEMA])
             .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "03877cee237172770935146709b8f5af6e9d0343dedc580d405339670617dd31"
+            .fingerprint(),
+        "03877cee237172770935146709b8f5af6e9d0343dedc580d405339670617dd31",
     );
     for wrong in [WrongSignedness::SCHEMA, WrongWidth::SCHEMA] {
         assert!(matches!(

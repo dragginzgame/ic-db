@@ -8,54 +8,112 @@ use super::{
 use proc_macro2::TokenStream;
 use quote::quote;
 
-pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::Result<TokenStream> {
-    let label = if many { "list" } else { "newtype" };
-    let mut item = declaration(item, label)?;
+///
+/// WrapperOptions
+/// Common wrapper metadata and the option specific to its declaration grammar.
+///
+pub(super) struct WrapperOptions<T> {
+    pub(super) wire: bool,
+    pub(super) name: String,
+    pub(super) kind: Kind,
+    pub(super) extra: Option<T>,
+}
+
+pub(super) fn options<T>(
+    args: TokenStream,
+    ident: &syn::Ident,
+    label: &str,
+    option: &str,
+    parse: impl Fn(&syn::Meta) -> syn::Result<T>,
+) -> syn::Result<WrapperOptions<T>> {
     let mut name = None;
-    let mut validation = None;
     let mut kind = None;
-    let mut bound = None;
+    let mut extra = None;
     let (wire, options) = crate::declaration_options(args)?;
     for meta in options {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
-        } else if !many && meta.path().is_ident("validate") {
-            let rules = super::meta_items(&meta)?;
-            if rules.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    meta,
-                    "expected at least one validation rule",
-                ));
-            }
-            once(&mut validation, rules, &meta)?;
         } else if meta.path().is_ident("item") {
             once(&mut kind, parse_item(&meta)?, &meta)?;
-        } else if many && meta.path().is_ident("max_items") {
-            once(&mut bound, parse_max_items(&meta)?, &meta)?;
+        } else if meta.path().is_ident(option) {
+            once(&mut extra, parse(&meta)?, &meta)?;
         } else {
             return Err(syn::Error::new_spanned(
                 meta,
-                format!("unsupported {label} option"),
+                format!("{label} accepts name, item and {option}"),
             ));
         }
     }
-    let name = super::declaration_name(name, &item.ident, label)?;
-    let kind = kind.ok_or_else(|| syn::Error::new_spanned(&item.ident, "expected item(...)"))?;
-    if many && bound.is_none() {
+    let name = super::declaration_name(name, ident, label)?;
+    let kind =
+        kind.ok_or_else(|| syn::Error::new_spanned(ident, format!("{label} requires item(...)")))?;
+
+    Ok(WrapperOptions {
+        wire,
+        name,
+        kind,
+        extra,
+    })
+}
+
+pub(super) fn list(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    let item = declaration(item, "list")?;
+    let ident = item.ident;
+    let WrapperOptions {
+        wire,
+        name,
+        kind,
+        extra: bound,
+    } = options(args, &ident, "list", "max_items", parse_max_items)?;
+    let bound = bound.ok_or_else(|| syn::Error::new_spanned(&ident, "list requires max_items"))?;
+    let mut field = Field::nested("value", kind, false, Some(bound));
+    field.resolve_self(&ident);
+    let attrs = crate::schema_attrs(&item.attrs, wire)?;
+    let vis = item.vis;
+    let ty = field.rust_type();
+    let desc = field.type_description();
+    let codec = value_impl(
+        &ident,
+        &name,
+        &quote!(::ic_db::TypeBody::Wrapped(#desc)),
+        &field.encode_with(&quote!(&self.0)),
+        &field.read_result(),
+    );
+
+    Ok(quote! {
+        #attrs
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        #vis struct #ident(#[doc="Wrapped value."] pub #ty);
+        #codec
+    })
+}
+
+pub(super) fn newtype(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    let mut item = declaration(item, "newtype")?;
+    let ident = item.ident;
+    let WrapperOptions {
+        wire,
+        name,
+        kind,
+        extra: validation,
+    } = options(args, &ident, "newtype", "validate", |meta| {
+        let rules = super::meta_items(meta)?;
+        if rules.is_empty() {
+            return Err(syn::Error::new_spanned(
+                meta,
+                "expected at least one validation rule",
+            ));
+        }
+
+        Ok(rules)
+    })?;
+    if matches!(kind, Kind::Named(..)) {
         return Err(syn::Error::new_spanned(
-            &item.ident,
-            "list requires max_items",
-        ));
-    }
-    if !many && matches!(kind, Kind::Named(..)) {
-        return Err(syn::Error::new_spanned(
-            item.ident,
+            ident,
             "newtype requires a primitive item",
         ));
     }
-    let ident = item.ident;
-    let mut field = Field::nested("value", kind, false, bound);
-    field.resolve_self(&ident);
+    let field = Field::nested("value", kind, false, None);
     let checked_principal = validation.is_some() && matches!(field.kind, Kind::Principal);
     let (ty, body, write, read, inner_vis, constructor) = if let Some(rules) = validation {
         let mut non_anonymous = None;
@@ -141,27 +199,14 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
         )
     };
     let vis = item.vis;
-    let projection = crate::wire_as(wire && !many, &item.attrs, &ident, &ty)?;
-    if !many {
-        default_transparent(&mut item.attrs)?;
-    }
-    let attrs = crate::schema_attrs(&item.attrs, wire && many)?;
-    let order = (!many).then(|| quote!(#[derive(PartialOrd, Ord)]));
-    let operand = if many {
-        None
-    } else {
-        let inner = match field.kind {
-            Kind::Text(_) => quote!(value.0.as_str()),
-            Kind::Blob(_) => quote!(value.0.as_slice()),
-            Kind::Principal if checked_principal => quote!(::ic_db::Principal::from(value.0)),
-            _ => quote!(value.0),
-        };
-
-        Some(quote! {
-            impl<'a> From<&'a #ident> for ::ic_db::IndexValue<'a> {
-                fn from(value: &'a #ident) -> Self { Self::from(#inner) }
-            }
-        })
+    let projection = crate::wire_as(wire, &item.attrs, &ident, &ty)?;
+    default_transparent(&mut item.attrs)?;
+    let attrs = crate::schema_attrs(&item.attrs, false)?;
+    let inner = match field.kind {
+        Kind::Text(_) => quote!(value.0.as_str()),
+        Kind::Blob(_) => quote!(value.0.as_slice()),
+        Kind::Principal if checked_principal => quote!(::ic_db::Principal::from(value.0)),
+        _ => quote!(value.0),
     };
 
     let owned_operand = checked_principal.then(|| {
@@ -171,13 +216,33 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
             }
         }
     });
+    let codec = value_impl(&ident, &name, &body, &write, &read);
+
     Ok(quote! {
         #attrs
-        #order
+        #[derive(PartialOrd, Ord)]
         #[derive(Clone, Debug, PartialEq, Eq)]
         #vis struct #ident(#[doc="Wrapped value."] #inner_vis #ty);
         #projection
         #constructor
+        #codec
+
+            impl<'a> From<&'a #ident> for ::ic_db::IndexValue<'a> {
+                fn from(value: &'a #ident) -> Self { Self::from(#inner) }
+            }
+
+        #owned_operand
+    })
+}
+
+fn value_impl(
+    ident: &syn::Ident,
+    name: &str,
+    body: &TokenStream,
+    write: &TokenStream,
+    read: &TokenStream,
+) -> TokenStream {
+    quote! {
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {
@@ -189,9 +254,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream, many: bool) -> syn::R
 
             fn decode_from(reader: &mut ::ic_db::__private::Decoder<'_>) -> Result<Self, ::ic_db::Error> { (#read).map(Self) }
         }
-        #operand
-        #owned_operand
-    })
+    }
 }
 
 // An explicit Serde conversion owns the representation in place of the default.

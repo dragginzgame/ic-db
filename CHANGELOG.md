@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.37.0]
+
+### ⚠️ Breaking
+
+- Applications inspecting IC DB types should use IC Wire 0.32. The CLI fixture’s `RowFilters` now accepts `ComparisonFilter` and `FieldRange`. Construct comparisons with a typed `FilterComparison` operator.
+
+### 🐛 Fixed
+
+- Generate endpoint manifests and TypeScript clients for application messages containing `QueryCursor` with Wire 0.32. Positional request and reply bytes are preserved. Applications can also include the cursor in an opt-in sparse message. [IC DB #36](https://github.com/dragginzgame/ic-db/issues/36)
+
+### 🔄 Changed
+
+- Consolidate schema scalar handling, query and aggregate execution helpers, and console selector dispatch. Qualification shares rollback and upgrade checks across scalar fixtures and exercises Canic 0.277.0 endpoints.
+
 ## [0.36.0] - 2026-11-27
 
 ### ⚠️ Breaking

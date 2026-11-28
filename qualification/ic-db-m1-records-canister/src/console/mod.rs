@@ -15,7 +15,8 @@ use crate::{
     runtime,
     schema::{DecimalRow, Document, Entry},
     transport::{
-        ConsolePage as Page, DisplayPage, EntityFilters, QueryOptions, QueryRequest, RowFilters,
+        ConsolePage as Page, DisplayPage, EntityFilters, FieldRange, FilterComparison,
+        QueryRequest, RowFilters,
     },
 };
 use ic_db::design::prelude::*;
@@ -92,121 +93,60 @@ fn measured_query(
     max_bytes = 65_536,
     on_error = crate::transport::endpoint_error
 )]
-fn query(
-    QueryRequest {
-        entity,
-        cursor,
-        limit,
-        entity_filters,
-        order,
-        descending,
-        work,
-        bytes,
-        select,
-        options:
-            QueryOptions {
-                distinct,
-                group_bounds: (group_min, group_max),
-                group_order,
-                filters,
-            },
-    }: QueryRequest,
-) -> Result<Page, String> {
-    let group_order = parse_group_order(group_order.as_deref())?;
-    let cursor = crate::queries::decode_cursor(cursor.as_deref()).map_err(message)?;
-    let order = parse_order(&order)?;
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Platform entrypoints receive an owned decoded request"
+)]
+fn query(request: QueryRequest) -> Result<Page, String> {
+    let parsed = ParsedQuery {
+        group_order: parse_group_order(request.options.group_order.as_deref())?,
+        cursor: crate::queries::decode_cursor(request.cursor.as_deref()).map_err(message)?,
+        order: parse_order(&request.order)?,
+        request: &request,
+    };
     let host = runtime();
     let db = open(&host);
+    let entity_filters = &request.entity_filters;
 
-    match entity.as_str() {
-        "Entry" => {
-            let query = filter_rows(entry_query(&db, &entity_filters)?, &filters)?;
-
-            execute(
-                configure(
-                    query,
-                    cursor.as_ref(),
-                    &order,
-                    descending,
-                    limit,
-                    work,
-                    bytes,
-                ),
-                &select,
-                (
-                    distinct,
-                    (group_min.as_deref(), group_max.as_deref()),
-                    group_order,
-                ),
-                &["id", "category", "amount"],
-                |r| {
-                    vec![
-                        r.id.to_string(),
-                        r.category.to_string(),
-                        r.amount.to_string(),
-                    ]
-                },
-            )
-        }
-        "Document" => {
-            let query = filter_rows(document_query(&db, &entity_filters)?, &filters)?;
-
-            execute(
-                configure(
-                    query,
-                    cursor.as_ref(),
-                    &order,
-                    descending,
-                    limit,
-                    work,
-                    bytes,
-                ),
-                &select,
-                (
-                    distinct,
-                    (group_min.as_deref(), group_max.as_deref()),
-                    group_order,
-                ),
-                &[
-                    "id",
-                    "entry_id",
-                    "title",
-                    "note",
-                    "published",
-                    "score",
-                    "previous_score",
-                    "priority",
-                ],
-                |r| {
-                    vec![
-                        r.id.to_string(),
-                        r.entry_id.to_string(),
-                        r.title,
-                        r.note.unwrap_or_else(|| "—".into()),
-                        r.published.to_string(),
-                        r.score.to_string(),
-                        optional(r.previous_score),
-                        optional(r.priority),
-                    ]
-                },
-            )
-        }
-        "DecimalRow" => execute(
-            configure(
-                filter_rows(decimal_query(&db, &entity_filters)?, &filters)?,
-                cursor.as_ref(),
-                &order,
-                descending,
-                limit,
-                work,
-                bytes,
-            ),
-            &select,
-            (
-                distinct,
-                (group_min.as_deref(), group_max.as_deref()),
-                group_order,
-            ),
+    match request.entity.as_str() {
+        "Entry" => parsed.execute(
+            entry_query(&db, entity_filters)?,
+            &["id", "category", "amount"],
+            |r| {
+                vec![
+                    r.id.to_string(),
+                    r.category.to_string(),
+                    r.amount.to_string(),
+                ]
+            },
+        ),
+        "Document" => parsed.execute(
+            document_query(&db, entity_filters)?,
+            &[
+                "id",
+                "entry_id",
+                "title",
+                "note",
+                "published",
+                "score",
+                "previous_score",
+                "priority",
+            ],
+            |r| {
+                vec![
+                    r.id.to_string(),
+                    r.entry_id.to_string(),
+                    r.title,
+                    r.note.unwrap_or_else(|| "—".into()),
+                    r.published.to_string(),
+                    r.score.to_string(),
+                    optional(r.previous_score),
+                    optional(r.priority),
+                ]
+            },
+        ),
+        "DecimalRow" => parsed.execute(
+            decimal_query(&db, entity_filters)?,
             &["id", "zone", "value", "maybe"],
             |r| {
                 vec![
@@ -217,35 +157,17 @@ fn query(
                 ]
             },
         ),
-        "BinaryObject" => {
-            let query = filter_rows(blob::query(&db, &entity_filters)?, &filters)?;
-
-            execute(
-                configure(
-                    query,
-                    cursor.as_ref(),
-                    &order,
-                    descending,
-                    limit,
-                    work,
-                    bytes,
-                ),
-                &select,
-                (
-                    distinct,
-                    (group_min.as_deref(), group_max.as_deref()),
-                    group_order,
-                ),
-                &["id", "payload", "optional"],
-                |r| {
-                    vec![
-                        r.id.to_string(),
-                        hex(&r.payload),
-                        blob::optional_hex(r.optional),
-                    ]
-                },
-            )
-        }
+        "BinaryObject" => parsed.execute(
+            blob::query(&db, entity_filters)?,
+            &["id", "payload", "optional"],
+            |r| {
+                vec![
+                    r.id.to_string(),
+                    hex(&r.payload),
+                    blob::optional_hex(r.optional),
+                ]
+            },
+        ),
         _ => Err(
             "query supports Entry, Document, DecimalRow and BinaryObject in this fixture".into(),
         ),
@@ -382,15 +304,25 @@ fn filter_rows<'a, E: Entity>(
     if let Some(field) = absent {
         query = query.filter_absent(field);
     }
-    if let Some([left, op, right]) = compare {
-        query = query.filter_fields(left, comparison(op)?, right);
+    if let Some(filter) = compare {
+        query = query.filter_fields(&filter.field, comparison(filter.op), &filter.operand);
     }
-    if let Some([field, lower, upper]) = between_fields {
+    if let Some(FieldRange {
+        field,
+        lower,
+        upper,
+    }) = between_fields
+    {
         query = query
             .filter_fields(field, Comparison::Ge, lower)
             .filter_fields(field, Comparison::Le, upper);
     }
-    if let Some([field, lower, upper]) = not_between_fields {
+    if let Some(FieldRange {
+        field,
+        lower,
+        upper,
+    }) = not_between_fields
+    {
         query = query.filter_any(&[
             (field, Comparison::Lt, ic_db::QueryOperand::Field(lower)),
             (field, Comparison::Gt, ic_db::QueryOperand::Field(upper)),
@@ -399,29 +331,32 @@ fn filter_rows<'a, E: Entity>(
     if let Some((field, value)) = boolean {
         query = query.filter(field, Comparison::Eq, *value);
     }
-    if let Some([field, op, value]) = text {
-        query = query.filter(field, comparison(op)?, value.as_str());
+    if let Some(filter) = text {
+        query = query.filter(
+            &filter.field,
+            comparison(filter.op),
+            filter.operand.as_str(),
+        );
     }
-    if let Some((field, op, n)) = length {
-        query = query.filter_length(field, comparison(op)?, *n);
+    if let Some(filter) = length {
+        query = query.filter_length(&filter.field, comparison(filter.op), filter.operand);
     }
 
     Ok(query)
 }
 
-fn comparison(op: &str) -> Result<Comparison, String> {
-    Ok(match op {
-        "eq" => Comparison::Eq,
-        "ne" => Comparison::Ne,
-        "lt" => Comparison::Lt,
-        "le" => Comparison::Le,
-        "gt" => Comparison::Gt,
-        "ge" => Comparison::Ge,
-        "starts-with" => Comparison::StartsWith,
-        "ends-with" => Comparison::EndsWith,
-        "contains" => Comparison::Contains,
-        _ => return Err(format!("unknown comparison '{op}'")),
-    })
+fn comparison(op: FilterComparison) -> Comparison {
+    match op {
+        FilterComparison::Eq => Comparison::Eq,
+        FilterComparison::Ne => Comparison::Ne,
+        FilterComparison::Lt => Comparison::Lt,
+        FilterComparison::Le => Comparison::Le,
+        FilterComparison::Gt => Comparison::Gt,
+        FilterComparison::Ge => Comparison::Ge,
+        FilterComparison::StartsWith => Comparison::StartsWith,
+        FilterComparison::EndsWith => Comparison::EndsWith,
+        FilterComparison::Contains => Comparison::Contains,
+    }
 }
 
 fn parse_direction(text: &str) -> Option<SortDirection> {
@@ -443,23 +378,6 @@ fn parse_order(order: &[String]) -> Result<Vec<(&str, SortDirection)>, String> {
             Ok((name, direction))
         })
         .collect()
-}
-
-fn configure<'a, E: Entity>(
-    mut query: Query<'a, E>,
-    cursor: Option<&'a QueryCursor>,
-    order: &[(&'a str, SortDirection)],
-    descending: bool,
-    limit: u32,
-    work: u32,
-    bytes: u32,
-) -> Query<'a, E> {
-    query = query
-        .limit(limit as usize)
-        .work_limit(work as usize)
-        .test_output_limit(bytes as usize);
-
-    apply_order(query, order, descending).after(cursor)
 }
 
 fn apply_order<'a, E: Entity>(
@@ -627,31 +545,55 @@ fn select_groups<'a, E: Entity>(
     Ok(query)
 }
 
-fn execute<'a, E: Entity>(
-    mut query: Query<'a, E>,
+///
+/// ParsedQuery
+/// Request options shared by all typed entity dispatch branches.
+///
+struct ParsedQuery<'a> {
+    request: &'a QueryRequest,
+    cursor: Option<QueryCursor>,
+    order: Vec<(&'a str, SortDirection)>,
+    group_order: Option<GroupOrder>,
+}
+
+impl ParsedQuery<'_> {
+    fn execute<'a, E: Entity>(
+        &'a self,
+        query: Query<'a, E>,
+        columns: &[&str],
+        render: fn(E) -> Vec<String>,
+    ) -> Result<Page, String> {
+        let request = self.request;
+        let options = &request.options;
+        let query = filter_rows(query, &options.filters)?
+            .limit(request.limit as usize)
+            .work_limit(request.work as usize)
+            .test_output_limit(request.bytes as usize);
+        let mut query =
+            apply_order(query, &self.order, request.descending).after(self.cursor.as_ref());
+        if options.distinct {
+            query = query.distinct();
+        }
+        let select = request.select.as_str();
+        let (min, max) = &options.group_bounds;
+        let query = select_groups(
+            query,
+            select,
+            (min.as_deref(), max.as_deref()),
+            self.group_order,
+        )?;
+
+        render_selection(query, select, columns, render)
+    }
+}
+
+fn render_selection<E: Entity>(
+    query: Query<'_, E>,
     select: &str,
-    (distinct, bounds, group_order): (bool, (Option<&'a str>, Option<&'a str>), Option<GroupOrder>),
     columns: &[&str],
     render: fn(E) -> Vec<String>,
 ) -> Result<Page, String> {
-    if distinct {
-        query = query.distinct();
-    }
-    let query = select_groups(query, select, bounds, group_order)?;
-
     match select {
-        "payload"
-        | "optional"
-        | "min:payload"
-        | "max:payload"
-        | "min:optional"
-        | "max:optional"
-        | "distinct-count:payload"
-        | "distinct-count:optional"
-        | "payload,count"
-        | "payload,count:optional"
-        | "optional,count"
-        | "optional,count:optional" => blob::execute(query, select),
         "avg:amount" => query
             .avg::<AverageAmount>()
             .map(|r| display_value(r, "amount", |r| r.amount.to_string())),
@@ -672,60 +614,6 @@ fn execute<'a, E: Entity>(
                 |v| v.amount.to_string(),
             )
         }),
-        "sum:value" | "avg:value" | "min:value" | "max:value" => {
-            let result = match select {
-                "avg:value" => query.avg::<TotalDecimal>(),
-                "min:value" => query.min::<TotalDecimal>(),
-                "max:value" => query.max::<TotalDecimal>(),
-                _ => query.sum::<TotalDecimal>(),
-            };
-
-            result.map(|r| display_value(r, "value", |r| r.value.to_string()))
-        }
-        "sum:maybe" | "avg:maybe" | "min:maybe" | "max:maybe" => {
-            let result = match select {
-                "avg:maybe" => query.avg::<OptionalDecimal>(),
-                "min:maybe" => query.min::<OptionalDecimal>(),
-                "max:maybe" => query.max::<OptionalDecimal>(),
-                _ => query.sum::<OptionalDecimal>(),
-            };
-
-            result.map(|r| display_value(r, "maybe", |r| optional(r.maybe)))
-        }
-        "zone,sum:value" | "zone,avg:value" | "zone,min:value" | "zone,max:value" => {
-            let result = match select {
-                "zone,avg:value" => query.group_avg::<ZoneOnly, TotalDecimal>(),
-                "zone,min:value" => query.group_min::<ZoneOnly, TotalDecimal>(),
-                "zone,max:value" => query.group_max::<ZoneOnly, TotalDecimal>(),
-                _ => query.group_sum::<ZoneOnly, TotalDecimal>(),
-            };
-
-            result.map(|r| {
-                display_group_values(
-                    r,
-                    &["zone", "value"],
-                    |k| k.zone.to_string(),
-                    |v| v.value.to_string(),
-                )
-            })
-        }
-        "zone,sum:maybe" | "zone,avg:maybe" | "zone,min:maybe" | "zone,max:maybe" => {
-            let result = match select {
-                "zone,avg:maybe" => query.group_avg::<ZoneOnly, OptionalDecimal>(),
-                "zone,min:maybe" => query.group_min::<ZoneOnly, OptionalDecimal>(),
-                "zone,max:maybe" => query.group_max::<ZoneOnly, OptionalDecimal>(),
-                _ => query.group_sum::<ZoneOnly, OptionalDecimal>(),
-            };
-
-            result.map(|r| {
-                display_group_values(
-                    r,
-                    &["zone", "maybe"],
-                    |k| k.zone.to_string(),
-                    |v| optional(v.maybe),
-                )
-            })
-        }
         "category,sum:amount" => query.group_sum::<CategoryOnly, TotalAmount>().map(|r| {
             display_group_values(
                 r,
@@ -868,9 +756,76 @@ fn execute<'a, E: Entity>(
         "maybe" => query
             .fetch_as::<OptionalDecimal>()
             .map(|p| display(p, &["maybe"], |r| vec![optional(r.maybe)])),
-        _ => return Err("unsupported projection or aggregate".into()),
+        _ => {
+            if let Some((op, grouped, field)) = DecimalOperation::parse(select) {
+                match field {
+                    "value" => op.execute(query, grouped, "value", |r: TotalDecimal| {
+                        r.value.to_string()
+                    }),
+                    "maybe" => op.execute(query, grouped, "maybe", |r: OptionalDecimal| {
+                        optional(r.maybe)
+                    }),
+                    _ => return blob::execute(query, select),
+                }
+            } else {
+                return blob::execute(query, select);
+            }
+        }
     }
     .map_err(message)
+}
+
+enum DecimalOperation {
+    Sum,
+    Average,
+    Min,
+    Max,
+}
+
+impl DecimalOperation {
+    fn parse(select: &str) -> Option<(Self, bool, &str)> {
+        let (op, field) = select.split_once(':')?;
+        let grouped = op.strip_prefix("zone,");
+        let op = match grouped.unwrap_or(op) {
+            "sum" => Self::Sum,
+            "avg" => Self::Average,
+            "min" => Self::Min,
+            "max" => Self::Max,
+            _ => return None,
+        };
+        Some((op, grouped.is_some(), field))
+    }
+
+    fn execute<E: Entity, R: Value>(
+        self,
+        query: Query<'_, E>,
+        grouped: bool,
+        column: &str,
+        render: fn(R) -> String,
+    ) -> Result<Page, Error> {
+        if grouped {
+            let result = match self {
+                Self::Sum => query.group_sum::<ZoneOnly, R>(),
+                Self::Average => query.group_avg::<ZoneOnly, R>(),
+                Self::Min => query.group_min::<ZoneOnly, R>(),
+                Self::Max => query.group_max::<ZoneOnly, R>(),
+            }?;
+            Ok(display_group_values(
+                result,
+                &["zone", column],
+                |k| k.zone.to_string(),
+                render,
+            ))
+        } else {
+            let result = match self {
+                Self::Sum => query.sum::<R>(),
+                Self::Average => query.avg::<R>(),
+                Self::Min => query.min::<R>(),
+                Self::Max => query.max::<R>(),
+            }?;
+            Ok(display_value(result, column, render))
+        }
+    }
 }
 
 fn grouped_extremum<E: Entity, K: Value, R: Value>(
@@ -970,15 +925,21 @@ fn display_group_values<K, R>(
     key: fn(K) -> String,
     render: fn(R) -> String,
 ) -> Page {
-    aggregate_page(r, |value| {
-        (
-            columns.iter().map(|c| (*c).into()).collect(),
-            value
-                .into_iter()
-                .map(|g| vec![key(g.key), g.value.map_or_else(|| "—".into(), render)])
-                .collect(),
-        )
-    })
+    aggregate_page(r, |rows| value_table(rows, columns, key, render))
+}
+
+fn value_table<K, R>(
+    rows: Vec<GroupValue<K, R>>,
+    columns: &[&str; 2],
+    key: fn(K) -> String,
+    render: fn(R) -> String,
+) -> (Vec<String>, Vec<Vec<String>>) {
+    (
+        columns.iter().map(|c| (*c).into()).collect(),
+        rows.into_iter()
+            .map(|g| vec![key(g.key), g.value.map_or_else(|| "—".into(), render)])
+            .collect(),
+    )
 }
 
 fn extremum<E: Entity, R: Value>(
@@ -1012,15 +973,20 @@ fn display_scalar<T: ToString>(r: Aggregate<T>, column: &str) -> Page {
 }
 
 fn display_groups<K>(r: Aggregate<Vec<GroupCount<K>>>, column: &str, key: fn(K) -> String) -> Page {
-    aggregate_page(r, |value| {
-        (
-            vec![column.into(), "count".into()],
-            value
-                .into_iter()
-                .map(|g| vec![key(g.key), g.count.to_string()])
-                .collect(),
-        )
-    })
+    aggregate_page(r, |rows| count_table(rows, column, key))
+}
+
+fn count_table<K>(
+    rows: Vec<GroupCount<K>>,
+    column: &str,
+    key: fn(K) -> String,
+) -> (Vec<String>, Vec<Vec<String>>) {
+    (
+        vec![column.into(), "count".into()],
+        rows.into_iter()
+            .map(|g| vec![key(g.key), g.count.to_string()])
+            .collect(),
+    )
 }
 
 fn display<T>(page: QueryPage<T>, columns: &[&str], render: fn(T) -> Vec<String>) -> Page {

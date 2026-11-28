@@ -3,6 +3,8 @@
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
+mod wire_frame;
+
 type Status = ([u8; 32], [u8; 16], u64, u64);
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 
@@ -2477,6 +2479,120 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
     owned.drop().await;
 }
 
+type ScalarRow<T> = (u64, Option<T>, T);
+
+struct ScalarProbe<'a> {
+    pic: &'a ic_testkit::pocket_ic::nonblocking::PocketIc,
+    canister: ic_testkit::pocket_ic::CanisterId,
+    batch: (&'static str, u64),
+    records: (&'static str, u64),
+    decodes: (&'static str, u64),
+}
+
+impl ScalarProbe<'_> {
+    async fn query<R: serde::de::DeserializeOwned>(
+        &self,
+        (name, method): (&str, u64),
+        value: &impl serde::Serialize,
+    ) -> R {
+        let reply = self
+            .pic
+            .query_call(
+                self.canister,
+                self.canister,
+                name,
+                wire_frame::request(method, value),
+            )
+            .await
+            .unwrap();
+        wire_frame::response(method, &reply)
+    }
+
+    async fn read(&self) -> (Vec<(u64, Vec<u8>)>, u64) {
+        self.query(self.records, &()).await
+    }
+
+    async fn check_batch<T: Copy + serde::Serialize>(
+        &self,
+        rows: &[ScalarRow<T>],
+        expected: impl Fn(&[ScalarRow<T>]) -> Vec<(u64, Vec<u8>)>,
+        invalid: Option<T>,
+    ) -> Vec<ScalarRow<T>> {
+        let (name, method) = self.batch;
+        let write = async |batch: &[ScalarRow<T>], trap| {
+            self.pic
+                .update_call(
+                    self.canister,
+                    self.canister,
+                    name,
+                    wire_frame::request(method, &(batch, trap)),
+                )
+                .await
+        };
+        let result = |reply: &[u8]| wire_frame::response::<Result<(), u8>>(method, reply);
+        assert_eq!(result(&write(rows, false).await.unwrap()), Ok(()));
+        assert_eq!(self.read().await, (expected(rows), 1));
+        let before = self.pic.get_stable_memory(self.canister).await;
+        assert_eq!(result(&write(rows, false).await.unwrap()), Ok(()));
+        assert_eq!(self.pic.get_stable_memory(self.canister).await, before);
+        let mut swapped = rows.to_vec();
+        swapped[0].1 = rows[5].1;
+        swapped[5].1 = rows[0].1;
+        assert_eq!(result(&write(&swapped[..1], false).await.unwrap()), Err(2));
+        assert_eq!(self.pic.get_stable_memory(self.canister).await, before);
+        if let Some(value) = invalid {
+            let mut row = rows[0];
+            row.2 = value;
+            assert_eq!(result(&write(&[row], false).await.unwrap()), Err(1));
+            assert_eq!(self.pic.get_stable_memory(self.canister).await, before);
+        }
+        let updates = [swapped[0], swapped[5]];
+        assert!(write(&updates, true).await.is_err());
+        assert_eq!(self.pic.get_stable_memory(self.canister).await, before);
+        assert_eq!(self.read().await, (expected(rows), 1));
+        assert_eq!(result(&write(&updates, false).await.unwrap()), Ok(()));
+        assert_eq!(self.read().await, (expected(&swapped), 2));
+        swapped
+    }
+
+    async fn check_decodes(&self, golden: Vec<u8>) {
+        let mut truncated = golden.clone();
+        truncated.remove(9);
+        let mut surplus = golden.clone();
+        surplus.insert(9, 0);
+        let mut invalid = golden.clone();
+        invalid[8] = 2;
+        for (bytes, valid) in [
+            (golden, true),
+            (truncated, false),
+            (surplus, false),
+            (invalid, false),
+        ] {
+            assert_eq!(self.query::<bool>(self.decodes, &bytes).await, valid);
+        }
+    }
+}
+
+fn scalar_bytes<T: Copy + Ord, const N: usize>(
+    rows: &[ScalarRow<T>],
+    encode: impl Fn(T) -> [u8; N],
+) -> Vec<(u64, Vec<u8>)> {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|(id, _, value)| (*value, *id));
+    rows.into_iter()
+        .map(|(id, maybe, value)| {
+            let mut bytes = id.to_le_bytes().to_vec();
+            bytes.push(u8::from(maybe.is_some()));
+            if let Some(maybe) = maybe {
+                bytes.extend(encode(maybe));
+            }
+            bytes.extend(encode(value));
+            bytes.push(1);
+            (id, bytes)
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn u256_exact_order_uniqueness_and_message_rollback() {
     let wasm = ic_db_m0_rollback_driver::records_wasm();
@@ -2486,63 +2602,12 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    type Row = (u64, Option<[u8; 32]>, [u8; 32]);
-    let write = async |rows: Vec<Row>, trap: bool| {
-        pic.update_call(
-            canister,
-            canister,
-            "u256_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 41,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-    };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 41,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
-    let read = async || {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "u256_rows",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 42,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 42,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+    let probe = ScalarProbe {
+        pic,
+        canister,
+        batch: ("u256_batch", 41),
+        records: ("u256_rows", 42),
+        decodes: ("u256_decodes", 44),
     };
     // Independent byte vectors: zero, one, 2^128-1, 2^128, 2^255, maximum.
     let zero = [0; 32];
@@ -2555,78 +2620,16 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
     let mut top = zero;
     top[0] = 128;
     let maximum = [255; 32];
-    let mut rows: Vec<Row> = [zero, one, low, high, top, maximum]
+    let mut rows: Vec<ScalarRow<[u8; 32]>> = [zero, one, low, high, top, maximum]
         .into_iter()
         .enumerate()
         .map(|(n, v)| (n as u64 + 1, Some(v), v))
         .collect();
     rows.push((7, None, high));
-    let expected = |rows: &[Row]| {
-        let mut rows = rows.to_vec();
-        rows.sort_by_key(|(id, _, value)| (*value, *id));
-
-        rows.into_iter()
-            .map(|(id, maybe, value)| {
-                let mut bytes = id.to_le_bytes().to_vec();
-                bytes.push(u8::from(maybe.is_some()));
-                if let Some(maybe) = maybe {
-                    bytes.extend(maybe);
-                }
-                bytes.extend(value);
-                bytes.push(1);
-
-                (id, bytes)
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(read().await, (expected(&rows), 1));
-    let before = pic.get_stable_memory(canister).await;
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let expected = |rows: &[ScalarRow<[u8; 32]>]| scalar_bytes(rows, |v| v);
+    let swapped = probe.check_batch(&rows, expected, None).await;
     assert_eq!(
-        result(&write(vec![(1, Some(maximum), zero)], false).await.unwrap()),
-        Err(2)
-    );
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    let mut swapped = rows.clone();
-    swapped[0].1 = Some(maximum);
-    swapped[5].1 = Some(zero);
-    assert!(write(vec![swapped[0], swapped[5]], true).await.is_err());
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&rows), 1));
-    assert_eq!(
-        result(&write(vec![swapped[0], swapped[5]], false).await.unwrap()),
-        Ok(())
-    );
-    assert_eq!(read().await, (expected(&swapped), 2));
-    let reply = pic
-        .query_call(
-            canister,
-            canister,
-            "u256_lookup",
-            ic_wire::encode(
-                &high,
-                Encoding::Frame {
-                    method: 43,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Vec<u64>>(
-            &reply,
-            Encoding::Frame {
-                method: 43,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
+        probe.query::<Vec<u64>>(("u256_lookup", 43), &high).await,
         vec![4, 7]
     );
     let golden = expected(&rows)
@@ -2634,54 +2637,13 @@ async fn u256_exact_order_uniqueness_and_message_rollback() {
         .find(|(id, _)| *id == 7)
         .unwrap()
         .1;
-    let mut truncated = golden.clone();
-    truncated.remove(9);
-    let mut surplus = golden.clone();
-    surplus.insert(9, 0);
-    let mut invalid = golden.clone();
-    invalid[8] = 2;
-    for (bytes, valid) in [
-        (golden, true),
-        (truncated, false),
-        (surplus, false),
-        (invalid, false),
-    ] {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "u256_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 44,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 44,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
-    }
+    probe.check_decodes(golden).await;
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&swapped), 2));
+    assert_eq!(probe.read().await, (expected(&swapped), 2));
     owned.drop().await;
 }
 
@@ -3272,63 +3234,12 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
             assert_eq!(result, Err(1));
         }
     }
-    type Row = (u64, Option<[u8; 16]>, [u8; 16]);
-    let write = async |rows: Vec<Row>, trap: bool| {
-        pic.update_call(
-            canister,
-            canister,
-            "ulid_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 53,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-    };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 53,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
-    let read = async || {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "ulid_rows",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 54,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 54,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+    let probe = ScalarProbe {
+        pic,
+        canister,
+        batch: ("ulid_batch", 53),
+        records: ("ulid_rows", 54),
+        decodes: ("ulid_decodes", 56),
     };
     // Independent byte vectors: zero, one, 2^80-1, 2^80, 2^127, maximum.
     let zero = [0; 16];
@@ -3341,78 +3252,16 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
     let mut top = zero;
     top[0] = 128;
     let maximum = [255; 16];
-    let mut rows: Vec<Row> = [zero, one, low, high, top, maximum]
+    let mut rows: Vec<ScalarRow<[u8; 16]>> = [zero, one, low, high, top, maximum]
         .into_iter()
         .enumerate()
         .map(|(n, v)| (n as u64 + 1, Some(v), v))
         .collect();
     rows.push((7, None, high));
-    let expected = |rows: &[Row]| {
-        let mut rows = rows.to_vec();
-        rows.sort_by_key(|(id, _, value)| (*value, *id));
-
-        rows.into_iter()
-            .map(|(id, maybe, value)| {
-                let mut bytes = id.to_le_bytes().to_vec();
-                bytes.push(u8::from(maybe.is_some()));
-                if let Some(maybe) = maybe {
-                    bytes.extend(maybe);
-                }
-                bytes.extend(value);
-                bytes.push(1);
-
-                (id, bytes)
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(read().await, (expected(&rows), 1));
-    let before = pic.get_stable_memory(canister).await;
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let expected = |rows: &[ScalarRow<[u8; 16]>]| scalar_bytes(rows, |v| v);
+    let swapped = probe.check_batch(&rows, expected, None).await;
     assert_eq!(
-        result(&write(vec![(1, Some(maximum), zero)], false).await.unwrap()),
-        Err(2)
-    );
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    let mut swapped = rows.clone();
-    swapped[0].1 = Some(maximum);
-    swapped[5].1 = Some(zero);
-    assert!(write(vec![swapped[0], swapped[5]], true).await.is_err());
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&rows), 1));
-    assert_eq!(
-        result(&write(vec![swapped[0], swapped[5]], false).await.unwrap()),
-        Ok(())
-    );
-    assert_eq!(read().await, (expected(&swapped), 2));
-    let reply = pic
-        .query_call(
-            canister,
-            canister,
-            "ulid_lookup",
-            ic_wire::encode(
-                &high,
-                Encoding::Frame {
-                    method: 55,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Vec<u64>>(
-            &reply,
-            Encoding::Frame {
-                method: 55,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
+        probe.query::<Vec<u64>>(("ulid_lookup", 55), &high).await,
         vec![4, 7]
     );
     let golden = expected(&rows)
@@ -3420,54 +3269,13 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
         .find(|(id, _)| *id == 7)
         .unwrap()
         .1;
-    let mut truncated = golden.clone();
-    truncated.remove(9);
-    let mut surplus = golden.clone();
-    surplus.insert(9, 0);
-    let mut invalid = golden.clone();
-    invalid[8] = 2;
-    for (bytes, valid) in [
-        (golden, true),
-        (truncated, false),
-        (surplus, false),
-        (invalid, false),
-    ] {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "ulid_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 56,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 56,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
-    }
+    probe.check_decodes(golden).await;
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&swapped), 2));
+    assert_eq!(probe.read().await, (expected(&swapped), 2));
     owned.drop().await;
 }
 
@@ -3480,63 +3288,12 @@ async fn dates_preserve_domain_order_and_message_rollback() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm.clone(), vec![], None)
         .await;
-    type Row = (u64, Option<i32>, i32);
-    let write = async |rows: Vec<Row>, trap: bool| {
-        pic.update_call(
-            canister,
-            canister,
-            "date_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 58,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-    };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 58,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
-    let read = async || {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "date_rows",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 59,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 59,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+    let probe = ScalarProbe {
+        pic,
+        canister,
+        batch: ("date_batch", 58),
+        records: ("date_rows", 59),
+        decodes: ("date_decodes", 61),
     };
     let zero = -719528_i32;
     let one = -365_i32;
@@ -3544,83 +3301,18 @@ async fn dates_preserve_domain_order_and_message_rollback() {
     let high = 0_i32;
     let top = 1_i32;
     let maximum = 2932896_i32;
-    let mut rows: Vec<Row> = [zero, one, low, high, top, maximum]
+    let mut rows: Vec<ScalarRow<i32>> = [zero, one, low, high, top, maximum]
         .into_iter()
         .enumerate()
         .map(|(n, v)| (n as u64 + 1, Some(v), v))
         .collect();
     rows.push((7, None, high));
-    let expected = |rows: &[Row]| {
-        let mut rows = rows.to_vec();
-        rows.sort_by_key(|(id, _, value)| (*value, *id));
-
-        rows.into_iter()
-            .map(|(id, maybe, value)| {
-                let mut bytes = id.to_le_bytes().to_vec();
-                bytes.push(u8::from(maybe.is_some()));
-                if let Some(maybe) = maybe {
-                    bytes.extend(maybe.to_le_bytes());
-                }
-                bytes.extend(value.to_le_bytes());
-                bytes.push(1);
-
-                (id, bytes)
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(read().await, (expected(&rows), 1));
-    let before = pic.get_stable_memory(canister).await;
-    assert_eq!(result(&write(rows.clone(), false).await.unwrap()), Ok(()));
-    assert_eq!(pic.get_stable_memory(canister).await, before);
+    let expected = |rows: &[ScalarRow<i32>]| scalar_bytes(rows, i32::to_le_bytes);
+    let swapped = probe.check_batch(&rows, expected, Some(2932897)).await;
     assert_eq!(
-        result(&write(vec![(1, Some(maximum), zero)], false).await.unwrap()),
-        Err(2)
-    );
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(
-        result(&write(vec![(1, Some(zero), 2932897)], false).await.unwrap()),
-        Err(1)
-    );
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    let mut swapped = rows.clone();
-    swapped[0].1 = Some(maximum);
-    swapped[5].1 = Some(zero);
-    assert!(write(vec![swapped[0], swapped[5]], true).await.is_err());
-    assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&rows), 1));
-    assert_eq!(
-        result(&write(vec![swapped[0], swapped[5]], false).await.unwrap()),
-        Ok(())
-    );
-    assert_eq!(read().await, (expected(&swapped), 2));
-    let reply = pic
-        .query_call(
-            canister,
-            canister,
-            "date_lookup",
-            ic_wire::encode(
-                &high,
-                Encoding::Frame {
-                    method: 60,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<Vec<u64>, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 60,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
+        probe
+            .query::<Result<Vec<u64>, u8>>(("date_lookup", 60), &high)
+            .await,
         Ok(vec![4, 7])
     );
     let golden = expected(&rows)
@@ -3628,57 +3320,16 @@ async fn dates_preserve_domain_order_and_message_rollback() {
         .find(|(id, _)| *id == 7)
         .unwrap()
         .1;
-    let mut truncated = golden.clone();
-    truncated.remove(9);
-    let mut surplus = golden.clone();
-    surplus.insert(9, 0);
-    let mut invalid = golden.clone();
-    invalid[8] = 2;
     let mut out_of_range = golden.clone();
     out_of_range[9..13].copy_from_slice(&i32::MAX.to_le_bytes());
-    for (bytes, valid) in [
-        (golden, true),
-        (out_of_range, false),
-        (truncated, false),
-        (surplus, false),
-        (invalid, false),
-    ] {
-        let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "date_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 61,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 61,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
-    }
+    assert!(!probe.query::<bool>(probe.decodes, &out_of_range).await);
+    probe.check_decodes(golden).await;
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
         .unwrap();
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    assert_eq!(read().await, (expected(&swapped), 2));
+    assert_eq!(probe.read().await, (expected(&swapped), 2));
     owned.drop().await;
 }
 

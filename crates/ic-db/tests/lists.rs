@@ -1,5 +1,7 @@
 //! Bounded ordered lists: independent count framing and shared row limits.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -230,13 +232,9 @@ fn list_order_duplicates_absence_and_element_bounds_are_exact() {
         numbers: vec![258, 1, 258],
     };
     // Independent Node framing and SHA-256, including list item/count bounds.
-    assert_eq!(
-        Schema::new(&[ListRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "9bc237d432b7ce89d5ceea8356c54acd570404687623e87ca14789359eac10bd"
+    fingerprint::check(
+        Schema::new(&[ListRow::SCHEMA]).unwrap().fingerprint(),
+        "9bc237d432b7ce89d5ceea8356c54acd570404687623e87ca14789359eac10bd",
     );
     let golden = [7, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 1, 1, 0, 2, 1];
     assert_eq!(row.encode().unwrap(), golden);

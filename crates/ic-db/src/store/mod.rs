@@ -72,6 +72,18 @@ fn read_index_owner<M: Memory>(
     Ok((owner, row))
 }
 
+// Validate a physical index entry against its stored owner when the caller needs
+// only the integrity result. Query scans already have the inspected fields.
+fn validate_index_owner<M: Memory>(
+    map: &Map<M>,
+    entity: &EntitySchema,
+    key: &[u8],
+    encoded_owner: &[u8],
+) -> Result<(), Error> {
+    let (owner, row) = read_index_owner(map, entity.id, entity.key_type()?, encoded_owner)?;
+    validate_index_entry(entity, &entity.inspect_row(&row)?, owner, key)
+}
+
 // The typed caller checks the decoded row's index components against this key.
 #[inline(never)]
 fn next_index<M: Memory>(
@@ -485,14 +497,6 @@ impl<M: Memory> Database<M> {
         Ok(read_entity_state(&self.map, entity.id)?.count)
     }
 
-    fn revision_by_id(&self, entity: u32) -> Result<u64, Error> {
-        if self.schema.entity_by_id(entity).is_none() {
-            return Err(Error::UnknownEntity);
-        }
-
-        read_revision(&self.map, entity)
-    }
-
     /// Read a typed primary key without planning a scan.
     /// # Errors
     /// Refuses unadmitted types or malformed rows.
@@ -616,14 +620,11 @@ impl<M: Memory> Database<M> {
             return Err(Error::Limit);
         }
         let prefix = prefix(2, entity.id, &[]);
-        let start = after.map_or_else(
-            || StoreKey::new(prefix.clone()).expect("row namespace fits"),
-            |key| row_key(entity.id, key.into_row_key()),
-        );
-        let lower = if after.is_some() {
-            std::ops::Bound::Excluded(start)
-        } else {
-            std::ops::Bound::Included(start)
+        let lower = match after {
+            Some(key) => std::ops::Bound::Excluded(row_key(entity.id, key.into_row_key())),
+            None => std::ops::Bound::Included(
+                StoreKey::new(prefix.clone()).expect("row namespace fits"),
+            ),
         };
         let mut entries = self.map.range((lower, std::ops::Bound::Unbounded));
         let key_type = entity.key_type()?;
@@ -955,9 +956,7 @@ impl<M: Memory> Database<M> {
             if let Some((entity, _)) = conflict_target.filter(|(_, prefix)| key.starts_with(prefix))
             {
                 if let Some(encoded) = self.map.get(&key) {
-                    let (owner, bytes) =
-                        read_index_owner(&self.map, entity.id, entity.key_type()?, &encoded)?;
-                    validate_index_entry(entity, &entity.inspect_row(&bytes)?, owner, &key)?;
+                    validate_index_owner(&self.map, entity, &key, &encoded)?;
                     skip_insert = true;
                 }
                 continue;
@@ -1054,14 +1053,7 @@ impl<M: Memory> Database<M> {
                             }
                             continue;
                         }
-                        let (owner, bytes) = read_index_owner(
-                            &self.map,
-                            entity.id,
-                            entity.key_type()?,
-                            &entry.value(),
-                        )?;
-                        let info = entity.inspect_row(&bytes)?;
-                        validate_index_entry(entity, &info, owner, entry.key())?;
+                        validate_index_owner(&self.map, entity, entry.key(), &entry.value())?;
 
                         return Err(Error::ReferenceViolation);
                     }

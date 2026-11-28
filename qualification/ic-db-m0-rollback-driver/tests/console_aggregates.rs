@@ -3,10 +3,34 @@
 mod wire_call;
 
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
-use ic_db_qualification_transport::{PayloadFilters, RetainedSelection as Selection, RowFilters};
+use ic_db_qualification_transport::{
+    ComparisonFilter, FilterComparison, PayloadFilters, RetainedResume,
+    RetainedSelection as Selection, RowFilters,
+};
 use wire_call::call;
 
 use ic_db_qualification_transport::{DisplayPage, RetainedPhase, RetainedProgress as Step};
+
+fn retained_selection(entity: &str, select: impl Into<String>) -> Selection {
+    Selection {
+        entity: entity.into(),
+        select: select.into(),
+        entity_filters: Default::default(),
+        limit: 32,
+        group_bounds: (None, None),
+        group_order: None,
+        filters: RowFilters::default(),
+        order: Default::default(),
+    }
+}
+
+async fn resume_step(
+    pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
+    canister: ic_testkit::pocket_ic::CanisterId,
+    request: RetainedResume,
+) -> Result<Step, String> {
+    call(pic, canister, "aggregate_resume", 121, &request).await
+}
 
 fn completed(step: &Step) -> &DisplayPage {
     let RetainedPhase::Complete(output) = &step.phase else {
@@ -38,34 +62,23 @@ async fn distinct_keys_page_past_32_after_upgrade() {
     }
     // An exact count retains 32 keys. Its 33rd distinct value must allow
     // cancellation at the previous checkpoint and a fresh enumeration.
-    let count = Selection {
-        entity: "Entry".into(),
-        select: "distinct-count:amount".into(),
-        entity_filters: Default::default(),
-        limit: 32,
-        group_bounds: (None, None),
-        group_order: None,
-        filters: RowFilters::default(),
-        order: Default::default(),
-    };
+    let count = retained_selection("Entry", "distinct-count:amount");
     let refused = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &count)
         .await
         .unwrap();
     let advance_count = async |sequence: u64, work: u32| {
-        call::<Result<Step, String>>(
+        resume_step(
             pic,
             canister,
-            "aggregate_resume",
-            121,
-            &(
-                &count,
-                &refused,
+            RetainedResume {
+                selection: count.clone(),
+                handle: refused.to_vec(),
                 sequence,
                 work,
-                4096_u32,
-                1_u32,
-                None::<Vec<u8>>,
-            ),
+                bytes: 4096,
+                page_size: 1,
+                after: None,
+            },
         )
         .await
     };
@@ -88,18 +101,13 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         (Some("first"), true),
     ] {
         let selection = Selection {
-            entity: "Entry".into(),
-            select: "distinct:amount".into(),
-            entity_filters: Default::default(),
-            limit: 32,
-            group_bounds: (None, None),
             group_order: order.map(str::to_owned),
-            filters: RowFilters::default(),
             order: if reverse_input {
                 (vec!["category".into()], true)
             } else {
                 Default::default()
             },
+            ..retained_selection("Entry", "distinct:amount")
         };
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -118,14 +126,18 @@ async fn distinct_keys_page_past_32_after_upgrade() {
         let mut output = Vec::new();
         for _ in 0..16 {
             let before = pic.cycle_balance(canister).await;
-            let step = call::<Result<Step, String>>(
+            let step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection, &handle, sequence, 17_u32, 4096_u32, 11_u32, &cursor,
-                ),
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
+                    sequence,
+                    work: 17,
+                    bytes: 4096,
+                    page_size: 11,
+                    after: cursor.clone(),
+                },
             )
             .await
             .unwrap();
@@ -191,16 +203,7 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, old, vec![], None).await;
 
-    let selection = Selection {
-        entity: "Entry".into(),
-        select: "distinct:amount".into(),
-        entity_filters: Default::default(),
-        limit: 32,
-        group_bounds: (None, None),
-        group_order: None,
-        filters: RowFilters::default(),
-        order: Default::default(),
-    };
+    let selection = retained_selection("Entry", "distinct:amount");
     type PreviousStep = (
         u64,
         String,
@@ -249,14 +252,18 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
         .unwrap();
     for (handle, sequence, was_complete) in saved {
         let resume = async |sequence: u64, after: Option<Vec<u8>>| {
-            call::<Result<Step, String>>(
+            resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection, &handle, sequence, 32_u32, 4096_u32, 3_u32, after,
-                ),
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
+                    sequence,
+                    work: 32,
+                    bytes: 4096,
+                    page_size: 3,
+                    after,
+                },
             )
             .await
             .unwrap()
@@ -285,14 +292,8 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
     pic.add_cycles(canister, 3_000_000_000_000).await;
     pic.install_canister(canister, wasm, vec![], None).await;
     let selection = Selection {
-        entity: "Entry".into(),
-        select: "distinct:amount".into(),
-        entity_filters: Default::default(),
-        limit: 32,
-        group_bounds: (None, None),
         group_order: Some("first".into()),
-        filters: RowFilters::default(),
-        order: Default::default(),
+        ..retained_selection("Entry", "distinct:amount")
     };
     let mut populated = 0;
     for keys in [8_u64, 32, 128, 255] {
@@ -313,20 +314,18 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
                 .await
                 .unwrap();
         let before_scan = pic.cycle_balance(canister).await;
-        let first = call::<Result<Step, String>>(
+        let first = resume_step(
             pic,
             canister,
-            "aggregate_resume",
-            121,
-            &(
-                &selection,
-                &handle,
-                0_u64,
-                512_u32,
-                4096_u32,
-                1_u32,
-                None::<Vec<u8>>,
-            ),
+            RetainedResume {
+                selection: selection.clone(),
+                handle: handle.to_vec(),
+                sequence: 0,
+                work: 512,
+                bytes: 4096,
+                page_size: 1,
+                after: None,
+            },
         )
         .await
         .unwrap();
@@ -336,20 +335,18 @@ async fn completed_distinct_single_key_page_cost_by_cardinality() {
         assert_eq!(completed(&first).rows, [["1"]]);
         assert!(completed(&first).next.is_some());
         let before = pic.cycle_balance(canister).await;
-        let second = call::<Result<Step, String>>(
+        let second = resume_step(
             pic,
             canister,
-            "aggregate_resume",
-            121,
-            &(
-                &selection,
-                &handle,
-                first.sequence,
-                1_u32,
-                4096_u32,
-                1_u32,
-                completed(&first).next.clone(),
-            ),
+            RetainedResume {
+                selection: selection.clone(),
+                handle: handle.to_vec(),
+                sequence: first.sequence,
+                work: 1,
+                bytes: 4096,
+                page_size: 1,
+                after: completed(&first).next.clone(),
+            },
         )
         .await
         .unwrap();
@@ -399,16 +396,7 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
             vec![vec!["0", "1"], vec!["1", "1"]],
         ),
     ] {
-        let selection = Selection {
-            entity: "Entry".into(),
-            select: select.into(),
-            entity_filters: Default::default(),
-            limit: 32,
-            group_bounds: (None, None),
-            group_order: None,
-            filters: RowFilters::default(),
-            order: Default::default(),
-        };
+        let selection = retained_selection("Entry", select);
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
@@ -416,20 +404,18 @@ async fn repeated_group_keys_preserve_counts_across_checkpoints() {
         let mut sequence = 0;
         for (index, work) in [128_u32, 256].into_iter().enumerate() {
             let before = pic.cycle_balance(canister).await;
-            let step = call::<Result<Step, String>>(
+            let step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection,
-                    &handle,
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
                     sequence,
                     work,
-                    4096_u32,
-                    2_u32,
-                    None::<Vec<u8>>,
-                ),
+                    bytes: 4096,
+                    page_size: 2,
+                    after: None,
+                },
             )
             .await
             .unwrap();
@@ -498,17 +484,15 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
 
     let selection = |right: &str| -> Selection {
         Selection {
-            entity: "Document".into(),
-            select: "count".into(),
-            entity_filters: Default::default(),
-            limit: 32,
-            group_bounds: (None, None),
-            group_order: None,
             filters: RowFilters {
-                compare: Some(["title".into(), "contains".into(), right.into()]),
+                compare: Some(ComparisonFilter {
+                    field: "title".into(),
+                    op: FilterComparison::Contains,
+                    operand: right.into(),
+                }),
                 ..Default::default()
             },
-            order: Default::default(),
+            ..retained_selection("Document", "count")
         }
     };
     let original = selection("note");
@@ -518,20 +502,18 @@ async fn retained_field_substrings_bind_the_needle_and_survive_upgrade() {
             .unwrap()
     };
     let resume = async |query: &Selection, handle: &[u8], sequence: u64| {
-        call::<Result<Step, String>>(
+        resume_step(
             pic,
             canister,
-            "aggregate_resume",
-            121,
-            &(
-                query,
-                handle,
+            RetainedResume {
+                selection: query.clone(),
+                handle: handle.to_vec(),
                 sequence,
-                2_u32,
-                4096_u32,
-                1_u32,
-                None::<Vec<u8>>,
-            ),
+                work: 2,
+                bytes: 4096,
+                page_size: 1,
+                after: None,
+            },
         )
         .await
     };
@@ -665,34 +647,23 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
         let mut jobs = Vec::new();
         for grouped in [false, true] {
             let select = format!("{}avg:{field}", if grouped { "zone," } else { "" });
-            let selection = Selection {
-                entity: "DecimalRow".into(),
-                select,
-                entity_filters: Default::default(),
-                limit: 32,
-                group_bounds: (None, None),
-                group_order: None,
-                filters: RowFilters::default(),
-                order: Default::default(),
-            };
+            let selection = retained_selection("DecimalRow", select);
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                     .await
                     .unwrap();
-            let first: Step = call::<Result<Step, String>>(
+            let first: Step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection,
-                    &handle,
-                    0_u64,
-                    1_u32,
-                    4096_u32,
-                    1_u32,
-                    None::<Vec<u8>>,
-                ),
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
+                    sequence: 0,
+                    work: 1,
+                    bytes: 4096,
+                    page_size: 1,
+                    after: None,
+                },
             )
             .await
             .unwrap();
@@ -715,20 +686,18 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
         assert_eq!(pic.get_stable_memory(canister).await, before);
         for (selection, handle, grouped) in jobs {
             // Replaying the pre-upgrade sequence cannot rescan or round a prefix.
-            let retry: Step = call::<Result<Step, String>>(
+            let retry: Step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection,
-                    &handle,
-                    0_u64,
-                    4_u32,
-                    4096_u32,
-                    1_u32,
-                    None::<Vec<u8>>,
-                ),
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
+                    sequence: 0,
+                    work: 4,
+                    bytes: 4096,
+                    page_size: 1,
+                    after: None,
+                },
             )
             .await
             .unwrap();
@@ -741,20 +710,18 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
                 ),
                 (1, "Running", 1, 0)
             );
-            let step: Step = call::<Result<Step, String>>(
+            let step: Step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection,
-                    &handle,
-                    retry.sequence,
-                    2_u32,
-                    4096_u32,
-                    1_u32,
-                    None::<Vec<u8>>,
-                ),
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
+                    sequence: retry.sequence,
+                    work: 2,
+                    bytes: 4096,
+                    page_size: 1,
+                    after: None,
+                },
             )
             .await
             .unwrap();
@@ -766,39 +733,35 @@ async fn retained_decimal_rounding_uses_complete_totals_after_upgrade() {
             let sequence = step.sequence;
             if index == 0 {
                 let before = pic.get_stable_memory(canister).await;
-                let refusal: Result<Step, String> = call(
+                let refusal = resume_step(
                     pic,
                     canister,
-                    "aggregate_resume",
-                    121,
-                    &(
-                        &selection,
-                        &handle,
+                    RetainedResume {
+                        selection: selection.clone(),
+                        handle: handle.clone(),
                         sequence,
-                        4_u32,
-                        1_u32,
-                        1_u32,
-                        None::<Vec<u8>>,
-                    ),
+                        work: 4,
+                        bytes: 1,
+                        page_size: 1,
+                        after: None,
+                    },
                 )
                 .await;
                 assert!(refusal.is_err());
                 assert_eq!(pic.get_stable_memory(canister).await, before);
             }
-            let complete: Step = call::<Result<Step, String>>(
+            let complete: Step = resume_step(
                 pic,
                 canister,
-                "aggregate_resume",
-                121,
-                &(
-                    &selection,
-                    &handle,
+                RetainedResume {
+                    selection: selection.clone(),
+                    handle: handle.to_vec(),
                     sequence,
-                    4_u32,
-                    4096_u32,
-                    1_u32,
-                    None::<Vec<u8>>,
-                ),
+                    work: 4,
+                    bytes: 4096,
+                    page_size: 1,
+                    after: None,
+                },
             )
             .await
             .unwrap();
@@ -860,20 +823,18 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         .unwrap();
     };
     let advance = async |selection: &Selection, handle: &[u8], sequence: u64, bytes: u32| {
-        call::<Result<Step, String>>(
+        resume_step(
             pic,
             canister,
-            "aggregate_resume",
-            121,
-            &(
-                selection,
-                handle,
+            RetainedResume {
+                selection: selection.clone(),
+                handle: handle.to_vec(),
                 sequence,
-                1_u32,
+                work: 1,
                 bytes,
-                1_u32,
-                None::<Vec<u8>>,
-            ),
+                page_size: 1,
+                after: None,
+            },
         )
         .await
     };
@@ -914,16 +875,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
         ];
         let mut jobs = Vec::new();
         for (selector, expected) in cases {
-            let selection = Selection {
-                entity: "BinaryObject".into(),
-                select: selector.into(),
-                entity_filters: Default::default(),
-                limit: 32,
-                group_bounds: (None, None),
-                group_order: None,
-                filters: RowFilters::default(),
-                order: Default::default(),
-            };
+            let selection = retained_selection("BinaryObject", selector);
             let handle =
                 call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                     .await
@@ -1030,12 +982,6 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .is_some_and(|(lo, hi)| lo > hi);
         replace(payload, None).await;
         let selection = Selection {
-            entity: "BinaryObject".into(),
-            select: "count".into(),
-            entity_filters: Default::default(),
-            limit: 32,
-            group_bounds: (None, None),
-            group_order: None,
             filters: RowFilters {
                 payload: PayloadFilters {
                     minimum: lower,
@@ -1046,7 +992,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
                 },
                 ..Default::default()
             },
-            order: Default::default(),
+            ..retained_selection("BinaryObject", "count")
         };
         let handle =
             call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
@@ -1119,16 +1065,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             .await
             .unwrap();
     }
-    let selection = Selection {
-        entity: "BinaryObject".into(),
-        select: "max:payload".into(),
-        entity_filters: Default::default(),
-        limit: 32,
-        group_bounds: (None, None),
-        group_order: None,
-        filters: RowFilters::default(),
-        order: Default::default(),
-    };
+    let selection = retained_selection("BinaryObject", "max:payload");
     let handle = call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
         .await
         .unwrap();
@@ -1181,13 +1118,17 @@ async fn literal_text_scan_cost() {
     }
     let before = pic.get_stable_memory(canister).await;
     for (op, needle, expected) in [
-        ("", "", "256"),
-        ("eq", rare.as_str(), "1"),
-        ("contains", "!", "1"),
-        ("contains", rare.as_str(), "1"),
+        (None, "", "256"),
+        (Some(FilterComparison::Eq), rare.as_str(), "1"),
+        (Some(FilterComparison::Contains), "!", "1"),
+        (Some(FilterComparison::Contains), rare.as_str(), "1"),
     ] {
         let filters = RowFilters {
-            text: (!op.is_empty()).then(|| ["title".into(), op.into(), needle.into()]),
+            text: op.map(|op| ComparisonFilter {
+                field: "title".into(),
+                op,
+                operand: needle.into(),
+            }),
             ..Default::default()
         };
         let request = (
@@ -1245,7 +1186,11 @@ async fn literal_text_scan_cost() {
         for (page_number, expected) in [vec!["257", "258"], vec!["259"]].into_iter().enumerate() {
             let filters = RowFilters {
                 boolean: Some(("published".into(), true)),
-                text: Some(["title".into(), "starts-with".into(), "special-".into()]),
+                text: Some(ComparisonFilter {
+                    field: "title".into(),
+                    op: FilterComparison::StartsWith,
+                    operand: "special-".into(),
+                }),
                 ..Default::default()
             };
             let request = (

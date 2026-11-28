@@ -1,5 +1,7 @@
 //! Exact decimal invariants, with independent widened-integer and byte oracles.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -225,13 +227,9 @@ fn fixed_scale_bytes_and_corruption() {
     b[9..25].copy_from_slice(&10_i128.to_be_bytes());
     b[25] = 1;
     assert!(matches!(DecimalRow::decode(&b), Err(Error::Corrupt)));
-    assert_eq!(
-        Schema::new(&[DecimalRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|v| format!("{v:02x}"))
-            .concat(),
-        "ad9ce8031e66e01e253b2f2f3d1fb51b5722dd104ba08ffc35723fe44744a1a1"
+    fingerprint::check(
+        Schema::new(&[DecimalRow::SCHEMA]).unwrap().fingerprint(),
+        "ad9ce8031e66e01e253b2f2f3d1fb51b5722dd104ba08ffc35723fe44744a1a1",
     );
     let absent = DecimalRow { maybe: None, ..row };
     let zero = DecimalRow {

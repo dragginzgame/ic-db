@@ -405,7 +405,7 @@ pub mod __private {
     #[cfg(not(feature = "wire"))]
     pub use ic_db_macros::__StorageOnly as Wire;
     #[cfg(feature = "wire")]
-    pub use ic_wire::{self, typescript::Wire};
+    pub use ic_wire::{self, Wire};
     pub use serde;
     /// Independent of the descriptor so references can form cycles.
     pub trait ReferenceTarget {

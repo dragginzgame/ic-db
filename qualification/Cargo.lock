@@ -227,13 +227,13 @@ dependencies = [
 
 [[package]]
 name = "canic"
-version = "0.276.0"
+version = "0.277.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ea1039306d5e498cdf11d979abe8498cad6bfe08b978c893eb4878d41db83cd"
+checksum = "241c9dedd86d02216ad95ad42810b5a305ab024dd1747e541000c1320cf4b3e0"
 dependencies = [
  "canic-macros",
  "ic-blob-storage",
- "ic-db 0.34.2",
+ "ic-db 0.36.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-entropy 0.7.0",
  "ic-jobs",
  "ic-logging",
@@ -241,15 +241,15 @@ dependencies = [
  "ic-platform-runtime 0.23.27",
  "ic-platform-types 0.21.6",
  "ic-timers",
- "ic-wire 0.31.1",
+ "ic-wire 0.31.2",
  "serde",
 ]
 
 [[package]]
 name = "canic-macros"
-version = "0.276.0"
+version = "0.277.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8b234c384c6021651df47b0496dfe09138d863675259971f0fc234ee73f6f53"
+checksum = "df47cbc5e8e18bc60eda754c89c3f5d27ad26b0c018d5acf50d1d27c6546d6ca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -900,7 +900,7 @@ dependencies = [
  "ic-metrics",
  "ic-platform-types 0.21.6",
  "ic-storage 0.80.6",
- "ic-wire 0.31.1",
+ "ic-wire 0.31.2",
  "serde",
  "sha2 0.11.2",
 ]
@@ -919,13 +919,31 @@ dependencies = [
 
 [[package]]
 name = "ic-db"
-version = "0.34.2"
+version = "0.36.0"
+dependencies = [
+ "ctor",
+ "ethnum",
+ "getrandom 0.4.3",
+ "ic-db-macros 0.36.0",
+ "ic-platform-runtime 0.23.27",
+ "ic-platform-types 0.21.6",
+ "ic-storage 0.80.6",
+ "ic-wire 0.32.0",
+ "memchr",
+ "serde",
+ "sha2 0.11.2",
+ "ulid",
+]
+
+[[package]]
+name = "ic-db"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "798fadd99805cf466fe17a382c035782f8f3a002248a6c47ae86095445e37039"
+checksum = "10a0ae88fb6494ad0206b39ffcaceed4587d15b6c6c5c320d665e09f046a8254"
 dependencies = [
  "ethnum",
  "getrandom 0.4.3",
- "ic-db-macros 0.34.2",
+ "ic-db-macros 0.36.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-logging",
  "ic-metrics",
  "ic-platform-runtime 0.23.27",
@@ -938,29 +956,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ic-db"
-version = "0.36.0"
-dependencies = [
- "ctor",
- "ethnum",
- "getrandom 0.4.3",
- "ic-db-macros 0.36.0",
- "ic-platform-runtime 0.23.27",
- "ic-platform-types 0.21.6",
- "ic-storage 0.80.6",
- "ic-wire 0.31.1",
- "memchr",
- "serde",
- "sha2 0.11.2",
- "ulid",
-]
-
-[[package]]
 name = "ic-db-cli"
 version = "0.36.0"
 dependencies = [
  "ic-testkit",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "serde",
  "tokio",
 ]
@@ -1034,7 +1034,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
  "ic-storage 0.80.6",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "toko-tooling",
 ]
 
@@ -1047,7 +1047,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-host-artifacts",
  "ic-testkit",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "rusqlite",
  "serde",
  "sha2 0.11.2",
@@ -1066,7 +1066,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
  "ic-storage 0.80.6",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "toko-tooling",
 ]
 
@@ -1080,9 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "ic-db-macros"
-version = "0.34.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5d6643a01b5425a4d512bc41245e62e62e12ed305145de5f15f96d8c2a8f85a"
+version = "0.36.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1092,6 +1090,8 @@ dependencies = [
 [[package]]
 name = "ic-db-macros"
 version = "0.36.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa9710440a4a08e3170d692c9a0f1b03f7983d0efd0f3956d4476dc3ed50b6bc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1105,7 +1105,7 @@ dependencies = [
  "ic-db 0.36.0",
  "ic-db-cli",
  "ic-platform-runtime 0.23.27",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "serde",
  "serde_json",
  "toko-tooling",
@@ -1157,7 +1157,7 @@ name = "ic-db-wire-schema-probe"
 version = "0.0.0"
 dependencies = [
  "ic-db 0.36.0",
- "ic-wire 0.31.1",
+ "ic-wire 0.32.0",
  "serde",
  "serde_json",
  "toko-tooling",
@@ -1372,9 +1372,21 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.31.1"
+version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "668657755a54c068fb0d26155be33de30ad7fc46f32cfdfba3c3b0b24ccb8700"
+checksum = "d7ffaf8c0381323b92fb2f444d29faad0031914f2b91b756c586d5fb3b08a405"
+dependencies = [
+ "bytemuck",
+ "postcard",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
+name = "ic-wire"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "476f78d119b0ac0bb77eac71938d1fb9421596e76d9739c1a4dde26c80bedfd8"
 dependencies = [
  "bytemuck",
  "ic-platform-types 0.21.6",
@@ -1387,9 +1399,9 @@ dependencies = [
 
 [[package]]
 name = "ic-wire-derive"
-version = "0.31.1"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278e24d6e54efe83e421565c71d0f636f453e9e377406a8b6de7502f9354e730"
+checksum = "6534e552a7cd45dd87055be4906011fcefc711ad6c1d86677d488f02c8fda0c1"
 dependencies = [
  "proc-macro2",
  "quote",

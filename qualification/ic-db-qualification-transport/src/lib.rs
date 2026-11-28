@@ -62,7 +62,8 @@ pub fn empty(bytes: &[u8]) -> Result<(), &'static str> {
 }
 
 pub use ic_db_cli::{
-    ConsolePage, DisplayPage, EntityFilters, EntityView, FieldView, IndexView, PayloadFilters,
-    QueryOptions, QueryRequest, RetainedPhase, RetainedProgress, RetainedResume, RetainedSelection,
-    RowFilters, SchemaResponse, Status, TypeMemberView, TypeView, lowercase_hex,
+    ComparisonFilter, ConsolePage, DisplayPage, EntityFilters, EntityView, FieldRange, FieldView,
+    FilterComparison, IndexView, PayloadFilters, QueryOptions, QueryRequest, RetainedPhase,
+    RetainedProgress, RetainedResume, RetainedSelection, RowFilters, SchemaResponse, Status,
+    TypeMemberView, TypeView, lowercase_hex,
 };

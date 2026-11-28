@@ -1006,8 +1006,12 @@ such as `inspection = ["ic-db/wire"]`. Its storage-only consumers can leave it
 disabled, including when the declarations carry the `wire` marker. Its build
 script can use just `ic-db/build`. Include Serde as a direct dependency wherever
 the marked declarations compile, including build dependencies for a shared schema. Ordinary
-application DTOs derive `ic_wire::typescript::Wire` with IC Wire’s `derive`
-feature. For DTOs encoded with ordinary Serde, use `#[wire(fixed)]` so the generated client reads the same layout. IC DB supplies this attribute for marked schema declarations. The host can enable `api-manifest` for offline inspection.
+application DTOs derive `ic_wire::Wire` with IC Wire 0.32’s `derive` feature.
+Plain derives describe positional Serde payloads. Enabling `ic-db/wire` supplies
+TypeScript inspection and platform type support. The host can enable IC Wire’s
+`api-manifest` feature for offline inspection. An application using
+`#[wire(sparse)]` on its own message can embed a positional `QueryCursor` and
+encode or decode that message with `ic_wire::evolution`.
 
 ```rust
 use ic_db::design::prelude::*;
@@ -1015,8 +1019,7 @@ use ic_db::design::prelude::*;
 #[enum_(wire, variant(name = "Allow"), variant(name = "Suspend"))]
 struct Action {}
 
-#[derive(serde::Serialize, serde::Deserialize, ic_wire::typescript::Wire)]
-#[wire(fixed)]
+#[derive(serde::Serialize, serde::Deserialize, ic_wire::Wire)]
 struct UserAdminRequest {
     user_id: Ulid,
     action: Action,

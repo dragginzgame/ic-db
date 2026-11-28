@@ -1,10 +1,6 @@
 //! Attribute-owned enums with unit or typed payload variants.
 
-use super::{
-    declaration,
-    field::{Field, parse_value},
-    meta_items, once, text,
-};
+use super::{declaration, field::parse_value, meta_items, once, text};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -32,12 +28,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
                     ));
                 }
             }
-            let payload = payload.map(|(kind, optional, many)| {
-                let mut f = Field::nested("payload", kind, optional, many);
-                f.resolve_self(&item.ident);
-
-                f
-            });
+            let payload = payload.map(|value| value.nested("payload", &item.ident));
             variants.push((
                 variant.ok_or_else(|| fail("variant requires name"))?,
                 payload,
@@ -61,6 +52,9 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let mut descriptions = Vec::new();
     let mut writes = Vec::new();
     let mut reads = Vec::new();
+    let ident = item.ident;
+    let unit_only = variants.iter().all(|(_, payload)| payload.is_none());
+    let mut arms = Vec::new();
     for (ordinal, (name, payload)) in variants.iter().enumerate() {
         let id: syn::Ident = syn::parse_str(name)?;
         let ordinal = ordinal as u8;
@@ -76,25 +70,21 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
             writes.push(quote!(Self::#id(value) => { writer.nat8(#ordinal)?; #write; }));
             reads.push(quote!(#ordinal => Ok(Self::#id(#read))));
         } else {
+            if unit_only {
+                arms.push(quote!(#ident::#id => #ordinal));
+            }
             declarations.push(quote!(#[doc="Authored unit variant."] #id));
             descriptions.push(quote!(::ic_db::VariantSchema {name:#name,payload:None}));
             writes.push(quote!(Self::#id => writer.nat8(#ordinal)?));
             reads.push(quote!(#ordinal => Ok(Self::#id)));
         }
     }
-    let copy = if variants.iter().all(|(_, p)| p.is_none()) {
+    let copy = if unit_only {
         quote!(#[derive(Copy, PartialOrd, Ord)])
     } else {
         quote!()
     };
-    let ident = item.ident;
-    let index_value = if variants.iter().all(|(_, p)| p.is_none()) {
-        let arms = variants.iter().enumerate().map(|(ordinal, (name, _))| {
-            let variant: syn::Ident = syn::parse_str(name).expect("validated variant");
-            let ordinal = ordinal as u8;
-
-            quote!(#ident::#variant => #ordinal)
-        });
+    let index_value = if unit_only {
         quote! {
             impl From<&#ident> for ::ic_db::IndexValue<'_> {
                 fn from(value: &#ident) -> Self {

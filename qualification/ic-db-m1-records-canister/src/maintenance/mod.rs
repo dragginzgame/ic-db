@@ -223,6 +223,13 @@ pub const COPY_TARGET: &str = "m1.copy.target.v1";
 pub const COPY_ROUTE: &str = "m1.copy.route.v1";
 pub const COPY_NEXT: &str = "m1.copy.next.v1";
 
+fn copy_memory(
+    host: &ic_storage::MemoryRuntime<crate::Backing>,
+    name: &str,
+) -> ic_storage::RuntimeMemory<crate::Backing> {
+    host.open_memory(&StableKey::parse(name).unwrap()).unwrap()
+}
+
 ///
 /// EntryV2
 /// Exercises an alternate `Entry` declaration under the same logical identity.
@@ -285,9 +292,7 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
     let host = runtime();
     let target = Schema::new(&[EntryV2::SCHEMA])?;
     if operation == 6 {
-        let memory = host
-            .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-            .unwrap();
+        let memory = copy_memory(&host, COPY_TARGET);
         let mut db = Database::open(memory, target)?;
         let mut batch = Batch::new();
         batch.replace(&EntryV2 {
@@ -302,9 +307,7 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
     let source = Schema::new(&[Entry::SCHEMA])?;
     let transition =
         SchemaTransition::new(&source, &target, "copy-entry", TRANSITION_VERSION, &[])?;
-    let source_memory = host
-        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-        .unwrap();
+    let source_memory = copy_memory(&host, COPY_SOURCE);
     if operation == 0 {
         let mut db = Database::create(source_memory, source, [3; 16])?;
         let mut batch = Batch::new();
@@ -325,9 +328,7 @@ fn copy_control(operation: u8, limit: u8) -> Result<(u64, bool), Error> {
 
         return Ok((0, retired.cleanup_step(usize::from(limit))?));
     }
-    let target_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .unwrap();
+    let target_memory = copy_memory(&host, COPY_TARGET);
     if operation == 1 {
         Maintenance::resume(source_memory, &transition)?.begin_copy(
             target_memory,
@@ -392,12 +393,8 @@ fn managed_copy_control(operation: u8) -> Result<ManagedCopyReply, Error> {
     let transition =
         SchemaTransition::new(&source, &target, "preserve-times", TRANSITION_VERSION, &[])?;
     let host = runtime();
-    let source_memory = host
-        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-        .unwrap();
-    let target_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .unwrap();
+    let source_memory = copy_memory(&host, COPY_SOURCE);
+    let target_memory = copy_memory(&host, COPY_TARGET);
     if operation == 0 {
         let mut db = Database::create(source_memory, source.clone(), [5; 16])?;
         let mut batch = Batch::at_for_test(Timestamp::from_millis(-10));
@@ -536,12 +533,8 @@ fn whole_declaration() -> Result<(Schema, Schema, SchemaTransition), Error> {
 fn whole_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let (source, target, transition) = whole_declaration()?;
     let host = runtime();
-    let source_memory = host
-        .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-        .unwrap();
-    let target_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .unwrap();
+    let source_memory = copy_memory(&host, COPY_SOURCE);
+    let target_memory = copy_memory(&host, COPY_TARGET);
     let jobs_enabled = cfg!(feature = "aggregate-jobs");
     if operation == 0 || (jobs_enabled && matches!(operation, 10 | 11)) {
         let db = if operation == 11 {
@@ -656,21 +649,14 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
     let host = runtime();
     if operation == 7 {
         let (_, _, previous) = whole_declaration()?;
-        let memory = host
-            .open_memory(&StableKey::parse(COPY_SOURCE).unwrap())
-            .unwrap();
+        let memory = copy_memory(&host, COPY_SOURCE);
         let mut retired = RetiredSource::resume(memory, &previous, [7; 16], [8; 16])?;
 
         return Ok((retired.cleanup_step(2)?, None, vec![]));
     }
     let source = whole_schema(EntryV2::SCHEMA)?;
-    let source_memory = host
-        .open_memory(&StableKey::parse(COPY_TARGET).unwrap())
-        .unwrap();
-    let route_memory = || {
-        host.open_memory(&StableKey::parse(COPY_ROUTE).unwrap())
-            .unwrap()
-    };
+    let source_memory = copy_memory(&host, COPY_TARGET);
+    let route_memory = || copy_memory(&host, COPY_ROUTE);
     let load_route = || StableCell::<u8, _>::load(route_memory()).map_err(|_| Error::Corrupt);
     if operation == 0 {
         let mut db = Database::open(source_memory, source)?;
@@ -731,9 +717,7 @@ fn next_copy_control(operation: u8) -> Result<WholeCopyReply, Error> {
 
         return Ok((retired.cleanup_step(2)?, None, vec![]));
     }
-    let target_memory = host
-        .open_memory(&StableKey::parse(COPY_NEXT).unwrap())
-        .unwrap();
+    let target_memory = copy_memory(&host, COPY_NEXT);
     if let Some(version) = selected {
         if version != 3 {
             return Err(Error::Corrupt);

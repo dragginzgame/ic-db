@@ -32,12 +32,13 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let key = key.ok_or_else(|| fail("map requires key(...)"))?;
     let max = max.ok_or_else(|| fail("map requires max_items"))?;
     let key = Field::nested("key", key, false, None);
-    let (kind, optional, many) = value.ok_or_else(|| fail("map requires value(...)"))?;
-    let mut value = Field::nested("value", kind, optional, many);
-    value.resolve_self(&item.ident);
+    let value = value
+        .ok_or_else(|| fail("map requires value(...)"))?
+        .nested("value", &item.ident);
     let name = super::declaration_name(name, &item.ident, "map")?;
     let kt = key.rust_type();
     let vt = value.rust_type();
+    let optional = value.optional;
     let kd = key.type_description();
     let vd = value.type_description();
     let kw = key.encode_with(&quote!(key));

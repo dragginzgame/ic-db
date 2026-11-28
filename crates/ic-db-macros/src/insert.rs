@@ -170,7 +170,9 @@ pub(super) fn emit(item: &ItemStruct, fields: &[Field], primary: &str) -> syn::R
                     value
                 }
             }
-            None if name == primary && matches!(field.kind, Kind::Ulid) => {
+            None if name == primary
+                && matches!(field.kind, Kind::Scalar(crate::field::Scalar::Ulid)) =>
+            {
                 quote!(::ic_db::__private::insert_ulid(_time)?)
             }
             None if field.optional => quote!(None),

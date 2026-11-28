@@ -1115,6 +1115,35 @@ fn compound_index_ranges_include_whole_duplicate_classes_and_respect_fixed_prefi
 }
 
 #[test]
+fn explicit_index_seeks_past_filter_fixed_components() {
+    let runtime = host(VectorMemory::default());
+    let db = create(&runtime, 1);
+    let category = [0_u8.into()];
+    for prefix in [&category[..0], &category[..]] {
+        let query = || {
+            db.query::<Entry>()
+                .using_index("category,amount,id", prefix)
+                .eq(Entry::CATEGORY, 0_u8)
+                .filter(Entry::AMOUNT, C::Ge, 60_u64)
+                .work_limit(2)
+        };
+        let page = query().fetch().unwrap();
+        assert_eq!(ids(&page.rows), [6, 8]);
+        assert_eq!((page.examined, page.fetched), (2, 2));
+        let count = query().count().unwrap();
+        assert_eq!((count.value, count.examined, count.fetched), (2, 2, 0));
+        let first = query().descending().limit(1).fetch().unwrap();
+        assert_eq!(ids(&first.rows), [8]);
+        let rest = query()
+            .descending()
+            .after(&first.next.unwrap())
+            .fetch()
+            .unwrap();
+        assert_eq!(ids(&rest.rows), [6]);
+    }
+}
+
+#[test]
 fn field_comparison_counts_use_both_fixed_components() {
     let runtime = host(VectorMemory::default());
     let db = create(&runtime, 1);

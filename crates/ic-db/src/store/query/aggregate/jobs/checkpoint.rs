@@ -35,7 +35,15 @@ impl Accumulator<'_> {
 
                 reader.finish()
             }
-            Self::Scalar(reducer) => reducer.restore_job(record.count, &record.state),
+            Self::Scalar(Reducer::Count { total, .. }) => {
+                if record.state != [0; 32] {
+                    return Err(Error::Corrupt);
+                }
+                *total = record.count;
+                Ok(())
+            }
+            Self::Scalar(Reducer::Numeric(state)) => state.restore(record.count, &record.state),
+            Self::Scalar(Reducer::Keys(_)) => Err(Error::InvalidQuery),
         }
     }
 
@@ -52,9 +60,11 @@ impl Accumulator<'_> {
 
                 (seen.len() as u64, writer.finish())
             }
-            Self::Scalar(reducer) => {
-                reducer.with_job_state(|count, total| (count, total.to_vec()))?
+            Self::Scalar(Reducer::Count { total, .. }) => (*total, vec![0; 32]),
+            Self::Scalar(Reducer::Numeric(state)) => {
+                state.with_checkpoint(|count, total| (count, total.to_vec()))
             }
+            Self::Scalar(Reducer::Keys(_)) => return Err(Error::InvalidQuery),
         })
     }
 }
@@ -132,43 +142,20 @@ impl Reducer {
 
                 Ok(count)
             }
-            Self::Count { .. } | Self::Numeric(_) => {
+            Self::Count { presence, total } => {
                 let count = reader.nat64()?;
-                let total = if let Self::Numeric(state) = self {
-                    reader.blob_ref(state.total_bytes())?
-                } else {
-                    if count == 0 && matches!(self, Self::Count { presence: None, .. }) {
-                        return Err(Error::Corrupt);
-                    }
-
-                    &[0; 32]
-                };
-                self.restore_job(count, total)?;
-
+                if count == 0 && presence.is_none() {
+                    return Err(Error::Corrupt);
+                }
+                *total = count;
+                Ok(count)
+            }
+            Self::Numeric(state) => {
+                let count = reader.nat64()?;
+                state.restore(count, reader.blob_ref(state.total_bytes())?)?;
                 Ok(count)
             }
         }
-    }
-
-    fn with_job_state<T>(&self, write: impl FnOnce(u64, &[u8]) -> T) -> Result<T, Error> {
-        match self {
-            Self::Count { total, .. } => Ok(write(*total, &[0; 32])),
-            Self::Numeric(state) => Ok(state.with_checkpoint(write)),
-            _ => Err(Error::InvalidQuery),
-        }
-    }
-
-    fn restore_job(&mut self, count: u64, bytes: &[u8]) -> Result<(), Error> {
-        if count == 0 && bytes.iter().any(|&b| b != 0) {
-            return Err(Error::Corrupt);
-        }
-        match self {
-            Self::Count { total, .. } if bytes == [0; 32] => *total = count,
-            Self::Count { .. } => return Err(Error::Corrupt),
-            Self::Numeric(state) => state.restore(count, bytes)?,
-            _ => return Err(Error::InvalidQuery),
-        }
-        Ok(())
     }
 }
 impl Groups {
@@ -186,27 +173,28 @@ impl Groups {
         // the existing codec on resume, rather than persisting two key representations.
         for (bytes, reducer) in self.rows.values() {
             writer.bytes(bytes)?;
-            let present = if matches!(reducer, Reducer::Keys(_)) {
-                1
-            } else if let Reducer::Distinct { seen, .. } = reducer {
-                write_distinct(&mut writer, seen)?;
-
-                seen.len() as u64
-            } else if let Reducer::Extremum { selected, .. } = reducer {
-                writer.boolean(selected.is_some())?;
-                if let Some((_, bytes)) = selected {
-                    writer.bytes(bytes)?;
+            let present = match reducer {
+                Reducer::Keys(_) => 1,
+                Reducer::Distinct { seen, .. } => {
+                    write_distinct(&mut writer, seen)?;
+                    seen.len() as u64
                 }
-
-                u64::from(selected.is_some())
-            } else {
-                reducer.with_job_state(|present, total| {
-                    writer.nat64(present)?;
-                    if matches!(reducer, Reducer::Numeric(_)) {
-                        writer.bytes(total)?;
+                Reducer::Extremum { selected, .. } => {
+                    writer.boolean(selected.is_some())?;
+                    if let Some((_, bytes)) = selected {
+                        writer.bytes(bytes)?;
                     }
-                    Ok::<_, Error>(present)
-                })??
+                    u64::from(selected.is_some())
+                }
+                Reducer::Count { total, .. } => {
+                    writer.nat64(*total)?;
+                    *total
+                }
+                Reducer::Numeric(state) => state.with_checkpoint(|count, total| {
+                    writer.nat64(count)?;
+                    writer.bytes(total)?;
+                    Ok::<_, Error>(count)
+                })?,
             };
             count = count.checked_add(present).ok_or(Error::Corrupt)?;
         }

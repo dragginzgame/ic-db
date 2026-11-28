@@ -1,5 +1,7 @@
 //! Independent ULID bytes, canonical text and stored/indexed identity boundaries.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -78,13 +80,9 @@ fn values() -> [Ulid; 6] {
 
 #[test]
 fn canonical_text_exact_bytes_and_distinct_schema_identity() {
-    assert_eq!(
-        Schema::new(&[UlidRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "941dcdaab8ea9a0c46d1305ebc35a8a54ee1aef816c5ac951402bb01c2aced60"
+    fingerprint::check(
+        Schema::new(&[UlidRow::SCHEMA]).unwrap().fingerprint(),
+        "941dcdaab8ea9a0c46d1305ebc35a8a54ee1aef816c5ac951402bb01c2aced60",
     );
     let known = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse::<Ulid>().unwrap();
     assert_eq!(

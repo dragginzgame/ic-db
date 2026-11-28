@@ -1,7 +1,7 @@
 //! Fluent query pages remain bounded and resume across upgrades in real Wasm.
 
 use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_db_qualification_transport::RowFilters;
+use ic_db_qualification_transport::{ComparisonFilter, FilterComparison, RowFilters};
 use ic_wire::{Direction, Encoding};
 
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
@@ -28,6 +28,20 @@ type DisplayPage = (
     u32,
     u32,
 );
+
+async fn upgrade_preserving_backing(
+    pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
+    canister: ic_testkit::pocket_ic::CanisterId,
+    wasm: Vec<u8>,
+) {
+    let before = pic.get_stable_memory(canister).await;
+    pic.advance_time(std::time::Duration::from_secs(600)).await;
+    pic.tick().await;
+    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(pic.get_stable_memory(canister).await, before);
+}
 
 #[tokio::test]
 async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
@@ -160,11 +174,7 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
     assert_eq!((&descending.0, descending.2), (&vec![2], 2));
     assert_eq!(ascending.1.as_ref().unwrap()[1], 1);
     assert_eq!(descending.1.as_ref().unwrap()[1], 1);
-    pic.advance_time(std::time::Duration::from_secs(600)).await;
-    pic.tick().await;
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
-        .await
-        .unwrap();
+    upgrade_preserving_backing(pic, canister, wasm).await;
     assert_eq!(
         call("Dependent", false, ascending.1, 8).await,
         (vec![2], None, 1)
@@ -228,11 +238,7 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
     assert_eq!((&ascending.0, ascending.2), (&vec![2], 2));
     assert_eq!((&descending.0, descending.2), (&vec![6], 2));
     assert_eq!(pic.get_stable_memory(canister).await, before);
-    pic.advance_time(std::time::Duration::from_secs(600)).await;
-    pic.tick().await;
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
-        .await
-        .unwrap();
+    upgrade_preserving_backing(pic, canister, wasm).await;
     for (direction, first, expected) in [
         (false, ascending, vec![2, 4, 6]),
         (true, descending, vec![6, 4, 2]),
@@ -310,11 +316,7 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
     assert_eq!((&ascending.0, ascending.2), (&vec![3], 1));
     assert_eq!((&descending.0, descending.2), (&vec![5], 1));
     assert_eq!(pic.get_stable_memory(canister).await, backing);
-    pic.advance_time(std::time::Duration::from_secs(600)).await;
-    pic.tick().await;
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
-        .await
-        .unwrap();
+    upgrade_preserving_backing(pic, canister, wasm).await;
     assert_eq!(call(None, true, 4, 4, 1, 8).await, (vec![4], None, 1));
     for (direction, first, expected) in [
         (false, ascending, vec![3, 4, 5]),
@@ -425,11 +427,7 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
     let before = pic.get_stable_memory(canister).await;
     for upgraded in [false, true] {
         if upgraded {
-            pic.advance_time(std::time::Duration::from_secs(600)).await;
-            pic.tick().await;
-            ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
-                .await
-                .unwrap();
+            upgrade_preserving_backing(pic, canister, wasm.clone()).await;
         }
         for (minimum, category, work, expected, examined) in [
             (None, None, 1, "true", 1),
@@ -468,10 +466,17 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
             assert_eq!((groups.3, groups.4), (3, 3));
             assert!(call(Some(40), Some(0), 2, terminal).await.is_err());
         }
-        for (op, fetched) in [("starts-with", 0), ("contains", 1)] {
+        for (op, fetched) in [
+            (FilterComparison::StartsWith, 0),
+            (FilterComparison::Contains, 1),
+        ] {
             let filters = RowFilters {
                 boolean: Some(("published".into(), false)),
-                text: Some(["title".into(), op.into(), "First".into()]),
+                text: Some(ComparisonFilter {
+                    field: "title".into(),
+                    op,
+                    operand: "First".into(),
+                }),
                 ..RowFilters::default()
             };
             let count = query("Document", filters, None, None, 2, "count")
@@ -583,17 +588,7 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
             let cursor = first.1.unwrap();
             assert_eq!(call(filter ^ 1, Some(cursor.clone())).await.unwrap_err(), 1);
             if matches!(filter, 1 | 2 | 5) {
-                pic.advance_time(std::time::Duration::from_secs(600)).await;
-                pic.tick().await;
-                ic_db_m0_rollback_driver::upgrade_stopped(
-                    pic,
-                    canister,
-                    wasm.clone(),
-                    vec![],
-                    None,
-                )
-                .await
-                .unwrap();
+                upgrade_preserving_backing(pic, canister, wasm.clone()).await;
             }
             let done = call(filter, Some(cursor)).await.unwrap();
             assert!(done.0.is_empty());
@@ -693,11 +688,7 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
                 .unwrap_err(),
             1
         );
-        pic.advance_time(std::time::Duration::from_secs(600)).await;
-        pic.tick().await;
-        ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
-            .await
-            .unwrap();
+        upgrade_preserving_backing(pic, canister, wasm.clone()).await;
         let mut examined = first.2;
         for step in 0..4 {
             let page = call(false, descending, cursor, 8).await.unwrap();
@@ -846,17 +837,7 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
                         }
                 {
                     assert_eq!(call(mode, needle, None, 1).await.unwrap_err(), 2);
-                    pic.advance_time(std::time::Duration::from_secs(600)).await;
-                    pic.tick().await;
-                    ic_db_m0_rollback_driver::upgrade_stopped(
-                        pic,
-                        canister,
-                        wasm.clone(),
-                        vec![],
-                        None,
-                    )
-                    .await
-                    .unwrap();
+                    upgrade_preserving_backing(pic, canister, wasm.clone()).await;
                 }
                 let finished = call(mode, needle, Some(cursor), 80).await.unwrap();
                 assert!(finished.0.is_empty());
@@ -931,17 +912,7 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
                         .await
                         .is_err()
                 );
-                pic.advance_time(std::time::Duration::from_secs(600)).await;
-                pic.tick().await;
-                ic_db_m0_rollback_driver::upgrade_stopped(
-                    pic,
-                    canister,
-                    wasm.clone(),
-                    vec![],
-                    None,
-                )
-                .await
-                .unwrap();
+                upgrade_preserving_backing(pic, canister, wasm.clone()).await;
             }
         }
         let mut expected = vec![(2, 20), (5, 51)];
@@ -1013,11 +984,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
     assert_eq!(page.0, [(2, 20)]);
     let before = pic.get_stable_memory(canister).await;
     // Let the IC install-code rate allowance recover between synthetic upgrades.
-    pic.advance_time(std::time::Duration::from_secs(600)).await;
-    pic.tick().await;
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm.clone(), vec![], None)
-        .await
-        .unwrap();
+    upgrade_preserving_backing(pic, canister, wasm.clone()).await;
     let resumed = call(false, (page.1, false, None, 20, 1, 128, 4096))
         .await
         .unwrap();
@@ -1050,17 +1017,7 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
                             .await
                             .is_err()
                     );
-                    pic.advance_time(std::time::Duration::from_secs(600)).await;
-                    pic.tick().await;
-                    ic_db_m0_rollback_driver::upgrade_stopped(
-                        pic,
-                        canister,
-                        wasm.clone(),
-                        vec![],
-                        None,
-                    )
-                    .await
-                    .unwrap();
+                    upgrade_preserving_backing(pic, canister, wasm.clone()).await;
                 }
             }
             let mut expected = vec![(1, 11), (2, 20), (5, 51), (6, 60)];
@@ -1640,11 +1597,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
     );
     // Only queries ran since install, so no update rounds drained the IC's
     // install-code rate limiter. Advance virtual time, not wall-clock time.
-    pic.advance_time(std::time::Duration::from_secs(600)).await;
-    pic.tick().await;
-    ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
-        .await
-        .unwrap();
+    upgrade_preserving_backing(pic, canister, wasm).await;
     let resumed = residual_distinct(Some(skipped_cursor)).await;
     assert_eq!(resumed.1, [vec!["0"]]);
     assert_eq!(resumed.3, 1);

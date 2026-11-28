@@ -11,8 +11,7 @@ use ic_storage::Memory;
 pub(super) enum MemberProbe {
     CountKeys,
     CountWithRows,
-    CountValidated,
-    Exists,
+    ValidateRows,
 }
 
 pub(super) fn probe_members<M: Memory>(
@@ -33,7 +32,7 @@ pub(super) fn probe_members<M: Memory>(
     for (components, needs_row) in members {
         examined += 1;
         let key = crate::store_key::StoreKey::new(components.concat())?;
-        if needs_row || matches!(mode, MemberProbe::CountValidated | MemberProbe::Exists) {
+        if needs_row || mode == MemberProbe::ValidateRows {
             let mut remaining = 1;
             let bounds = (
                 std::ops::Bound::Included(key.clone()),

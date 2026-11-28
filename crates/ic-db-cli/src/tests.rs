@@ -1,6 +1,21 @@
 use super::{Command, FilterArgs, charged_cycles, parse_console_line};
 
 #[test]
+fn unknown_comparison_is_rejected_while_building_the_request() {
+    for flag in ["--compare", "--text", "--length"] {
+        let cli = parse_console_line(&format!("query Document {flag} title bogus 1")).unwrap();
+        let Some(Command::Query { filters, .. }) = cli.command else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            filters.into_filters().unwrap_err(),
+            "unknown comparison 'bogus'"
+        );
+    }
+}
+
+#[test]
 fn named_payload_filters_keep_their_wire_positions() {
     let filters = super::PayloadFilters {
         minimum: Some(vec![]),

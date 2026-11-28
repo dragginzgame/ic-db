@@ -1,5 +1,7 @@
 //! Full-width U256 bytes, ordering, uniqueness and corruption boundaries.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -101,13 +103,9 @@ fn values() -> [U256; 7] {
 #[test]
 fn exact_bytes_and_schema_do_not_narrow_large_integers() {
     // Independently framed schema bytes, hashed with Node SHA-256.
-    assert_eq!(
-        Schema::new(&[BigNumbers::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "60487d694da48eb3266fb37d87f86e9454f1c0bbb9ada879104079cf099adbc3"
+    fingerprint::check(
+        Schema::new(&[BigNumbers::SCHEMA]).unwrap().fingerprint(),
+        "60487d694da48eb3266fb37d87f86e9454f1c0bbb9ada879104079cf099adbc3",
     );
     for value in values() {
         let row = BigNumbers {

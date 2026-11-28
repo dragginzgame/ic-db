@@ -1,5 +1,7 @@
 //! Canonical scalar sets: logical order, strict corruption refusal, shared limits.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -121,13 +123,9 @@ fn order_and_count_are_validated_before_materialization() {
         scores: Scores(BTreeSet::from([256, -1, 0])),
     };
     // Independent Node contract framing and SHA-256, not the product serializer.
-    assert_eq!(
-        Schema::new(&[SetRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "7f90e9bb47b31ac0dcc4efab810e7e29c56a0376c6d9c45a0adfe43d412d73b8"
+    fingerprint::check(
+        Schema::new(&[SetRow::SCHEMA]).unwrap().fingerprint(),
+        "7f90e9bb47b31ac0dcc4efab810e7e29c56a0376c6d9c45a0adfe43d412d73b8",
     );
     let golden = [7, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1];
     assert_eq!(row.encode().unwrap(), golden);

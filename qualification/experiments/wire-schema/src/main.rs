@@ -8,7 +8,7 @@ use ic_wire::{Encoding, Limits};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "inspection", derive(Wire), wire(fixed))]
+#[cfg_attr(feature = "inspection", derive(Wire))]
 struct UserAdminRequest {
     user_id: Ulid,
     action: Action,
@@ -108,13 +108,11 @@ mod tests {
     };
 
     #[derive(Serialize, Deserialize, Wire)]
-    #[wire(fixed)]
     struct PageRequest {
         after: Option<ic_db::QueryCursor>,
     }
 
     #[derive(Serialize, Deserialize, Wire)]
-    #[wire(fixed)]
     struct PageReply {
         id: u8,
         next: Option<ic_db::QueryCursor>,
@@ -207,20 +205,22 @@ mod tests {
                 .unwrap()
                 .contains("globalThis.Uint8Array")
         );
+        let method = Method {
+            export: "page",
+            id: 1,
+            request: "PageRequest",
+            response: "PageReply",
+            request_limits: limits,
+            response_limits: limits,
+        };
+        let manifests = registry.api_manifests(&[("page", method)]).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifests["page"]).unwrap();
+        assert_eq!(manifest["request"]["root"], "PageRequest");
+        assert_eq!(manifest["response"]["root"], "PageReply");
         let module = registry
-            .method_module(
-                &[Method {
-                    export: "page",
-                    id: 1,
-                    request: "PageRequest",
-                    response: "PageReply",
-                    request_limits: limits,
-                    response_limits: limits,
-                }],
-                "./runtime.ts",
-                &Default::default(),
-                |report| assert!(report.is_clean(), "{report}"),
-            )
+            .method_module(&[method], "./runtime.ts", &Default::default(), |report| {
+                assert!(report.is_clean(), "{report}");
+            })
             .unwrap();
         let frame = |direction| Encoding::Frame {
             method: 1,
@@ -243,6 +243,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first_reply, old_reply);
+        // A sparse application envelope still carries the positional cursor leaf.
+        #[derive(ic_wire::Wire)]
+        #[wire(sparse)]
+        struct SparseRequest {
+            after: Option<QueryCursor>,
+        }
+        let sparse = SparseRequest {
+            after: Some(cursor.clone()),
+        };
+        let encoded = ic_wire::evolution::encode(&sparse, request, LIMITS).unwrap();
+        let decoded: SparseRequest = ic_wire::evolution::decode(&encoded, request, LIMITS).unwrap();
+        assert_eq!(decoded.after.as_ref(), Some(&cursor));
         let next_request = typescript_continue(&module, &first_reply);
         assert_eq!(
             next_request,
@@ -323,6 +335,10 @@ mod tests {
                 .metadata_json()
                 .unwrap()
         }
+        assert_eq!(
+            layout::<ic_db::QueryCursor>(),
+            layout::<ic_wire::Bytes<{ ic_db::QueryCursor::MAX_ENCODED_BYTES }>>()
+        );
         assert_eq!(layout::<Code>(), layout::<u16>());
         assert_eq!(layout::<Date>(), layout::<i32>());
         assert_eq!(layout::<Timestamp>(), layout::<i64>());

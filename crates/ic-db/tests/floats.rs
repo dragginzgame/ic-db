@@ -1,5 +1,7 @@
 //! Finite domains, canonical zero, index order and stored corruption boundaries.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -207,13 +209,9 @@ fn canonical_equality_hash_and_encoded_order_agree_over_the_finite_domain() {
 #[test]
 fn exact_rows_refuse_nonfinite_and_noncanonical_stored_values() {
     // Independent Node framing and SHA-256, not the product serializer.
-    assert_eq!(
-        Schema::new(&[FloatRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "7c1698d8f52068ad67e2cf52544b467a8671cde439d14b49a344bc76284ec2ae"
+    fingerprint::check(
+        Schema::new(&[FloatRow::SCHEMA]).unwrap().fingerprint(),
+        "7c1698d8f52068ad67e2cf52544b467a8671cde439d14b49a344bc76284ec2ae",
     );
     let row = FloatRow {
         id: 7,

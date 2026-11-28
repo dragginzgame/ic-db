@@ -2,6 +2,7 @@
 //! Local product-record console.
 
 mod commands;
+mod schema_json;
 mod terminal;
 #[cfg(test)]
 mod tests;
@@ -9,9 +10,9 @@ mod tests;
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_cli::host::{LIMITS, instance};
 use ic_db_cli::{
-    ConsolePage, DisplayPage, EntityFilters, EntityView, FieldView, IndexView, PayloadFilters,
-    QueryOptions, QueryRequest, RetainedPhase, RetainedProgress, RowFilters, Status,
-    TypeMemberView, TypeView, lowercase_hex,
+    ComparisonFilter, ConsolePage, DisplayPage, EntityFilters, EntityView, FieldRange, FieldView,
+    FilterComparison, IndexView, PayloadFilters, QueryOptions, QueryRequest, RetainedPhase,
+    RetainedProgress, RowFilters, Status, TypeMemberView, TypeView, lowercase_hex,
 };
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
@@ -386,15 +387,34 @@ impl FilterArgs {
                 .map(Some)
                 .map_err(|_| format!("expected {N} filter arguments"))
         }
-        let length = match operands(self.length)? {
-            Some([field, op, n]) => Some((
+        fn comparison<T>(
+            args: Vec<String>,
+            parse: impl FnOnce(String) -> Result<T, String>,
+        ) -> Result<Option<ComparisonFilter<T>>, String> {
+            operands(args)?
+                .map(|[field, op, value]| {
+                    let op = <FilterComparison as clap::ValueEnum>::from_str(&op, false)
+                        .map_err(|_| format!("unknown comparison '{op}'"))?;
+                    Ok(ComparisonFilter {
+                        field,
+                        op,
+                        operand: parse(value)?,
+                    })
+                })
+                .transpose()
+        }
+
+        fn range(args: Vec<String>) -> Result<Option<FieldRange>, String> {
+            Ok(operands(args)?.map(|[field, lower, upper]| FieldRange {
                 field,
-                op,
-                n.parse::<u32>()
-                    .map_err(|_| "--length requires an unsigned 32-bit length")?,
-            )),
-            None => None,
-        };
+                lower,
+                upper,
+            }))
+        }
+        let length = comparison(self.length, |n| {
+            n.parse::<u32>()
+                .map_err(|_| "--length requires an unsigned 32-bit length".into())
+        })?;
         let boolean = match operands(self.boolean)? {
             None => None,
             Some([field, value]) => Some((
@@ -413,10 +433,10 @@ impl FilterArgs {
                 suffix: self.payload_suffix.map(|arg| arg.0),
                 contains: self.payload_contains.map(|arg| arg.0),
             },
-            compare: operands(self.compare)?,
-            between_fields: operands(self.between_fields)?,
-            not_between_fields: operands(self.not_between_fields)?,
-            text: operands(self.text)?,
+            compare: comparison(self.compare, Ok)?,
+            between_fields: range(self.between_fields)?,
+            not_between_fields: range(self.not_between_fields)?,
+            text: comparison(self.text, Ok)?,
             boolean,
             length,
             present: self.present,
@@ -469,43 +489,7 @@ fn print_schema_json(
     entities: &[EntityView],
     types: &[TypeView],
 ) -> Result<(), String> {
-    use serde_json::json;
-    let entities: Vec<_> = entities
-        .iter()
-        .map(
-            |EntityView {
-                 name,
-                 primary,
-                 fields,
-                 indexes,
-                 ..
-             }| {
-                let fields: Vec<_> = fields
-                    .iter()
-                    .map(
-                        |FieldView {
-                             name,
-                             kind,
-                             optional,
-                             info,
-                             reference,
-                         }| {
-                            json!({"name": name, "type": kind, "optional": optional, "info": info,
-                    "reference": reference.as_ref().map(|(target, index)|
-                        json!({"target": target, "index": index}))})
-                        },
-                    )
-                    .collect();
-                json!({"name": name, "primary_key": primary, "fields": fields, "indexes": indexes})
-            },
-        )
-        .collect();
-    let document = json!({
-        "source": "local_fixture",
-        "schema_fingerprint": lowercase_hex(&fingerprint, ""),
-        "entities": entities,
-        "types": types,
-    });
+    let document = schema_json::Document::new(&fingerprint, entities, types);
     let mut output = io::stdout().lock();
     serde_json::to_writer_pretty(&mut output, &document).map_err(|e| e.to_string())?;
 

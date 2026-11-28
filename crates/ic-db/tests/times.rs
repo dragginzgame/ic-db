@@ -2,6 +2,8 @@
 
 #[path = "support/allocations.rs"]
 mod allocations;
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 use crate::raw_map::RawMap;
@@ -107,13 +109,9 @@ fn rows() -> Vec<TimeRow> {
 
 #[test]
 fn independent_bytes_full_domains_and_absence() {
-    assert_eq!(
-        Schema::new(&[TimeRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "49eac412fcdf225a26d5d5df7ae277cb3c19fe10f8d0b9e3e932a92aecd467c8"
+    fingerprint::check(
+        Schema::new(&[TimeRow::SCHEMA]).unwrap().fingerprint(),
+        "49eac412fcdf225a26d5d5df7ae277cb3c19fe10f8d0b9e3e932a92aecd467c8",
     );
     for row in rows() {
         let mut bytes = vec![u8::from(row.delay.is_some())];

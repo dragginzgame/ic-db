@@ -75,7 +75,7 @@ pub fn enum_(args: TokenStream, item: TokenStream) -> TokenStream {
 /// Declare a reusable ordered list with an item type and a shared maximum length.
 #[proc_macro_attribute]
 pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
-    finish(wrapped::expand(args.into(), item.into(), true))
+    finish(wrapped::list(args.into(), item.into()))
 }
 
 /// Declare a distinct Rust and schema type around one primitive, including its bounds.
@@ -83,7 +83,7 @@ pub fn list(args: TokenStream, item: TokenStream) -> TokenStream {
 /// A Principal newtype can use `validate(non_anonymous)` and be constructed via `TryFrom<Principal>`.
 #[proc_macro_attribute]
 pub fn newtype(args: TokenStream, item: TokenStream) -> TokenStream {
-    finish(wrapped::expand(args.into(), item.into(), false))
+    finish(wrapped::newtype(args.into(), item.into()))
 }
 
 /// Declare a bounded ordered set with `item(...)` and `max_items = N` (0..256).
@@ -454,7 +454,12 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
         ] {
             authored.push(Field {
                 managed: Some(role),
-                ..Field::nested(name, field::Kind::Timestamp, false, None)
+                ..Field::nested(
+                    name,
+                    field::Kind::Scalar(field::Scalar::Timestamp),
+                    false,
+                    None,
+                )
             });
         }
     }

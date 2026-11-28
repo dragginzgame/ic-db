@@ -1,5 +1,7 @@
 //! Maps preserve scalar key identity without overwriting corrupt stored entries.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -197,13 +199,9 @@ fn sample() -> MapRow {
 fn canonical_map_bytes_distinguish_missing_absent_and_empty() {
     let row = sample();
     // Independent Node contract framing and SHA-256.
-    assert_eq!(
-        Schema::new(&[MapRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "7246c616493ef6299448d6e44e38b93a1ff74e3aa85e5ef46a18b4dd902f0122"
+    fingerprint::check(
+        Schema::new(&[MapRow::SCHEMA]).unwrap().fingerprint(),
+        "7246c616493ef6299448d6e44e38b93a1ff74e3aa85e5ef46a18b4dd902f0122",
     );
     let golden = [
         7, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0,

@@ -124,10 +124,14 @@ fn literal(term: &Term) -> Option<(&[u8], bool)> {
 // operand may exceed the physical key bound even when its query is valid.
 fn bound_operand<'a>(
     entity: &EntitySchema,
+    field: &str,
     term: &'a Term,
     secondary: bool,
     prefix_len: usize,
 ) -> Result<Option<(Comparison, &'a [u8])>, Error> {
+    if !matches_field(entity, term, field) {
+        return Ok(None);
+    }
     // All present values share the 01 tag on an optional secondary component.
     if secondary && term.tests_presence && optional_component(entity, term) {
         return Ok((prefix_len < crate::MAX_INDEX_KEY_BYTES).then_some((Comparison::Ge, &[1])));
@@ -181,7 +185,90 @@ fn next_field<'a>(
     Some((entity.primary_key, false))
 }
 
-// Both path ranking and key-only counting use the same encodable range proof.
+///
+/// ClauseBound
+/// Encodable restriction on the next physical key component.
+///
+enum ClauseBound<'a> {
+    Single {
+        term: &'a Term,
+        comparison: Comparison,
+        key: &'a [u8],
+    },
+    Membership {
+        low: &'a [u8],
+        high: &'a [u8],
+    },
+}
+
+impl<'a> ClauseBound<'a> {
+    fn for_field(
+        entity: &EntitySchema,
+        field: &str,
+        secondary: bool,
+        clause: &'a [Term],
+        prefix_len: usize,
+    ) -> Result<Option<Self>, Error> {
+        let Some((term, alternatives)) = clause.split_first() else {
+            return Ok(None);
+        };
+        // A disjunction needs exact values. The optional-present tag alone
+        // can bound a singleton but cannot identify a member of a set.
+        let singleton = alternatives.is_empty();
+        let Some((comparison, key)) =
+            bound_operand(entity, field, term, secondary && singleton, prefix_len)?
+        else {
+            return Ok(None);
+        };
+        if singleton {
+            return Ok(Some(Self::Single {
+                term,
+                comparison,
+                key,
+            }));
+        }
+        if comparison != Comparison::Eq {
+            return Ok(None);
+        }
+        let (mut low, mut high) = (key, key);
+        for term in alternatives {
+            let Some((Comparison::Eq, key)) =
+                bound_operand(entity, field, term, false, prefix_len)?
+            else {
+                return Ok(None);
+            };
+            low = low.min(key);
+            high = high.max(key);
+        }
+
+        Ok(Some(Self::Membership { low, high }))
+    }
+
+    // Inclusive endpoints spanning the whole domain save no scan work. A
+    // complete-key probe can still skip the unlisted members inside that interval.
+    fn restricts_scan(
+        self,
+        includes_absence: bool,
+        can_probe: bool,
+        extreme: impl Fn(&[u8], bool) -> bool,
+    ) -> bool {
+        match self {
+            Self::Single { term, .. } if term.tests_presence && !includes_absence => false,
+            Self::Single {
+                comparison, key, ..
+            } => match comparison {
+                Comparison::Ge => !extreme(key, false),
+                Comparison::Le => includes_absence || !extreme(key, true),
+                _ => true,
+            },
+            Self::Membership { low, high } => {
+                can_probe || !(extreme(low, false) && extreme(high, true))
+            }
+        }
+    }
+}
+
+// A membership range can narrow a scan even when gaps still require row checks.
 pub(super) fn key_range_proves_clause(
     entity: &EntitySchema,
     index: Option<&IndexSchema>,
@@ -189,30 +276,24 @@ pub(super) fn key_range_proves_clause(
     clause: &[Term],
     prefix_len: usize,
 ) -> bool {
-    next_field(entity, index, fixed).is_some_and(|(name, secondary)| match clause {
-        [term] => {
-            matches_field(entity, term, name)
-                && matches!(
-                    bound_operand(entity, term, secondary, prefix_len),
-                    Ok(Some(_))
-                )
+    let Some((name, secondary)) = next_field(entity, index, fixed) else {
+        return false;
+    };
+    match ClauseBound::for_field(entity, name, secondary, clause, prefix_len) {
+        Ok(Some(ClauseBound::Single { .. })) => true,
+        Ok(Some(ClauseBound::Membership { low, high })) => {
+            low == high
+                || (secondary
+                    && !index.is_some_and(|i| i.is_unique_lookup(fixed + 1))
+                    && low.len() == high.len()
+                    && entity
+                        .index_field(name)
+                        .and_then(|f| crate::key::fixed_width(crate::key::operand_type(f.value)))
+                        .is_some()
+                    && complete_key_run(low, high, clause))
         }
-        _ => membership_interval(entity, name, clause, prefix_len).is_some_and(|(low, high)| {
-            if low == high {
-                return true;
-            }
-            // Trailing components do not affect membership in this interval.
-            // Keep complete unique keys on the bounded point-probe path.
-            secondary
-                && !index.is_some_and(|i| i.is_unique_lookup(fixed + 1))
-                && low.len() == high.len()
-                && entity
-                    .index_field(name)
-                    .and_then(|f| crate::key::fixed_width(crate::key::operand_type(f.value)))
-                    .is_some()
-                && complete_key_run(low, high, clause)
-        }),
-    })
+        _ => false,
+    }
 }
 
 // Follow consecutive admitted literals by reference. Carry skips trailing FF
@@ -235,26 +316,6 @@ fn complete_key_run<'a>(mut current: &'a [u8], high: &[u8], clause: &'a [Term]) 
         current = next;
     }
     true
-}
-
-fn bounds_index_clause(
-    entity: &EntitySchema,
-    path: &super::order::IndexPath<'_>,
-    clause: &[Term],
-) -> bool {
-    if clause.len() == 1 {
-        return key_range_proves_clause(
-            entity,
-            Some(path.index),
-            path.fixed,
-            clause,
-            path.prefix.len(),
-        );
-    }
-
-    next_field(entity, Some(path.index), path.fixed).is_some_and(|(field, _)| {
-        membership_interval(entity, field, clause, path.prefix.len()).is_some()
-    })
 }
 
 // Rank only bounds the traversal can actually encode on the next index field.
@@ -283,57 +344,13 @@ pub(super) fn has_secondary_bound(
         };
         crate::key::is_fixed_extreme(field.value, present, upper)
     };
+    let can_probe = can_probe && (!secondary || path.index.is_unique_lookup(path.fixed + 1));
     plan.clauses().any(|clause| {
-        if let [term] = clause {
-            if !matches_field(entity, term, name)
-                || (term.tests_presence
-                    && (entity.field_is_required(name) || path.index.present_only))
-            {
-                return false;
-            }
-            return bound_operand(entity, term, secondary, path.prefix.len())
-                .ok()
-                .flatten()
-                .is_some_and(|(comparison, key)| match comparison {
-                    Comparison::Ge => !extreme(key, false),
-                    // Optional upper bounds also exclude absent entries.
-                    Comparison::Le => includes_absence || !extreme(key, true),
-                    _ => true,
-                });
-        }
-        membership_interval(entity, name, clause, path.prefix.len()).is_some_and(|(low, high)| {
-            // Complete keys can use point probes. A component with trailing keys
-            // must scan every value between the two endpoints.
-            (can_probe && (!secondary || path.index.is_unique_lookup(path.fixed + 1)))
-                || !(extreme(low, false) && extreme(high, true))
-        })
+        ClauseBound::for_field(entity, name, secondary, clause, path.prefix.len())
+            .ok()
+            .flatten()
+            .is_some_and(|bound| bound.restricts_scan(includes_absence, can_probe, extreme))
     })
-}
-
-// A disjunction of exact values on one key component fits one inclusive scan between
-// its extrema. The original predicate still rejects every gap in that scan.
-fn membership_interval<'a>(
-    entity: &EntitySchema,
-    field: &str,
-    clause: &'a [Term],
-    prefix_len: usize,
-) -> Option<(&'a [u8], &'a [u8])> {
-    let mut operands = clause.iter().map(|term| {
-        if !matches_field(entity, term, field) {
-            return None;
-        }
-        let (comparison, bytes) = bound_operand(entity, term, false, prefix_len).ok()??;
-        (comparison == Comparison::Eq).then_some(bytes)
-    });
-    let mut low = operands.next()??;
-    let mut high = low;
-    for operand in operands {
-        let key = operand?;
-        low = low.min(key);
-        high = high.max(key);
-    }
-
-    Some((low, high))
 }
 
 // A secondary candidate must retain every restriction the primary scan could seek.
@@ -344,32 +361,24 @@ pub(super) fn preserves_primary_bounds(
     can_probe: bool,
 ) -> bool {
     let field = entity.fields[plan.primary].value;
+    let next = next_field(entity, Some(path.index), path.fixed);
     plan.clauses().all(|clause| {
-        let primary_bound = match clause {
-            [term] => {
-                term.position == plan.primary
-                    && !term.tests_presence
-                    && bound_operand(entity, term, false, plan.prefix.len())
-                        .ok()
-                        .flatten()
-                        .is_some_and(|(comparison, key)| match comparison {
-                            Comparison::Ge => !crate::key::is_fixed_extreme(field, key, false),
-                            Comparison::Le => !crate::key::is_fixed_extreme(field, key, true),
-                            _ => true,
-                        })
-            }
-            _ => {
-                membership_interval(entity, entity.primary_key, clause, plan.prefix.len())
-                    .is_some_and(|(low, high)| {
-                        // Probes can skip unlisted IDs even when the interval spans the table.
-                        can_probe
-                            || !(crate::key::is_fixed_extreme(field, low, false)
-                                && crate::key::is_fixed_extreme(field, high, true))
+        let primary_bound =
+            ClauseBound::for_field(entity, entity.primary_key, false, clause, plan.prefix.len())
+                .ok()
+                .flatten()
+                .is_some_and(|bound| {
+                    bound.restricts_scan(false, can_probe, |key, upper| {
+                        crate::key::is_fixed_extreme(field, key, upper)
                     })
-            }
-        };
-
-        !primary_bound || bounds_index_clause(entity, path, clause)
+                });
+        !primary_bound
+            || next.is_some_and(|(name, secondary)| {
+                matches!(
+                    ClauseBound::for_field(entity, name, secondary, clause, path.prefix.len()),
+                    Ok(Some(_))
+                )
+            })
     })
 }
 
@@ -426,32 +435,18 @@ pub(super) fn bounds(
     }
     let mut first_key = plan.prefix.clone();
     let next = next_field(entity, plan.index, plan.fixed_components);
-    // Extend the seek through consecutive fixed components, including an owner suffix.
-    // Keep the admitted plan prefix for residual bounds and cursor validation.
-    let mut fixed = plan.fixed_components;
-    let mut component = next;
-    while !request.predicates.is_empty()
-        && let Some((field, secondary)) = component
+    // The owner is a complete key after the fixed secondary components.
+    let mut exact = next.is_none();
+    if let Some((field, false)) = next
+        && !request.predicates.is_empty()
+        && let Some(owner) = super::order::equality(entity, request, field)
     {
-        let Some(value) = super::order::equality(entity, request, field) else {
-            break;
-        };
-        let schema = entity.index_field(field).ok_or(Error::InvalidSchema)?;
-        let prefix_len = first_key.len();
-        value.append_component(schema.optional, &mut first_key);
-        if first_key.len() > crate::MAX_INDEX_KEY_BYTES {
-            // An oversized operand remains a row predicate on the last encodable prefix.
-            first_key.truncate(prefix_len);
-            break;
+        owner.append_component(false, &mut first_key);
+        exact = first_key.len() <= crate::MAX_INDEX_KEY_BYTES;
+        if !exact {
+            first_key.truncate(plan.prefix.len());
         }
-        fixed += 1;
-        component = if secondary {
-            next_field(entity, plan.index, fixed)
-        } else {
-            None
-        };
     }
-    let exact = component.is_none();
     let mut lower = Endpoint {
         key: StoreKey::new(first_key)?,
         inclusive: true,
@@ -479,22 +474,24 @@ pub(super) fn bounds(
             })
         };
         for clause in plan.clauses() {
-            let [term] = clause else {
-                if let Some((low, high)) =
-                    membership_interval(entity, field, clause, plan.prefix.len())
-                {
+            let (term, comparison, operand) = match ClauseBound::for_field(
+                entity,
+                field,
+                secondary,
+                clause,
+                plan.prefix.len(),
+            )? {
+                Some(ClauseBound::Single {
+                    term,
+                    comparison,
+                    key,
+                }) => (term, comparison, key),
+                Some(ClauseBound::Membership { low, high }) => {
                     lower.tighten(component_key(low, false)?, true, Ordering::Greater);
                     upper.tighten(component_key(high, true)?, !secondary, Ordering::Less);
+                    continue;
                 }
-                continue;
-            };
-            if !matches_field(entity, term, field) {
-                continue;
-            }
-            let Some((comparison, operand)) =
-                bound_operand(entity, term, secondary, plan.prefix.len())?
-            else {
-                continue;
+                None => continue,
             };
             // Less-than predicates require presence too. Their upper bound alone
             // would include the optional absent component (00) before present (01).

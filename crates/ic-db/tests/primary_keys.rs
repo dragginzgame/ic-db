@@ -1,5 +1,7 @@
 //! Supplied ULID keys retain typed identity through shared storage and references.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -149,9 +151,9 @@ fn typed_keys_pages_unique_exchange_and_final_references() {
         Schema::new(&[WrongReference::SCHEMA, KeyRow::SCHEMA, Numbered::SCHEMA]),
         Err(Error::InvalidSchema)
     ));
-    assert_eq!(
-        schema().fingerprint().map(|b| format!("{b:02x}")).concat(),
-        "e37ca51bce9f12897de77c66f9c6e52d1d442f0e35711772ffb5473f806c527f"
+    fingerprint::check(
+        schema().fingerprint(),
+        "e37ca51bce9f12897de77c66f9c6e52d1d442f0e35711772ffb5473f806c527f",
     );
     let backing = VectorMemory::default();
     let runtime = host(backing.clone());

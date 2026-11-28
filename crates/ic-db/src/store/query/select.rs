@@ -28,10 +28,7 @@ impl<E, T> Column<E, T> {
     }
     fn read_span(&self, bytes: &[u8], spans: &[(u16, u16)]) -> Result<T, Error> {
         let (start, end) = spans[usize::from(self.position)];
-        let mut reader = Decoder::new(&bytes[usize::from(start)..usize::from(end)])?;
-        let value = (self.decode)(&mut reader)?;
-        reader.finish()?;
-        Ok(value)
+        super::decode_exact(&bytes[usize::from(start)..usize::from(end)], self.decode)
     }
 }
 
@@ -166,5 +163,5 @@ fn selected_page<E: Entity, M: Memory, S: Selection<E>>(
     let mut slots = [0, 1, 2, 3];
     let order = &mut slots[..positions.len()];
     order.sort_unstable_by_key(|&index| positions[index]);
-    raw.decode_with(|reader| selection.decode(reader, order))
+    raw.decode_rows(|bytes| super::decode_exact(bytes, |reader| selection.decode(reader, order)))
 }

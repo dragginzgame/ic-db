@@ -7,8 +7,9 @@ use super::{
         Query, Reducer, decode_group_count, decode_group_value,
         numeric::{Operation, decode_summary},
     },
-    AggregateJobs, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start,
+    AggregateJobs, CountInput, GroupPage, JobHandle, JobStep, field_binding, pages, prepare, start,
 };
+use crate::store::read_revision;
 use crate::{Entity, Error, Timestamp, Value};
 use ic_storage::Memory;
 use sha2::{Digest, Sha256};
@@ -36,7 +37,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_group_count_job::<K>(jobs, now, expires, None)
+            self.start_group_count_job::<K>(jobs, now, expires, CountInput::Rows)
         })
     }
 
@@ -55,21 +56,20 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_group_count_job::<K>(jobs, now, expires, Some(field))
+            self.start_group_count_job::<K>(jobs, now, expires, CountInput::Field(field))
         })
     }
 
-    fn start_group_count_job<K: Value>(
+    pub(super) fn start_group_count_job<K: Value>(
         self,
         jobs: &mut AggregateJobs<M>,
         now: Timestamp,
         expires: Timestamp,
-        field: Option<&str>,
+        input: CountInput<'_>,
     ) -> Result<JobHandle, Error> {
         self.request.groups.admit_start_page()?;
-        let plan = self.aggregate_plan(Some(K::definition()), true)?;
-
-        self.start_groups(jobs, now, expires, plan, self.count_reducer(field)?, field)
+        let job = self.group_count_job::<K>(input)?;
+        self.start_group_job(jobs, now, expires, job)
     }
 
     /// Advance grouped counts with scalar jobs' revision/retry/work/expiry contract.
@@ -90,7 +90,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         observe!(resume, {
-            self.resume_group_count_job::<K>(jobs, handle, sequence, now, None)
+            self.resume_group_count_job::<K>(jobs, handle, sequence, now, CountInput::Rows)
         })
     }
 
@@ -110,22 +110,28 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         observe!(resume, {
-            self.resume_group_count_job::<K>(jobs, handle, sequence, now, Some(field))
+            self.resume_group_count_job::<K>(jobs, handle, sequence, now, CountInput::Field(field))
         })
     }
 
-    fn resume_group_count_job<K: Value>(
+    pub(super) fn resume_group_count_job<K: Value>(
         self,
         jobs: &mut AggregateJobs<M>,
         handle: &JobHandle,
         sequence: u64,
         now: Timestamp,
-        field: Option<&str>,
+        input: CountInput<'_>,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
-        let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let job = self.retained_groups(plan, self.count_reducer(field)?, field, None)?;
+        let job = self.group_count_job::<K>(input)?;
 
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
+    }
+
+    fn group_count_job<K: Value>(&self, input: CountInput<'_>) -> Result<GroupJob<'static>, Error> {
+        let (plan, reducer) = self.group_count_plan::<K>(input)?;
+        let mut job = self.retained_groups(plan, reducer, None)?;
+        job.binding = field_binding(job.binding, input.field());
+        Ok(job)
     }
 
     /// Retain grouped integer, Decimal or finite float sums with `group_sum`'s exact result types.
@@ -142,7 +148,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Sum)
+            let admitted = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
+
+            self.start_group_value(jobs, now, expires, admitted)
         })
     }
 
@@ -162,7 +170,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         observe!(resume, {
-            self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Sum)
+            let admitted = self.numeric_plan::<R>(Some(K::definition()), Operation::Sum)?;
+
+            self.resume_group_value(jobs, handle, sequence, now, admitted)
         })
     }
 
@@ -180,7 +190,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.start_group_numeric::<K, R>(jobs, now, expires, Operation::Average)
+            let admitted = self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
+
+            self.start_group_value(jobs, now, expires, admitted)
         })
     }
 
@@ -199,7 +211,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         observe!(resume, {
-            self.resume_group_numeric::<K, R>(jobs, handle, sequence, now, Operation::Average)
+            let admitted = self.numeric_plan::<R>(Some(K::definition()), Operation::Average)?;
+
+            self.resume_group_value(jobs, handle, sequence, now, admitted)
         })
     }
 
@@ -242,7 +256,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
 
     fn summary_job<K: Value, S: Value, A: Value>(&self) -> Result<GroupJob<'static>, Error> {
         let (plan, reducer, sum) = self.summary_plan::<K, S, A>()?;
-        let mut job = self.retained_groups(plan, reducer, None, Some(sum))?;
+        let mut job = self.retained_groups(plan, reducer, Some(sum))?;
         let mut encoded = Vec::new();
         crate::schema::encode_type(&mut encoded, sum.value, sum.optional, false)?;
         let mut hash = Sha256::new();
@@ -251,18 +265,6 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         hash.update(encoded);
         job.binding = hash.finalize().into();
         Ok(job)
-    }
-
-    fn start_group_numeric<K: Value, R: Value>(
-        self,
-        jobs: &mut AggregateJobs<M>,
-        now: Timestamp,
-        expires: Timestamp,
-        operation: Operation,
-    ) -> Result<JobHandle, Error> {
-        let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
-
-        self.start_group_value(jobs, now, expires, admitted)
     }
 
     pub(super) fn start_group_value(
@@ -275,19 +277,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         self.request.groups.admit_start_page()?;
         let (plan, reducer) = admitted;
 
-        self.start_groups(jobs, now, expires, plan, reducer, None)
-    }
-
-    pub(super) fn start_groups(
-        &self,
-        jobs: &mut AggregateJobs<M>,
-        now: Timestamp,
-        expires: Timestamp,
-        plan: Plan<'_>,
-        reducer: Reducer,
-        field: Option<&str>,
-    ) -> Result<JobHandle, Error> {
-        let job = self.retained_groups(plan, reducer, field, None)?;
+        let job = self.retained_groups(plan, reducer, None)?;
         self.start_group_job(jobs, now, expires, job)
     }
 
@@ -301,24 +291,11 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         start(
             jobs,
             job.binding,
-            self.db.read()?.revision_by_id(E::SCHEMA.id)?,
+            read_revision(&self.db.read()?.map, E::SCHEMA.id)?,
             now,
             expires,
             &Accumulator::Groups(&mut job.groups),
         )
-    }
-
-    fn resume_group_numeric<K: Value, R: Value>(
-        self,
-        jobs: &mut AggregateJobs<M>,
-        handle: &JobHandle,
-        sequence: u64,
-        now: Timestamp,
-        operation: Operation,
-    ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
-        let admitted = self.numeric_plan::<R>(Some(K::definition()), operation)?;
-
-        self.resume_group_value(jobs, handle, sequence, now, admitted)
     }
 
     pub(super) fn resume_group_value<K: Value, R: Value>(
@@ -330,7 +307,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         admitted: (Plan<'_>, Reducer),
     ) -> Result<JobStep<GroupPage<GroupValue<K, R>>>, Error> {
         let (plan, reducer) = admitted;
-        let job = self.retained_groups(plan, reducer, None, None)?;
+        let job = self.retained_groups(plan, reducer, None)?;
 
         self.resume_groups(jobs, handle, sequence, now, job, decode_group_value)
     }
@@ -354,7 +331,7 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         pages::admit(page, handle, &record)?;
         let (rows, bytes) = (self.request.rows, self.request.bytes);
         let changed = prepare(
-            &*self.db.read()?,
+            &self.db.read()?.map,
             E::SCHEMA,
             self.request,
             &plan,
@@ -374,24 +351,12 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         &self,
         plan: Plan<'p>,
         reducer: Reducer,
-        field: Option<&str>,
         summary_sum: Option<crate::ValueSchema>,
     ) -> Result<GroupJob<'p>, Error> {
-        GroupJob::admit(&self.request, E::SCHEMA, plan, reducer, field, summary_sum)
-    }
-}
-
-impl<'p> GroupJob<'p> {
-    fn admit(
-        request: &super::Request<'_>,
-        entity: &crate::EntitySchema,
-        plan: Plan<'p>,
-        reducer: Reducer,
-        field: Option<&str>,
-        summary_sum: Option<crate::ValueSchema>,
-    ) -> Result<Self, Error> {
-        let groups = request.admit_groups(entity, &plan, reducer, summary_sum)?;
-        let binding = field_binding(group_binding(&plan, &groups, request.rows)?, field);
+        let groups = self
+            .request
+            .admit_groups(E::SCHEMA, &plan, reducer, summary_sum)?;
+        let binding = group_binding(&plan, &groups, self.request.rows)?;
 
         Ok(GroupJob {
             plan,

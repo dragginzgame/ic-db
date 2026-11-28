@@ -281,15 +281,16 @@ pub(super) fn select_filtered_path<'a>(
     plan: &mut super::Plan<'a>,
     probe: Option<super::probe::MemberProbe>,
 ) -> Result<bool, Error> {
-    if let Some((_, values)) = &request.index {
+    if request.index.is_some() {
         return Ok(plan.index.is_some_and(|index| {
             covers_keys(
                 entity,
                 request,
                 plan,
                 Some(index),
-                values,
+                plan.fixed_components,
                 plan.prefix.len(),
+                &|field| fixed_prefix_value(entity, request, plan, field),
             )
         }));
     }
@@ -299,8 +300,9 @@ pub(super) fn select_filtered_path<'a>(
         request,
         plan,
         None,
-        primary.as_slice(),
+        usize::from(primary.is_some()),
         plan.prefix.len(),
+        &|field| primary.filter(|_| field == entity.primary_key),
     ) {
         return Ok(true);
     }
@@ -321,8 +323,9 @@ pub(super) fn select_filtered_path<'a>(
                 request,
                 plan,
                 Some(index),
-                &values,
+                values.len(),
                 path.prefix.len(),
+                &|field| prefix_value(index.fields, &values, field),
             );
         let single_owner = index.is_unique_lookup(path.fixed);
         // The exact key proves exhaustion in one visit. If it also covers
@@ -367,18 +370,15 @@ pub(super) fn select_filtered_path<'a>(
 }
 
 // Plan admission emits one encoded term per predicate, in request order.
-fn covers_keys(
+fn covers_keys<'a>(
     entity: &EntitySchema,
     request: &Request<'_>,
     plan: &super::Plan<'_>,
     index: Option<&IndexSchema>,
-    values: &[IndexValue<'_>],
+    fixed: usize,
     prefix_len: usize,
+    lookup: &dyn Fn(&str) -> Option<IndexValue<'a>>,
 ) -> bool {
-    let fields = index.map_or(std::slice::from_ref(&entity.primary_key), |index| {
-        index.fields
-    });
-
     request
         .clauses()
         .zip(plan.clauses())
@@ -388,18 +388,11 @@ fn covers_keys(
                 (term.tests_presence
                     && (entity.field_is_required(p.field)
                         || index.is_some_and(|i| i.present_only && i.fields.contains(&p.field))))
-                    || fixed_comparison(entity, p, &|field| prefix_value(fields, values, field))
-                        == Some(true)
+                    || fixed_comparison(entity, p, lookup) == Some(true)
             });
 
             key_proves_clause
-                || super::range::key_range_proves_clause(
-                    entity,
-                    index,
-                    values.len(),
-                    terms,
-                    prefix_len,
-                )
+                || super::range::key_range_proves_clause(entity, index, fixed, terms, prefix_len)
         })
 }
 

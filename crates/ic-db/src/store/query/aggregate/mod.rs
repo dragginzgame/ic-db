@@ -9,16 +9,39 @@ use super::probe::{MemberProbe, probe_members};
 use super::{
     Comparison, MAX_COMPARISON_KEY, MAX_DISTINCT_VALUES, MAX_STATE_BYTES, Plan, PlanOutput, Query,
     QueryPage, admit_ordered_fields, admit_output, admit_projection, comparison_key,
-    copy_projection, execute, projection_size,
+    copy_projection, decode_record, execute, projection_size,
 };
 use crate::{
-    Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema,
-    codec::Decoder, key,
+    Entity, EntitySchema, Error, FieldType, IndexValue, TypeSchema, Value, ValueSchema, key,
 };
 use ic_storage::Memory;
 use std::collections::BTreeMap;
 
 const MAX_GROUPS: usize = 32;
+
+#[derive(Clone, Copy)]
+enum CountInput<'a> {
+    Rows,
+    Field(&'a str),
+    Distinct(&'static TypeSchema),
+}
+
+impl<'a> CountInput<'a> {
+    fn field(self) -> Option<&'a str> {
+        if let Self::Field(field) = self {
+            Some(field)
+        } else {
+            None
+        }
+    }
+
+    fn projection(self) -> Option<&'static TypeSchema> {
+        match self {
+            Self::Distinct(projection) => Some(projection),
+            _ => None,
+        }
+    }
+}
 
 /// Numeric result used to order completed summary groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -412,21 +435,10 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         mut reducer: Reducer,
     ) -> Result<Aggregate<Option<R>>, Error> {
         super::order::select_unique_aggregate_path(E::SCHEMA, &self.request, &mut plan)?;
-        let page = execute(
-            &self.db.read()?.map,
-            E::SCHEMA,
-            &self.request,
-            &plan,
-            Some(Accumulator::Scalar(&mut reducer)),
-        )?;
+        let page = self.scan_aggregate(&plan, Accumulator::Scalar(&mut reducer))?;
         let (value, output_bytes) = scalar_output(reducer, self.request.bytes)?;
 
-        Ok(Aggregate {
-            value,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes,
-        })
+        Ok(page.into_aggregate(value, output_bytes))
     }
 
     /// Minimum present operand per group. `K` is an exact grouping record; `R`
@@ -506,13 +518,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn exists(self) -> Result<Aggregate<bool>, Error> {
-        observe!(query, {
-            let mut plan = self.count_plan(None)?;
-            self.select_aggregate_row_path(&mut plan, Some(MemberProbe::Exists))?;
-            Ok(self
-                .count_matching_rows(&plan, MemberProbe::Exists, 1)?
-                .at_least(1))
-        })
+        observe!(query, { Ok(self.validated_count_until(1)?.at_least(1)) })
     }
 
     /// Count all matching rows in one synchronous execution. Empty input yields zero.
@@ -597,6 +603,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self.count_matching_rows(&plan, MemberProbe::CountWithRows, stop)
     }
 
+    fn validated_count_until(&self, stop: u64) -> Result<Aggregate<u64>, Error> {
+        let mut plan = self.count_plan(None)?;
+        self.select_aggregate_row_path(&mut plan, Some(MemberProbe::ValidateRows))?;
+
+        self.count_matching_rows(&plan, MemberProbe::ValidateRows, stop)
+    }
+
     fn count_matching_rows(
         &self,
         plan: &Plan<'_>,
@@ -607,19 +620,8 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             return Ok(count);
         }
         let mut remaining = stop;
-        let page = execute(
-            &self.db.read()?.map,
-            E::SCHEMA,
-            &self.request,
-            plan,
-            Some(Accumulator::Until(&mut remaining)),
-        )?;
-        Ok(Aggregate {
-            value: stop - remaining,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes: 8,
-        })
+        let page = self.scan_aggregate(plan, Accumulator::Until(&mut remaining))?;
+        Ok(page.into_aggregate(stop - remaining, 8))
     }
 
     fn entity_count(&self) -> Result<Aggregate<u64>, Error> {
@@ -638,7 +640,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// Returns the same admission and resource errors as [`Self::count`], and
     /// reports corruption encountered during traversal.
     pub fn count_validated(self) -> Result<Aggregate<u64>, Error> {
-        observe!(query, { self.scalar_count(None) })
+        observe!(query, {
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
+            self.validated_count_until(u64::MAX)
+        })
     }
 
     /// Count physical entries in the range selected by `using_index` and its
@@ -702,7 +709,16 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair.
     pub fn count_field(self, field: &str) -> Result<Aggregate<u64>, Error> {
-        observe!(query, { self.scalar_count(Some(field)) })
+        observe!(query, {
+            if self.request.bytes < 8 {
+                return Err(Error::RowTooLarge);
+            }
+            let mut plan = self.count_plan(None)?;
+            self.select_aggregate_row_path(&mut plan, None)?;
+            let reducer = self.count_reducer(Some(field))?;
+
+            self.scalar_count_value(&plan, reducer)
+        })
     }
 
     /// Count distinct projected tuples, including absent values. An indexed filter can narrow the input.
@@ -741,43 +757,14 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok(())
     }
 
-    fn scalar_count(self, field: Option<&str>) -> Result<Aggregate<u64>, Error> {
-        if self.request.bytes < 8 {
-            return Err(Error::RowTooLarge);
-        }
-        let mut plan = self.count_plan(None)?;
-        let probe = field.is_none().then_some(MemberProbe::CountValidated);
-        self.select_aggregate_row_path(&mut plan, probe)?;
-        if let Some(probe) = probe
-            && let Some(count) =
-                probe_members(&self.db, E::SCHEMA, &self.request, &plan, probe, u64::MAX)?
-        {
-            return Ok(count);
-        }
-        let reducer = self.count_reducer(field)?;
-
-        self.scalar_count_value(&plan, reducer)
-    }
-
     fn scalar_count_value(
         self,
         plan: &Plan<'_>,
         mut reducer: Reducer,
     ) -> Result<Aggregate<u64>, Error> {
-        let page = execute(
-            &self.db.read()?.map,
-            E::SCHEMA,
-            &self.request,
-            plan,
-            Some(Accumulator::Scalar(&mut reducer)),
-        )?;
+        let page = self.scan_aggregate(plan, Accumulator::Scalar(&mut reducer))?;
 
-        Ok(Aggregate {
-            value: reducer.finish(false)?.into_count()?,
-            examined: page.examined,
-            fetched: page.fetched,
-            output_bytes: 8,
-        })
+        Ok(page.into_aggregate(reducer.finish(false)?.into_count()?, 8))
     }
 
     /// Count matching rows grouped by an exact named-record projection.
@@ -797,7 +784,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// # Panics
     /// Supplier corruption traps without repair, as for ordinary query execution.
     pub fn group_count<K: Value>(self) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        observe!(query, { self.group_counts(None) })
+        observe!(query, { self.group_counts(CountInput::Rows) })
     }
 
     /// Count present operand values within each projected group. Groups whose
@@ -812,7 +799,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
         field: &str,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        observe!(query, { self.group_counts(Some(field)) })
+        observe!(query, { self.group_counts(CountInput::Field(field)) })
     }
 
     /// Count distinct projected `R` tuples within each projected `K` group.
@@ -832,36 +819,31 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         self,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
         observe!(query, {
-            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-
-            self.group_count_values(plan, reducer)
+            self.group_counts(CountInput::Distinct(R::definition()))
         })
     }
 
-    fn group_distinct_plan<K: Value, R: Value>(&self) -> Result<(Plan<'static>, Reducer), Error> {
+    fn group_count_plan<K: Value>(
+        &self,
+        input: CountInput<'_>,
+    ) -> Result<(Plan<'static>, Reducer), Error> {
         let mut plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let operand = admit_projection(E::SCHEMA, R::definition())?;
-        admit_ordered_fields(E::SCHEMA, operand)?;
-        plan.selected |= operand;
-
-        Ok((plan, Reducer::distinct(operand)))
+        let reducer = if let CountInput::Distinct(record) = input {
+            let operand = admit_projection(E::SCHEMA, record)?;
+            admit_ordered_fields(E::SCHEMA, operand)?;
+            plan.selected |= operand;
+            Reducer::distinct(operand)
+        } else {
+            self.count_reducer(input.field())?
+        };
+        Ok((plan, reducer))
     }
 
     fn group_counts<K: Value>(
         self,
-        field: Option<&str>,
+        input: CountInput<'_>,
     ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
-        let plan = self.aggregate_plan(Some(K::definition()), true)?;
-        let reducer = self.count_reducer(field)?;
-
-        self.group_count_values(plan, reducer)
-    }
-
-    fn group_count_values<K: Value>(
-        self,
-        mut plan: Plan<'static>,
-        mut reducer: Reducer,
-    ) -> Result<Aggregate<Vec<GroupCount<K>>>, Error> {
+        let (mut plan, mut reducer) = self.group_count_plan::<K>(input)?;
         self.select_aggregate_row_path(&mut plan, None)?;
         if let Reducer::Distinct { mask, .. } = &mut reducer {
             let grouped = plan.projection.ok_or(Error::InvalidQuery)?;
@@ -885,25 +867,31 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Ok(Reducer::Count { presence, total: 0 })
     }
 
+    fn scan_aggregate(
+        &self,
+        plan: &Plan<'_>,
+        accumulator: Accumulator<'_>,
+    ) -> Result<QueryPage<Vec<u8>>, Error> {
+        execute(
+            &self.db.read()?.map,
+            E::SCHEMA,
+            &self.request,
+            plan,
+            Some(accumulator),
+        )
+    }
+
     fn grouped(
         &self,
         plan: &Plan<'_>,
         initial: Reducer,
         summary_sum: Option<ValueSchema>,
     ) -> Result<(Groups, QueryPage<Vec<u8>>), Error> {
-        if self.request.groups.page.is_some() {
-            return Err(Error::InvalidQuery);
-        }
+        self.request.groups.admit_start_page()?;
         let mut groups = self
             .request
             .admit_groups(E::SCHEMA, plan, initial, summary_sum)?;
-        let page = execute(
-            &self.db.read()?.map,
-            E::SCHEMA,
-            &self.request,
-            plan,
-            Some(Accumulator::Groups(&mut groups)),
-        )?;
+        let page = self.scan_aggregate(plan, Accumulator::Groups(&mut groups))?;
 
         Ok((groups, page))
     }
@@ -1009,6 +997,17 @@ fn scalar_output<R: Value>(reducer: Reducer, limit: usize) -> Result<(Option<R>,
     Ok((Some(decode_record(&bytes)?), used))
 }
 
+impl QueryPage<Vec<u8>> {
+    fn into_aggregate<T>(self, value: T, output_bytes: usize) -> Aggregate<T> {
+        Aggregate {
+            value,
+            examined: self.examined,
+            fetched: self.fetched,
+            output_bytes,
+        }
+    }
+}
+
 fn group_output<T>(
     (groups, page): (Groups, QueryPage<Vec<u8>>),
     request: &super::Request<'_>,
@@ -1029,12 +1028,7 @@ fn group_output<T>(
         })
         .collect::<Result<_, Error>>()?;
 
-    Ok(Aggregate {
-        value,
-        examined: page.examined,
-        fetched: page.fetched,
-        output_bytes,
-    })
+    Ok(page.into_aggregate(value, output_bytes))
 }
 
 fn decode_group_count<K: Value>(key: &[u8], result: Completed) -> Result<GroupCount<K>, Error> {
@@ -1054,14 +1048,6 @@ fn decode_group_value<K: Value, R: Value>(
         key: decode_record(key)?,
         value: value.as_deref().map(decode_record).transpose()?,
     })
-}
-
-fn decode_record<R: Value>(bytes: &[u8]) -> Result<R, Error> {
-    let mut reader = Decoder::new(bytes)?;
-    let value = R::decode_from(&mut reader)?;
-    reader.finish()?;
-
-    Ok(value)
 }
 
 // Closed choices over delivered reducers and one grouping table, not user extensions.

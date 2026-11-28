@@ -346,6 +346,9 @@ impl NumericAggregate {
     }
 
     pub(super) fn restore(&mut self, count: u64, bytes: &[u8]) -> Result<(), Error> {
+        if count == 0 && bytes.iter().any(|&b| b != 0) {
+            return Err(Error::Corrupt);
+        }
         match &mut self.total {
             Total::Signed(n) => {
                 *n = I256::from_be_bytes(bytes.try_into().map_err(|_| Error::Corrupt)?)

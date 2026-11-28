@@ -1,5 +1,7 @@
 //! Exact account/subaccount bytes and one identity for the default account.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -102,13 +104,9 @@ fn key(value: IndexValue<'_>) -> Vec<u8> {
 #[test]
 fn default_identity_and_exact_fixed_bytes_share_one_canonical_representation() {
     // Independent Node byte framing and SHA-256.
-    assert_eq!(
-        Schema::new(&[AccountRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "fd371c7f1f629e960520548b552e57d395af538ba93cea068f710831682ccf87"
+    fingerprint::check(
+        Schema::new(&[AccountRow::SCHEMA]).unwrap().fingerprint(),
+        "fd371c7f1f629e960520548b552e57d395af538ba93cea068f710831682ccf87",
     );
     for len in 0..=29 {
         let owner = vec![0xa5; len];

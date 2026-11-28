@@ -1,8 +1,7 @@
 //! Product retained jobs: real Wasm rollback, retry, upgrade and explicit expiry.
 
 mod wire_call;
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
 
 use wire_call::wire_frame;
 mod job_step;
@@ -127,15 +126,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
             canister,
             canister,
             "job_control",
-            ic_wire::encode(
-                &(operation, handle, now, limit),
-                Encoding::Frame {
-                    method: 112,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(112, &(operation, handle, now, limit)),
         )
         .await
     };
@@ -143,18 +134,8 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
         |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(111, &bytes).unwrap();
     let handle =
         |bytes: Vec<u8>| wire_frame::response::<Result<Vec<u8>, String>>(110, &bytes).unwrap();
-    let controlled = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<u64, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let controlled =
+        |bytes: Vec<u8>| wire_frame::response::<Result<u64, String>>(112, &bytes).unwrap();
 
     // Creation has both a generation/header write and a slot write. Traps restore
     // the complete backing allocation, including supplier/allocator metadata.
@@ -416,18 +397,7 @@ async fn retained_aggregates_rollback_and_resume_across_upgrade() {
     let replacement = handle(start(0, 0).await.unwrap());
     assert_ne!(replacement, count);
     let stale = control(0, &count, 0, 0).await.unwrap();
-    assert!(
-        ic_wire::decode::<Result<u64, String>>(
-            &stale,
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap()
-        .is_err()
-    );
+    assert!(wire_frame::response::<Result<u64, String>>(112, &stale).is_err());
     controlled(control(0, &replacement, 0, 0).await.unwrap());
     owned.drop().await;
 }
@@ -563,32 +533,17 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
             canister,
             canister,
             "job_page",
-            ic_wire::encode(
+            wire_frame::request(
+                113,
                 &(
                     handle, sequence, cursor, 1_u32, 100_u32, now, fault, trap_after,
                 ),
-                Encoding::Frame {
-                    method: 113,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<PageResponse, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 113,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let decode =
+        |bytes: Vec<u8>| wire_frame::response::<Result<PageResponse, String>>(113, &bytes).unwrap();
     // A new job's final input progress and first output page share rollback.
     let pending = start().await;
     let before = pic.get_stable_memory(canister).await;
@@ -638,15 +593,7 @@ async fn completed_group_pages_survive_traps_upgrade_and_source_changes() {
         canister,
         canister,
         "job_control",
-        ic_wire::encode(
-            &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32),
-            Encoding::Frame {
-                method: 112,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap(),
+        wire_frame::request(112, &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32)),
     )
     .await
     .unwrap();
@@ -753,28 +700,11 @@ async fn retained_extrema_rollback_and_preserve_winners_across_upgrade() {
             canister,
             canister,
             "job_control",
-            ic_wire::encode(
-                &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32),
-                Encoding::Frame {
-                    method: 112,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(112, &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32)),
         )
         .await
         .unwrap();
-    ic_wire::decode::<Result<u64, String>>(
-        &bytes,
-        Encoding::Frame {
-            method: 112,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
+    wire_frame::response::<Result<u64, String>>(112, &bytes).unwrap();
     assert_eq!(
         decode(advance(&running, 10, 1, 0, false).await.unwrap()).phase,
         2
@@ -829,32 +759,17 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
             canister,
             canister,
             "job_group_extremum",
-            ic_wire::encode(
+            wire_frame::request(
+                114,
                 &(
                     handle, op, sequence, 2_u32, after, 1_u32, now, fault, trap_after,
                 ),
-                Encoding::Frame {
-                    method: 114,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
     };
-    let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Response, String>>(
-            &bytes,
-            Encoding::Frame {
-                method: 114,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
-    };
+    let decode =
+        |bytes: Vec<u8>| wire_frame::response::<Result<Response, String>>(114, &bytes).unwrap();
     let min = start(12).await;
     let max = start(13).await;
     for (handle, op) in [(&min, 12), (&max, 13)] {
@@ -900,28 +815,11 @@ async fn retained_group_extrema_rollback_upgrade_and_page_completed_winners() {
             canister,
             canister,
             "job_control",
-            ic_wire::encode(
-                &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32),
-                Encoding::Frame {
-                    method: 112,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(112, &(2_u8, Vec::<u8>::new(), 0_i64, 0_u32)),
         )
         .await
         .unwrap();
-    ic_wire::decode::<Result<u64, String>>(
-        &bytes,
-        Encoding::Frame {
-            method: 112,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
+    wire_frame::response::<Result<u64, String>>(112, &bytes).unwrap();
     assert_eq!(
         decode(advance(&running, 12, 1, None, 3, 0, false).await.unwrap()).1,
         2

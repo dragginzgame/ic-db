@@ -38,19 +38,34 @@ const INTEGERS: &[Integer] = &[
     integer!(Int128, i128, int128),
 ];
 
+// These primitives share their schema and Rust type name and use a by-value codec.
+macro_rules! simple_scalars {
+    ($($name:ident => $codec:ident),+ $(,)?) => {
+        #[derive(Clone, Copy)]
+        pub(super) enum Scalar { $($name),+ }
+        impl Scalar {
+            fn parse(name: &str) -> Option<Self> {
+                match name { $(stringify!($name) => Some(Self::$name),)+ _ => None }
+            }
+            fn ident(self) -> syn::Ident {
+                match self { $(Self::$name => quote::format_ident!("{}", stringify!($name)),)+ }
+            }
+            fn codec(self) -> &'static str {
+                match self { $(Self::$name => stringify!($codec),)+ }
+            }
+        }
+    };
+}
+simple_scalars! {
+    Float32 => float32, Float64 => float64, Subaccount => subaccount, Account => account,
+    U256 => u256, Ulid => ulid, Date => date, Duration => duration, Timestamp => timestamp,
+}
+
 pub(super) enum Kind {
+    Scalar(Scalar),
     Integer(&'static Integer),
     Named(syn::Path, bool),
-    Float32,
-    Float64,
-    Subaccount,
-    Account,
-    U256,
-    Ulid,
-    Date,
-    Duration,
     Decimal(u32),
-    Timestamp,
     Bool,
     Principal,
     Text(u32),
@@ -128,28 +143,7 @@ impl Field {
                 };
                 once(&mut managed, policy, &part)?;
             } else if part.path().is_ident("references") {
-                let mut entity = None;
-                let mut index = None;
-                for option in meta_items(&part)? {
-                    if option.path().is_ident("entity") {
-                        let target = syn::parse_str(&text(&option)?)?;
-                        once(&mut entity, target, &option)?;
-                    } else if option.path().is_ident("index") {
-                        once(&mut index, text(&option)?, &option)?;
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            option,
-                            "references accepts an entity type path and optional index name",
-                        ));
-                    }
-                }
-                let target = (
-                    entity.ok_or_else(|| {
-                        syn::Error::new_spanned(&part, "references requires an entity type path")
-                    })?,
-                    index,
-                );
-                once(&mut reference, target, &part)?;
+                once(&mut reference, parse_reference(&part)?, &part)?;
             } else {
                 return Err(syn::Error::new_spanned(
                     part,
@@ -158,10 +152,13 @@ impl Field {
             }
         }
         let name = name.ok_or_else(|| syn::Error::new_spanned(meta, "field requires name"))?;
-        let (kind, optional, many) =
-            value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
+        let ParsedValue {
+            kind,
+            optional,
+            max_items: many,
+        } = value.ok_or_else(|| syn::Error::new_spanned(meta, "field requires value"))?;
         if managed.is_some()
-            && (!matches!(kind, Kind::Timestamp | Kind::Named(..))
+            && (!matches!(kind, Kind::Scalar(Scalar::Timestamp) | Kind::Named(..))
                 || optional
                 || many.is_some()
                 || default.is_some()
@@ -254,20 +251,15 @@ impl Field {
                     quote!(#path)
                 }
             }
+            Kind::Scalar(scalar) => {
+                let name = scalar.ident();
+                quote!(::ic_db::#name)
+            }
             Kind::Integer(integer) => {
                 let name = quote::format_ident!("{}", integer.rust);
                 quote!(#name)
             }
-            Kind::Float32 => quote!(::ic_db::Float32),
-            Kind::Float64 => quote!(::ic_db::Float64),
-            Kind::Subaccount => quote!(::ic_db::Subaccount),
-            Kind::Account => quote!(::ic_db::Account),
-            Kind::U256 => quote!(::ic_db::U256),
-            Kind::Ulid => quote!(::ic_db::Ulid),
-            Kind::Date => quote!(::ic_db::Date),
             Kind::Decimal(_) => quote!(::ic_db::Decimal),
-            Kind::Duration => quote!(::ic_db::Duration),
-            Kind::Timestamp => quote!(::ic_db::Timestamp),
             Kind::Bool => quote!(bool),
             Kind::Principal => quote!(::ic_db::Principal),
             Kind::Text(_) => quote!(::std::string::String),
@@ -316,20 +308,15 @@ impl Field {
             Kind::Named(path, _) => {
                 quote!(::ic_db::FieldType::Named(::ic_db::TypeLink { name: <#path as ::ic_db::Value>::NAME, definition: <#path as ::ic_db::Value>::definition }))
             }
+            Kind::Scalar(scalar) => {
+                let name = scalar.ident();
+                quote!(::ic_db::FieldType::#name)
+            }
             Kind::Integer(integer) => {
                 let name = quote::format_ident!("{}", integer.schema);
                 quote!(::ic_db::FieldType::#name)
             }
-            Kind::Float32 => quote!(::ic_db::FieldType::Float32),
-            Kind::Float64 => quote!(::ic_db::FieldType::Float64),
-            Kind::Subaccount => quote!(::ic_db::FieldType::Subaccount),
-            Kind::Account => quote!(::ic_db::FieldType::Account),
-            Kind::U256 => quote!(::ic_db::FieldType::U256),
-            Kind::Ulid => quote!(::ic_db::FieldType::Ulid),
-            Kind::Date => quote!(::ic_db::FieldType::Date),
             Kind::Decimal(scale) => quote!(::ic_db::FieldType::Decimal { scale: #scale }),
-            Kind::Duration => quote!(::ic_db::FieldType::Duration),
-            Kind::Timestamp => quote!(::ic_db::FieldType::Timestamp),
             Kind::Bool => quote!(::ic_db::FieldType::Bool),
             Kind::Principal => quote!(::ic_db::FieldType::Principal),
             Kind::Text(max_bytes) => quote!(::ic_db::FieldType::Text {max_bytes:#max_bytes}),
@@ -431,16 +418,8 @@ impl Field {
                     quote!(reader.blob(#max as usize)),
                 );
             }
+            Kind::Scalar(scalar) => scalar.codec(),
             Kind::Integer(integer) => integer.codec,
-            Kind::Float32 => "float32",
-            Kind::Float64 => "float64",
-            Kind::Subaccount => "subaccount",
-            Kind::Account => "account",
-            Kind::U256 => "u256",
-            Kind::Ulid => "ulid",
-            Kind::Date => "date",
-            Kind::Duration => "duration",
-            Kind::Timestamp => "timestamp",
             Kind::Bool => "boolean",
         };
         let method = quote::format_ident!("{method}");
@@ -468,7 +447,50 @@ impl Field {
         quote!((#read)?)
     }
 }
-pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)> {
+fn parse_reference(part: &Meta) -> syn::Result<(syn::Path, Option<String>)> {
+    let mut entity = None;
+    let mut index = None;
+    for option in meta_items(part)? {
+        if option.path().is_ident("entity") {
+            let target = syn::parse_str(&text(&option)?)?;
+            once(&mut entity, target, &option)?;
+        } else if option.path().is_ident("index") {
+            once(&mut index, text(&option)?, &option)?;
+        } else {
+            return Err(syn::Error::new_spanned(
+                option,
+                "references accepts an entity type path and optional index name",
+            ));
+        }
+    }
+    Ok((
+        entity.ok_or_else(|| {
+            syn::Error::new_spanned(part, "references requires an entity type path")
+        })?,
+        index,
+    ))
+}
+
+///
+/// ParsedValue
+/// Type, optionality and collection bound from one value declaration.
+///
+pub(super) struct ParsedValue {
+    kind: Kind,
+    optional: bool,
+    max_items: Option<u32>,
+}
+
+impl ParsedValue {
+    pub(super) fn nested(self, name: &str, owner: &syn::Ident) -> Field {
+        let mut field = Field::nested(name, self.kind, self.optional, self.max_items);
+        field.resolve_self(owner);
+
+        field
+    }
+}
+
+pub(super) fn parse_value(meta: &Meta) -> syn::Result<ParsedValue> {
     let mut item = None;
     let mut optional = false;
     let mut many = false;
@@ -496,11 +518,11 @@ pub(super) fn parse_value(meta: &Meta) -> syn::Result<(Kind, bool, Option<u32>)>
         ));
     }
 
-    Ok((
-        item.ok_or_else(|| syn::Error::new_spanned(meta, "value requires item(...)"))?,
+    Ok(ParsedValue {
+        kind: item.ok_or_else(|| syn::Error::new_spanned(meta, "value requires item(...)"))?,
         optional,
         max_items,
-    ))
+    })
 }
 
 pub(super) fn parse_max_items(part: &Meta) -> syn::Result<u32> {
@@ -598,16 +620,12 @@ pub(super) fn parse_item(meta: &Meta) -> syn::Result<Kind> {
     {
         return Ok(Kind::Integer(integer));
     }
+    if max.is_none()
+        && let Some(scalar) = prim.as_deref().and_then(Scalar::parse)
+    {
+        return Ok(Kind::Scalar(scalar));
+    }
     match (prim.as_deref(), max) {
-        (Some("Float32"), None) => Ok(Kind::Float32),
-        (Some("Float64"), None) => Ok(Kind::Float64),
-        (Some("Subaccount"), None) => Ok(Kind::Subaccount),
-        (Some("Account"), None) => Ok(Kind::Account),
-        (Some("U256"), None) => Ok(Kind::U256),
-        (Some("Ulid"), None) => Ok(Kind::Ulid),
-        (Some("Date"), None) => Ok(Kind::Date),
-        (Some("Duration"), None) => Ok(Kind::Duration),
-        (Some("Timestamp"), None) => Ok(Kind::Timestamp),
         (Some("Bool"), None) => Ok(Kind::Bool),
         (Some("Principal"), None) => Ok(Kind::Principal),
         (Some("Text"), Some(max)) => Ok(Kind::Text(max)),
@@ -626,11 +644,11 @@ impl Kind {
         matches!(
             self,
             Self::Integer(_)
-                | Self::U256
-                | Self::Ulid
+                | Self::Scalar(Scalar::U256)
+                | Self::Scalar(Scalar::Ulid)
                 | Self::Principal
-                | Self::Account
-                | Self::Subaccount
+                | Self::Scalar(Scalar::Account)
+                | Self::Scalar(Scalar::Subaccount)
         )
     }
 }

@@ -147,9 +147,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         observe!(resume, {
-            let (plan, reducer) = self.extremum_plan::<R>(false)?;
+            let admitted = self.extremum_plan::<R>(false)?;
 
-            self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+            self.resume_value(jobs, handle, sequence, now, admitted)
         })
     }
 
@@ -166,9 +166,9 @@ impl<E: Entity, M: Memory> Query<'_, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<Option<R>>, Error> {
         observe!(resume, {
-            let (plan, reducer) = self.extremum_plan::<R>(true)?;
+            let admitted = self.extremum_plan::<R>(true)?;
 
-            self.resume_value(jobs, handle, sequence, now, (plan, reducer))
+            self.resume_value(jobs, handle, sequence, now, admitted)
         })
     }
 }

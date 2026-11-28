@@ -186,27 +186,82 @@ pub struct TypeMemberView {
     pub info: String,
 }
 
+///
+/// FilterComparison
+/// Comparison carried by a fixture filter.
+///
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Copy)]
+#[cfg_attr(feature = "console", derive(clap::ValueEnum))]
+pub enum FilterComparison {
+    /// Equal.
+    Eq,
+    /// Unequal.
+    Ne,
+    /// Less than.
+    Lt,
+    /// At most.
+    Le,
+    /// Greater than.
+    Gt,
+    /// At least.
+    Ge,
+    /// Prefix match.
+    StartsWith,
+    /// Suffix match.
+    EndsWith,
+    /// Substring match.
+    Contains,
+}
+
+///
+/// ComparisonFilter
+/// A field compared with a typed right operand.
+///
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ComparisonFilter<T> {
+    /// Left field.
+    pub field: String,
+    /// Comparison to apply.
+    pub op: FilterComparison,
+    /// Right operand.
+    pub operand: T,
+}
+
+///
+/// FieldRange
+/// Three field names in a range predicate.
+///
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct FieldRange {
+    /// Tested field.
+    pub field: String,
+    /// Lower end.
+    pub lower: String,
+    /// Upper end.
+    pub upper: String,
+}
+
 /// Row predicates carried by the local query and retained-aggregate commands.
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct RowFilters {
     /// Lower bound, upper bound, prefix, suffix and substring on BinaryObject.payload.
     pub payload: PayloadFilters,
     /// Left field, comparison, right field.
-    pub compare: Option<[String; 3]>,
+    pub compare: Option<ComparisonFilter<String>>,
     /// Field, comparison and length threshold.
-    pub length: Option<(String, String, u32)>,
+    pub length: Option<ComparisonFilter<u32>>,
     /// Require a value in this optional field.
     pub present: Option<String>,
     /// Require absence in this optional field.
     pub absent: Option<String>,
     /// Field, comparison and exact UTF-8 literal.
-    pub text: Option<[String; 3]>,
+    pub text: Option<ComparisonFilter<String>>,
     /// Field and Boolean equality operand.
     pub boolean: Option<(String, bool)>,
     /// Field, inclusive lower field and inclusive upper field.
-    pub between_fields: Option<[String; 3]>,
+    pub between_fields: Option<FieldRange>,
     /// Field, lower field and upper field for the strict outside-range comparison.
-    pub not_between_fields: Option<[String; 3]>,
+    pub not_between_fields: Option<FieldRange>,
 }
 
 /// Selection shared by the private retained fixture when starting and resuming a job.

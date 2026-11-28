@@ -1061,7 +1061,12 @@ fn wrapper_declarations_require_one_primitive_or_one_bounded_list() {
         (true, quote!(item(prim = "Nat16"))),
         (true, quote!(max_items = 257, item(prim = "Nat16"))),
     ] {
-        assert!(super::wrapped::expand(args, item.clone(), many).is_err());
+        let expand = if many {
+            super::wrapped::list
+        } else {
+            super::wrapped::newtype
+        };
+        assert!(expand(args, item.clone()).is_err());
     }
 }
 
@@ -1077,12 +1082,11 @@ fn newtype_validation_rejects_duplicate_incompatible_and_malformed_rules() {
         quote!(validate(non_blank(1))),
     ] {
         assert!(
-            super::wrapped::expand(
+            super::wrapped::newtype(
                 quote!(item(prim = "Text", max_bytes = 200), #rules),
                 quote!(
                     struct Name {}
-                ),
-                false
+                )
             )
             .is_err(),
             "{rules}"

@@ -118,8 +118,8 @@ impl Plan<'_> {
         hash.update(schema);
         hash.update(incarnation);
         hash.update([u8::from(request.descending)]);
-        hash.update((self.prefix.len() as u32).to_le_bytes());
-        hash.update(&self.prefix);
+        hash.update((self.cursor_prefix_len as u32).to_le_bytes());
+        hash.update(&self.prefix[..self.cursor_prefix_len]);
         for term in &self.terms {
             hash.update([term.position as u8, term.comparison as u8]);
 
@@ -264,7 +264,9 @@ impl Plan<'_> {
             return Err(Error::InvalidCursor);
         }
         let bytes = cursor.position.as_slice();
-        if bytes.len() > crate::MAX_INDEX_KEY_BYTES || !bytes.starts_with(&self.prefix) {
+        if bytes.len() > crate::MAX_INDEX_KEY_BYTES
+            || !bytes.starts_with(&self.prefix[..self.cursor_prefix_len])
+        {
             return Err(Error::InvalidCursor);
         }
         if let Some(index) = self.index {

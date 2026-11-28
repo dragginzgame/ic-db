@@ -1,5 +1,7 @@
 //! Independent Date bytes, calendar domain and stored/indexed identity boundaries.
 
+#[path = "support/fingerprint.rs"]
+mod fingerprint;
 #[path = "support/raw_map.rs"]
 pub mod raw_map;
 #[path = "support/host.rs"]
@@ -141,13 +143,9 @@ fn calendar_and_epoch_days_agree_with_an_independent_day_counter() {
 
 #[test]
 fn exact_date_bytes_and_invalid_stored_domains() {
-    assert_eq!(
-        Schema::new(&[DateRow::SCHEMA])
-            .unwrap()
-            .fingerprint()
-            .map(|b| format!("{b:02x}"))
-            .concat(),
-        "425c91779bd76c7a39be8d48ac42ab05c3658385b4b3159ccd63a4c23cb08cc1"
+    fingerprint::check(
+        Schema::new(&[DateRow::SCHEMA]).unwrap().fingerprint(),
+        "425c91779bd76c7a39be8d48ac42ab05c3658385b4b3159ccd63a4c23cb08cc1",
     );
     for value in values() {
         let row = DateRow {

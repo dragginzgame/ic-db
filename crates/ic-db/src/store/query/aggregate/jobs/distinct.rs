@@ -1,7 +1,7 @@
 //! Retained tuple DISTINCT counts using the existing exact key-set reducer.
 
 use super::{
-    super::{Completed, GroupCount, Query, Reducer, decode_group_count, decode_record},
+    super::{Completed, GroupCount, Query, Reducer, decode_record},
     AggregateJobs, CountInput, GroupCursor, GroupPage, JobHandle, JobStep,
 };
 use crate::{Entity, Error, Timestamp, Value};
@@ -54,7 +54,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
             let page_size = self.request.rows;
             let query = self.group_page(page_size, after);
             let plan = query.aggregate_plan(Some(K::definition()), true)?;
-            let job = query.retained_groups(plan, Reducer::Keys(0), None, None)?;
+            let job = query.retained_groups(plan, Reducer::Keys(0), None)?;
             query.resume_groups(jobs, handle, sequence, now, job, |bytes, result| {
                 if !matches!(result, Completed::Key) {
                     return Err(Error::Corrupt);
@@ -127,10 +127,12 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         expires: Timestamp,
     ) -> Result<JobHandle, Error> {
         observe!(start, {
-            self.request.groups.admit_start_page()?;
-            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-
-            self.start_groups(jobs, now, expires, plan, reducer, None)
+            self.start_group_count_job::<K>(
+                jobs,
+                now,
+                expires,
+                CountInput::Distinct(R::definition()),
+            )
         })
     }
 
@@ -152,10 +154,13 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         now: Timestamp,
     ) -> Result<JobStep<GroupPage<GroupCount<K>>>, Error> {
         observe!(resume, {
-            let (plan, reducer) = self.group_distinct_plan::<K, R>()?;
-            let job = self.retained_groups(plan, reducer, None, None)?;
-
-            self.resume_groups(jobs, handle, sequence, now, job, decode_group_count)
+            self.resume_group_count_job::<K>(
+                jobs,
+                handle,
+                sequence,
+                now,
+                CountInput::Distinct(R::definition()),
+            )
         })
     }
 }

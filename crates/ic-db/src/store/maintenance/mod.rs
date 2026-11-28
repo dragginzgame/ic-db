@@ -246,7 +246,7 @@ impl SchemaTransition {
             limit,
             bytes,
         )?
-        .decode_entities()
+        .decode_rows(E::decode)
     }
 }
 
